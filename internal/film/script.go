@@ -69,14 +69,34 @@ type Scene struct {
 	Buildings int     `json:"buildings"` // rear buildings per side, "battle" only
 	Factories bool    `json:"factories"` // queue factory production, "battle" only
 	Fog       bool    `json:"fog"`       // keep the viewing player's fog; a film reveals by default
+	// Opening plays the modern commander arrival on a fresh skirmish and then
+	// has the commander build an extractor on the nearest deposit.
+	Opening bool `json:"opening"`
+	// Air is extra aircraft per side, created in flight and kept patrolling
+	// across the front so no plane sits parked in frame.
+	Air int `json:"air"`
+	// Builders is construction units per side, each given a short list of
+	// structures to raise behind its own line.
+	Builders int `json:"builders"`
+	// Columns, Pitch and Gap reshape the two formations: units per row, pixel
+	// spacing, and half the distance between the armies.
+	Columns int `json:"columns"`
+	Pitch   int `json:"pitch"`
+	Gap     int `json:"gap"`
+	// Patrol sends ground units back and forth across the front rather than
+	// to one goal, so a late shot still has traffic in it.
+	Patrol bool `json:"patrol"`
 }
 
 // Shot is one continuous camera take. Shots cut hard: the camera jumps to the
 // next shot's first key on its first tick.
 type Shot struct {
-	Name   string      `json:"name"`
-	Scene  *Scene      `json:"scene,omitempty"` // a fresh scene at this cut; nil continues the current session
-	Ticks  int         `json:"ticks"`
+	Name  string `json:"name"`
+	Scene *Scene `json:"scene,omitempty"` // a fresh scene at this cut; nil continues the current session
+	Ticks int    `json:"ticks"`
+	// Score is read by tools/film-score only: "intro" holds the beat back
+	// and lets the music rise through the shot instead of starting on it.
+	Score  string      `json:"score,omitempty"`
 	Camera []CameraKey `json:"camera"`
 	Text   []Cue       `json:"text"`
 }
@@ -155,8 +175,22 @@ func (s *Scene) applyDefaults() {
 	if s.PerSide == 0 {
 		s.PerSide = 120
 	}
-	if s.Buildings == 0 && s.Roster != "air" {
+	if s.Buildings < 0 {
+		s.Buildings = 0 // an explicit "none", which zero cannot say
+	} else if s.Buildings == 0 && s.Roster != "air" && s.Roster != "naval" {
 		s.Buildings = 12
+	}
+	if s.Columns <= 0 {
+		s.Columns = 8
+	}
+	if s.Pitch <= 0 {
+		s.Pitch = 48
+		if s.Roster == "naval" {
+			s.Pitch = 120
+		}
+	}
+	if s.Gap <= 0 {
+		s.Gap = 320
 	}
 }
 
@@ -168,15 +202,18 @@ func (s *Scene) problems() []string {
 		problems = append(problems, fmt.Sprintf("unknown scene kind %q, expected \"battle\" or \"skirmish\"", s.Kind))
 	}
 	switch s.Roster {
-	case "", "mixed", "armor", "air":
+	case "", "mixed", "armor", "air", "naval", "heavy", "kbots", "flame":
 	default:
-		problems = append(problems, fmt.Sprintf("unknown scene roster %q, expected \"mixed\", \"armor\" or \"air\"", s.Roster))
+		problems = append(problems, fmt.Sprintf("unknown scene roster %q", s.Roster))
 	}
 	if s.Anchor != nil && len(s.Anchor) != 2 {
 		problems = append(problems, "scene anchor must contain exactly two world coordinates [x,z]")
 	}
 	if s.Roster == "air" && (s.Buildings != 0 || s.Factories) {
 		problems = append(problems, "air scene cannot stage buildings or factories")
+	}
+	if s.Opening && s.Kind != "skirmish" {
+		problems = append(problems, "the opening arrival needs a skirmish scene")
 	}
 	if s.PreTicks < 0 || s.PerSide < 0 || s.Buildings < 0 {
 		problems = append(problems, "scene pre_ticks, per_side and buildings must not be negative")

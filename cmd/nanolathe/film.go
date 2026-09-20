@@ -111,6 +111,14 @@ func (g *filmGame) startScene(opts Options, cs *contentSet, scene film.Scene) er
 	if !scene.Fog {
 		revealFilmScene(sess)
 	}
+	// Explosion shake reads as capture judder under a scripted camera move, so
+	// a film turns it off through the `+noshake` developer switch's own bit.
+	if !sess.NoShake() {
+		sess.ToggleNoShake()
+	}
+	if scene.Opening {
+		filmOpeningMex(sess)
+	}
 
 	var (
 		b  *battleSession
@@ -175,6 +183,16 @@ func (g *filmGame) startScene(opts Options, cs *contentSet, scene film.Scene) er
 		cl.TickPresentationAudio()
 	}
 
+	g.opening = false
+	if scene.Opening {
+		// The arrival is a presentation clock the film drives itself, frame
+		// by frame, from the shot's own time (GPU §36).
+		if !b.beginArrival(cl) {
+			cl.Close()
+			return fmt.Errorf("nanolathe: film: the opening needs a fresh scene with a local commander and no pre_ticks")
+		}
+		g.opening = true
+	}
 	g.cl, g.cam, g.advance = cl, b, advance
 	g.anchorX, g.anchorZ = anchorX, anchorZ
 	return nil
@@ -192,6 +210,7 @@ type filmGame struct {
 	advance   func()
 	loadScene func(film.Scene) error
 	cam       *battleSession
+	opening   bool // the arrival clock is still running
 
 	gpu      *gpurender.Renderer
 	overlay  *image.RGBA
@@ -243,6 +262,16 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 			// incoming shot's camera, so collapsing the blend onto that sample
 			// keeps the outgoing framing from sliding into it.
 			g.cl.SnapCameraBlend()
+			g.census(shot.Name)
+		}
+	}
+	if g.opening {
+		// After the step, which may add its own cooling time, and before the
+		// frame is recorded: the film's clock is the only one that counts.
+		seconds := (float64(cursor.ShotTick) + cursor.Fraction) / film.SimulationTPS
+		g.cl.SetArrivalSeconds(float32(seconds))
+		if float32(seconds) >= drawlist.ArrivalCoolingEndSeconds {
+			g.opening = false
 		}
 	}
 	g.cl.SetTickFraction(float32(cursor.Fraction))
@@ -279,6 +308,28 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 	if g.drawn >= g.frames {
 		g.done = true
 	}
+}
+
+// census reports, at each cut, where the fires are relative to the scene
+// anchor. Framing a burning treeline is otherwise a guess per render.
+func (g *filmGame) census(shot string) {
+	cur := g.cl.Buffer().Current()
+	if cur == nil {
+		return
+	}
+	burning, sx, sz := 0, int64(0), int64(0)
+	for _, f := range cur.Features {
+		if f.IsBurning {
+			burning++
+			sx += int64(f.X.Int()) - int64(g.anchorX)
+			sz += int64(f.Z.Int()) - int64(g.anchorZ)
+		}
+	}
+	if burning > 0 {
+		sx, sz = sx/int64(burning), sz/int64(burning)
+	}
+	fmt.Fprintf(os.Stderr, "nanolathe: film: shot %q units=%d features=%d burning=%d (mean offset %d,%d) projectiles=%d\n",
+		shot, len(cur.Units), len(cur.Features), burning, sx, sz, len(cur.Projectiles))
 }
 
 // prepareScene is also the capture's error boundary: a failed incoming scene

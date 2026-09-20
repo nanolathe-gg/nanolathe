@@ -1,562 +1,618 @@
 {
-  "width": 1280,
-  "height": 720,
-  "fps": 60,
-  "clean": true,
-  "letterbox": 0.04,
-  "scene": {
+ "width": 1280,
+ "height": 720,
+ "fps": 60,
+ "clean": true,
+ "letterbox": 0.04,
+ "scene": {
+  "kind": "skirmish",
+  "map": "Greenhaven",
+  "seed": 7,
+  "opening": true
+ },
+ "shots": [
+  {
+   "name": "arrival",
+   "ticks": 300,
+   "score": "intro",
+   "scene": {
+    "kind": "skirmish",
+    "map": "Greenhaven",
+    "seed": 7,
+    "opening": true
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": 0,
+     "z": 0,
+     "zoom": 1.5,
+     "ease": "linear"
+    },
+    {
+     "tick": 70,
+     "x": 0,
+     "z": 0,
+     "zoom": 1.5,
+     "ease": "linear"
+    },
+    {
+     "tick": 300,
+     "x": -55,
+     "z": -70,
+     "zoom": 2.0,
+     "ease": "inout"
+    }
+   ],
+   "text": [
+    {
+     "at": 150,
+     "ticks": 150,
+     "style": "title",
+     "anim": "rise",
+     "in": 24,
+     "out": 10,
+     "lines": [
+      "TOTAL ANNIHILATION."
+     ],
+     "size": 0.1,
+     "y": 0.66,
+     "scrim": 0.2
+    },
+    {
+     "at": 180,
+     "ticks": 120,
+     "style": "subtitle",
+     "anim": "rise",
+     "in": 16,
+     "out": 10,
+     "lines": [
+      "BACK IN YOUR HANDS."
+     ],
+     "size": 0.034,
+     "y": 0.76,
+     "color": [
+      255,
+      190,
+      100
+     ]
+    }
+   ]
+  },
+  {
+   "name": "meet-the-engine",
+   "ticks": 135,
+   "scene": {
     "kind": "battle",
     "map": "Great Divide",
     "seed": 7,
-    "pre_ticks": 270,
-    "per_side": 160,
+    "pre_ticks": 230,
+    "roster": "mixed",
+    "per_side": 250,
     "buildings": 16,
     "factories": true,
-    "roster": "mixed"
-  },
-  "shots": [
+    "air": 18,
+    "columns": 12
+   },
+   "camera": [
     {
-      "name": "the-return",
-      "ticks": 90,
-      "camera": [
-        {
-          "tick": 0,
-          "x": 0,
-          "z": -100,
-          "zoom": 1.25,
-          "ease": "linear"
-        },
-        {
-          "tick": 90,
-          "x": 30,
-          "z": -65,
-          "zoom": 1.5,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 84,
-          "style": "title",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "TOTAL ANNIHILATION."
-          ],
-          "size": 0.1,
-          "y": 0.47,
-          "scrim": 0.22
-        },
-        {
-          "at": 25,
-          "ticks": 65,
-          "style": "subtitle",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "BACK IN YOUR HANDS."
-          ],
-          "size": 0.034,
-          "y": 0.57,
-          "color": [
-            255,
-            190,
-            100
-          ]
-        }
-      ]
+     "tick": 0,
+     "x": 0,
+     "z": -20,
+     "zoom": 0.5,
+     "ease": "linear"
     },
     {
-      "name": "meet-the-engine",
-      "ticks": 75,
-      "scene": {
-        "kind": "battle",
-        "map": "Comet Catcher",
-        "seed": 7,
-        "pre_ticks": 480,
-        "per_side": 160,
-        "buildings": 16,
-        "factories": true,
-        "roster": "mixed"
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": -70,
-          "z": 0,
-          "zoom": 1.6,
-          "ease": "linear"
-        },
-        {
-          "tick": 75,
-          "x": 30,
-          "z": -25,
-          "zoom": 1.9,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 69,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "MEET NANOLATHE."
-          ],
-          "size": 0.071,
-          "y": 0.78,
-          "scrim": 0.12
-        },
-        {
-          "at": 14,
-          "ticks": 61,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "An open-source engine for a legendary RTS."
-          ],
-          "size": 0.029,
-          "y": 0.84,
-          "font": "body"
-        }
-      ]
-    },
-    {
-      "name": "coastal-flyover",
-      "ticks": 90,
-      "scene": {
-        "kind": "battle",
-        "map": "Coast to Coast",
-        "seed": 7,
-        "pre_ticks": 60,
-        "per_side": 48,
-        "buildings": 0,
-        "factories": false,
-        "roster": "air",
-        "anchor": [
-          2450,
-          1000
-        ]
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": -380,
-          "z": -50,
-          "zoom": 1.6,
-          "ease": "linear"
-        },
-        {
-          "tick": 90,
-          "x": -280,
-          "z": -100,
-          "zoom": 1.9,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 84,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "A NEW WAVE."
-          ],
-          "size": 0.07,
-          "y": 0.78
-        },
-        {
-          "at": 12,
-          "ticks": 78,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "Modern GPU renderer / Water reflections"
-          ],
-          "size": 0.025,
-          "y": 0.84,
-          "color": [
-            255,
-            190,
-            100
-          ],
-          "font": "body"
-        }
-      ]
-    },
-    {
-      "name": "battle-light",
-      "ticks": 75,
-      "scene": {
-        "kind": "battle",
-        "map": "Great Divide",
-        "seed": 7,
-        "pre_ticks": 330,
-        "per_side": 160,
-        "buildings": 16,
-        "factories": true,
-        "roster": "mixed"
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": -60,
-          "z": -140,
-          "zoom": 2,
-          "ease": "linear"
-        },
-        {
-          "tick": 75,
-          "x": 55,
-          "z": -140,
-          "zoom": 2,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 69,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "LIGHT UP THE BATTLEFIELD."
-          ],
-          "size": 0.065,
-          "y": 0.79
-        },
-        {
-          "at": 12,
-          "ticks": 63,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "Dynamic lighting / Bloom / Heat distortion"
-          ],
-          "size": 0.025,
-          "y": 0.85,
-          "color": [
-            255,
-            190,
-            100
-          ],
-          "font": "body"
-        }
-      ]
-    },
-    {
-      "name": "impact-and-aftermath",
-      "ticks": 75,
-      "scene": {
-        "kind": "battle",
-        "map": "Comet Catcher",
-        "seed": 7,
-        "pre_ticks": 600,
-        "per_side": 160,
-        "buildings": 16,
-        "factories": true,
-        "roster": "mixed"
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": -70,
-          "z": 0,
-          "zoom": 2,
-          "ease": "linear"
-        },
-        {
-          "tick": 75,
-          "x": 60,
-          "z": 30,
-          "zoom": 2,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 69,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "EVERY IMPACT LEAVES A MARK."
-          ],
-          "size": 0.055,
-          "y": 0.8,
-          "scrim": 0.12
-        },
-        {
-          "at": 12,
-          "ticks": 63,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "Explosive light / Flying debris / Scorched ground"
-          ],
-          "size": 0.024,
-          "y": 0.855,
-          "color": [
-            255,
-            190,
-            100
-          ],
-          "font": "body"
-        }
-      ]
-    },
-    {
-      "name": "make-it-yours",
-      "ticks": 75,
-      "scene": {
-        "kind": "battle",
-        "map": "Great Divide",
-        "seed": 7,
-        "pre_ticks": 120,
-        "per_side": 128,
-        "buildings": 16,
-        "factories": true,
-        "roster": "mixed"
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": -600,
-          "z": 0,
-          "zoom": 1.75,
-          "ease": "linear"
-        },
-        {
-          "tick": 75,
-          "x": -550,
-          "z": -30,
-          "zoom": 2,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 69,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "OPEN SOURCE. MODDABLE. YOURS."
-          ],
-          "size": 0.066,
-          "y": 0.78
-        },
-        {
-          "at": 12,
-          "ticks": 63,
-          "style": "lower",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "MIT-licensed engine. Build on it."
-          ],
-          "size": 0.028,
-          "y": 0.845,
-          "color": [
-            255,
-            190,
-            100
-          ],
-          "font": "body"
-        }
-      ]
-    },
-    {
-      "name": "your-platform",
-      "ticks": 90,
-      "scene": {
-        "kind": "battle",
-        "map": "Greenhaven",
-        "seed": 7,
-        "pre_ticks": 600,
-        "per_side": 160,
-        "buildings": 16,
-        "factories": true,
-        "roster": "mixed"
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": 20,
-          "z": -80,
-          "zoom": 1.0,
-          "ease": "linear"
-        },
-        {
-          "tick": 90,
-          "x": -45,
-          "z": -30,
-          "zoom": 1.2,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 6,
-          "ticks": 84,
-          "style": "title",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "Windows / macOS / Linux"
-          ],
-          "size": 0.082,
-          "y": 0.47,
-          "scrim": 0.24
-        },
-        {
-          "at": 18,
-          "ticks": 72,
-          "style": "subtitle",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "YOUR NEXT SKIRMISH. YOUR PLATFORM."
-          ],
-          "size": 0.026,
-          "y": 0.57,
-          "color": [
-            255,
-            190,
-            100
-          ]
-        }
-      ]
-    },
-    {
-      "name": "join-the-return",
-      "ticks": 150,
-      "scene": {
-        "kind": "battle",
-        "map": "Great Divide",
-        "seed": 7,
-        "pre_ticks": 380,
-        "per_side": 160,
-        "buildings": 16,
-        "factories": true,
-        "roster": "mixed"
-      },
-      "camera": [
-        {
-          "tick": 0,
-          "x": 0,
-          "z": -80,
-          "zoom": 1.1,
-          "ease": "linear"
-        },
-        {
-          "tick": 150,
-          "x": 0,
-          "z": -100,
-          "zoom": 0.85,
-          "ease": "linear"
-        }
-      ],
-      "text": [
-        {
-          "at": 0,
-          "ticks": 150,
-          "style": "title",
-          "anim": "fade",
-          "in": 12,
-          "out": 1,
-          "lines": [
-            "NANOLATHE"
-          ],
-          "size": 0.135,
-          "y": 0.43,
-          "scrim": 0.64
-        },
-        {
-          "at": 12,
-          "ticks": 138,
-          "style": "subtitle",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "The next chapter is open source."
-          ],
-          "size": 0.034,
-          "y": 0.52
-        },
-        {
-          "at": 18,
-          "ticks": 132,
-          "style": "title",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "nanolathe.gg"
-          ],
-          "size": 0.058,
-          "y": 0.64,
-          "color": [
-            255,
-            190,
-            100
-          ],
-          "font": "body"
-        },
-        {
-          "at": 24,
-          "ticks": 126,
-          "style": "subtitle",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "Explore the engine. Try it. Make it yours."
-          ],
-          "size": 0.025,
-          "y": 0.715
-        },
-        {
-          "at": 18,
-          "ticks": 132,
-          "style": "caption",
-          "anim": "rise",
-          "in": 10,
-          "out": 8,
-          "lines": [
-            "Independent project / In development / Original TA assets required"
-          ],
-          "size": 0.021,
-          "y": 0.895
-        }
-      ]
+     "tick": 135,
+     "x": 20,
+     "z": -40,
+     "zoom": 1.7,
+     "ease": "in"
     }
-  ]
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 127,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "MEET NANOLATHE."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.12
+    },
+    {
+     "at": 18,
+     "ticks": 117,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "An open-source engine for a legendary RTS."
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "new-wave",
+   "ticks": 120,
+   "scene": {
+    "kind": "battle",
+    "map": "Coast To Coast",
+    "seed": 7,
+    "pre_ticks": 260,
+    "roster": "naval",
+    "per_side": 12,
+    "air": 18,
+    "gap": 380,
+    "columns": 3,
+    "patrol": true,
+    "buildings": -1
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": -330,
+     "z": -120,
+     "zoom": 1.5,
+     "ease": "linear"
+    },
+    {
+     "tick": 120,
+     "x": -200,
+     "z": -60,
+     "zoom": 1.9,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 112,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "A NEW WAVE."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.12
+    },
+    {
+     "at": 18,
+     "ticks": 102,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "Modern GPU renderer / Water reflections / Soft shadows"
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "battle-light",
+   "ticks": 105,
+   "scene": {
+    "kind": "battle",
+    "map": "Metal Heck",
+    "seed": 7,
+    "pre_ticks": 300,
+    "roster": "armor",
+    "per_side": 120,
+    "air": 14,
+    "columns": 12
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": -80,
+     "z": 0,
+     "zoom": 1.8,
+     "ease": "linear"
+    },
+    {
+     "tick": 105,
+     "x": 60,
+     "z": 20,
+     "zoom": 2.0,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 97,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "LIGHT UP THE BATTLEFIELD."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.12
+    },
+    {
+     "at": 18,
+     "ticks": 87,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "Dynamic lighting / Bloom / Heat distortion"
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "wildfire",
+   "ticks": 105,
+   "scene": {
+    "kind": "battle",
+    "map": "Great Divide",
+    "seed": 7,
+    "pre_ticks": 700,
+    "roster": "flame",
+    "per_side": 120,
+    "columns": 10
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": 120,
+     "z": -30,
+     "zoom": 1.6,
+     "ease": "linear"
+    },
+    {
+     "tick": 105,
+     "x": 215,
+     "z": -20,
+     "zoom": 2.0,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 97,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "THE FOREST BURNS."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.12
+    },
+    {
+     "at": 18,
+     "ticks": 87,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "Spreading fire / Smoke / Scorched ground"
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "aftermath",
+   "ticks": 105,
+   "scene": {
+    "kind": "battle",
+    "map": "Lava Run",
+    "seed": 7,
+    "pre_ticks": 520,
+    "roster": "heavy",
+    "per_side": 90,
+    "air": 8,
+    "columns": 9
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": 20,
+     "z": -170,
+     "zoom": 1.3,
+     "ease": "linear"
+    },
+    {
+     "tick": 105,
+     "x": 110,
+     "z": -200,
+     "zoom": 1.7,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 97,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "EVERY IMPACT LEAVES A MARK."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.12
+    },
+    {
+     "at": 18,
+     "ticks": 87,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "Cooling wrecks / Flying debris / Craters"
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "make-it-yours",
+   "ticks": 105,
+   "scene": {
+    "kind": "battle",
+    "map": "Ice Scream",
+    "seed": 7,
+    "pre_ticks": 200,
+    "roster": "kbots",
+    "per_side": 100,
+    "builders": 6,
+    "factories": true,
+    "columns": 6
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": -700,
+     "z": 0,
+     "zoom": 1.6,
+     "ease": "linear"
+    },
+    {
+     "tick": 105,
+     "x": -640,
+     "z": -20,
+     "zoom": 2.0,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 97,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "OPEN SOURCE. MODDABLE. YOURS."
+     ],
+     "size": 0.071,
+     "y": 0.78,
+     "scrim": 0.38
+    },
+    {
+     "at": 18,
+     "ticks": 87,
+     "style": "lower",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "MIT-licensed engine. Build on it."
+     ],
+     "size": 0.029,
+     "y": 0.84,
+     "font": "body"
+    }
+   ]
+  },
+  {
+   "name": "your-platform",
+   "ticks": 105,
+   "scene": {
+    "kind": "battle",
+    "map": "Gasbag Forests",
+    "seed": 7,
+    "pre_ticks": 420,
+    "roster": "kbots",
+    "per_side": 110,
+    "air": 12,
+    "columns": 7,
+    "patrol": true
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": 40,
+     "z": -40,
+     "zoom": 1.0,
+     "ease": "linear"
+    },
+    {
+     "tick": 105,
+     "x": -30,
+     "z": 0,
+     "zoom": 1.35,
+     "ease": "linear"
+    }
+   ],
+   "text": [
+    {
+     "at": 8,
+     "ticks": 97,
+     "style": "title",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "Windows / macOS / Linux"
+     ],
+     "size": 0.075,
+     "y": 0.47,
+     "scrim": 0.3
+    },
+    {
+     "at": 20,
+     "ticks": 85,
+     "style": "subtitle",
+     "anim": "rise",
+     "in": 10,
+     "out": 10,
+     "lines": [
+      "YOUR NEXT SKIRMISH. YOUR PLATFORM."
+     ],
+     "size": 0.034,
+     "y": 0.57,
+     "color": [
+      255,
+      190,
+      100
+     ]
+    }
+   ]
+  },
+  {
+   "name": "join-the-return",
+   "ticks": 180,
+   "scene": {
+    "kind": "battle",
+    "map": "Painted Desert",
+    "seed": 7,
+    "pre_ticks": 400,
+    "roster": "mixed",
+    "per_side": 220,
+    "air": 16,
+    "columns": 11,
+    "factories": true
+   },
+   "camera": [
+    {
+     "tick": 0,
+     "x": 0,
+     "z": -10,
+     "zoom": 1.6,
+     "ease": "linear"
+    },
+    {
+     "tick": 180,
+     "x": 0,
+     "z": -40,
+     "zoom": 0.5,
+     "ease": "out"
+    }
+   ],
+   "text": [
+    {
+     "at": 55,
+     "ticks": 125,
+     "style": "title",
+     "anim": "fade",
+     "in": 20,
+     "out": 1,
+     "lines": [
+      "NANOLATHE"
+     ],
+     "size": 0.135,
+     "y": 0.43,
+     "scrim": 0.5
+    },
+    {
+     "at": 67,
+     "ticks": 113,
+     "style": "subtitle",
+     "anim": "rise",
+     "in": 10,
+     "out": 8,
+     "lines": [
+      "The next chapter is open source."
+     ],
+     "size": 0.034,
+     "y": 0.52
+    },
+    {
+     "at": 73,
+     "ticks": 107,
+     "style": "title",
+     "anim": "rise",
+     "in": 10,
+     "out": 8,
+     "lines": [
+      "nanolathe.gg"
+     ],
+     "size": 0.058,
+     "y": 0.64,
+     "color": [
+      255,
+      190,
+      100
+     ],
+     "font": "body"
+    },
+    {
+     "at": 79,
+     "ticks": 101,
+     "style": "subtitle",
+     "anim": "rise",
+     "in": 10,
+     "out": 8,
+     "lines": [
+      "Explore the engine. Try it. Make it yours."
+     ],
+     "size": 0.025,
+     "y": 0.715
+    },
+    {
+     "at": 73,
+     "ticks": 107,
+     "style": "caption",
+     "anim": "rise",
+     "in": 10,
+     "out": 8,
+     "lines": [
+      "Independent project / In development / Original TA assets required"
+     ],
+     "size": 0.021,
+     "y": 0.895
+    }
+   ]
+  }
+ ]
 }

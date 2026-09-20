@@ -16,9 +16,9 @@ encoding both succeed; a failed render preserves an existing output. Python 3,
 Go, ffmpeg and retail assets are required. Keep the output outside the repository.
 The optional score uses a temporary WAV; omit `--score` for a silent render.
 
-The example is a 24-second announcement: eight shots across four maps, with
-separate armor and aircraft compositions, short feature captions, platform
-support, modding and a five-second website card. See [the edit notes](../films/README.md).
+The example is a 42-second announcement: a commander arrival, then eight
+staged battles on eight maps — land, sea, metal, lava, ice and forest — with
+short feature captions, platform support, modding and a website card. See [the edit notes](../films/README.md).
 
 To inspect frames instead of encoding them:
 
@@ -116,6 +116,44 @@ resources before composing the new scene.
 through the existing airborne creator and cruise-altitude interfaces, uses the
 ordinary flight order, and has no rear buildings or factory production. This
 is staged footage, not a new gameplay rule or a standard skirmish opening.
+
+Further rosters vary the footage: `naval` (battleships, cruisers, destroyers
+and patrol boats, staged on the widest open water the fixture can find),
+`heavy`, `kbots` and `flame`. Whatever the roster, anything that can fly starts
+in flight and patrols across the front, so no aircraft sits parked in frame.
+These scene fields shape a fixture further:
+
+| Field | Meaning |
+| --- | --- |
+| `air` | extra aircraft per side, scattered behind the line and patrolling over it |
+| `builders` | construction units per side, each queued three structures behind its line |
+| `columns`, `pitch`, `gap` | units per rank, their spacing, and half the distance between the armies |
+| `patrol` | ground units patrol across the front instead of moving to one goal |
+| `buildings` | `-1` stages none; zero keeps the default rear line |
+| `opening` | `skirmish` only: play the commander arrival, then build an extractor |
+
+A unit whose own movement class refuses its spot — a tank over water, a ship
+over a sandbar — is skipped and counted on stderr, so a formation can be drawn
+across a shoreline or a lava field. A map with no clean dry rectangle falls
+back to the window holding the most dry ground.
+
+Staged units get their session order queue bound at creation
+(`Session.BindStagedOrderQueue`). A freshly created unit has no queue, and an
+order pushed at it is dropped without a trace; footage staged before this was
+armies standing still until something came into weapon range.
+
+`opening` drives the modern arrival (DESIGN_GPU_RENDERER §36) from the shot's
+own clock: tile reveal, descent, impact, and the red-hot model cooling while
+the commander walks to the nearest permanent metal deposit and builds an
+extractor through the player's own command path. It needs a fresh scene with
+no `pre_ticks`, and must be the scene of the shot it opens.
+
+Explosion camera shake is always off in a capture, through the `+noshake`
+developer switch's own bit: under a scripted move it reads as judder.
+
+At every cut the capture prints a census — units, projectiles, and the number
+and mean anchor-relative offset of burning features — which is how a burning
+treeline is framed without guessing.
 
 An optional `anchor: [x, z]` gives an authored world-pixel centre for the fixture;
 without it, the battle fixture searches for a large dry area. Anchors and staged
@@ -218,7 +256,9 @@ FILM_SPECIMEN=/tmp/face.png go test ./internal/film -run TestFontSpecimen -count
 by `tools/film-score`, using Python's standard library. It contains no sampled
 music or retail game audio: a 120 BPM pulse, minor synth ostinato, cut-aligned
 impacts and transition swells, with a quieter resolving chord under the final
-shot. The source is MIT licensed with the rest of Nanolathe. It follows shot
+shot. A first shot marked `"score": "intro"` holds the beat back: a landing
+thud, the ostinato rising from halfway through, and the drums arriving on the
+first cut. The source is MIT licensed with the rest of Nanolathe. It follows shot
 boundaries automatically; omit the flag when taking the footage into an editor
 with another score. This is editorial sound design, not a gameplay-audio capture.
 
@@ -237,7 +277,7 @@ python3 -m unittest discover -s tools -p film_test.py
 
 ## Cost
 
-The announcement writes 1,440 frames at 1280×720/60 FPS. Cost depends on the
+The announcement writes 2,520 frames at 1280×720/60 FPS, in about 100 seconds here. Cost depends on the
 maps, unit counts, title sizes and detail-art cache; each fresh scene pays its
 own loading and warmup cost. Offline capture is not a real-time performance
 claim. It takes no benchmark host lock and must not run alongside a benchmark.
