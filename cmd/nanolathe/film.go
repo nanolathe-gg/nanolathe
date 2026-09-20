@@ -215,9 +215,9 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 		g.advance()
 		g.cl.BumpPresentationEpoch()
 		if cursor.Cut {
-			// A cut is not a camera move: collapse the blend onto the new
-			// shot's camera so the outgoing framing does not slide into it.
-			g.applyCamera(shot, float64(cursor.ShotTick+1))
+			// A cut is not a camera move: the step above already sampled the
+			// incoming shot's camera, so collapsing the blend onto that sample
+			// keeps the outgoing framing from sliding into it.
 			g.cl.SnapCameraBlend()
 		}
 	}

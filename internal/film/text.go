@@ -42,11 +42,10 @@ func MeasureText(text string, style TextStyle) float64 {
 // once and the compositor reads it for the shadow and the face, so overlapping
 // strokes composite as one shape instead of darkening at every join.
 type mask struct {
-	x0, y0       int // top-left in destination pixels
-	w, h         int
-	cov          []float32
-	inkX0, inkX1 int // occupied column range, for the reveal wipe
-	hasInk       bool
+	x0, y0 int // top-left in destination pixels
+	w, h   int
+	cov    []float32
+	hasInk bool
 }
 
 func newMask(x0, y0, w, h int) *mask {
@@ -56,7 +55,7 @@ func newMask(x0, y0, w, h int) *mask {
 	if h < 0 {
 		h = 0
 	}
-	return &mask{x0: x0, y0: y0, w: w, h: h, cov: make([]float32, w*h), inkX0: w, inkX1: 0}
+	return &mask{x0: x0, y0: y0, w: w, h: h, cov: make([]float32, w*h)}
 }
 
 // stroke rasterizes one segment as a round-capped bar of the given half width.
@@ -98,7 +97,6 @@ func (m *mask) stroke(ax, ay, bx, by, half float64) {
 			}
 			if c > 0.02 {
 				m.hasInk = true
-				m.inkX0, m.inkX1 = min(m.inkX0, x), max(m.inkX1, x)
 			}
 		}
 	}
