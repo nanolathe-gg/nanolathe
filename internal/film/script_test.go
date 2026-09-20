@@ -157,8 +157,8 @@ func TestSceneOverridesDefaultIndependentlyAndOnlyLoadAtCuts(t *testing.T) {
 }
 
 func TestSceneOverrideValidationNamesTheShot(t *testing.T) {
-	_, err := Parse([]byte(`{"shots":[{"name":"bad-cut","ticks":1,"scene":{"kind":"unknown","roster":"naval","pre_ticks":-1,"anchor":[1]}}]}`))
-	for _, want := range []string{"bad-cut", "unknown", "naval", "negative", "exactly two"} {
+	_, err := Parse([]byte(`{"shots":[{"name":"bad-cut","ticks":1,"scene":{"kind":"unknown","roster":"orbital","pre_ticks":-1,"anchor":[1]}}]}`))
+	for _, want := range []string{"bad-cut", "unknown", "orbital", "negative", "exactly two"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %v, want %q", err, want)
 		}

@@ -36,17 +36,35 @@ def render(script, destination):
             left[at] += value * lg
             right[at] += value * rg
 
+    intro = shots[0]["ticks"] / 30 if shots[0].get("score") == "intro" else 0
+
     # Minor pedal, with a slow moving fifth and octave: weight without narration.
     for start in range(0, math.ceil(duration), 4):
         for freq, gain, pan in ((73.416, .08, -.35), (110, .045, .35), (146.832, .025, 0)):
             event(start, min(4.3, duration - start),
-                  lambda t, p, f=freq, g=gain: g * min(1, t * 5) * min(1, (1-p)*8) *
+                  lambda t, p, f=freq, g=gain * (min(1, max(.2, start / intro)) if intro else 1): g * min(1, t * 5) * min(1, (1-p)*8) *
                   (math.sin(TAU*f*t) + .2*math.sin(TAU*f*2.003*t)), pan)
 
     closing = duration - shots[-1]["ticks"] / 30
+    # An "intro" first shot holds the beat back: a landing thud, then the
+    # ostinato rising from halfway through, and the drums arriving on the cut.
+    if intro:
+        event(1.23, 2.6, lambda t, p: .5*math.exp(-t*2.2)*math.sin(TAU*(34*t + 30*.12*(1-math.exp(-t/.12)))) +
+              .09*math.exp(-t*6)*noise.uniform(-1, 1))
+        event(intro-2.5, 2.5, lambda t, p: .075*p*p*p*noise.uniform(-1, 1), .2)
     step = 0
     while step * .25 < closing:
         start = step * .25
+        rise = 1 if start >= intro else max(0, (start - intro*.5) / (intro*.5)) ** 2
+        if rise <= 0:
+            step += 1
+            continue
+        if start < intro:
+            note = (146.832, 220, 293.665, 349.228, 293.665, 220, 174.614, 220)[step % 8]
+            event(start, .32, lambda t, p, f=note, g=.07*rise: g * min(1, t*200) * math.exp(-t*13) *
+                  (math.sin(TAU*f*t) + .27*math.sin(TAU*f*2*t) + .12*math.sin(TAU*f*3*t)), -.25 if step % 2 else .25)
+            step += 1
+            continue
         # Bass drum with a continuous falling-frequency phase and a dry transient.
         if step % 2 == 0:
             event(start, .42, lambda t, p: .44 * math.exp(-t*10) *
@@ -63,7 +81,10 @@ def render(script, destination):
         step += 1
 
     cut = 0
-    for shot in shots:
+    for index, shot in enumerate(shots):
+        if intro and index == 0:
+            cut += shot["ticks"] / 30
+            continue
         # Cuts get a sub impact and a stereo metallic tail; the preceding swell
         # is editorial sound design, not a claim to recorded gameplay audio.
         event(cut, 1.4, lambda t, p: .25*math.exp(-t*4)*math.sin(TAU*(38*t + 20*.1*(1-math.exp(-t/.1)))) +
