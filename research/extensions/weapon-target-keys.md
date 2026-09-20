@@ -6,8 +6,9 @@ no reader for.
 
 ## Evidence scope and sources
 
-This document records what three shipped content sets document and author. It
-does not establish either patched engine's admission algorithm, and it approves
+This document records what three shipped content sets document and author, and
+the implementation evidence the inspected Escalation engine build provides. It
+does not establish a complete admission predicate for any key, and it approves
 no Nanolathe behavior. Retail's own unit-to-unit target gate — the medium
 clauses, the `toairweapon` mover-mode clause and their order — stays owned by
 [06 R-WPN-05 §1](../retail-executable-spec/06-weapons-projectiles-damage-and-effects.md)
@@ -27,10 +28,12 @@ inspected on 19 September 2026.
 | ProTA | 4.8 | bundled `ProTA 4.8 changelog.txt` and the earlier changelogs back to `OTA 3.1 to ProTA 4.3 changelog.txt`; weapon sections in `WEAPONS.TDF` under the set's `weaponP` tree |
 | TA Zero | Alpha 5 | bundled `TA Zero Readme.txt` |
 
-No patch executable was analyzed and no third-party implementation source was
-read. Every count below is a census of authored TDF text read through
-Nanolathe's own loader with the matching content profile, at commit
-`1dbc8b84`. Retail counts are the same census over the stock install.
+No third-party implementation source was read. Every count below is a census
+of authored TDF text read through Nanolathe's own loader with the matching
+content profile, at commit `1dbc8b84`; retail counts are the same census over
+the stock install. In addition, the Escalation Gold 10.2.0 engine DLL and
+executable were inspected for the implementation evidence in its own section
+below.
 
 **Established — retail authors none of the four keys.** No stock weapon section
 authors `nottoair`, `toaironly`, `nottounderwater` or `surfacefire`, and the
@@ -102,6 +105,42 @@ features; none of them, and no line of the readme, mentions `toaironly` or any
 air-target restriction beyond the retail `NOTAIR` unit category used for
 selection hotkeys and bad-target categories.
 
+## Escalation implementation evidence
+
+**Established — the engine DLL parses the three keys as flags.** During weapon
+parsing the DLL reads `nottoair` and, when set, marks the weapon record with a
+high flag bit; it reads `surfacefire` and `nottounderwater` and, when set,
+registers the weapon in two separate parser-side tables. Every authored value
+is `1`, and the readers are set-if-nonzero.
+
+**Established — a validator cluster consults the tables.** Per-key validation
+hooks look a weapon up in the `surfacefire` or `nottounderwater` table while
+other weapon keys are parsed and reject the authored combination with a TDF
+error on a hit. One rule was decoded: a weapon registered as
+`nottounderwater` whose own geometry can sit at or below the global waterline
+is rejected (the weapon's height plus its offset is compared against the
+waterline value). The cluster's other rules were not individually decoded.
+
+**Established — the executable's acquisition routine changed.** Retail's
+autonomous weapon-acquisition routine tests one high weapon-flag bit as part
+of its per-weapon condition; the Escalation build requires an additional bit
+there, changes the eligible-slot test from separate flag checks to a combined
+mask, and adds a target-validation call whose failure clears the slot's stored
+target. The surrounding per-weapon and per-target checks are otherwise
+unchanged.
+
+**Supported inference.** The parser marks plus the acquisition change are the
+mechanism behind the keys' documented intent (restricting or extending what a
+weapon acquires); the validator cluster additionally refuses some authoring
+combinations.
+
+**Unknown — the bit-to-key mapping and the fire-time predicate.** Which flag
+bit each key sets, which table entry it consults, and how the acquisition
+routine's per-weapon condition reads them are not mapped, and the validator's
+waterline comparison need not be the predicate (if any) that admits surface or
+submerged targets at fire time. Versioned patch documentation, licensed
+source, or a bounded observation would settle it.
+
 ## Contracts
 
 **None of the four is Established, and Nanolathe implements none of them.**
@@ -162,12 +201,18 @@ not `surfacefire` — no inspected set authors either combination.
 
 ### `toaironly` — Unknown
 
-**Unknown.** Nothing establishes what this key admits. ProTA 4.8 documents it
-nowhere, no other inspected set authors it, and the only two weapons that carry
-it are `interceptor` weapons, whose retail target search scans projectiles
-rather than units [06 §3.1]. Its name suggests the retail `toairweapon` clause,
-but `toairweapon` has two further readers in retail — the attack-order
-resolver's return code and the fire-order handler's slot pick
+**Established — no reader is reachable in the inspected binaries.** The
+literal name appears in no shipped binary of the three packages (executables,
+`tdraw`/`tplayx`, `TAESC`/`eplayx`, `zdraw`/`zplayx` were all searched), and
+the retail weapon loader matches authored keys against its literal key
+vocabulary, so nothing resolves the key in these builds.
+
+**Unknown.** Nothing establishes what this key would admit. ProTA 4.8
+documents it nowhere, no other inspected set authors it, and the only two
+weapons that carry it are `interceptor` weapons, whose retail target search
+scans projectiles rather than units [06 §3.1]. Its name suggests the retail
+`toairweapon` clause, but `toairweapon` has two further readers in retail —
+the attack-order resolver's return code and the fire-order handler's slot pick
 [02 R-KEYS-01 §2] — so an author wanting only a restriction cannot be assumed
 to have wanted that key's other effects, and the reverse cannot be assumed
 either. Do not supply an admission test for it.
@@ -178,10 +223,11 @@ key, appropriately licensed source, or a bounded manual observation of a ProTA
 
 ## Open questions
 
-- **Unknown — which paths the keys reach.** For every key above, whether the
-  patched engine applies it at autonomous acquisition only, or also at manual
-  attack-order installation, guard replacement and the damage-reaction offer,
-  is unestablished. The inspected content cannot distinguish these.
+- **Unknown — what the keys change outside autonomous acquisition.** The
+  executable's autonomous acquisition routine is known to be modified, but
+  whether the keys also apply at manual attack-order installation, guard
+  replacement and the damage-reaction offer is unestablished. The inspected
+  content cannot distinguish these.
 - **Unknown — interaction with `toairweapon` and `waterweapon`.** No inspected
   set authors `nottoair` together with `toairweapon`, or `surfacefire` or
   `nottounderwater` without `waterweapon`, so no evidence covers those
