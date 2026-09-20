@@ -3962,7 +3962,22 @@ integer chamfer sweeps approximate distance up to 32 world pixels; a separable
 nine-tap blur smooths the distance channel without changing wet/dry labels, its
 sample spacing at least two world pixels so height-grid corners round even on the
 finest level. Bilinear sampling softens the mask while conservative coverage clips
-foam and dust. A future height-editing path must invalidate this cache as well as
+foam and dust.
+
+**The distance is measured from a rounded coast, not from the strict wet set**
+(`roundShoreline`). Terrain height is a sixteen-pixel grid, and where a beach is
+steep the sea-level contour of its bilinear surface hugs the cell edges, so the
+strict boundary is a staircase; the nine-tap blur is far too narrow to round
+sixteen-pixel steps, and the wave fronts and the shallow tint drew them. Three
+box passes approximate a Gaussian of about eight world pixels over the binary
+water reading, and water reading under three quarters is dropped from the
+distance source. Three quarters is the reading at the tip of a square dry
+corner, so the rounded coast passes outside every such corner and about six
+world pixels off a straight shore. Red stays the strict wet set, because wakes,
+reflections, the ring term and aircraft shadows gate on it. Every near-shore
+term in the shader rises from zero at the rounded coast, so the strict boundary
+is never the edge of anything drawn; the painted water between the two is left
+as authored and reads as the shallows. A future height-editing path must invalidate this cache as well as
 the painted terrain sources.
 
 A 128-pixel block index skips the water pass when no water intersects the view,
@@ -4740,8 +4755,10 @@ band lives on dry texels; a pixel with no water on its ring returns the painted
 colour unchanged, and the mask's alpha says so without a second lookup.
 
 On the water side, the result mixes eight percent toward a pale cyan
-`(0.62, 0.80, 0.84)`, scaled by one minus a 0.0-to-0.35 smoothstep of the shore
-distance, so water lightens as the bottom rises. Deep water is untouched.
+`(0.62, 0.80, 0.84)`, rising over a 0.0-to-0.10 smoothstep of the shore distance
+and falling over a 0.10-to-0.40 one, so water lightens as the bottom rises
+without the tint ending on the strict wet boundary (§26.3). Deep water is
+untouched.
 
 ### 32.4 Verification
 

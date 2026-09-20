@@ -76,6 +76,7 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 			blocks[(int(py)/waterBlockSize)*bw+int(px)/waterBlockSize] = true
 		}
 	}
+	roundShoreline(pixels, distance, w, h, step)
 	// Valid neighbours supply shore distance; no reads cross the source.
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
@@ -136,6 +137,53 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 	}
 	waterRingField(pixels, distance, w, h, step, blocks, bw, bh)
 	return
+}
+
+// roundShoreline takes the water the shore distance is measured from back to a
+// rounded coast (§32.3). Terrain height is a sixteen-pixel grid, and where a
+// beach is steep the sea-level contour of its bilinear surface hugs the cell
+// edges, so the strict wet set ends in a staircase that every wave front and
+// the shallow tint then trace. Three box passes approximate a Gaussian of about
+// eight world pixels; water whose blurred reading is under three quarters is
+// dropped from the distance source. Three quarters is the reading at the tip of
+// a square dry corner, so the rounded coast passes outside every such corner
+// and about six world pixels off a straight shore. Only the distance source
+// changes: red stays the strict wet set its other readers gate on.
+func roundShoreline(pixels []byte, distance []uint16, w, h, step int) {
+	radius := max(1, 8/step)
+	field, scratch := make([]uint16, w*h), make([]uint16, w*h)
+	for i := range field {
+		field[i] = uint16(pixels[i*4])
+	}
+	window := 2*radius + 1
+	for pass := 0; pass < 3; pass++ {
+		for y := 0; y < h; y++ {
+			row := field[y*w : (y+1)*w]
+			sum := 0
+			for k := -radius; k <= radius; k++ {
+				sum += int(row[min(max(k, 0), w-1)])
+			}
+			for x := 0; x < w; x++ {
+				scratch[y*w+x] = uint16(sum / window)
+				sum += int(row[min(x+radius+1, w-1)]) - int(row[max(x-radius, 0)])
+			}
+		}
+		for x := 0; x < w; x++ {
+			sum := 0
+			for k := -radius; k <= radius; k++ {
+				sum += int(scratch[min(max(k, 0), h-1)*w+x])
+			}
+			for y := 0; y < h; y++ {
+				field[y*w+x] = uint16(sum / window)
+				sum += int(scratch[min(y+radius+1, h-1)*w+x]) - int(scratch[max(y-radius, 0)*w+x])
+			}
+		}
+	}
+	for i, v := range field {
+		if v < 191 {
+			distance[i] = 0
+		}
+	}
 }
 
 // waterRingField writes the damp band's ring term (§32) into the mask's spare
@@ -458,13 +506,16 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  result := mix(warped.rgb*shade,vec3(0.40,0.67,0.78),crest*(0.04+strength*0.04)*deep)
  // Wave fronts travel down the smoothed shore-distance field. Broad crests
  // dissolve before the wet/dry boundary, so they do not trace its texel steps.
- shore := (1.0-smoothstep(0.35,0.95,mask.y))*smoothstep(0.03,0.22,mask.y)
+ shore := (1.0-smoothstep(0.35,0.95,mask.y))*smoothstep(0.0,0.25,mask.y)
  shorePatch := noise(world*0.025)
  lap := pow(max(0.0,sin(mask.y*10.0+t*1.6+shorePatch*3.0)),2.0)
  foam := shore*lap*(0.09+strength*0.105)*(0.50+0.50*shorePatch)*coverage
  result = mix(result,vec3(0.72,0.84,0.87),foam)
  // Shallow tint (§32): water lightens toward a pale cyan as the bottom rises.
- result = mix(result,vec3(0.62,0.80,0.84),0.08*(1.0-smoothstep(0.0,0.35,mask.y)))
+ // It rises from nothing at the rounded coast the distance is measured from,
+ // like every other term here, so the strict wet boundary — a staircase on a
+ // steep beach — is never the edge of anything drawn.
+ result = mix(result,vec3(0.62,0.80,0.84),0.08*smoothstep(0.0,0.10,mask.y)*(1.0-smoothstep(0.10,0.40,mask.y)))
  return vec4(mix(base.rgb,min(result,vec3(base.a)),coverage),base.a)
 }
 `
