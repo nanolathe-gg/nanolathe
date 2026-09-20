@@ -196,6 +196,7 @@ func TestRS06_FloatAudit(t *testing.T) {
 		"internal/platform/gpurender/lighting.go":          true, // Enhanced light response only, never simulation input [I2][DESIGN_GPU_RENDERER §23]
 		"internal/client/water_wakes.go":                   true, // Enhanced visible-path geometry, never simulation input [I2][DESIGN_GPU_RENDERER §26]
 		"internal/platform/gpurender/water_reflections.go": true, // reflection stroke length, presentation-only, never simulation input [I2][DESIGN_GPU_RENDERER §26.4]
+		"internal/film/text.go":                            true, // offline capture overlay stroke rasterizer, presentation-only, never on a sim path [I2][docs/FILM_CAPTURE.md]
 		"internal/platform/gpurender/glow.go":              true, // the glow stroke's length, presentation-only on the device path, never on a sim path [I2][DESIGN_GPU_RENDERER §19]
 	}
 	re := regexp.MustCompile(`math\.(Hypot|Sqrt|Acos)`)

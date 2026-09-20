@@ -130,7 +130,7 @@ func run(opts Options, out *os.File) error {
 	// A file-less headless report owns stdout as one JSON document. Windowed
 	// runs and headless runs with a separate report file retain the profile
 	// banner on stdout.
-	if (!opts.Headless || opts.Report != "") && opts.Shot == "" {
+	if (!opts.Headless || opts.Report != "") && opts.Shot == "" && opts.Film == "" {
 		fmt.Fprintf(out, "%s\n", version.ProfileID())
 	}
 
@@ -144,6 +144,10 @@ func run(opts Options, out *os.File) error {
 	// the selector the command line carried — is what the reports state
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 	opts.ContentProfile = content.profile
+
+	if opts.Film != "" {
+		return runFilm(opts, content)
+	}
 
 	if opts.ShotDebris != "" {
 		return runDebrisShot(opts, content)

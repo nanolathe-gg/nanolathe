@@ -74,6 +74,9 @@ type Options struct {
 	ShotDebrisBurn     int         // features ignited near the site instead of killing units
 	ShotDebrisLighting bool        // Enhanced Lighting switch for the capture
 	ShotDebrisGlow     bool        // Enhanced glow layer for the capture
+	Film               string      // film script path for the --film sequence capture; empty runs no film
+	FilmOut            string      // --film destination: a directory of PNGs, or "-" for raw RGBA on stdout
+	FilmFrames         int         // stop a --film capture after this many frames; 0 captures the whole script
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit", "confirm", "settings", "help" or "briefing"
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
@@ -188,6 +191,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.IntVar(&opts.ShotDebrisBurn, "shot-debris-burn", 0, "ignite this many features near the site instead of killing units, for a standing-fire capture")
 	set.BoolVar(&opts.ShotDebrisLighting, "shot-debris-lighting", true, "Enhanced battle lighting during a --shot-debris capture")
 	set.BoolVar(&opts.ShotDebrisGlow, "shot-debris-glow", true, "Enhanced glow layer during a --shot-debris capture")
+	set.StringVar(&opts.Film, "film", "", "compose the scripted sequence in this film script (docs/FILM_CAPTURE.md)")
+	set.StringVar(&opts.FilmOut, "film-out", "", "where --film writes: a directory of PNG frames, or \"-\" for a raw RGBA stream on stdout")
+	set.IntVar(&opts.FilmFrames, "film-frames", 0, "stop a --film capture after this many frames (0 captures the whole script)")
 	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\", \"confirm\", \"settings\", \"help\", or \"briefing\" (needs --mission)")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")

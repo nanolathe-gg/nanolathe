@@ -292,6 +292,12 @@ probes to the first committed local unit afterwards. Use the existing
 `--shot-renderer=both` route to inspect both executors. Captures and performance
 artifacts stay outside the repository.
 
+A moving check — a camera move, an effect over its whole lifetime, a title —
+is a film capture rather than a shot: `--film` composes a scripted sequence at
+exact sub-tick blend fractions and writes it as frames or as a stream an
+encoder reads ([FILM_CAPTURE](FILM_CAPTURE.md)). It is the promotional-footage
+route as well, and it takes no host lock.
+
 ### Validation recorded for the first delivery
 
 Focused publication tests compare both gameplay modes with observation off/on,
