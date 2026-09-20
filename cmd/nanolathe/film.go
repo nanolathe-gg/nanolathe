@@ -47,12 +47,53 @@ func runFilm(opts Options, cs *contentSet) error {
 	}
 	defer sink.close()
 
-	// The script owns the scene, so its map and seed outrank the command line.
-	if script.Scene.Map != "" {
-		opts.Map = script.Scene.Map
+	frames := script.TotalFrames()
+	if opts.FilmFrames > 0 && opts.FilmFrames < frames {
+		frames = opts.FilmFrames
 	}
-	if script.Scene.Seed != 0 {
-		opts.Seed = int64(script.Scene.Seed)
+	fmt.Fprintf(os.Stderr, "nanolathe: film: %d frames, %d ticks, %.1fs at %d FPS, %dx%d from a %dx%d surface, %d shots\n",
+		frames, script.TotalTicks(), script.Duration(), script.FPS, script.Width, script.Height, surfaceW, surfaceH, len(script.Shots))
+
+	game := &filmGame{
+		script: script, sink: sink, frames: frames,
+	}
+	game.loadScene = func(scene film.Scene) error { return game.startScene(opts, cs, scene) }
+	defer func() { game.cam.teardown(game.cl) }()
+	ebiten.SetWindowVisible(false)
+	ebiten.SetWindowSize(min(surfaceW, 1920), min(surfaceH, 1080))
+	if err := ebiten.RunGame(game); err != nil {
+		return fmt.Errorf("nanolathe: film: capture loop: %w", err)
+	}
+	if game.err != nil {
+		return game.err
+	}
+	if err := sink.close(); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "nanolathe: film: wrote %d frames to %s\n", game.drawn, opts.FilmOut)
+	return nil
+}
+
+// startScene replaces all battle-bound state at a cut. Draw calls it only
+// after the previous frame has finished recording and readback, so teardown
+// joins the client workers before retiring the renderer's uploaded sources.
+func (g *filmGame) startScene(opts Options, cs *contentSet, scene film.Scene) error {
+	g.cam.teardown(g.cl)
+	g.cam, g.cl, g.advance = nil, nil, nil
+	if g.gpu != nil {
+		g.gpu.ResetSources()
+		g.gpu = nil
+	}
+	surfaceW, surfaceH := g.script.Surface()
+	// The script owns the scene, so its map and seed outrank the command line.
+	if scene.Map != "" {
+		opts.Map = scene.Map
+	}
+	if scene.Seed != 0 {
+		opts.Seed = int64(scene.Seed)
+	}
+	if opts.Seed < 0 {
+		opts.Seed = 1 // Capture default; never derive a film seed from host time.
 	}
 	request, _, err := headlessFreshBattleRequest(opts, cs, newBattleSeedSource(opts))
 	if err != nil {
@@ -63,11 +104,11 @@ func runFilm(opts Options, cs *contentSet) error {
 		return err
 	}
 	sess := authoritative.Session
-	anchorX, anchorZ, err := stageFilmScene(script.Scene, sess)
+	anchorX, anchorZ, err := stageFilmScene(scene, sess)
 	if err != nil {
 		return err
 	}
-	if !script.Scene.Fog {
+	if !scene.Fog {
 		revealFilmScene(sess)
 	}
 
@@ -98,13 +139,13 @@ func runFilm(opts Options, cs *contentSet) error {
 	// skipped otherwise: synthesizing it costs seconds for pixels a native
 	// capture cannot show (DESIGN_GPU_RENDERER §14.1, §14.4).
 	detailOpts := opts
-	detailOpts.Zoom = camera.Zoom(int32(script.MaxZoom()*float64(camera.ZoomUnit) + 0.5))
+	detailOpts.Zoom = camera.Zoom(int32(g.script.MaxZoom()*float64(camera.ZoomUnit) + 0.5))
 	b, err = composeBattleEntryWithDetail(sess, sess.Catalog, cs, cl, nil, captureDetailArt(detailOpts, cs, sess.World))
 	if err != nil {
+		cl.Close()
 		return err
 	}
-	defer b.teardown(cl)
-	if !script.Messages {
+	if !g.script.Messages {
 		// The message column draws inside the world viewport, so a clean
 		// capture has to silence it at the ring rather than crop it away. One
 		// authored line shows none [07 R-HUD-03 §14.3].
@@ -127,50 +168,30 @@ func runFilm(opts Options, cs *contentSet) error {
 		cl.Step(tickSeconds)
 		cl.ObserveCommittedTick()
 	}
-	for i := 0; i < script.Scene.PreTicks; i++ {
+	for i := 0; i < scene.PreTicks; i++ {
 		advance()
 		// Drain each committed tick so the first captured frame does not
 		// replay the whole lead-in's retained sound and status queue.
 		cl.TickPresentationAudio()
 	}
 
-	frames := script.TotalFrames()
-	if opts.FilmFrames > 0 && opts.FilmFrames < frames {
-		frames = opts.FilmFrames
-	}
-	fmt.Fprintf(os.Stderr, "nanolathe: film: %d frames, %d ticks, %.1fs at %d FPS, %dx%d from a %dx%d surface, scene %q on %q\n",
-		frames, script.TotalTicks(), script.Duration(), script.FPS, script.Width, script.Height, surfaceW, surfaceH, script.Scene.Kind, opts.Map)
-
-	game := &filmGame{
-		script: script, cl: cl, sink: sink, frames: frames,
-		anchorX: anchorX, anchorZ: anchorZ, advance: advance, cam: b,
-	}
-	ebiten.SetWindowVisible(false)
-	ebiten.SetWindowSize(min(surfaceW, 1920), min(surfaceH, 1080))
-	if err := ebiten.RunGame(game); err != nil {
-		return fmt.Errorf("nanolathe: film: capture loop: %w", err)
-	}
-	if game.err != nil {
-		return game.err
-	}
-	if err := sink.close(); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "nanolathe: film: wrote %d frames to %s\n", game.drawn, opts.FilmOut)
+	g.cl, g.cam, g.advance = cl, b, advance
+	g.anchorX, g.anchorZ = anchorX, anchorZ
 	return nil
 }
 
 // filmGame drives the capture: one authoritative step per group of presented
 // frames, each frame composed at its own exact blend fraction.
 type filmGame struct {
-	script  *film.Script
-	cl      *client.Client
-	sink    filmSink
-	frames  int
-	anchorX int32
-	anchorZ int32
-	advance func()
-	cam     *battleSession
+	script    *film.Script
+	cl        *client.Client
+	sink      filmSink
+	frames    int
+	anchorX   int32
+	anchorZ   int32
+	advance   func()
+	loadScene func(film.Scene) error
+	cam       *battleSession
 
 	gpu      *gpurender.Renderer
 	overlay  *image.RGBA
@@ -191,6 +212,14 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 	if g.done {
 		return
 	}
+	cursor, ok := g.script.At(g.drawn)
+	if !ok {
+		g.done = true
+		return
+	}
+	if !g.prepareScene(cursor) {
+		return
+	}
 	w, h := g.script.Surface()
 	if g.gpu == nil {
 		gpu, err := gpurender.NewChecked(g.cl.PaletteTables(), w, h)
@@ -200,11 +229,6 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 		}
 		g.gpu, g.readback = gpu, make([]byte, 4*w*h)
 		g.overlay = image.NewRGBA(image.Rect(0, 0, g.script.Width, g.script.Height))
-	}
-	cursor, ok := g.script.At(g.drawn)
-	if !ok {
-		g.done = true
-		return
 	}
 	shot := &g.script.Shots[cursor.Shot]
 	if cursor.Phase == 0 {
@@ -255,6 +279,18 @@ func (g *filmGame) Draw(screen *ebiten.Image) {
 	if g.drawn >= g.frames {
 		g.done = true
 	}
+}
+
+// prepareScene is also the capture's error boundary: a failed incoming scene
+// ends the stream before any frame from that shot is written.
+func (g *filmGame) prepareScene(cursor film.Cursor) bool {
+	if scene := g.script.SceneAtCut(cursor); scene != nil {
+		if err := g.loadScene(*scene); err != nil {
+			g.fail(fmt.Errorf("nanolathe: film: shot %q: load scene: %w", g.script.Shots[cursor.Shot].Name, err))
+			return false
+		}
+	}
+	return true
 }
 
 // applyCamera installs the shot's camera for one tick. Zoom is set first: it

@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Regenerate film glyph atlases from the two pinned upstream TTFs.
+
+Requires Pillow 12.3.0 (FreeType 2.14.3). Usage:
+  tools/film-font /path/to/BarlowCondensed-ExtraBold.ttf /path/to/Barlow-Medium.ttf
+Source revision, checksums and license: internal/film/assets/README.md.
+"""
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from PIL import Image, ImageDraw, ImageFont
+
+CHARS = "".join(chr(i) for i in range(32, 127)) + "–—‘’“”×…"
+OUT = Path(__file__).resolve().parent.parent / "internal/film/assets"
+
+
+def generate(source, name):
+    font = ImageFont.truetype(source, 256)
+    cap = -font.getbbox("H", anchor="ls")[1]
+    atlas = Image.new("L", (2048, 2048))
+    draw = ImageDraw.Draw(atlas)
+    glyphs = {}
+    x = y = row_height = 0
+    for char in CHARS:
+        left, top, right, bottom = font.getbbox(char, anchor="ls")
+        width, height = right - left, bottom - top
+        if x + width + 4 > atlas.width:
+            x, y, row_height = 0, y + row_height + 4, 0
+        draw.text((x - left, y - top), char, font=font, fill=255, anchor="ls")
+        glyphs[char] = dict(x=x, y=y, w=width, h=height, left=left,
+                            top=top, advance=font.getlength(char))
+        x += width + 4
+        row_height = max(row_height, height)
+    kerning = {}
+    for a in CHARS:
+        for b in CHARS:
+            adjustment = font.getlength(a + b) - font.getlength(a) - font.getlength(b)
+            if adjustment:
+                kerning[a + b] = adjustment
+    atlas.crop((0, 0, atlas.width, y + row_height)).save(OUT / (name + ".png"))
+    (OUT / (name + ".json")).write_text(json.dumps(
+        dict(cap=cap, glyphs=glyphs, kerning=kerning), separators=(",", ":")) + "\n")
+    print(name, "source sha256:", hashlib.sha256(Path(source).read_bytes()).hexdigest())
+
+
+if len(sys.argv) != 3:
+    sys.exit(__doc__)
+generate(sys.argv[1], "display")
+generate(sys.argv[2], "body")

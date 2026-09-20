@@ -43,9 +43,9 @@ func TestMeasuredWidthMatchesDrawnInk(t *testing.T) {
 		t.Fatalf("DrawText returned %v but MeasureText says %v", width, measured)
 	}
 	ink := inkBounds(img, 0x20)
-	// The stroke has width, so the ink overhangs the advance by about half of
-	// it at each end. Anything further apart is a measurement bug.
-	slack := style.Size * style.weight()
+	// The face has side bearings and filtered edges; the ink should stay
+	// within one tenth of a cap height of the measured advance.
+	slack := style.Size * 0.1
 	if float64(ink.Min.X) < 100-slack || float64(ink.Min.X) > 100+slack {
 		t.Fatalf("ink starts at %d, want the pen at 100 within %v", ink.Min.X, slack)
 	}
@@ -62,12 +62,12 @@ func TestMeasuredWidthMatchesDrawnInk(t *testing.T) {
 // silently loses a letter and nobody notices until the render is watched.
 func TestEveryMappedGlyphDrawsInk(t *testing.T) {
 	style := TextStyle{Size: 40, Color: color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}}
-	for r := range face {
-		if r == ' ' {
+	for r := range textFace(style.Font).Glyphs {
+		if r == " " {
 			continue
 		}
 		img := flat(120, 120, 0x00)
-		DrawText(img, string(r), 20, 80, style, 1, math.Inf(1))
+		DrawText(img, r, 20, 80, style, 1, math.Inf(1))
 		if inkBounds(img, 0x00).Empty() {
 			t.Fatalf("glyph %q drew nothing", string(r))
 		}
@@ -81,11 +81,11 @@ func TestUnmappedRuneAdvancesLikeASpace(t *testing.T) {
 	if MeasureText("AéA", style) != MeasureText("A A", style) {
 		t.Fatal("an unmapped rune does not advance like a space")
 	}
-	if _, ok := lookupGlyph('é'); ok {
+	if _, normalized := textFace("display").glyph('é'); normalized != ' ' {
 		t.Fatal("an unmapped rune reported a glyph")
 	}
-	if _, ok := lookupGlyph('a'); !ok {
-		t.Fatal("lower case did not fold onto the face")
+	if _, normalized := textFace("display").glyph('a'); normalized != 'a' {
+		t.Fatal("lower case did not retain its glyph")
 	}
 }
 
@@ -156,5 +156,49 @@ func TestLetterboxCoversTopAndBottomOnly(t *testing.T) {
 	Letterbox(wide, 0.9)
 	if got := wide.Pix[wide.PixOffset(50, 100)]; got != 0x80 {
 		t.Fatalf("an over-large letterbox covered the centre (%d)", got)
+	}
+}
+
+// Both measurement and drawing use pair kerning; a headline must stay centred
+// when a kerning pair crosses the wipe edge.
+func TestFilmFontKerningAndLowerCase(t *testing.T) {
+	for _, name := range []string{"display", "body"} {
+		style := TextStyle{Size: 80, Font: name}
+		if MeasureText("AV", style) >= MeasureText("A", style)+MeasureText("V", style) {
+			t.Fatalf("%s did not apply AV kerning", name)
+		}
+		if MeasureText("nanolathe", style) == MeasureText("NANOLATHE", style) {
+			t.Fatalf("%s folded lower case", name)
+		}
+	}
+}
+
+// A cue scrim follows the exact cue envelope, and only affects the provided
+// frame region. This also protects use with cropped frame views.
+func TestCueScrimEnvelopeAndBounds(t *testing.T) {
+	cue := Cue{At: 10, Ticks: 40, In: 10, Out: 10, Lines: []string{" "}, Scrim: 0.5}
+	for _, tc := range []struct {
+		at   float64
+		want uint8
+	}{{0, 200}, {10, 200}, {15, 150}, {25, 100}, {50, 200}} {
+		img := flat(20, 20, 200)
+		sub := img.SubImage(image.Rect(5, 5, 15, 15)).(*image.RGBA)
+		cue.Draw(sub, tc.at)
+		if got := img.RGBAAt(8, 8).R; got != tc.want {
+			t.Fatalf("at %v: scrim = %d, want %d", tc.at, got, tc.want)
+		}
+		if img.RGBAAt(0, 0).R != 200 {
+			t.Fatal("scrim escaped the frame bounds")
+		}
+	}
+	for _, value := range []float64{-0.1, 1.1, math.NaN()} {
+		cue.Scrim = value
+		if cue.Validate() == nil {
+			t.Fatalf("invalid scrim %v validated", value)
+		}
+	}
+	cue.Scrim, cue.Font = 0, "missing"
+	if cue.Validate() == nil {
+		t.Fatal("unknown font validated")
 	}
 }
