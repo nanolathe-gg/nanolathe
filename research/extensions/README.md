@@ -15,7 +15,14 @@ stable named heading and keeps its unresolved questions beside it.
 | Reference | Scope and source version |
 |---|---|
 | [Extended build menus](build-menus.md) | TA Zero Alpha 5 authored placements, repeated membership records, and documented twelve-slot sidebar; patch membership semantics remain unknown. |
-| [Non-retail weapon target keys](weapon-target-keys.md) | `nottoair`, `nottounderwater` and `surfacefire` as authored and described by TA: Escalation Gold 10.2.0, and `toaironly` as authored by ProTA 4.8; TA Zero Alpha 5 uses none. Documented intent and authored census only — no patch admission algorithm is established, and `toaironly` remains unknown. |
+| [Non-retail weapon target keys](weapon-target-keys.md) | `nottoair`, `nottounderwater` and `surfacefire` as authored and described by TA: Escalation Gold 10.2.0, and `toaironly` as authored by ProTA 4.8; TA Zero Alpha 5 uses none. Documented intent, authored census and the inspected Escalation parser/acquisition evidence — the complete admission predicate and `toaironly` remain unknown. |
+| [ProTA 4.8 engine package](prota-engine.md) | The stock-executable + engine-DLL package: documented global features (megamap, click snap, selection, construction-unit behaviour, session tooling) and the asset surface, which stays on the retail key/port/opcode set. |
+| [TA: Escalation Gold 10.2.0 engine package](taesc-engine.md) | The patched-executable + engine-DLL package: documented engine changes, the executable patch inventory, the extension-key registry (veterancy, preview pieces, rotations) with the authored key census, and the recorder-provided script-port surface. |
+| [TA Zero Alpha 5 engine package](ta-zero-engine.md) | The patched executable and renamed data trees/registry/save format, the executable patch inventory, the documented controls and commands, and the small asset extension surface (ports 70/74, `UnitControl`, `SoundLava`). |
+| [TA Demo Recorder session DLLs](ta-demo-recorder.md) | The community DirectPlay-replacement recorder shipped by all three packages: command catalog, feature families, the shared COB-extension ports, and the 3.9.2.0 → 3.9.2.416 version boundary. |
+| [Extended script ports](script-ports.md) | Recorder-provided ports `32` and `69`–`75` shared by all three packages: per-port arithmetic, authored census, and the remaining open questions. |
+| [Mod engine-package compatibility](mod-engine-compatibility.md) | Package architecture, input mappings and their collisions, content-key vocabulary, executable-level behavior differences, and whether one engine could host all three content sets. |
+| [Shared draw-DLL interface](draw-engine-interface.md) | The renderer family's megamap, whiteboard and selection interface: keys, zoom, icon configuration, ring thresholds, chat-stream markers, drag-filter masks, and the per-build preference-key differences. |
 
 ## Evidence policy
 
