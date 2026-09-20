@@ -1,44 +1,89 @@
-#!/bin/sh
-# Render a film script straight into a video file. Retail assets required.
-#
-#   tools/film <script.json> <out.mp4> [extra --film flags]
-#
-# The capture streams packed RGBA on stdout and ffmpeg encodes it; nothing
-# intermediate is written, so a 4K reel costs no disk beyond the result. Frame
-# pacing comes from the script's fps, not from how long a frame took to
-# compose. See docs/FILM_CAPTURE.md.
-set -eu
-if [ $# -lt 2 ]; then
-	echo "usage: tools/film <script.json> <out.mp4> [--film-frames N] [--root DIR]" >&2
-	exit 2
-fi
-script=$1
-out=$2
-shift 2
-cd "$(git rev-parse --show-toplevel)"
-script=$(cd "$(dirname "$script")" && pwd)/$(basename "$script")
-case $out in
-/*) ;;
-*) out=$PWD/$out ;;
-esac
-command -v ffmpeg >/dev/null || { echo "nanolathe: film: ffmpeg is not on PATH" >&2; exit 1; }
+#!/usr/bin/env python3
+"""Capture a film, optionally score it, and atomically publish a checked MP4."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
 
-# The script owns the frame size and rate; read them back so the encoder is
-# told the same numbers rather than a second copy of them.
-read -r width height fps <<EOF2
-$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s.get("width",1920), s.get("height",1080), s.get("fps",60))' "$script")
-EOF2
 
-# A build inside a git worktree carries no VCS stamp; keep the binary out of
-# the pipe by building it first, so only frames reach ffmpeg's stdin.
-bin=$(mktemp -d)/nanolathe-film
-go build -o "$bin" ./cmd/nanolathe
-trap 'rm -rf "$(dirname "$bin")"' EXIT
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("script", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--score", action="store_true", help="add the original procedural trailer score")
+    parser.add_argument("--fade-out", type=float, default=0, help="fade the final picture to black over this many seconds")
+    parser.add_argument("--film-frames", type=int, default=0, help="stop after this many presented frames")
+    args, capture_flags = parser.parse_known_args()
+    script, output = args.script.resolve(), args.output.resolve()
+    root = Path(__file__).resolve().parent.parent
+    if not shutil.which("ffmpeg"):
+        parser.error("ffmpeg is not on PATH")
+    data = json.loads(script.read_text())
+    width, height, fps = (data.get(key, default) or default for key, default in
+                          (("width", 1920), ("height", 1080), ("fps", 60)))
+    if min(width, height, fps) <= 0:
+        parser.error("width, height and fps must be positive")
+    duration = sum(shot["ticks"] for shot in data["shots"]) / 30
+    if args.film_frames > 0:
+        duration = min(duration, args.film_frames / fps)
+        capture_flags += ["--film-frames", str(args.film_frames)]
+    if args.fade_out < 0 or args.fade_out > duration:
+        parser.error("fade-out must be between zero and the captured duration")
+    if not output.parent.is_dir():
+        parser.error(f"output directory does not exist: {output.parent}")
+    # Stage beside the destination: replacing it is atomic even across filesystems.
+    with tempfile.TemporaryDirectory(prefix="nanolathe-film-") as work, \
+            tempfile.TemporaryDirectory(prefix=".nanolathe-film-", dir=output.parent) as publish:
+        binary = Path(work) / ("nanolathe-film.exe" if os.name == "nt" else "nanolathe-film")
+        staged = Path(publish) / "capture.mp4"
+        subprocess.run(["go", "build", "-o", str(binary), "./cmd/nanolathe"], cwd=root, check=True)
+        audio = []
+        if args.score:
+            score = Path(work) / "score.wav"
+            subprocess.run([sys.executable, str(root / "tools/film-score"), str(script), str(score)], check=True)
+            audio = ["-i", str(score)]
+        encoder = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y",
+                   "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", f"{width}x{height}",
+                   "-framerate", str(fps), "-i", "pipe:0", *audio,
+                   "-map", "0:v:0", "-c:v", "libx264", "-preset", "slow", "-crf", "16",
+                   "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        if args.fade_out:
+            encoder += ["-vf", f"fade=t=out:st={duration-args.fade_out:.6f}:d={args.fade_out:.6f}"]
+        if args.score:
+            encoder += ["-map", "1:a:0", "-c:a", "aac", "-b:a", "192k", "-shortest"]
+        else:
+            encoder += ["-an"]
+        encoder += [str(staged)]
+        capture = subprocess.Popen([str(binary), "--film", str(script), "--film-out", "-", *capture_flags],
+                                   cwd=root, stdout=subprocess.PIPE)
+        encode = None
+        try:
+            encode = subprocess.Popen(encoder, stdin=capture.stdout)
+            capture.stdout.close()
+            encode_status = encode.wait()
+            if encode_status and capture.poll() is None:
+                capture.terminate()
+            capture_status = capture.wait()
+            if capture_status or encode_status:
+                raise RuntimeError(f"capture exited {capture_status}; encoder exited {encode_status}; output was not replaced")
+            os.replace(staged, output)
+        finally:
+            if capture.stdout:
+                capture.stdout.close()
+            for process in (capture, encode):
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    process.wait()
+    print(f"nanolathe: film: wrote {output} ({width}x{height} at {fps} FPS)", file=sys.stderr)
 
-"$bin" --film "$script" --film-out - "$@" |
-	ffmpeg -hide_banner -loglevel warning -y \
-		-f rawvideo -pixel_format rgba -video_size "${width}x${height}" -framerate "$fps" \
-		-i - -an \
-		-c:v libx264 -preset slow -crf 16 -pix_fmt yuv420p -movflags +faststart \
-		"$out"
-echo "nanolathe: film: wrote $out (${width}x${height} at ${fps} FPS)" >&2
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"nanolathe: film: {error}", file=sys.stderr)
+        sys.exit(1)

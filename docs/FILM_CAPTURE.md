@@ -6,12 +6,19 @@ demonstration footage is made: a film script names a scene, the shots that look
 at it, the camera move inside each shot and the titles drawn over them.
 
 ```
-tools/film films/announce.json /tmp/announce.mp4
+tools/film films/announce.json /tmp/announce.mp4 --score --fade-out 0.5
 ```
 
 `tools/film` builds the binary, streams packed RGBA on stdout and hands it to
-ffmpeg; nothing intermediate is written, so a 4K reel costs no disk beyond the
-result. Retail assets are required. Keep the output outside the repository.
+ffmpeg. No intermediate frame files are written. The encoder writes a temporary
+MP4 beside the destination and replaces the destination only after capture and
+encoding both succeed; a failed render preserves an existing output. Python 3,
+Go, ffmpeg and retail assets are required. Keep the output outside the repository.
+The optional score uses a temporary WAV; omit `--score` for a silent render.
+
+The example is a 24-second announcement: eight shots across four maps, with
+separate armor and aircraft compositions, short feature captions, platform
+support, modding and a five-second website card. See [the edit notes](../films/README.md).
 
 To inspect frames instead of encoding them:
 
@@ -96,7 +103,29 @@ is pinned by the performance baselines it feeds
 * `skirmish` — an ordinary fresh battle, framed on the viewing player's own
   start. Quieter footage: a base, not a front.
 
-`pre_ticks` advances the scene before the first frame is written. `fog` keeps
+The top-level `scene` starts the film. A shot may carry its own complete
+`scene` object to load a fresh map/session at that cut; shots without one
+continue the current session. Each override gets independent defaults, not
+values inherited from the previous scene. The first shot's override, if any,
+replaces the top-level scene before rendering. The capture stays inside one
+Ebitengine loop and retires the previous client's workers and map-bound GPU
+resources before composing the new scene.
+
+`roster` selects a capture composition: `mixed` (the original combined force),
+`armor` (armed ground vehicles) or `air` (authored fighters/bombers). Air starts
+through the existing airborne creator and cruise-altitude interfaces, uses the
+ordinary flight order, and has no rear buildings or factory production. This
+is staged footage, not a new gameplay rule or a standard skirmish opening.
+
+An optional `anchor: [x, z]` gives an authored world-pixel centre for the fixture;
+without it, the battle fixture searches for a large dry area. Anchors and staged
+positions must fit the map. This allows an aerial battle over a coast without
+asking the dry-land search to find an ocean. The announcement uses
+`Coast to Coast`, anchor `[2450, 1000]`, for its reflected aircraft pass.
+
+A scene's explicit `seed` wins over the command-line seed; when neither supplies
+one, film capture uses seed 1. `pre_ticks` advances each new scene before its
+first frame is written. `fog` keeps
 the viewing player's fog; a film reveals the map by default, through the same
 path as the `+nowisee` developer command, because a film shows the battle
 rather than one side's knowledge of it.
@@ -142,10 +171,13 @@ it is a game.
 
 ## Titles
 
-Overlay text is drawn onto the composed frame after readback. It is our own
-monoline stroke face, not a retail GAF font: promotional wording is Nanolathe's
-own, and a stroke outline stays crisp at any capture resolution. The face is
-upper case, and folds lower case onto it.
+Overlay text is drawn onto the composed frame after readback. Titles and lower
+thirds use **Barlow Condensed ExtraBold**; subtitles and captions use **Barlow
+Medium**. Both preserve mixed case. These are independently licensed OFL faces,
+not retail GAF fonts. The bundled high-resolution coverage atlases and metrics
+need no host font installation or new Go module. Provenance, pinned source
+hashes, the license and regeneration instructions are in
+[`internal/film/assets`](../internal/film/assets/README.md).
 
 | `style` | Where |
 | --- | --- |
@@ -164,36 +196,57 @@ upper case, and folds lower case onto it.
 `at` and `ticks` are the cue's start and length within its shot; `in` and `out`
 are the animation and fade lengths. `size` overrides the style's cap height as
 a fraction of frame height, `x`/`y` its anchor, `align` its alignment and
-`color` its face colour. Every cue carries a dark halo and a drop shadow, so a
-title stays legible crossing grass, smoke and unit art in the same line.
+`color` its face colour. `font: "display"` or `"body"` overrides the style's face. A subtle
+shadow and edge halo keep type legible without the old heavy stroke outlines.
+An optional `scrim` between 0 and 1 darkens the entire frame by that opacity,
+following the cue's fade envelope. Use it on only the first cue in a shot to
+avoid stacking scrims or dimming earlier text; the end card uses it to give the
+website a quiet background.
 
 An unknown style or animation is a script error rather than a default: a title
 that quietly does not appear costs a whole re-render to notice.
 
-To review the face itself — a stroke glyph can lose a segment and still measure
-and draw ink — write the specimen sheet and look at it:
+To review the typography, write the specimen sheet and look at it:
 
 ```
 FILM_SPECIMEN=/tmp/face.png go test ./internal/film -run TestFontSpecimen -count=1
 ```
 
+## Sound and encoding
+
+`tools/film --score` adds an original deterministic electronic score generated
+by `tools/film-score`, using Python's standard library. It contains no sampled
+music or retail game audio: a 120 BPM pulse, minor synth ostinato, cut-aligned
+impacts and transition swells, with a quieter resolving chord under the final
+shot. The source is MIT licensed with the rest of Nanolathe. It follows shot
+boundaries automatically; omit the flag when taking the footage into an editor
+with another score. This is editorial sound design, not a gameplay-audio capture.
+
+`--fade-out 0.5` fades the last half-second of the picture to black. Its timing
+uses the actual requested capture duration, including `--film-frames` limits.
+Output is H.264, 4:2:0, with fast-start metadata; scored output adds stereo AAC.
+The generated score fades to silence at the end of the full script.
+
+The exporter checks both child processes. A producer which fails after writing
+valid frames must not be mistaken for success just because ffmpeg can encode
+that short stream. Run the pipeline regression checks with:
+
+```
+python3 -m unittest discover -s tools -p film_test.py
+```
+
 ## Cost
 
-The reference reel — `films/announce.json`, 770 ticks of a 320-unit battle,
-1540 frames at 1920×1080, every Enhanced switch on — renders in about a minute
-on an M-series laptop, faster than the 25.7 seconds of footage it produces. It
-is a normal `go run`, not a benchmark: it takes no host lock and does not
-belong beside a benchmark run.
+The announcement writes 1,440 frames at 1920×1080/60 FPS. Cost depends on the
+maps, unit counts, title sizes and detail-art cache; each fresh scene pays its
+own loading and warmup cost. Offline capture is not a real-time performance
+claim. It takes no benchmark host lock and must not run alongside a benchmark.
 
 ## What it does not do yet
 
-* **No audio.** The capture composes frames only. `internal/audiobackend` is a
-  device seam, so a PCM mixdown driven at tick timestamps is possible, but it
-  does not exist; score the cut in post, or record a live pass for reference.
+* **No gameplay audio mixdown.** Capture composes frames only; the optional
+  procedural score is added by the encoder. The audio backend's device seam
+  could support a tick-timestamped PCM mixdown, but it does not exist.
 * **No saved-game scenes.** `--load-save` reaches the battle through the
-  windowed frontend, so a film cannot yet start from a save. This is the
-  obvious next scene kind: it is what turns "a staged fixture" into "the moment
-  from the game I just played".
+  windowed frontend, so a film cannot yet start from a save.
 * **No follow camera.** The camera takes scripted keys, not a unit to track.
-* **One scene per script.** Every shot looks at the same battle, at a different
-  time and from a different place.

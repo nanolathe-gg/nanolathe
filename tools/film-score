@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Original, deterministic electronic trailer score. No samples or game audio.
+
+The arrangement follows the film's shot boundaries, in seconds, with a 120 BPM
+pulse, D-minor synth ostinato, low impacts and reverse-noise transition swells.
+These are editorial choices, never game simulation behavior. Standard library
+only; output is 48 kHz stereo PCM. The source is covered by the project MIT license.
+"""
+from array import array
+import json
+import math
+from pathlib import Path
+import random
+import sys
+import wave
+
+RATE = 48000
+TAU = 2 * math.pi
+
+
+def render(script, destination):
+    shots = script["shots"]
+    duration = sum(shot["ticks"] for shot in shots) / 30
+    total = round(duration * RATE)
+    left, right = array("f", [0]) * total, array("f", [0]) * total
+    noise = random.Random(71)
+
+    def event(start, length, voice, pan=0):
+        first, count = round(start * RATE), round(length * RATE)
+        lg, rg = math.sqrt((1 - pan) / 2), math.sqrt((1 + pan) / 2)
+        for i in range(count):
+            at = first + i
+            if at < 0 or at >= total:
+                continue
+            value = voice(i / RATE, i / count)
+            left[at] += value * lg
+            right[at] += value * rg
+
+    # Minor pedal, with a slow moving fifth and octave: weight without narration.
+    for start in range(0, math.ceil(duration), 4):
+        for freq, gain, pan in ((73.416, .08, -.35), (110, .045, .35), (146.832, .025, 0)):
+            event(start, min(4.3, duration - start),
+                  lambda t, p, f=freq, g=gain: g * min(1, t * 5) * min(1, (1-p)*8) *
+                  (math.sin(TAU*f*t) + .2*math.sin(TAU*f*2.003*t)), pan)
+
+    closing = duration - shots[-1]["ticks"] / 30
+    step = 0
+    while step * .25 < closing:
+        start = step * .25
+        # Bass drum with a continuous falling-frequency phase and a dry transient.
+        if step % 2 == 0:
+            event(start, .42, lambda t, p: .44 * math.exp(-t*10) *
+                  math.sin(TAU*(48*t + 75*.025*(1-math.exp(-t/.025)))) +
+                  .045 * math.exp(-t*180) * noise.uniform(-1, 1))
+        if step % 4 == 2:
+            event(start, .18, lambda t, p: .12*math.exp(-t*23)*noise.uniform(-1, 1) +
+                  .06*math.exp(-t*28)*math.sin(TAU*175*t))
+        event(start, .07, lambda t, p: .025*math.exp(-t*65)*noise.uniform(-1, 1), .45 if step % 2 else -.45)
+        note = (146.832, 220, 293.665, 349.228, 293.665, 220, 174.614, 220)[step % 8]
+        strength = .052 if step % 2 else .075
+        event(start, .32, lambda t, p, f=note, g=strength: g * min(1, t*200) * math.exp(-t*13) *
+              (math.sin(TAU*f*t) + .27*math.sin(TAU*f*2*t) + .12*math.sin(TAU*f*3*t)), -.25 if step % 2 else .25)
+        step += 1
+
+    cut = 0
+    for shot in shots:
+        # Cuts get a sub impact and a stereo metallic tail; the preceding swell
+        # is editorial sound design, not a claim to recorded gameplay audio.
+        event(cut, 1.4, lambda t, p: .25*math.exp(-t*4)*math.sin(TAU*(38*t + 20*.1*(1-math.exp(-t/.1)))) +
+              .045*math.exp(-t*9)*noise.uniform(-1, 1))
+        if cut > 0:
+            event(cut-.45, .45, lambda t, p: .065*p*p*noise.uniform(-1,1), -.2)
+        cut += shot["ticks"] / 30
+    # Let the CTA breathe on a resolving D-minor chord, then fade to silence.
+    for freq, pan in ((146.832, -.6), (174.614, .6), (220, -.2), (293.665, .2)):
+        event(closing, duration-closing, lambda t, p, f=freq: .055*min(1,t*8)*math.exp(-t*.65)*
+              (math.sin(TAU*f*t)+.15*math.sin(TAU*f*2*t)), pan)
+
+    peak = max(max(abs(v) for v in left), max(abs(v) for v in right), .001)
+    gain = .88 / peak
+    pcm = array("h")
+    for i in range(total):
+        fade = min(1, i / (RATE*.012), (total-1-i) / (RATE*.8))
+        pcm.extend((round(left[i]*gain*fade*32767), round(right[i]*gain*fade*32767)))
+    if sys.byteorder != "little":
+        pcm.byteswap()
+    with wave.open(str(destination), "wb") as output:
+        output.setnchannels(2)
+        output.setsampwidth(2)
+        output.setframerate(RATE)
+        output.writeframes(pcm.tobytes())
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        sys.exit("usage: tools/film-score <script.json> <out.wav>")
+    render(json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2]))
