@@ -9,6 +9,29 @@ import tempfile
 import unittest
 
 
+def load_film():
+    from importlib import machinery, util
+    loader = machinery.SourceFileLoader("film_tool", str(Path(__file__).with_name("film")))
+    module = util.module_from_spec(util.spec_from_loader("film_tool", loader))
+    loader.exec_module(module)
+    return module
+
+
+class ResizeTests(unittest.TestCase):
+    def test_height_keeps_framing_within_the_zoom_ceiling(self):
+        keys = lambda *zooms: [dict(tick=i, zoom=z) for i, z in enumerate(zooms)]
+        script = dict(width=1280, height=720, shots=[
+            dict(ticks=9, camera=keys(1.0, 1.2)),        # room to scale fully
+            dict(ticks=9, camera=keys(1.6, 2.0)),        # already at the ceiling: push ratio kept
+            dict(ticks=9, camera=keys(0.45, 0.7, 1.6)),  # strategic keys are absolute factors
+        ])
+        out = load_film().resize(script, 1080)
+        zooms = [[key["zoom"] for key in shot["camera"]] for shot in out["shots"]]
+        self.assertEqual((out["width"], out["height"]), (1920, 1080))
+        self.assertEqual(zooms, [[1.5, 1.8], [1.6, 2.0], [0.45, 0.7, 2.0]])
+        self.assertEqual(script["shots"][0]["camera"][0]["zoom"], 1.0, "the source script must not be edited")
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg required for encoder integration")
 class FilmPipelineTests(unittest.TestCase):
     def run_capture(self, failure):

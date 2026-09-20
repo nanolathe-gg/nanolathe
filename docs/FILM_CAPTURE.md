@@ -9,6 +9,14 @@ at it, the camera move inside each shot and the titles drawn over them.
 tools/film films/announce.json /tmp/announce.mp4 --score --fade-out 0.5
 ```
 
+For a larger master of the same cut, add `--height 1080`. A larger frame shows
+more world rather than more pixels per unit (§16), so the option raises each
+shot's zoom keys with the frame to keep its framing. The factor stops at 2×: a
+shot already there is scaled by less, all keys together, so it keeps its push
+and comes out wider than authored instead. Keys at or below 0.75× are left
+alone, because the strategic-icon thresholds are absolute factors. Titles and
+letterbox are fractions of the frame and need nothing.
+
 `tools/film` builds the binary, streams packed RGBA on stdout and hands it to
 ffmpeg. No intermediate frame files are written. The encoder writes a temporary
 MP4 beside the destination and replaces the destination only after capture and
