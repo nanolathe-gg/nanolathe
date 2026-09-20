@@ -206,7 +206,17 @@ func stageFilmScene(scene film.Scene, s *session.Session) (cx, cz int32, err err
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: film: scene centre=%d,%d terrain_relief=%d per_side=%d\n", centreX, centreZ, relief, scene.PerSide)
 
-	columns, pitch, standIn := scene.Columns, int32(scene.Pitch), int32(scene.Gap)
+	// A scene built in code skips the parser's defaults.
+	columns, pitch, standIn := max(scene.Columns, 1), int32(scene.Pitch), int32(scene.Gap)
+	if scene.Columns <= 0 {
+		columns = 8
+	}
+	if pitch <= 0 {
+		pitch = 48
+	}
+	if standIn <= 0 {
+		standIn = 320
+	}
 	buildingPitch := int32(96)
 	for side := range filmSideBuildings {
 		for _, name := range filmSideBuildings[side] {
@@ -228,7 +238,7 @@ func stageFilmScene(scene film.Scene, s *session.Session) (cx, cz int32, err err
 			ax, az := world.PlacementAnchor(fx, fz, int32(def.FootprintX), int32(def.FootprintZ))
 			fx, fz = world.PlacementCenter(ax, az, int32(def.FootprintX), int32(def.FootprintZ))
 		}
-		fy := max(s.World.HeightAt(fx, fz), s.World.SeaLevelWorld())
+		var fy numeric.Fixed
 		var h pool.Handle
 		var e error
 		if airborne && def.CanFly {
