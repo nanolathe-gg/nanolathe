@@ -6,39 +6,37 @@ import (
 	"math"
 )
 
-// TextStyle is one drawn run of the stroke face. Size is the cap height in
+// TextStyle is one drawn run of a bundled film face. Size is the cap height in
 // pixels; every other measurement is a fraction of it, so a script authored at
 // 1080p composes the same picture at any capture size.
 type TextStyle struct {
 	Size     float64    // cap height, pixels
-	Weight   float64    // stroke width as a fraction of Size
+	Weight   float64    // retained for source compatibility; face weight is authored
+	Font     string     // "display" (default) or "body"
 	Tracking float64    // extra advance between glyphs, in cap heights
 	Color    color.RGBA // opaque colour; the draw alpha scales it
 	Shadow   float64    // drop-shadow offset as a fraction of Size; 0 is none
 	Halo     float64    // dark outline radius as a fraction of Size; 0 is none
 }
 
-func (s TextStyle) weight() float64 {
-	if s.Weight <= 0 {
-		return 0.095
-	}
-	return s.Weight
-}
-
-// MeasureText reports the advance width of a run in pixels.
+// MeasureText reports the advance width of a run in pixels, including the
+// same pair kerning used by the rasterizer.
 func MeasureText(text string, style TextStyle) float64 {
+	face := textFace(style.Font)
 	w := 0.0
+	previous := rune(0)
 	for _, r := range text {
-		g, _ := lookupGlyph(r)
-		w += g.advance + style.Tracking
-	}
-	if w > 0 {
-		w -= style.Tracking
+		g, normalized := face.glyph(r)
+		if previous != 0 {
+			w += face.Kerning[string([]rune{previous, normalized})]/face.Cap + style.Tracking
+		}
+		w += g.Advance / face.Cap
+		previous = normalized
 	}
 	return w * style.Size
 }
 
-// mask is a coverage buffer for one drawn run: the stroke rasterizer fills it
+// mask is a coverage buffer for one drawn run: the glyph rasterizer fills it
 // once and the compositor reads it for the shadow and the face, so overlapping
 // strokes composite as one shape instead of darkening at every join.
 type mask struct {
@@ -104,28 +102,67 @@ func (m *mask) stroke(ax, ay, bx, by, half float64) {
 
 // buildRun rasterizes one line of text with its pen at (x, baseline).
 func buildRun(text string, x, baseline float64, style TextStyle) *mask {
-	size := style.Size
-	half := size * style.weight() / 2
-	width := MeasureText(text, style)
-	pad := half + 2
-	x0 := int(math.Floor(x - pad))
-	y0 := int(math.Floor(baseline - size - pad))
-	m := newMask(x0, y0, int(math.Ceil(width+2*pad)), int(math.Ceil(size*1.35+2*pad)))
-	pen := x
+	if style.Size <= 0 {
+		return newMask(0, 0, 0, 0)
+	}
+	face := textFace(style.Font)
+	scale := style.Size / face.Cap
+	type placedGlyph struct {
+		g *atlasGlyph
+		x float64
+	}
+	placed := make([]placedGlyph, 0, len(text))
+	pen, previous := x, rune(0)
+	minX, minY, maxX, maxY := x, baseline, x, baseline
 	for _, r := range text {
-		g, _ := lookupGlyph(r)
-		for _, stroke := range g.strokes {
-			for i := 0; i+1 < len(stroke); i++ {
-				a, b := stroke[i], stroke[i+1]
-				m.stroke(pen+a.X*size, baseline-size+a.Y*size,
-					pen+b.X*size, baseline-size+b.Y*size, half)
-			}
-			if len(stroke) == 1 {
-				a := stroke[0]
-				m.stroke(pen+a.X*size, baseline-size+a.Y*size, pen+a.X*size, baseline-size+a.Y*size, half)
+		g, normalized := face.glyph(r)
+		if previous != 0 {
+			pen += face.Kerning[string([]rune{previous, normalized})]*scale + style.Tracking*style.Size
+		}
+		if len(g.levels) > 0 {
+			placed = append(placed, placedGlyph{g, pen})
+			minX = math.Min(minX, pen+float64(g.Left-3)*scale)
+			maxX = math.Max(maxX, pen+float64(g.Left+g.W+3)*scale)
+			minY = math.Min(minY, baseline+float64(g.Top-3)*scale)
+			maxY = math.Max(maxY, baseline+float64(g.Top+g.H+3)*scale)
+		}
+		pen += g.Advance * scale
+		previous = normalized
+	}
+	// Extra destination pixels include the filter footprint at small sizes.
+	x0, y0 := int(math.Floor(minX))-2, int(math.Floor(minY))-2
+	m := newMask(x0, y0, int(math.Ceil(maxX))-x0+2, int(math.Ceil(maxY))-y0+2)
+	for _, item := range placed {
+		g := item.g
+		level, factor := 0, 1.0
+		for level+1 < len(g.levels) && scale*factor < 0.5 {
+			level++
+			factor *= 2
+		}
+		bitmap := g.levels[level]
+		pixelScale := scale * factor
+		left := item.x + float64(g.Left-2)*scale
+		top := baseline + float64(g.Top-2)*scale
+		x1 := max(0, int(math.Floor(left-pixelScale))-m.x0)
+		y1 := max(0, int(math.Floor(top-pixelScale))-m.y0)
+		x2 := min(m.w, int(math.Ceil(left+float64(bitmap.Bounds().Dx()+1)*pixelScale))-m.x0)
+		y2 := min(m.h, int(math.Ceil(top+float64(bitmap.Bounds().Dy()+1)*pixelScale))-m.y0)
+		for py := y1; py < y2; py++ {
+			v := (float64(py+m.y0)+0.5-top)/pixelScale - 0.5
+			by := int(math.Floor(v))
+			fy := v - float64(by)
+			for px := x1; px < x2; px++ {
+				u := (float64(px+m.x0)+0.5-left)/pixelScale - 0.5
+				bx := int(math.Floor(u))
+				fx := u - float64(bx)
+				a := float64(bitmap.GrayAt(bx, by).Y)*(1-fx) + float64(bitmap.GrayAt(bx+1, by).Y)*fx
+				b := float64(bitmap.GrayAt(bx, by+1).Y)*(1-fx) + float64(bitmap.GrayAt(bx+1, by+1).Y)*fx
+				coverage := float32((a*(1-fy) + b*fy) / 255)
+				idx := py*m.w + px
+				m.cov[idx] = max(m.cov[idx], coverage)
+				m.hasInk = m.hasInk || coverage > 0
 			}
 		}
-		pen += (g.advance + style.Tracking) * size
 	}
 	return m
 }
@@ -195,7 +232,7 @@ func blend8(dst, src uint8, a float64) uint8 {
 func DrawText(dst *image.RGBA, text string, x, baseline float64, style TextStyle, alpha, revealX float64) float64 {
 	m := buildRun(text, x, baseline, style)
 	// A title crosses grass, smoke and unit art in the same line, so the face
-	// carries its own contrast: a dark outline tight against the stroke, then
+	// carries its own contrast: a dark outline tight against the glyph, then
 	// the drop shadow, then the face itself.
 	if style.Halo > 0 {
 		r := max(1, int(math.Round(style.Halo*style.Size)))
@@ -204,13 +241,13 @@ func DrawText(dst *image.RGBA, text string, x, baseline float64, style TextStyle
 				if dx*dx+dy*dy > r*r || (dx == 0 && dy == 0) {
 					continue
 				}
-				m.composite(dst, dx, dy, color.RGBA{A: 0xff}, alpha*0.42, revealX, style.Size*0.08)
+				m.composite(dst, dx, dy, color.RGBA{A: 0xff}, alpha*0.14, revealX, style.Size*0.08)
 			}
 		}
 	}
 	if style.Shadow > 0 {
 		off := int(math.Round(style.Shadow * style.Size))
-		m.composite(dst, off, off, color.RGBA{A: 0xff}, alpha*0.55, revealX, style.Size*0.08)
+		m.composite(dst, off, off, color.RGBA{A: 0xff}, alpha*0.40, revealX, style.Size*0.08)
 	}
 	m.composite(dst, 0, 0, style.Color, alpha, revealX, style.Size*0.08)
 	return MeasureText(text, style)

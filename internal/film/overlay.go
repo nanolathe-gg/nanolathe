@@ -31,6 +31,8 @@ type Cue struct {
 	Align string   `json:"align"`
 	Color []uint8  `json:"color"`
 	Rule  bool     `json:"rule"`
+	Font  string   `json:"font"`
+	Scrim float64  `json:"scrim"` // full-frame black opacity, scaled by the cue envelope
 }
 
 // cueStyle is a named preset: the anchor, alignment and size a cue takes when
@@ -40,14 +42,14 @@ type cueStyle struct {
 	x, y     float64 // anchor, fractions of the frame
 	align    string
 	tracking float64
-	weight   float64
+	font     string
 }
 
 var cueStyles = map[string]cueStyle{
-	"title":    {size: 0.082, x: 0.5, y: 0.46, align: "center", tracking: 0.13, weight: 0.085},
-	"subtitle": {size: 0.030, x: 0.5, y: 0.60, align: "center", tracking: 0.22, weight: 0.10},
-	"lower":    {size: 0.038, x: 0.085, y: 0.80, align: "left", tracking: 0.05, weight: 0.095},
-	"caption":  {size: 0.026, x: 0.5, y: 0.90, align: "center", tracking: 0.10, weight: 0.10},
+	"title":    {size: 0.108, x: 0.5, y: 0.46, align: "center", tracking: 0.018, font: "display"},
+	"subtitle": {size: 0.027, x: 0.5, y: 0.57, align: "center", tracking: 0.075, font: "body"},
+	"lower":    {size: 0.055, x: 0.085, y: 0.80, align: "left", tracking: 0.02, font: "display"},
+	"caption":  {size: 0.024, x: 0.5, y: 0.90, align: "center", tracking: 0.035, font: "body"},
 }
 
 var cueAnims = map[string]bool{"fade": true, "rise": true, "wipe": true, "type": true}
@@ -67,6 +69,12 @@ func (c Cue) Validate() error {
 	}
 	if !cueAnims[c.anim()] {
 		return fmt.Errorf("text cue %q: unknown animation %q, expected one of %s", c.Lines[0], c.Anim, strings.Join(slices.Sorted(maps.Keys(cueAnims)), ", "))
+	}
+	if c.Font != "" && c.Font != "display" && c.Font != "body" {
+		return fmt.Errorf("text cue %q: unknown font %q, expected display or body", c.Lines[0], c.Font)
+	}
+	if math.IsNaN(c.Scrim) || c.Scrim < 0 || c.Scrim > 1 {
+		return fmt.Errorf("text cue %q: scrim must be between 0 and 1", c.Lines[0])
 	}
 	if len(c.Color) != 0 && len(c.Color) != 3 && len(c.Color) != 4 {
 		return fmt.Errorf("text cue %q: colour wants three or four components, got %d", c.Lines[0], len(c.Color))
@@ -131,6 +139,16 @@ func (c Cue) Draw(dst *image.RGBA, t float64) {
 	if !on || alpha <= 0 {
 		return
 	}
+	if c.Scrim > 0 {
+		for y := dst.Bounds().Min.Y; y < dst.Bounds().Max.Y; y++ {
+			for x := dst.Bounds().Min.X; x < dst.Bounds().Max.X; x++ {
+				o := dst.PixOffset(x, y)
+				for channel := 0; channel < 3; channel++ {
+					dst.Pix[o+channel] = blend8(dst.Pix[o+channel], 0, c.Scrim*alpha)
+				}
+			}
+		}
+	}
 	preset := cueStyles[c.style()]
 	bounds := dst.Bounds()
 	frameH := float64(bounds.Dy())
@@ -140,11 +158,14 @@ func (c Cue) Draw(dst *image.RGBA, t float64) {
 	}
 	style := TextStyle{
 		Size:     size * frameH,
-		Weight:   preset.weight,
+		Font:     preset.font,
 		Tracking: preset.tracking,
 		Color:    c.colour(),
-		Shadow:   0.07,
-		Halo:     0.055,
+		Shadow:   0.025,
+		Halo:     0.006,
+	}
+	if c.Font != "" {
+		style.Font = c.Font
 	}
 	anchorX, anchorY := preset.x, preset.y
 	if c.X > 0 {
@@ -158,11 +179,11 @@ func (c Cue) Draw(dst *image.RGBA, t float64) {
 		align = c.Align
 	}
 
-	leading := style.Size * 1.62
-	originX := anchorX * float64(bounds.Dx())
+	leading := style.Size * 1.38
+	originX := float64(bounds.Min.X) + anchorX*float64(bounds.Dx())
 	// The block is anchored on its own centre vertically, so a two-line title
 	// sits where a one-line title sat.
-	top := anchorY*frameH - leading*float64(len(c.Lines)-1)/2
+	top := float64(bounds.Min.Y) + anchorY*frameH - leading*float64(len(c.Lines)-1)/2
 	rise := 0.0
 	if c.anim() == "rise" {
 		rise = (1 - progress) * style.Size * 0.55
