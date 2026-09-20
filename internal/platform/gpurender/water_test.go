@@ -68,6 +68,52 @@ func TestWaterMaskProjectionAndLiquidGate(t *testing.T) {
 	}
 }
 
+// Shore distance is measured from a rounded coast, not the strict wet set: on a
+// steep beach the strict boundary is a staircase of height cells, and every
+// wave front and the shallow tint would trace it (§26.3). So no water texel on
+// the strict boundary may carry a world pixel of distance, red stays strict, and open water still
+// reaches full depth.
+func TestWaterShoreDistanceStartsOffTheStrictBoundary(t *testing.T) {
+	ter := waterFixtureTerrain()
+	// Step the bank two cells west on alternate pairs of rows.
+	attrs := make([]formats.TNTAttribute, 16*16)
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			attrs[y*16+x].Height = 4
+			if x >= 8-2*((y/2)%2) {
+				attrs[y*16+x].Height = 28
+			}
+		}
+	}
+	ter.Plot = world.ExpandPlot(attrs, 16, 16)
+	p, w, h, _, _, _, _ := waterMaskPixels(ter)
+	edge, deep, worst := 0, false, 0
+	// The map's first and last cell rows project onto invalid ground; the coast
+	// under test is the stepped bank between them.
+	for y := 32; y < h-32; y++ {
+		for x := 1; x < w-1; x++ {
+			i := (y*w + x) * 4
+			if p[i] != 255 {
+				continue
+			}
+			deep = deep || p[i+1] == 255
+			if p[i-4] == 255 && p[i+4] == 255 && p[i-w*4] == 255 && p[i+w*4] == 255 {
+				continue
+			}
+			edge++
+			worst = max(worst, int(p[i+1]))
+		}
+	}
+	// Eight levels are one world pixel of the 32 the channel spans; the strict
+	// boundary read twenty before the coast was rounded.
+	if worst >= 8 {
+		t.Fatalf("a strict boundary texel carries shore distance %d, a world pixel or more", worst)
+	}
+	if edge == 0 || !deep {
+		t.Fatalf("fixture lost its coast or its open water: edge=%d deep=%v", edge, deep)
+	}
+}
+
 // The damp band's ring term is built into the mask's alpha once per terrain
 // identity, so the shader reads it out of the tap it already takes rather than
 // sampling eight bilinear water readings on every pixel of a viewport-wide quad
@@ -386,7 +432,7 @@ func checkWaterSurfaceAdditions() error {
 		return err
 	}
 	defer noDamp.Deallocate()
-	noTint, err := variant("0.08*(1.0-smoothstep(0.0,0.35,mask.y))", "0.0*mask.y")
+	noTint, err := variant("0.08*smoothstep(0.0,0.10,mask.y)*(1.0-smoothstep(0.10,0.40,mask.y))", "0.0*mask.y")
 	if err != nil {
 		return err
 	}
