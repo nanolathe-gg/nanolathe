@@ -10,12 +10,42 @@ import sys
 import tempfile
 
 
+# The strategic thresholds are absolute factors (icons at and below 0.5x, the
+# mixed band up to 0.625x), so keys in that range keep their value at any size.
+STRATEGIC_ZOOM = 0.75
+MAX_ZOOM = 2.0
+
+
+def resize(data, height):
+    """Return the script at another frame height with its framing kept.
+
+    A larger frame shows more world, not more pixels per unit, so the zoom keys
+    rise with the frame. The factor tops out at 2x: a shot that would pass it is
+    scaled by less, all keys together, so its push keeps its ratio and the shot
+    comes out somewhat wider than authored rather than losing its move.
+    """
+    old = data.get("height") or 1080
+    scale = height / old
+    data = json.loads(json.dumps(data))
+    data["height"] = height
+    data["width"] = 2 * round((data.get("width") or 1920) * scale / 2)
+    for shot in data["shots"]:
+        tactical = [key.get("zoom") or 1 for key in shot.get("camera", []) if (key.get("zoom") or 1) > STRATEGIC_ZOOM]
+        factor = min(scale, MAX_ZOOM / max(tactical)) if tactical else 1
+        for key in shot.get("camera", []):
+            if (key.get("zoom") or 1) > STRATEGIC_ZOOM:
+                key["zoom"] = round((key.get("zoom") or 1) * factor, 4)
+    return data
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("script", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--score", action="store_true", help="add the original procedural trailer score")
     parser.add_argument("--fade-out", type=float, default=0, help="fade the final picture to black over this many seconds")
+    parser.add_argument("--height", type=int, default=0,
+                        help="render at this frame height, rescaling zoom keys so the framing is kept")
     parser.add_argument("--film-frames", type=int, default=0, help="stop after this many presented frames")
     args, capture_flags = parser.parse_known_args()
     script, output = args.script.resolve(), args.output.resolve()
@@ -23,6 +53,11 @@ def main():
     if not shutil.which("ffmpeg"):
         parser.error("ffmpeg is not on PATH")
     data = json.loads(script.read_text())
+    resized = None
+    if args.height:
+        if args.height <= 0 or args.height % 2:
+            parser.error("height must be a positive even number")
+        data = resized = resize(data, args.height)
     width, height, fps = (data.get(key, default) or default for key, default in
                           (("width", 1920), ("height", 1080), ("fps", 60)))
     if min(width, height, fps) <= 0:
@@ -38,6 +73,9 @@ def main():
     # Stage beside the destination: replacing it is atomic even across filesystems.
     with tempfile.TemporaryDirectory(prefix="nanolathe-film-") as work, \
             tempfile.TemporaryDirectory(prefix=".nanolathe-film-", dir=output.parent) as publish:
+        if resized is not None:
+            script = Path(work) / "resized.json"
+            script.write_text(json.dumps(resized))
         binary = Path(work) / ("nanolathe-film.exe" if os.name == "nt" else "nanolathe-film")
         staged = Path(publish) / "capture.mp4"
         subprocess.run(["go", "build", "-o", str(binary), "./cmd/nanolathe"], cwd=root, check=True)

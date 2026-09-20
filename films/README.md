@@ -8,6 +8,10 @@ feeling of returning to Total Annihilation, then give viewers one next step:
 tools/film films/announce.json /tmp/nanolathe-announce.mp4 --score --fade-out 0.5
 ```
 
+For the 1080p upload master, add `--height 1080`; the close shots already sit
+at the 2× zoom ceiling, so they show about half again as much battlefield as
+the 720p cut rather than the same framing at more pixels.
+
 The capture uses installed Total Annihilation content; no retail assets, frames,
 video or music are bundled here. The font atlases carry their OFL license in
 `internal/film/assets`. The optional electronic score is original procedural
