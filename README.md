@@ -10,6 +10,10 @@ behavior and compatibility gaps.
 
 [Official website](https://nanolathe.gg/) · [Get started](https://nanolathe.gg/get-started/) · [Documentation](https://nanolathe.gg/docs/) · [Contributors and AI agents](#contributors-and-ai-agents)
 
+[![Watch the Nanolathe announcement reel: 43 seconds of engine footage](https://nanolathe.gg/images/reel/poster.jpg)](https://www.youtube.com/watch?v=bMWSCOY0dTc)
+
+*Engine footage captured offline with [`--film`](docs/FILM_CAPTURE.md) from [`films/announce.json`](films/announce.json). Opens on YouTube.*
+
 The engine reads content from your own local Total Annihilation installation.
 Nanolathe's original code is [MIT licensed](LICENSE); the license does not grant
 rights to the original game or retail-derived artwork. Retail-derived remaster
