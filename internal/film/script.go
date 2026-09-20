@@ -14,7 +14,7 @@ import (
 // is an exact k/n rather than a wall-clock sample (DESIGN_GPU_RENDERER §13.5).
 const SimulationTPS = 30
 
-// Script is a complete capture: one scene, a list of shots cut back to back,
+// Script is a complete capture: an initial scene, shots cut back to back,
 // and the overlay each shot carries.
 type Script struct {
 	Width     int     `json:"width"`
@@ -59,20 +59,23 @@ func (s *Script) CropOrigin() (x, y int) {
 // retail opening: the units are placed directly (docs/FILM_CAPTURE.md
 // "Scenes").
 type Scene struct {
-	Kind      string `json:"kind"` // "battle" or "skirmish"
-	Map       string `json:"map"`
-	Seed      uint32 `json:"seed"`
-	PreTicks  int    `json:"pre_ticks"`
-	PerSide   int    `json:"per_side"`  // armed mobile units per side, "battle" only
-	Buildings int    `json:"buildings"` // rear buildings per side, "battle" only
-	Factories bool   `json:"factories"` // queue factory production, "battle" only
-	Fog       bool   `json:"fog"`       // keep the viewing player's fog; a film reveals by default
+	Kind      string  `json:"kind"`             // "battle" or "skirmish"
+	Anchor    []int32 `json:"anchor,omitempty"` // explicit fixture centre [x,z] in world pixels
+	Roster    string  `json:"roster"`           // "mixed" (default), "armor", or "air"; "battle" only
+	Map       string  `json:"map"`
+	Seed      uint32  `json:"seed"`
+	PreTicks  int     `json:"pre_ticks"`
+	PerSide   int     `json:"per_side"`  // armed mobile units per side, "battle" only
+	Buildings int     `json:"buildings"` // rear buildings per side, "battle" only
+	Factories bool    `json:"factories"` // queue factory production, "battle" only
+	Fog       bool    `json:"fog"`       // keep the viewing player's fog; a film reveals by default
 }
 
 // Shot is one continuous camera take. Shots cut hard: the camera jumps to the
 // next shot's first key on its first tick.
 type Shot struct {
 	Name   string      `json:"name"`
+	Scene  *Scene      `json:"scene,omitempty"` // a fresh scene at this cut; nil continues the current session
 	Ticks  int         `json:"ticks"`
 	Camera []CameraKey `json:"camera"`
 	Text   []Cue       `json:"text"`
@@ -124,16 +127,11 @@ func (s *Script) applyDefaults() {
 	if s.FPS <= 0 {
 		s.FPS = 60
 	}
-	if s.Scene.Kind == "" {
-		s.Scene.Kind = "battle"
-	}
-	if s.Scene.PerSide == 0 {
-		s.Scene.PerSide = 120
-	}
-	if s.Scene.Buildings == 0 {
-		s.Scene.Buildings = 12
-	}
+	s.Scene.applyDefaults()
 	for i := range s.Shots {
+		if s.Shots[i].Scene != nil {
+			s.Shots[i].Scene.applyDefaults()
+		}
 		if s.Shots[i].Name == "" {
 			s.Shots[i].Name = fmt.Sprintf("shot%02d", i+1)
 		}
@@ -150,6 +148,42 @@ func (s *Script) applyDefaults() {
 	}
 }
 
+func (s *Scene) applyDefaults() {
+	if s.Kind == "" {
+		s.Kind = "battle"
+	}
+	if s.PerSide == 0 {
+		s.PerSide = 120
+	}
+	if s.Buildings == 0 && s.Roster != "air" {
+		s.Buildings = 12
+	}
+}
+
+func (s *Scene) problems() []string {
+	var problems []string
+	switch s.Kind {
+	case "battle", "skirmish":
+	default:
+		problems = append(problems, fmt.Sprintf("unknown scene kind %q, expected \"battle\" or \"skirmish\"", s.Kind))
+	}
+	switch s.Roster {
+	case "", "mixed", "armor", "air":
+	default:
+		problems = append(problems, fmt.Sprintf("unknown scene roster %q, expected \"mixed\", \"armor\" or \"air\"", s.Roster))
+	}
+	if s.Anchor != nil && len(s.Anchor) != 2 {
+		problems = append(problems, "scene anchor must contain exactly two world coordinates [x,z]")
+	}
+	if s.Roster == "air" && (s.Buildings != 0 || s.Factories) {
+		problems = append(problems, "air scene cannot stage buildings or factories")
+	}
+	if s.PreTicks < 0 || s.PerSide < 0 || s.Buildings < 0 {
+		problems = append(problems, "scene pre_ticks, per_side and buildings must not be negative")
+	}
+	return problems
+}
+
 // Validate reports every reason the script cannot be captured, rather than the
 // first: a re-render is minutes, so a script is worth checking whole.
 func (s *Script) Validate() error {
@@ -160,15 +194,16 @@ func (s *Script) Validate() error {
 	if s.FPS%SimulationTPS != 0 {
 		problems = append(problems, fmt.Sprintf("fps %d must be a multiple of the %d Hz authoritative tick", s.FPS, SimulationTPS))
 	}
-	switch s.Scene.Kind {
-	case "battle", "skirmish":
-	default:
-		problems = append(problems, fmt.Sprintf("unknown scene kind %q, expected \"battle\" or \"skirmish\"", s.Scene.Kind))
-	}
+	problems = append(problems, s.Scene.problems()...)
 	if len(s.Shots) == 0 {
 		problems = append(problems, "script has no shots")
 	}
 	for _, shot := range s.Shots {
+		if shot.Scene != nil {
+			for _, problem := range shot.Scene.problems() {
+				problems = append(problems, fmt.Sprintf("shot %q: %s", shot.Name, problem))
+			}
+		}
 		if shot.Ticks <= 0 {
 			problems = append(problems, fmt.Sprintf("shot %q has no duration", shot.Name))
 		}
@@ -266,6 +301,21 @@ func (s *Script) At(frame int) (Cursor, bool) {
 		tick -= shot.Ticks
 	}
 	return Cursor{}, false
+}
+
+// SceneAtCut selects a new scene only on the first frame of a shot. The first
+// shot can replace the top-level scene, avoiding loading an unused battle.
+func (s *Script) SceneAtCut(cursor Cursor) *Scene {
+	if !cursor.Cut || cursor.Shot < 0 || cursor.Shot >= len(s.Shots) {
+		return nil
+	}
+	if scene := s.Shots[cursor.Shot].Scene; scene != nil {
+		return scene
+	}
+	if cursor.Shot == 0 {
+		return &s.Scene
+	}
+	return nil
 }
 
 // CameraAt evaluates the shot's camera at a tick. It returns the view centre

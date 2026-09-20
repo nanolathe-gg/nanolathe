@@ -6,10 +6,13 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/film"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // The film scene fixture. Like the benchmark's, it places units directly
@@ -26,6 +29,36 @@ var filmSideUnits = [2][]string{
 	{"corraid", "corlevlr", "corak", "corstorm", "corthud", "corpyro", "corfav", "correap", "corveng", "corshad"},
 }
 
+// Roster selections are capture composition choices; definitions, movement and
+// weapons still come from the installed catalog.
+func filmRoster(name string) ([2][]string, error) {
+	switch name {
+	case "", "mixed":
+		return filmSideUnits, nil
+	case "armor":
+		return [2][]string{
+			{"armflash", "armstump", "armzeus", "armwar"},
+			{"corraid", "corlevlr", "correap", "corthud"},
+		}, nil
+	case "air":
+		return [2][]string{{"armfig", "armthund"}, {"corveng", "corshad"}}, nil
+	default:
+		return [2][]string{}, fmt.Errorf("nanolathe: film: unknown roster %q", name)
+	}
+}
+
+// filmBattleCentre allows deliberately authored coast framing without changing
+// the benchmark's dry-land search or guessing a naval placement rule.
+func filmBattleCentre(scene film.Scene, terrain *world.Terrain) (int32, int32, int32, error) {
+	if scene.Anchor == nil {
+		return benchmarkBattleCentre(terrain)
+	}
+	if len(scene.Anchor) != 2 || scene.Anchor[0] < 0 || scene.Anchor[0] >= terrain.PlayRight || scene.Anchor[1] < 0 || scene.Anchor[1] >= terrain.PlayBottom {
+		return 0, 0, 0, fmt.Errorf("nanolathe: film: scene anchor %v is outside the playable map", scene.Anchor)
+	}
+	return scene.Anchor[0], scene.Anchor[1], 0, nil
+}
+
 // filmSideBuildings is the rear line: something to build, power and defend.
 var filmSideBuildings = [2][]string{
 	{"armsolar", "armlab", "armllt", "armrad"},
@@ -38,7 +71,11 @@ func stageFilmScene(scene film.Scene, s *session.Session) (cx, cz int32, err err
 	if scene.Kind == "skirmish" {
 		return filmSkirmishAnchor(s)
 	}
-	centreX, centreZ, relief, err := benchmarkBattleCentre(s.World)
+	roster, err := filmRoster(scene.Roster)
+	if err != nil {
+		return 0, 0, err
+	}
+	centreX, centreZ, relief, err := filmBattleCentre(scene, s.World)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -62,7 +99,7 @@ func stageFilmScene(scene film.Scene, s *session.Session) (cx, cz int32, err err
 		rows := (scene.PerSide + columns - 1) / columns
 		for i := 0; i < scene.PerSide+scene.Buildings; i++ {
 			building := i >= scene.PerSide
-			name := filmSideUnits[side][i%len(filmSideUnits[side])]
+			name := roster[side][i%len(roster[side])]
 			if building {
 				name = filmSideBuildings[side][(i-scene.PerSide)%len(filmSideBuildings[side])]
 			}
@@ -77,9 +114,27 @@ func stageFilmScene(scene film.Scene, s *session.Session) (cx, cz int32, err err
 				x = centreX + facing*(standIn+340) + (j%2)*buildingPitch
 				z = centreZ + (j/2)*buildingPitch - int32(scene.Buildings/4)*buildingPitch
 			}
+			if x < 0 || x >= s.World.PlayRight || z < 0 || z >= s.World.PlayBottom {
+				return 0, 0, fmt.Errorf("nanolathe: film: unit %q at %d,%d is outside the playable map", name, x, z)
+			}
 			fx, fz := numeric.Fixed(int64(x)<<16), numeric.Fixed(int64(z)<<16)
 			fy := s.World.HeightAt(fx, fz)
-			h, e := s.Units.Create(def, uint8(side), fx, fy, fz)
+			// An air-only fixture begins in flight, using the authored cruise
+			// altitude and existing creator/mover seam [04 §10.1]. Mixed
+			// scenes retain their original grounded startup.
+			if scene.Roster == "air" {
+				if !def.CanFly {
+					return 0, 0, fmt.Errorf("nanolathe: film: air roster unit %q cannot fly", name)
+				}
+				fy = movement.CruiseAltitudeForOffset(s.World, fx, fz, def.CruiseAlt)
+			}
+			var h pool.Handle
+			var e error
+			if scene.Roster == "air" {
+				h, e = s.Units.CreateWithMoverMode(def, uint8(side), fx, fy, fz, 2)
+			} else {
+				h, e = s.Units.Create(def, uint8(side), fx, fy, fz)
+			}
 			if e != nil {
 				return 0, 0, fmt.Errorf("nanolathe: film: create %s: %w", name, e)
 			}
@@ -106,6 +161,9 @@ func stageFilmScene(scene film.Scene, s *session.Session) (cx, cz int32, err err
 				continue
 			}
 			id := orders.Lookup("Move_Ground")
+			if scene.Roster == "air" {
+				id = orders.Lookup("VTOL_Move")
+			}
 			goalX := numeric.Fixed(int64(centreX-facing*standIn/2) << 16)
 			goalY := s.World.HeightAt(goalX, fz)
 			q.Push(id, orders.NewNodeForOrder(id, 0, goalX, goalY, fz, s.Clock.GlobalTick, h, false))

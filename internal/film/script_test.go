@@ -136,3 +136,39 @@ func TestCleanCaptureGrowsTheSurfaceByTheChrome(t *testing.T) {
 		t.Fatalf("a capture that keeps its interface composes %dx%d, want the frame size", w, h)
 	}
 }
+
+func TestSceneOverridesDefaultIndependentlyAndOnlyLoadAtCuts(t *testing.T) {
+	s := mustParse(t, `{"scene":{"kind":"skirmish","map":"original","seed":7,"pre_ticks":40,"per_side":8,"buildings":4,"factories":true,"fog":true},"shots":[{"ticks":1},{"ticks":1,"scene":{"map":"next"}},{"ticks":1}]}`)
+	next := s.Shots[1].Scene
+	if next.Kind != "battle" || next.PerSide != 120 || next.Buildings != 12 || next.Map != "next" || next.Seed != 0 || next.PreTicks != 0 || next.Factories || next.Fog {
+		t.Fatalf("override inherited previous scene instead of defaults: %+v", next)
+	}
+	for i, want := range []*Scene{&s.Scene, nil, next, nil, nil, nil} {
+		cursor, _ := s.At(i)
+		if got := s.SceneAtCut(cursor); got != want {
+			t.Fatalf("frame %d new scene = %p, want %p", i, got, want)
+		}
+	}
+	first := mustParse(t, `{"shots":[{"ticks":1,"scene":{"map":"first","roster":"air"}}]}`)
+	cursor, _ := first.At(0)
+	if first.SceneAtCut(cursor) != first.Shots[0].Scene || first.Shots[0].Scene.Buildings != 0 {
+		t.Fatal("first-shot override must replace the initial scene and air must default to no buildings")
+	}
+}
+
+func TestSceneOverrideValidationNamesTheShot(t *testing.T) {
+	_, err := Parse([]byte(`{"shots":[{"name":"bad-cut","ticks":1,"scene":{"kind":"unknown","roster":"naval","pre_ticks":-1,"anchor":[1]}}]}`))
+	for _, want := range []string{"bad-cut", "unknown", "naval", "negative", "exactly two"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %v, want %q", err, want)
+		}
+	}
+	for _, scene := range []string{`{"roster":"air","buildings":1}`, `{"roster":"air","factories":true}`, `{"anchor":[]}`} {
+		if _, err := Parse([]byte(`{"shots":[{"ticks":1,"scene":` + scene + `}]}`)); err == nil {
+			t.Fatalf("invalid scene accepted: %s", scene)
+		}
+	}
+	if _, err := Parse([]byte(`{"shots":[{"ticks":1,"scene":{"mapp":"typo"}}]}`)); err == nil {
+		t.Fatal("unknown override field accepted")
+	}
+}
