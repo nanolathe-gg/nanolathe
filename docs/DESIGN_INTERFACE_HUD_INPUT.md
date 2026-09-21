@@ -1091,11 +1091,21 @@ horizontal and the vertical bound, with the window focused, before either axis
 is forced onto its edge `[07 §10]`.
 
 Retail's pass has no minimap-region test and no modal test, and it consults
-window focus only inside that forced strip. This build additionally suppresses
-the **edge** disjuncts when the window is unfocused, when a modal is open, or
-when the pointer is over the minimap. That is host behaviour, not a retail
-contract; it is recorded here so the divergence is not mistaken for the traced
-pass, and it remains an open decision this document does not resolve.
+window focus only inside that forced strip `[07 R-CAM-01 §10]`. This build
+additionally suppresses the **edge** disjuncts when the window is unfocused and
+when a modal is open; that much is host behaviour, recorded here so the
+divergence is not mistaken for the traced pass.
+
+The pass no longer tests the minimap. It once did, and because the radar canvas
+is anchored at the screen's top-left corner (C4) that test cost the whole
+top-left corner plus the first 126 pixels of the top edge and of the left edge
+— the pointer positions a player uses to pan up and left. A captured minimap
+camera drag that reaches those canvas edges does not fight the restored edge
+disjuncts: the latch jumps the camera to the lens point of that same edge
+(canvas column 0 is the map's leftmost column, canvas row 0 its topmost row),
+so C3 has already pinned the axis, and the edge disjunct then pushes further in
+the direction the clamp holds. The camera does not move at all
+`[07 R-CAM-01 §11]`.
 
 **C3 — clamp.** Per axis, compute the maximum from the map size and the battle
 viewport's own span, clamp the negative side first, then clamp above the

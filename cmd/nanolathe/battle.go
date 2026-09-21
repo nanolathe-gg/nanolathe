@@ -1071,7 +1071,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// - one exclusive test per axis, Left before Right and Up before Down [07 §10][07 R-CRD-006 §1]
 	// - direction predicates: exact-edge bands plus the jointly gated beyond-edge forced strip [07 §10]
 	// - held-arrow gated on TALK.GUI suppression, edge never suppressed by TALK [07 §10]
-	// - minimap interaction region suppresses edge [07 §10]
+	// - the minimap does NOT suppress edge: retail's pass reads the cursor
+	//   position and the four arrows and nothing else — no minimap or GUI
+	//   hit test appears in its input list [07 R-CAM-01 §10]. Because the
+	//   radar canvas occupies the screen's top-left corner, such a test
+	//   costs the corner itself plus the first 126 pixels of both the top
+	//   and the left edge, which is where a player reaches for them (C2).
 	// - modal GUI suppresses edge [07 §10]
 	// - focus gating before edge [07 §10]
 	// - scroll setting from persisted settings byte [02 "Settings"] default 32 [C-5]
@@ -1129,12 +1134,18 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// Each predicate is its arrow held with TALK.GUI absent, OR its edge
 		// band [07 §10]. The held arm wins the magnitude form when both arms of
 		// one predicate hold, as the keyboard arm is tested first. The edge arm
-		// additionally requires focus, no modal and a pointer off the minimap.
+		// additionally requires focus and no modal; it deliberately does not
+		// test the minimap [07 R-CAM-01 §10]. A captured minimap camera drag
+		// that reaches the canvas edge cannot fight this pass: that latch jumps
+		// the camera to the lens point of the same screen edge — canvas x 0 is
+		// the leftmost column of the map, canvas y 0 its topmost row — so the
+		// clamp has already pinned the axis the edge disjunct then pushes
+		// further in the same direction [07 R-CAM-01 §11][C3].
 		heldLeft := kbd.KeyHeld(input.KeyLeft) && !talkActive
 		heldRight := kbd.KeyHeld(input.KeyRight) && !talkActive
 		heldUp := kbd.KeyHeld(input.KeyUp) && !talkActive
 		heldDown := kbd.KeyHeld(input.KeyDown) && !talkActive
-		edgeReady := focused && !modalActive && !overMinimap
+		edgeReady := focused && !modalActive
 		switch { // horizontal: Left predicate, then Right only if it failed
 		case heldLeft || (edgeReady && effX == 0 && effY < hi):
 			scroll(camera.DirLeft, heldLeft)
