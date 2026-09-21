@@ -135,9 +135,9 @@ type retailBattleHUD struct {
 	// FX radar markers are authored indexed GAF bytes. They are retained with
 	// the battle HUD so FINAL can copy the selected frame directly, without
 	// recoloring through the GUI palette [03 §3.9].
-	radarBlipGAF      *formats.GAFEntry
-	radarCommanderGAF *formats.GAFEntry
-	radarFeatureGAF   *formats.GAFEntry
+	radarBlipGAF   *formats.GAFEntry
+	radarHoverGAF  *formats.GAFEntry
+	radarMarkerGAF *formats.GAFEntry
 
 	// rebuildRadar's working storage, retained for the life of the HUD. The
 	// contact list and the two blip-art lists are refilled from the committed
@@ -147,10 +147,10 @@ type retailBattleHUD struct {
 	// per-frame allocations of the whole radar payload
 	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU"). The art entries point into the
 	// retained FX GAF, so a stale tail pins nothing the HUD does not already hold.
-	radarContacts     []render.MinimapContact
-	radarRegularArt   []*formats.GAFFrame
-	radarCommanderArt []*formats.GAFFrame
-	radarFinal        render.RadarSurface
+	radarContacts   []render.MinimapContact
+	radarRegularArt []*formats.GAFFrame
+	radarHoverArt   []*formats.GAFFrame
+	radarFinal      render.RadarSurface
 
 	// Retail's battle composer copies FINAL to the origin of the fixed 126-pixel
 	// radar canvas; aspect letterbox is inside that canvas [07 §6][07 §10].
@@ -437,16 +437,17 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	})
 	// The three contact-pass markers, in the order the contacts pass draws them
 	// [03 §3.9]: the regular unit blip is `radlogo`, whose ten frames are the
-	// ten player colours the owning-player selector indexes; the commander
-	// marker is `radlogohigh` frame 0, one ring around whichever unit's
-	// identity matches the commander slot; and the feature marker is
-	// `nuclogo`, indexed by the same owning-player selector as the blip.
+	// ten player colours the owning-player selector indexes; the hover marker
+	// is `radlogohigh` frame 0, one ring around whichever unit's identity
+	// matches the host's hovered-unit word [07 R-HUD-03 §1]; and the missile
+	// marker is `nuclogo`, indexed by the same owning-player selector as the
+	// blip.
 	// `h2oboom2` is loaded by the same FX initialization but no contacts-pass
 	// branch reads it.
 	if fx := loadGAFOptional(fs, "anims/fx.gaf", "radar FX markers [03 §3.9]"); fx != nil {
 		h.radarBlipGAF, _ = fx.Find("radlogo")
-		h.radarCommanderGAF, _ = fx.Find("radlogohigh")
-		h.radarFeatureGAF, _ = fx.Find("nuclogo")
+		h.radarHoverGAF, _ = fx.Find("radlogohigh")
+		h.radarMarkerGAF, _ = fx.Find("nuclogo")
 	}
 	h.minimapAnchor = hud.Rect{X1: 0, Y1: 0, X2: int32(camera.MinimapLongSide - 1), Y2: int32(camera.MinimapLongSide - 1)}
 	h.minimapAnchorOK = true

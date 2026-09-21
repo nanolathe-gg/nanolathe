@@ -615,6 +615,21 @@ func (s *Session) publishSnapshot(tick uint32) {
 					// other out-of-range byte resolves no entry and the
 					// resolver suppresses it there instead.
 					pv.Selector = int32(int8(uint8(w.Color)))
+					// The minimap projectile pass's art selector. Its three
+					// terms are weapon-definition flags, tested in this order:
+					// a `targetable` or `interceptor` weapon draws the
+					// `nuclogo` marker, a `noradar` weapon draws nothing at
+					// all, and every other weapon draws the 1×1 dot
+					// [03 §3.9] layer 6 [06 §11.3]. Resolving it once here is
+					// what keeps presentation off the compiled catalog [I6].
+					switch {
+					case w.Targetable || w.Interceptor:
+						pv.RadarArt = frame.RadarProjectileMarker
+					case w.NoRadar:
+						pv.RadarArt = frame.RadarProjectileHidden
+					default:
+						pv.RadarArt = frame.RadarProjectileDot
+					}
 				}
 			}
 			// The cached average floor height the ground shadow is anchored
@@ -707,7 +722,6 @@ func (s *Session) publishSnapshot(tick uint32) {
 				contact.Rings = existingContacts[contactIdx].Rings[:0]
 			}
 			if u.Def != nil {
-				contact.Commander = u.Def.Commander
 				contact.Graphic = u.Def.ObjectName
 				// The selected-unit circle gate of [03 §3.9] "Selected-unit
 				// circle gate correction" (Established): the selected/range-status
@@ -752,7 +766,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 		palette, paletteKnown := radarOwnerPalette(s, owner, p.OwnerKnown)
 		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
 			Kind: frame.RadarContactProjectile, Handle: p.Handle, Owner: owner, OwnerKnown: p.OwnerKnown, Palette: palette, PaletteKnown: paletteKnown, X: p.X, Y: p.Y, Z: p.Z,
-			Graphic: p.Graphic, AssetID: p.AssetID, Status: p.Flags,
+			Graphic: p.Graphic, AssetID: p.AssetID, Status: p.Flags, RadarArt: p.RadarArt,
 			Visible: radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
 		})
 	}

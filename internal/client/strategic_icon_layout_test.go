@@ -47,7 +47,6 @@ func TestStrategicIconIdentificationAndSlotReuse(t *testing.T) {
 	f.Units[0].Owner = 1
 	f.Units[0].Cloaked = true
 	f.Radar.Contacts[0].Owner = 1
-	f.Radar.Contacts[0].Commander = true
 	f.Radar.Contacts[0].Graphic = "commander"
 	c.drawStrategicMarkers(f)
 	if len(c.markerArena) != 1 || c.markerArena[0].IconAtlas != nil || c.markerArena[0].Size != strategicMarkerSize {

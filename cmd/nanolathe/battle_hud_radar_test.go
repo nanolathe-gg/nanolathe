@@ -238,28 +238,37 @@ func TestRadarContactRangeGateRequiresSelectionAndActivation(t *testing.T) {
 	}
 }
 
-// TestRadarProjectileAndFeatureStatusArtGate locks radarProjectileDot's Kind
-// gate. Retail's real selector reads bits 29/30 of the shared
-// projectile/feature list record's status regardless of kind [03 §3.9], but
-// frame.RadarContactView.Status for a RadarContactFeature is the feature
-// INSTANCE's own status word (internal/features only ever writes bit 0x01),
-// not that shared-list record — so a feature must never take the dot path
-// through an accidental zero read of unrelated status bits.
-func TestRadarProjectileAndFeatureStatusArtGate(t *testing.T) {
-	c := frame.RadarContactView{Kind: frame.RadarContactProjectile}
-	if !radarProjectileDot(c) {
-		t.Fatal("clear projectile status did not select one-pixel dot")
-	}
-	for _, mask := range []uint32{1 << 29, 1 << 30, 0x40} {
-		c.Status = mask
-		if radarProjectileDot(c) {
-			t.Fatalf("projectile status %#x incorrectly selected dot", mask)
+// TestRadarPublishedProjectileArtSelector locks layer 6's three branches. The
+// selector is three WEAPON-DEFINITION flags resolved by the publisher — a
+// `targetable` or `interceptor` weapon draws the `nuclogo` marker, a `noradar`
+// weapon draws nothing at all, and every other weapon draws the 1×1 dot
+// [03 §3.9] layer 6 [06 §11.3]. It is not a per-record status word, and the
+// pass walks the projectile pool alone: no feature reaches it.
+func TestRadarPublishedProjectileArtSelector(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		art  frame.RadarProjectileArt
+	}{
+		{"ordinary weapon takes the dot", frame.RadarProjectileDot},
+		{"targetable or interceptor takes the marker", frame.RadarProjectileMarker},
+		{"noradar draws nothing", frame.RadarProjectileHidden},
+	} {
+		c := frame.RadarContactView{Kind: frame.RadarContactProjectile, RadarArt: tc.art}
+		if got := radarPublishedProjectileArt(c); got != tc.art {
+			t.Fatalf("%s: selector returned %d, want %d", tc.name, got, tc.art)
 		}
 	}
-	c.Kind = frame.RadarContactFeature
-	c.Status = 0
-	if radarProjectileDot(c) {
-		t.Fatal("feature contact selected projectile dot")
+	// The old status-word reading would have taken the dot for any record with
+	// bits 29/30 clear; the record's status is not a term any more.
+	noisy := frame.RadarContactView{Kind: frame.RadarContactProjectile, Status: 1<<29 | 1<<30 | 0x40}
+	if got := radarPublishedProjectileArt(noisy); got != frame.RadarProjectileDot {
+		t.Fatalf("record status still steers the selector: got %d, want the dot", got)
+	}
+	for _, kind := range []frame.RadarContactKind{frame.RadarContactUnit, frame.RadarContactFeature} {
+		c := frame.RadarContactView{Kind: kind, RadarArt: frame.RadarProjectileMarker}
+		if got := radarPublishedProjectileArt(c); got != frame.RadarProjectileHidden {
+			t.Fatalf("kind %d reached the projectile pass: got %d", kind, got)
+		}
 	}
 }
 
@@ -296,7 +305,7 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 		radarBlipGAF: &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: &formats.GAFFrame{
 			Width: 1, Height: 1, Pixels: []byte{23}, Transparent: []bool{false},
 		}}}},
-		radarFeatureGAF: &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: &formats.GAFFrame{
+		radarMarkerGAF: &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: &formats.GAFFrame{
 			Width: 1, Height: 1, Pixels: []byte{31}, Transparent: []bool{false},
 		}}, {Frame: &formats.GAFFrame{
 			Width: 1, Height: 1, Pixels: []byte{37}, Transparent: []bool{false},
@@ -315,8 +324,14 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 			// Unselected unit retains only its blip; the selected-range circle
 			// must not appear at x=88.
 			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(80 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0, PaletteKnown: true},
+			// A feature never reaches the projectile pass, whatever its
+			// owner art would have selected [03 §3.9] layer 6.
 			{Kind: frame.RadarContactFeature, Owner: local, X: numeric.Fixed(96 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 1, PaletteKnown: true},
+			// The three projectile branches: dot, `nuclogo` marker in the
+			// owner's frame, and `noradar` drawing nothing.
 			{Kind: frame.RadarContactProjectile, Owner: local, X: numeric.Fixed(112 << 16), Z: numeric.Fixed(63 << 16), Visible: true},
+			{Kind: frame.RadarContactProjectile, Owner: local, X: numeric.Fixed(120 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 1, PaletteKnown: true, RadarArt: frame.RadarProjectileMarker},
+			{Kind: frame.RadarContactProjectile, Owner: local, X: numeric.Fixed(8 << 16), Z: numeric.Fixed(63 << 16), Visible: true, RadarArt: frame.RadarProjectileHidden},
 		}},
 	}
 	final := h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
@@ -338,11 +353,17 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	if got, _ := final.At(88, 63); got != 1 {
 		t.Fatalf("unselected unit emitted range circle pixel %d, want mapped background 1", got)
 	}
-	if got, _ := final.At(96, 63); got != 37 {
-		t.Fatalf("feature marker pixel = %d, want authored owner frame 37", got)
+	if got, _ := final.At(96, 63); got != 1 {
+		t.Fatalf("feature drew %d on the projectile pass, want mapped background 1", got)
 	}
 	if got, _ := final.At(112, 63); got != 14 {
 		t.Fatalf("projectile dot pixel = %d, want projectile palette 14", got)
+	}
+	if got, _ := final.At(120, 63); got != 37 {
+		t.Fatalf("targetable/interceptor marker pixel = %d, want authored owner frame 37", got)
+	}
+	if got, _ := final.At(8, 63); got != 1 {
+		t.Fatalf("noradar projectile drew %d, want mapped background 1", got)
 	}
 	first := append([]byte(nil), final.Bits...)
 	revision := h.radar.FinalRevision()
@@ -361,5 +382,89 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	}
 	if got := h.radar.Blink().Phase; got != cur.Radar.BlinkPhase {
 		t.Fatalf("rebuild phase = %d, want committed %d", got, cur.Radar.BlinkPhase)
+	}
+}
+
+// TestRebuildRadarHoverRingFollowsPointer locks layer 3 of the contacts pass:
+// the `radlogohigh` ring is drawn on the contact whose identity equals the
+// host's hovered-unit word — the pointer record's unit word that the footer's
+// second source also reads [03 §3.9][07 R-HUD-03 §1]. It is not a commander
+// marker: a seen ENEMY commander must draw its ordinary blip and nothing more,
+// or the minimap leaks an identity the player has not earned.
+func TestRebuildRadarHoverRingFollowsPointer(t *testing.T) {
+	const local = uint8(1)
+	picture := &render.RadarSurface{W: 126, H: 126, Pitch: 128, Bits: make([]byte, 126*126)}
+	for i := range picture.Bits {
+		picture.Bits[i] = 1
+	}
+	h := &retailBattleHUD{
+		radar: render.NewMinimapService(render.MinimapServiceConfig{
+			Picture: picture, MapW: 1, MapH: 1, LocalSlot: local,
+		}),
+		radarBlipGAF: &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: &formats.GAFFrame{
+			Width: 1, Height: 1, Pixels: []byte{23}, Transparent: []bool{false},
+		}}}},
+		radarHoverGAF: &formats.GAFEntry{Frames: []formats.GAFFrameRef{{Frame: &formats.GAFFrame{
+			Width: 1, Height: 1, Pixels: []byte{47}, Transparent: []bool{false},
+		}}}},
+	}
+	b := &battleSession{
+		sess:         &session.Session{World: &world.Terrain{PlayRight: 126, PlayBottom: 126}},
+		radarOptions: radarAllContactsOption,
+	}
+	cur := &frame.Frame{
+		Tick:          11,
+		ViewingPlayer: local,
+		Selection:     frame.SelectionView{LocalPlayer: local},
+		Visibility:    frame.VisibilityView{W: 1, H: 1, Valid: true, MappingSource: 1, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
+		Radar: frame.RadarView{MappingLOS: 3, BlinkPhase: 1, Contacts: []frame.RadarContactView{
+			// The hovered unit.
+			{Kind: frame.RadarContactUnit, Handle: 5, Owner: local, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0, PaletteKnown: true},
+			// A seen enemy unit — a commander in every respect the frame still
+			// carries. It gets a blip and no ring.
+			{Kind: frame.RadarContactUnit, Handle: 9, Owner: 2, X: numeric.Fixed(80 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0, PaletteKnown: true},
+			// The null handle is the pointer record's "no unit hovered" value.
+			{Kind: frame.RadarContactUnit, Handle: 0, Owner: local, X: numeric.Fixed(112 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0, PaletteKnown: true},
+		}},
+	}
+	b.footerHoverUnit = 5
+	final := h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
+	if final == nil {
+		t.Fatal("published radar contacts did not rebuild final surface")
+	}
+	if got, _ := final.At(32, 63); got != 47 {
+		t.Fatalf("hovered contact pixel = %d, want authored hover ring 47", got)
+	}
+	if got, _ := final.At(80, 63); got != 23 {
+		t.Fatalf("enemy contact pixel = %d, want ordinary blip 23 with no ring", got)
+	}
+	if got, _ := final.At(112, 63); got != 23 {
+		t.Fatalf("null-handle contact pixel = %d, want ordinary blip 23", got)
+	}
+	// With nothing hovered the ring disappears entirely; the null handle must
+	// not match the null hover word.
+	b.footerHoverUnit = 0
+	cur.Tick++
+	final = h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
+	if final == nil {
+		t.Fatal("second rebuild produced no surface")
+	}
+	for _, x := range []int{32, 80, 112} {
+		if got, _ := final.At(x, 63); got != 23 {
+			t.Fatalf("with no unit hovered, contact at x=%d drew %d, want ordinary blip 23", x, got)
+		}
+	}
+	// A hovered unit that the contact gate does not admit draws no ring: the
+	// ring still obeys the blip's own admission [03 §3.9].
+	b.footerHoverUnit = 9
+	b.radarOptions = 0
+	cur.Tick++
+	cur.Radar.Contacts[1].Visible = false
+	final = h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
+	if final == nil {
+		t.Fatal("third rebuild produced no surface")
+	}
+	if got, _ := final.At(80, 63); got != 1 {
+		t.Fatalf("unadmitted hovered contact drew %d, want mapped background 1", got)
 	}
 }

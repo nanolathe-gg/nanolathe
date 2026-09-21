@@ -356,8 +356,12 @@ type MinimapContact struct {
 	WorldX, WorldZ, WorldY int32 // map pixels (short narrow already), WorldY high word for shear [03 §3.9]
 	Owner                  uint8
 	Palette                byte // caller-resolved owning-player palette index [03 §3.9]
-	IsCommander            bool // when true draws commander GAF after blip [03 §3.9]
-	Stealth                bool // when true gate on blink [03 §3.9]
+	// Hovered marks the one contact the host's pointer record currently names.
+	// Layer 3's `radlogohigh` ring is drawn on it, after the blip [03 §3.9].
+	// The word is host presentation state, never simulation state, so the
+	// caller resolves it and hands the answer in [07 R-HUD-03 §1][I6].
+	Hovered bool
+	Stealth bool // when true gate on blink [03 §3.9]
 	// RangeStatus is the selected-unit circle gate of [03 §3.9] "Selected-unit
 	// circle gate correction": the selected/range-status bit is set AND the
 	// instance is active or the definition is not on/off-capable. It governs
@@ -392,7 +396,7 @@ type MinimapContact struct {
 // MinimapContactBlitter is the resolved authored-art adapter. It is called
 // after the visibility/gate checks; a nil adapter means the authored blip is
 // absent and therefore leaves FINAL untouched. [03 §3.9]
-type MinimapContactBlitter func(dst *RadarSurface, x, y int, palette byte, commander bool)
+type MinimapContactBlitter func(dst *RadarSurface, x, y int, palette byte, hovered bool)
 
 // MinimapContactGate is the contacts pass's visibility gate: a contact reaches
 // any of the pass's layers when the full-radar option bit is set, or the
@@ -437,7 +441,7 @@ func rebuildFinalExactInto(dst, mapped *RadarSurface, m camera.Minimap, playW, p
 	final.W, final.H, final.Pitch = mapped.W, mapped.H, (mapped.W+3)&^3
 	final.Bits = resizeRadarBits(final.Bits, mapped.W*mapped.H)
 	copy(final.Bits, mapped.Bits)
-	// Unit blips precede all circles, and commander art is the next layer.
+	// Unit blips precede all circles, and the hover ring is the next layer.
 	for _, c := range contacts {
 		if !MinimapBlipAdmitted(c, blink) {
 			continue
@@ -448,7 +452,7 @@ func rebuildFinalExactInto(dst, mapped *RadarSurface, m camera.Minimap, playW, p
 		}
 	}
 	for _, c := range contacts {
-		if !MinimapBlipAdmitted(c, blink) || !c.IsCommander {
+		if !MinimapBlipAdmitted(c, blink) || !c.Hovered {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)

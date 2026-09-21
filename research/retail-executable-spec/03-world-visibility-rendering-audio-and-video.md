@@ -4680,14 +4680,21 @@ Layer order on the final surface (later layers overwrite; no blending):
    `blinkSuppressByte == 0 || blinkPhase`. The byte is a per-unit countdown,
    decremented each tick while nonzero, that forces the blip into blink-only
    mode while it runs;
-3. commander blip from the FX `radlogohigh` GAF, frame 0, when the unit's
-   identity matches the commander slot held in engine root state;
+3. hover ring from the FX `radlogohigh` GAF, frame 0, when the unit's identity
+   matches the **hovered-unit word** in engine root state — the pointer
+   record's unit word of `[07 R-HUD-03 §1]` source 2, rewritten every host
+   frame while the pointer is inside the view with no drag armed, or over the
+   minimap. It is not a commander marker and carries no commander term:
+   marking every seen commander would put an enemy commander's identity on
+   the minimap. **Established.** The ring obeys the same admission as the
+   blip, so an unadmitted hovered unit draws nothing;
 4. sensor circles (radar/sonar outer, jammer) in their distinct palette indices
    via the solid-circle rasterizer (2,048 angular steps over 32 segments);
 5. weapon/interceptor rings (below);
-6. projectile dot, 1×1 pixel, in the projectile palette index, when the
-   projectile's runtime status has bits 29 and 30 clear and its 0x40 bit clear,
-   LOS-gated; otherwise a feature marker from the FX `nuclogo` GAF.
+6. projectile art, LOS-gated, selected by the firing weapon's **definition**
+   flags (below): a `targetable` or `interceptor` weapon draws the FX
+   `nuclogo` marker, a `noradar` weapon draws nothing at all, and every other
+   weapon draws a 1×1 pixel in the projectile palette index.
 
 The three GAF handles above are loaded from the FX archive during battle-data
 initialization, from four consecutive loads in one FX initialization routine:
@@ -4695,8 +4702,8 @@ initialization, from four consecutive loads in one FX initialization routine:
 first three; nothing in it reads `h2oboom2`, whose handle belongs to another
 effect family. A regular unit's owning-player record supplies the frame selector
 for `radlogo` — the byte at a fixed offset in the record the unit's owner slot
-indexes — and the feature branch of layer 6 applies the same selector to
-`nuclogo`. The commander marker always selects frame 0 of `radlogohigh`. The
+indexes — and the marker branch of layer 6 applies the same selector to
+`nuclogo`. The hover ring always selects frame 0 of `radlogohigh`. The
 selected frame bytes are copied as indexed pixels through the GAF blitter, so
 they already refer to the active `PALETTE.PAL` and are not recolored through
 `GUIPAL.PAL` or a separate blit color argument. **Established.**
@@ -4705,7 +4712,7 @@ The stock art corroborates the assignment exactly: `radlogo` carries ten 4×4
 frames whose interiors are the ten player colours and whose border is one shared
 index, `nuclogo` carries ten 7×7 frames on the same ten-slot pattern, and
 `radlogohigh` carries a single 6×6 frame — one ring, which is what a
-frame-0-only commander marker needs and what an owning-player selector cannot
+frame-0-only hover marker needs and what an owning-player selector cannot
 use `[fmt gaf]`.
 
 **Blip gate.** The unit blip draws when any of: a global options word bit 9 is
@@ -4730,17 +4737,36 @@ rx = unitMapX * RadarW / PlayRight         truncating
 ry = (unitMapZ - (unitMapY >> 1)) * RadarH / PlayBottom   half-height shear
 ```
 
-A second pass repeats the same projection over the projectile/feature list.
-The list is the entry-captured projectile/feature span (pointer and count in
-engine root state, fixed-size records): one shared list written by the
-projectile/feature capture path and read by the sensor first pass, the contacts
-pass, and the pool walker — it is not partitioned per consumer
-(bounded-negative). A candidate is admitted through the mode-selected local
-player visibility source at its projected cell; when that source does not
-admit it, the candidate's owner-local identity is the bypass. After admission,
-the runtime status mask selects the art family: a zero value for bits 29 and
-30 takes the projectile-dot path (which is then suppressed if bit 0x40 is set),
-while any bit in that mask takes the feature-marker path. **Established.**
+A second pass repeats the same projection over the **projectile pool** — the
+one fixed-size, fixed-capacity record array the projectile allocator fills, its
+live count and base held in engine root state. The contacts pass has exactly
+two loops, the ascending unit pass and this one; there is no third walk and no
+feature list, so **a feature never reaches the contacts pass at all** and no
+feature marker is ever drawn. **Established.** (This replaces the earlier
+reading of a shared, kind-agnostic projectile/feature span.)
+
+A candidate is admitted through the mode-selected local player visibility
+source at its projected cell; when that source does not admit it, the
+candidate's owner-local identity is the bypass. The two art branches take that
+bypass from different places: the dot branch compares the owner slot **stored
+on the record** with the viewing slot, while the marker branch follows the
+record's firing-unit pointer and compares that unit's owner slot, with no null
+check. **Established.**
+
+**The art selector is three weapon-definition flags.** Each record's first
+field is the pointer to the **weapon definition** it was fired from, and the
+selector reads that definition's behaviour flags word — not any per-record
+status or runtime word. In the definition the weapon parser writes,
+`targetable` and `interceptor` are the two high flags the selector tests
+together, and `noradar` is the low flag it tests second. So: `targetable ||
+interceptor` → the `nuclogo` marker branch; else `noradar` → nothing drawn;
+else the 1×1 dot. **Established by analysis** (2026-09-19; the earlier
+"runtime status bits 29/30/0x40" wording named the right flags in the wrong
+record). `[06 §11.3]` states the `noradar` half of the same contract, and the
+marker frame is the firing player's colour selector applied to `nuclogo`.
+Stock reach: `targetable` on `nuclear_missile`, `crblmssl`, `armemp_weapon`
+and `cortron_weapon`; `interceptor` on `amd_rocket`, `fmd_rocket`,
+`armscab_weapon` and `cormabm_weapon`; `noradar` on `earthquake` alone.
 
 **HOT list.** Every unit visited in pool (ascending-slot) order appends a
 10-byte entry — id, originX + rx, originY + ry, and two pad shorts — to the
@@ -4790,8 +4816,8 @@ independent: no `onoffable` or cloak test suppresses a blip once its visibility
 and blink conditions pass.
 
 **Contact layering and ring-only cases (Established).** The ascending unit
-pass draws at most one regular blip and, for the commander identity, one
-additional commander marker; it does not draw duplicate regular blips. Circles
+pass draws at most one regular blip and, for the hovered identity, one
+additional `radlogohigh` ring; it does not draw duplicate regular blips. Circles
 and weapon/interceptor rings are emitted later in that same unit iteration, so
 they overwrite earlier contact pixels where opaque. There is no independent
 ring-only contact list. A visible unit can appear ring-only when its regular
@@ -5065,8 +5091,8 @@ surface onto the HUD's own destination surface at the canvas letterbox origin
 that same destination. So the rectangle lives on the destination surface, above
 a FINAL that never contains it — which is why it survives the per-tick FINAL
 wipe and why a save-restored FINAL carries no marker. FINAL is *mapped wipe →
-blips → commander markers → sensor circles → weapon rings →
-projectile/feature dots*, and nothing else (§3.6).
+blips → hover ring → sensor circles → weapon rings →
+projectile dots and markers*, and nothing else (§3.6).
 
 **Established — the rectangle.** The rectangle is the **camera-to-radar
 rectangle**, a four-integer inclusive record recomputed by the per-axis camera
@@ -5141,7 +5167,7 @@ Until a `+` command vocabulary exists the first term reads false and the
 masks read true, so the gate reduces to the last two terms.
 
 **Established — rings are gated on selection.** Within one unit's
-iteration: blip; commander/hover marker; then, **only if the unit's
+iteration: blip; hover ring; then, **only if the unit's
 selected bit (status bit 4) is set**: the four sensor circles when the
 instance is active or the definition lacks `onoffable` (the selected-unit
 circle gate of §3.9), and then — independently of that inner test but still

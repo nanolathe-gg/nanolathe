@@ -294,16 +294,24 @@ private; the raw accessors exist for the publication copy and for diagnostics
 `VisibleExtents`'s two-corner form belongs to the world composer's feature
 draw gate (`featureVisibleForFrame` in `internal/client/world_draw.go`), keyed
 additionally to `nodrawundergray` and the plot placer nibble `[03 §5.1.5]`.
-The minimap contacts pass's second walk over the projectile/feature list is a
-*different* consumer: it admits each candidate — feature or projectile alike,
-from one shared, kind-agnostic list — through a one-point sample at the
-candidate's own projected position, with owner-local identity as the only
+The minimap contacts pass's second walk is a *different* consumer: it walks
+the **projectile pool alone** and admits each projectile through a one-point
+sample at its own projected position, with owner-local identity as the only
 bypass; it carries neither the `nodrawundergray` nor the placer-nibble term.
-`internal/session/publish.go`'s `radarFeatureVisible` and `radarPointVisible`
-therefore both call `VisiblePoint`, never `VisibleExtents` — the projectile
-form, not the feature-draw form — and the friendly-contact status pair `0x300`
-is a term of the minimap's UNIT-pass blip gate only, never of this second pass
-`[03 §3.9]`.
+`internal/session/publish.go`'s `radarPointVisible` therefore calls
+`VisiblePoint`, never `VisibleExtents`, and the friendly-contact status pair
+`0x300` is a term of the minimap's UNIT-pass blip gate only, never of this
+second pass `[03 §3.9]`. No feature record reaches that pass, so the painter
+draws no feature marker; `radarFeatureVisible` still admits the published
+feature contacts, which the minimap no longer reads.
+
+That second pass's art comes from the firing weapon's **definition**, not from
+any per-record status word: a `targetable` or `interceptor` weapon draws the
+`nuclogo` marker, a `noradar` weapon draws nothing, and every other weapon
+draws the 1×1 dot `[03 §3.9]` `[06 §11.3]`. `internal/session/publish.go`
+resolves that classification once from the compiled weapon into
+`frame.ProjectileView.RadarArt`, and the painter switches on the committed
+value so presentation never reaches into the catalog `[I6]`.
 
 `Session.ViewingOwner` supplies visibility and the published
 `Frame.ViewingPlayer`; `Session.LocalOwner` and `Selection.LocalPlayer` retain

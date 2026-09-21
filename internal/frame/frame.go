@@ -248,7 +248,10 @@ type ProjectileView struct {
 	// Propeller identifies the authored child-roll substitution.  The renderer
 	// uses PropellerRoll for that child only while the expiry deadline is ahead [06 §6.1]
 	// [06 R-WFX-01 §4].
-	Propeller                 bool
+	Propeller bool
+	// RadarArt is the minimap projectile pass's art selector, resolved from
+	// the firing weapon's definition at publication [03 §3.9] layer 6.
+	RadarArt                  RadarProjectileArt
 	Flags                     uint32
 	Family                    int32
 	RenderType                int32
@@ -699,6 +702,26 @@ const (
 	RadarContactFeature
 )
 
+// RadarProjectileArt names the art the minimap's projectile pass draws for one
+// in-flight projectile.  The selector is three WEAPON-DEFINITION flags —
+// `targetable`, `interceptor` and `noradar` — and not a per-record status
+// word, so the classification is resolved once from the compiled weapon and
+// carried here [03 §3.9] layer 6 [06 §11.3].
+type RadarProjectileArt uint8
+
+const (
+	// RadarProjectileDot is the 1×1 pixel in the projectile palette index that
+	// every ordinary weapon draws.  It is the zero value because it is the
+	// selector's "otherwise" branch.
+	RadarProjectileDot RadarProjectileArt = iota
+	// RadarProjectileMarker is the `nuclogo` marker a `targetable` or
+	// `interceptor` weapon draws, indexed by the owning player's colour.
+	RadarProjectileMarker
+	// RadarProjectileHidden draws nothing at all: the weapon is `noradar`,
+	// whose one located reader is this selector [06 §11.3].
+	RadarProjectileHidden
+)
+
 // RadarRingView carries one weapon-range ring's authored flags.  A unit owns
 // three weapon slots; rings retain that slot order at the frame boundary
 // [03 §3.9].
@@ -713,12 +736,16 @@ type RadarRingView struct {
 // presentation. Coordinates remain authoritative 16.16 values until the
 // renderer performs the documented signed narrowing [03 §3.9].
 type RadarContactView struct {
-	Kind          RadarContactKind
-	Handle        pool.Handle
-	Owner         uint8
-	OwnerKnown    bool
-	X, Y, Z       numeric.Fixed
-	Status        uint32
+	Kind       RadarContactKind
+	Handle     pool.Handle
+	Owner      uint8
+	OwnerKnown bool
+	X, Y, Z    numeric.Fixed
+	Status     uint32
+	// RadarArt carries the projectile pass's art selector for a
+	// RadarContactProjectile; it is meaningless for the other kinds
+	// [03 §3.9] layer 6.
+	RadarArt      RadarProjectileArt
 	Hidden        bool
 	Stealth       bool
 	Active        bool
@@ -728,7 +755,9 @@ type RadarContactView struct {
 	BlinkSuppress uint8
 	Seen          bool
 	Friendly      bool
-	Commander     bool
+	// There is no commander field here on purpose. Layer 3's `radlogohigh`
+	// ring follows the host's hovered-unit word, which is presentation state
+	// the frame must not carry [03 §3.9][07 R-HUD-03 §1][I6].
 	// Palette is the owner-player frame selector for authored radar/feature
 	// art. PaletteKnown distinguishes a published selector of zero from an
 	// unresolved owner or neutral contact; presentation must not recover an

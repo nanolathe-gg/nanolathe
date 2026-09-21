@@ -324,13 +324,13 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	playH := int32(100)
 	// Two contacts at same radar pixel, later should overwrite earlier (pool order ascending slice order is caller-stable) [03 §3.9]
 	contacts := []MinimapContact{
-		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 10, IsCommander: false},
-		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 20, IsCommander: false},
+		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 10, Hovered: false},
+		{WorldX: 50, WorldZ: 50, WorldY: 0, Owner: 0, Palette: 20, Hovered: false},
 	}
 	blink := BlinkState{Phase: 1}
-	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+	blit := func(dst *RadarSurface, x, y int, color byte, hovered bool) {
 		dst.Set(x, y, color)
-		if commander {
+		if hovered {
 			dst.Set(x+1, y, color)
 		}
 	}
@@ -346,19 +346,19 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 	if got := final.Bits[idx]; got != 20 {
 		t.Fatalf("layer order later overwrites earlier: got %d want 20 [03 §3.9]", got)
 	}
-	// Commander draws on top of blip at same location plus second pixel
+	// The hover ring draws on top of the blip at the same location plus a second pixel
 	contacts2 := []MinimapContact{
-		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 10, IsCommander: false},
-		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 30, IsCommander: true},
+		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 10, Hovered: false},
+		{WorldX: 20, WorldZ: 20, WorldY: 0, Palette: 30, Hovered: true},
 	}
 	final2 := rebuildFinalExactInto(nil, mapped, m, playW, playH, contacts2, blink, blit, 0xA0, 0xB0, 0xC0)
 	rx2, ry2 := RadarProjection(20, 20, 0, playW, playH, m)
 	if v, _ := final2.At(int(rx2), int(ry2)); v != 30 {
-		t.Fatalf("commander should overwrite blip at same pixel, got %d want 30", v)
+		t.Fatalf("hover ring should overwrite blip at same pixel, got %d want 30", v)
 	}
 	// Check second pixel offset exists
 	if v, ok := final2.At(int(rx2+1), int(ry2)); !ok || v != 30 {
-		t.Fatalf("commander second pixel not drawn")
+		t.Fatalf("hover ring second pixel not drawn")
 	}
 	// Circles overwrite blip: create contact with circle radius
 	// Circles reach layer 4 only through the selected-unit circle gate
@@ -404,7 +404,7 @@ func TestMinimapRebuildFinalLayerOrderAndBlink(t *testing.T) {
 func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 	m := camera.Minimap{W: 10, H: 10}
 	playW, playH := int32(100), int32(100)
-	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+	blit := func(dst *RadarSurface, x, y int, color byte, hovered bool) {
 		dst.Set(x, y, color)
 	}
 	base := MinimapContact{
@@ -466,7 +466,7 @@ func TestMinimapSelectedUnitCircleGate(t *testing.T) {
 func TestMinimapWeaponRingIsGatedOnSelection(t *testing.T) {
 	m := camera.Minimap{W: 10, H: 10}
 	playW, playH := int32(100), int32(100)
-	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) { dst.Set(x, y, color) }
+	blit := func(dst *RadarSurface, x, y int, color byte, hovered bool) { dst.Set(x, y, color) }
 	base := MinimapContact{
 		WorldX: 50, WorldZ: 50, Visible: true, Palette: 9,
 		RingEnabled: true, RingRange: 532,
@@ -510,7 +510,7 @@ func TestMinimapBlinkGate(t *testing.T) {
 	for i := range mapped.Bits {
 		mapped.Bits[i] = 5
 	}
-	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+	blit := func(dst *RadarSurface, x, y int, color byte, hovered bool) {
 		dst.Set(x, y, color)
 	}
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
@@ -608,7 +608,7 @@ func TestMinimapPhaseGatesRegularAndDashedPresentation(t *testing.T) {
 		WorldX: 50, WorldZ: 50, Visible: true, LocalPlayer: 1, Owner: 1,
 		BlinkSuppress: 1, Palette: 9,
 	}}
-	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
+	blit := func(dst *RadarSurface, x, y int, color byte, hovered bool) {
 		dst.Set(x, y, color)
 	}
 	rx, ry := RadarProjection(50, 50, 0, 100, 100, m)

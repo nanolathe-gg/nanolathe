@@ -83,13 +83,12 @@ func radarContactAdmitted(c render.MinimapContact, blink render.BlinkState) bool
 }
 
 func radarPublishedContactVisible(c frame.RadarContactView, local uint8) bool {
-	// Retail's second pass over the projectile/feature list admits through
-	// the mode-selected local player visibility source at the projected
-	// cell, with owner-local identity as the only bypass [03 §3.9]. The
+	// Retail's second pass over the projectile list admits through the
+	// mode-selected local player visibility source at the projected cell,
+	// with owner-local identity as the only bypass [03 §3.9]. The
 	// friendly-contact status pair 0x300 is a term of the UNIT pass's blip
-	// gate (radarContactAdmitted) only; a feature's status word and a
-	// projectile's flags word do not carry those bits with that meaning, so
-	// this second-pass gate must not read them.
+	// gate (radarContactAdmitted) only; a projectile's flags word does not
+	// carry those bits with that meaning, so this gate must not read them.
 	return c.Visible || c.OwnerKnown && c.Owner == local
 }
 
@@ -100,24 +99,17 @@ func radarContactRangeEnabled(c frame.RadarContactView) bool {
 	return c.RangeStatus
 }
 
-func radarProjectileDot(c frame.RadarContactView) bool {
-	// Retail selects dot-vs-marker art purely from the shared list record's
-	// status bits 29/30 (clear takes the dot, itself suppressed by bit 0x40)
-	// [03 §3.9] over one kind-agnostic projectile/feature list. Nanolathe's
-	// publisher does not carry that shared-list record status for a feature:
-	// frame.RadarContactView.Status for a RadarContactFeature is the feature
-	// INSTANCE's own status word from internal/features (only bit 0x01 is
-	// ever written there, by service.go/burn.go), not the capture-path
-	// record whose bits 29/30 retail's selector reads. A projectile's Status
-	// is that record's Flags word, which does carry retail's bits. Until the
-	// feature capture path publishes the shared-list record status, gate the
-	// dot path on Kind so a feature's unrelated status word cannot be
-	// misread as clear bits 29/30.
-	//
-	// TODO(question): what do bits 29/30 hold for a feature entry in
-	// retail's shared projectile/feature list record? Settle by tracing the
-	// projectile/feature capture path's feature-record write [03 §3.9][06].
-	return c.Kind == frame.RadarContactProjectile && c.Status&(1<<29|1<<30|0x40) == 0
+func radarPublishedProjectileArt(c frame.RadarContactView) frame.RadarProjectileArt {
+	// The selector is the firing weapon's definition, resolved by the
+	// publisher: `targetable` or `interceptor` takes the `nuclogo` marker,
+	// `noradar` draws nothing, and everything else takes the 1×1 dot
+	// [03 §3.9] layer 6 [06 §11.3]. There is no per-record status word in it,
+	// and no feature ever reaches it — retail's second pass walks the
+	// projectile pool alone.
+	if c.Kind != frame.RadarContactProjectile {
+		return frame.RadarProjectileHidden
+	}
+	return c.RadarArt
 }
 
 func (h *retailBattleHUD) radarOwnerFrameIndex(contact frame.RadarContactView, frameCount int) int {
@@ -152,12 +144,12 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
 	contacts := h.radarContacts[:0]
 	regularArt := h.radarRegularArt[:0]
-	commanderArt := h.radarCommanderArt[:0]
+	hoverArt := h.radarHoverArt[:0]
 	blink := h.radar.Blink()
 	for _, published := range cur.Radar.Contacts {
-		// The renderer's contact adapter owns the unit/commander/ring passes.
-		// Projectile and feature records are applied below, after rings, in the
-		// order required by the retail contacts pass [03 §3.9].
+		// The renderer's contact adapter owns the blip, hover-ring and ring
+		// passes. Projectile records are applied below, after the rings, in
+		// the order the retail contacts pass requires [03 §3.9].
 		if published.Kind != frame.RadarContactUnit {
 			continue
 		}
@@ -166,11 +158,18 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		// be active; the publisher folded both terms before the frame boundary.
 		rangeCircles := radarContactRangeEnabled(published)
 		contact := render.MinimapContact{
-			WorldX:      radarMapPixel(published.X),
-			WorldZ:      radarMapPixel(published.Z),
-			WorldY:      radarMapPixel(published.Y),
-			Owner:       published.Owner,
-			IsCommander: published.Commander, Stealth: published.Stealth,
+			WorldX: radarMapPixel(published.X),
+			WorldZ: radarMapPixel(published.Z),
+			WorldY: radarMapPixel(published.Y),
+			Owner:  published.Owner,
+			// Layer 3's `radlogohigh` ring marks the HOVERED unit: the
+			// contact whose identity equals the pointer record's hovered-unit
+			// word, the same word the footer's second source reads
+			// [03 §3.9][07 R-HUD-03 §1]. It is host presentation state, so it
+			// is resolved here and never published [I6]. Handle zero is the
+			// "no unit hovered" value and must not ring the null slot.
+			Hovered: published.Handle != 0 && published.Handle == b.footerHoverUnit,
+			Stealth: published.Stealth,
 			// RangeStatus is the selected-unit circle gate; Stealth stays separate
 			// because it is a blip-blink term, not a circle term [03 §3.9].
 			RangeStatus: rangeCircles, Status: published.Status,
@@ -183,8 +182,8 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		}
 		if radarContactAdmitted(contact, blink) {
 			regularArt = append(regularArt, radarGAFFrame(h.radarBlipGAF, h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarBlipGAF))))
-			if contact.IsCommander {
-				commanderArt = append(commanderArt, radarGAFFrame(h.radarCommanderGAF, 0))
+			if contact.Hovered {
+				hoverArt = append(hoverArt, radarGAFFrame(h.radarHoverGAF, 0))
 			}
 		}
 		if len(published.Rings) != 0 {
@@ -210,18 +209,18 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		}
 	}
 	// Keep whatever capacity the walk grew so the next frame refills in place.
-	h.radarContacts, h.radarRegularArt, h.radarCommanderArt = contacts, regularArt, commanderArt
+	h.radarContacts, h.radarRegularArt, h.radarHoverArt = contacts, regularArt, hoverArt
 	playW, playH, ok := b.sess.PlayArea()
 	if !ok {
 		return nil
 	}
-	regularIndex, commanderIndex := 0, 0
-	returnFinal := h.radar.RebuildFinalVersion(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, commander bool) {
-		if commander {
-			if commanderIndex < len(commanderArt) {
-				blitRadarGAF(dst, int32(x), int32(y), commanderArt[commanderIndex])
+	regularIndex, hoverIndex := 0, 0
+	returnFinal := h.radar.RebuildFinalVersion(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, hovered bool) {
+		if hovered {
+			if hoverIndex < len(hoverArt) {
+				blitRadarGAF(dst, int32(x), int32(y), hoverArt[hoverIndex])
 			}
-			commanderIndex++
+			hoverIndex++
 			return
 		}
 		if regularIndex < len(regularArt) {
@@ -241,24 +240,22 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	if final == nil {
 		return nil
 	}
-	// The projectile/feature pass follows rings. The published payload carries
-	// the status and owner/visibility gates. Retail selects dot-vs-marker art
-	// purely from the shared list record's status bits [03 §3.9], but our
-	// publisher does not carry that shared-list status for a feature (see
-	// radarProjectileDot); gate explicitly on Kind so a projectile's status
-	// word selects the dot/marker split while every feature draws its marker.
+	// The projectile pass follows the rings. It walks the projectile pool
+	// alone — retail's second list carries no feature records at all, so a
+	// feature contributes nothing to the contacts pass [03 §3.9] layer 6. The
+	// published payload carries the owner/visibility gate; the art selector
+	// is the firing weapon's own classification.
 	for _, published := range cur.Radar.Contacts {
-		if published.Kind == frame.RadarContactUnit || !radarPublishedContactVisible(published, cur.ViewingPlayer) {
+		if published.Kind != frame.RadarContactProjectile || !radarPublishedContactVisible(published, cur.ViewingPlayer) {
 			continue
 		}
 		rx, ry := render.RadarProjection(radarMapPixel(published.X), radarMapPixel(published.Z), radarMapPixel(published.Y), playW, playH, layout)
-		if radarProjectileDot(published) {
+		switch radarPublishedProjectileArt(published) {
+		case frame.RadarProjectileMarker:
+			index := h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarMarkerGAF))
+			blitRadarGAF(final, rx, ry, radarGAFFrame(h.radarMarkerGAF, index))
+		case frame.RadarProjectileDot:
 			final.Set(int(rx), int(ry), h.paletteIndex(14))
-			continue
-		}
-		if published.Kind == frame.RadarContactFeature || published.Kind == frame.RadarContactProjectile {
-			index := h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarFeatureGAF))
-			blitRadarGAF(final, rx, ry, radarGAFFrame(h.radarFeatureGAF, index))
 		}
 	}
 	return final
