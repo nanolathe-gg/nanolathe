@@ -1278,10 +1278,28 @@ func (s *Session) RegisterAll() {
 							[3]numeric.Fixed{u.X, u.Y, u.Z},
 							features.Orientation{Bank: u.Move.Bank, Heading: u.Move.Heading, Pitch: u.Move.Pitch},
 							corpseDef, u.Def.IsFeature, u.Owner)
+						// The notification flag the death dispatcher hands the
+						// finalizer is "the death cause is not the immediate
+						// feature-conversion cause" [03 R-LAYER §3] step 1 — a
+						// death that converts the unit straight into a feature
+						// never notifies. Two things read it.
+						//
 						// Enhanced wreck cooling is presentation metadata. A
 						// completed isfeature conversion is not a heated death.
+						//
+						// The land-wreck smoke column is the retail half: step
+						// 5 calls the strip-9 producer at the wreck position
+						// once the stamp is done, on the land path only
+						// [03 R-LAYER §3][03 R-STRIP-01 §1 strip 9]. It spends
+						// one CRT draw — presentation values, but a determinism
+						// input all the same, since the same stream carries the
+						// wind interval and the meteor scheduler
+						// [03 R-STRIP-01 §3]. It is spent HERE, after the death
+						// explosion's own puffs, because the handler runs the
+						// explosion first and the corpse second [06 §12.1].
 						if c != combat.CauseFeatureConversion {
 							s.noteWreckBirth(corpse)
+							s.appendWreckSmokeColumn(corpse)
 						}
 					}
 				}

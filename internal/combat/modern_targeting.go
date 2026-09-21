@@ -314,6 +314,33 @@ func (*ModernRules) SelectTarget(s *Service, q *TargetQuery) (pool.Handle, bool)
 	}
 	// Modern keeps fire-at-will automatic acquisition, while order requests
 	// with an explicit released slot retain their caller's existing stance gate.
+	//
+	// Modern replaces the sampling and scoring of [06 §3.2], not the medium,
+	// range and trajectory gates ("retains the existing medium, range and
+	// trajectory gates", docs/DESIGN_WEAPONS_PROJECTILES.md "Modern threat
+	// targeting and incoming fire"). The physical gate below therefore compares
+	// against the slot weapon's authored range under both rule sets, and the
+	// sight-distance caller's `nochasecategory` rejection holds here too — the
+	// same mask Modern's own danger response already honors before it proposes
+	// an attack. No Modern policy claims the no-chase category; a Modern unit
+	// that chased aircraft its Strict twin ignores would be an accident, not a
+	// departure.
+	//
+	// A slot with NO active weapon is outside this policy altogether. The
+	// approved Modern threat targeting is scoped to an armed slot — it ranks by
+	// the damage "the weapon can cause" — so it has nothing to say about the
+	// weaponless kamikaze search that carries a stock mine or crawling bomb
+	// [04 R-SPEC-01 §1]. Modern therefore delegates that query to the strict
+	// sampled selection, unchanged, rather than duplicating or approximating
+	// it; the boundary is recorded in docs/DESIGN_WEAPONS_PROJECTILES.md
+	// "Modern threat targeting and incoming fire". This adds no departure: the
+	// scan is a detonation TRIGGER, not a weapon aim, and a deterministic
+	// ranker feeding `Standby_Mine`'s grounded-target post-check could starve
+	// a mine that a sampled search would have fired.
+	if q.Slot.Weapon == nil {
+		return StrictRules{}.SelectTarget(s, q)
+	}
+
 	var best, retained pool.Handle
 	var bestScore, retainedScore int64
 	var bestDistance int64
@@ -321,7 +348,7 @@ func (*ModernRules) SelectTarget(s *Service, q *TargetQuery) (pool.Handle, bool)
 	for _, c := range q.Candidates {
 		target := q.World.Unit(c.Handle)
 		if target == nil || target.Def == nil || !c.Hostile || s.allied(q.Shooter.Owner, target.Owner, q.Economy) ||
-			!q.Acquisition.admits(c) || q.Acquisition.rejectsStunned(c) ||
+			!q.Acquisition.admits(c) || q.Acquisition.rejectsNoChase(c) || q.Acquisition.rejectsStunned(c) ||
 			s.effectiveDamage(q.Slot.Weapon, target, q.Shooter) <= 0 || (q.Slot.Weapon.Paralyzer && target.Def.ImmuneToParalyzer) {
 			continue
 		}

@@ -5507,6 +5507,17 @@ is a candidate — `kamikaze` is the authored key behind [06 §3.2]'s bypass
 flag. The damage-reaction site also admits a kamikaze victim as if armed
 ([R-STANCE-01 §3]).
 
+That search is reached through weapon **slot 0** ([R-STANCE-01 §3]: "exactly
+one acquisition call with weapon slot 0"), and the stock kamikaze definitions
+hold no weapon there — they author an empty `weapon1`, which resolves to the
+inactive record-0 sentinel ([02 §5 R-CONTENT-02]). The search runs for them
+regardless, and the weaponless slot supplies nothing but its index: the bypass
+removes every weapon operand with the gate, the paralyzer clause cannot fire on
+an inactive record, and the bad-target bitset that buckets the survivors is the
+unit definition's own, indexed by slot number. [06 §3.2] owns that census under
+check 3. So this widening is not a refinement of a working case — it *is* how
+the mines and the crawling bombs acquire at all.
+
 **Established — the HUD range rings.** The per-unit range-ring pass
 ([R-P0-11 §3]) draws two kamikaze rings. In the labelled mode, when
 `kamikazedistance` is non-zero, a ring of that radius labelled with the key

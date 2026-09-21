@@ -38,10 +38,10 @@ import (
 const (
 	// The reference run of docs/ARCHITECTURE.md §6 and
 	// docs/DESIGN_RUNTIME_DETERMINISM.md §4: one human slot, one computer
-	// slot, no weapon ever fired, and no Modern policy ever consulted with an
-	// answer that reaches fingerprinted state. Strict and Modern agree here,
-	// and that agreement is itself locked: this scene is the baseline drift
-	// detector, so the two constants per tick count are deliberately equal.
+	// slot. Through 6000 ticks no weapon is fired and no Modern policy is
+	// consulted with an answer that reaches fingerprinted state, so Strict and
+	// Modern agree there, and that agreement is itself locked: the 6000-tick
+	// pair is the baseline drift detector and is deliberately equal.
 	lockAshapMap = "ashap plateau"
 	// The seed both deterministic streams take, matching the reference run.
 	lockAshapSeed uint32 = 7
@@ -54,10 +54,19 @@ const (
 	// The difficulty word the displayless command defaults to.
 	lockDifficulty = 1
 
-	lockAshapStrict6000  = "partial-v1:d125c21700a2db1b"
-	lockAshapModern6000  = "partial-v1:d125c21700a2db1b"
-	lockAshapStrict54000 = "partial-v1:259cdc428c0501c8"
-	lockAshapModern54000 = "partial-v1:259cdc428c0501c8"
+	lockAshapStrict6000 = "partial-v1:d125c21700a2db1b"
+	lockAshapModern6000 = "partial-v1:d125c21700a2db1b"
+	// The 54000-tick pair no longer agrees across modes. With the building
+	// blocker's strict entry bounds [05 R-ECO-02 §1] the computer slot cannot
+	// site on the map's edge cells, builds a different base, and reaches its
+	// first attack near tick 45,800 — so the long run now contains combat, and
+	// Modern's approved threat-targeting policy separates it from Strict
+	// (bisected to the Combat seam alone). The 6000-tick pair stays the
+	// combat-free baseline drift detector. Re-recorded 2026-09-20, arm64, on
+	// the integrated ds41 branch (also carries the opportunity scan's check 4
+	// and weapon-range gate [06 §3.2]).
+	lockAshapStrict54000 = "partial-v1:4a62d6ab26833264"
+	lockAshapModern54000 = "partial-v1:9bd2d73075a56228"
 )
 
 // The combat-bearing scene is the simulation benchmark's own composition
@@ -71,8 +80,20 @@ const (
 // Hidden projectile impacts now cause anonymous withdrawal, and precise beams
 // coordinate against predictable ground movers. These approved follow-up
 // policies change the combat outcome after 1500 ticks; the initial and warm
-// states still agree with the preceding prototype. Strict constants retain
-// their original recorded values.
+// states still agree with the preceding prototype.
+//
+// Both FINAL constants were re-recorded on 2026-09-20 for the sight-distance
+// caller's two missing clauses [06 §3.2]: the opportunity scan of
+// [04 R-STANCE-01 §3] now applies check 4, "for the sight-distance caller only,
+// the candidate's definition index must be clear of the `nochasecategory`
+// mask", and its physical gate compares against the slot weapon's authored
+// `range` instead of the caller's sight radius [06 R-WPN-05 §1] clause 5. Both
+// are retail-baseline corrections, so the Strict constant moves with the Modern
+// one. The stream moves because a candidate rejected by either clause no longer
+// takes the scoring draw it was taking [06 §3.2 "Draw consequence"]; the two
+// scenes' initial and warm values are unchanged, which is what a rejection that
+// only removes draws once idle units meet an out-of-reach or no-chase contact
+// looks like.
 const (
 	lockBenchSeed        uint32 = 7
 	lockBenchWarmupTicks        = 600
@@ -80,8 +101,18 @@ const (
 	lockBenchInitialBoth        = "partial-v1:3e1cbf1c074f060d"
 	lockBenchStrictWarm         = "partial-v1:dce20f30bcdeef34"
 	lockBenchModernWarm         = "partial-v1:7a75ebe138eebade"
-	lockBenchStrictFinal        = "partial-v1:df0bcee56a98af34"
-	lockBenchModernFinal        = "partial-v1:f5a87151c1c89a5c"
+	// Both final values moved again on 2026-09-20 for the land-wreck smoke
+	// column of [03 R-LAYER §3], on top of the sight-distance re-recording
+	// above: the corpse finalizer's land path now spends the smoke family's one
+	// CRT draw per stamped wreck, and that stream also carries the wind interval
+	// and the meteor scheduler, so a scene with deaths reaches different wind
+	// from the same seed [03 R-STRIP-01 §3][01 §7.5]. The warm values are
+	// unchanged because the first casualty falls after tick 600, and the ashap
+	// constants because nothing dies there. Attributed by removing the producer
+	// call and nothing else: both scenes then fingerprint the values this merge
+	// brought in.
+	lockBenchStrictFinal = "partial-v1:d0eaf19c8a8f135b" // was 82263563d76d3284
+	lockBenchModernFinal = "partial-v1:886fdb07ddea5f77" // was 0e11552b08f6b8c7
 )
 
 // TestStrictFingerprintIsLocked holds the retail baseline. Nothing in a Modern
@@ -102,8 +133,8 @@ func TestModernFingerprintIsLocked(t *testing.T) {
 // scene must NOT. A Modern policy that silently stopped applying would make
 // the second pair equal, and the constants alone would still look plausible.
 func TestLockedScenesDiscriminateTheRuleSets(t *testing.T) {
-	if lockAshapStrict6000 != lockAshapModern6000 || lockAshapStrict54000 != lockAshapModern54000 {
-		t.Fatal("the ashap reference run consults no Modern policy that reaches fingerprinted state, so its Strict and Modern constants must be equal")
+	if lockAshapStrict6000 != lockAshapModern6000 {
+		t.Fatal("the first 6000 ticks of the ashap reference run consult no Modern policy that reaches fingerprinted state, so its Strict and Modern constants must be equal")
 	}
 	if lockBenchStrictFinal == lockBenchModernFinal {
 		t.Fatal("the benchmark scene no longer separates Strict from Modern: either a Modern policy stopped applying or the scene stopped reaching it")

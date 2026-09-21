@@ -154,6 +154,28 @@ paralyzer rejection before its score, with preferred and fallback minima
 updated in pick order `[06 §3.1]` `[06 §3.2]`. The shot-time physical gate has
 its own ordered clauses below `[06 R-WPN-05 §9]`.
 
+An acquisition carries **two** radii, and they are not interchangeable.
+`Acquisition.FilterRange` is the caller's query radius — the slot weapon's
+`range` for the autonomous scan, the definition's `sightdistance` for the
+opportunity scan of `[04 R-STANCE-01 §3]` — and only candidate materialization
+reads it. `Acquisition.Range` is the physical gate's last clause and is always
+the slot weapon's authored `range`, because that gate takes the shooter, the
+target and the slot and knows nothing of the caller `[06 §3.2]`
+`[06 R-WPN-05 §1]` `[06 R-WPN-05 §9]`. A shooter whose sight exceeds its reach
+therefore samples the wider population, spends those sampling draws, and
+acquires nothing outside weapon range.
+
+Check 4 of the picked-candidate order — the shooter's `nochasecategory` mask,
+tested against the candidate's definition mask — belongs to the sight-distance
+caller **alone** `[06 §3.2]`. `Acquisition.NoChaseMask` is installed only by
+the caller-supplied-radius form, so the autonomous scan, `SlotAcquisitionAdmits`
+(the damage reaction's offer, `[06 R-WPN-04 §2]`) and every order handler bypass
+it by leaving it zero. Do not "helpfully" apply it everywhere: a zero mask is
+the bypass. It sits between check 3 and check 5, so a rejection removes that
+candidate's scoring draw and leaves its sampling draw intact. Both clauses hold
+under Modern as well: Modern replaces sampling and scoring, not the gates, and
+claims no policy over the no-chase category.
+
 The service builds one attempt-local candidate snapshot only after its
 range-and-liveness query has found an entry. That snapshot is the sampler's
 swap-removal storage, so the public query can retain an unmodified input while
@@ -374,6 +396,21 @@ it. Explicit commands remain protected by the maintenance scan admission and
 the order policy's provenance checks. Thus a factory is a usable opportunity
 until a real threat enters range, and equivalent threats do not cause aim churn. Modern acquisition
 consumes no sampling or scoring RNG; Strict keeps the exact retail draw order.
+
+**Weaponless kamikaze searches are not claimed by this policy and use the
+strict search under both rule sets.** Everything above is scoped to an armed
+slot — "a completed armed unit", ranked by the damage the weapon can cause — so
+it says nothing about the one query whose slot holds no active weapon: the
+sight-distance search a stock mine or crawling bomb makes, which every stock
+`kamikaze` definition reaches because it authors an empty `weapon1`
+[06 §3.2][04 R-SPEC-01 §1]. Modern therefore delegates that query, unchanged,
+to the strict sampled selection rather than duplicating or approximating the
+selector. This is a boundary, not a new departure, and it needs no Strict
+bypass of its own: the scan there is a detonation **trigger**, not a weapon
+aim, so Modern's damage-and-reload ranking has nothing to rank; and a
+deterministic ranker feeding `Standby_Mine`'s grounded-target post-check could
+starve — it would return the same non-grounded favourite every visit while a
+sampled search would eventually pick the grounded one the mine can fire on.
 
 **Incoming confidence boundary.** Aim reserves nothing. A successful projectile
 creation immediately records its target/shooter allocation pointers and weapon

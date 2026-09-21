@@ -2099,11 +2099,10 @@ func createAndBindServices(s *Session) error {
 	//     tick owns the site, but reaching the session's strip table from
 	//     internal/features needs a producer port on its Service, which is
 	//     outside this unit's file ownership (TODO at the burn site).
-	//   - strip 9, the sinking-wreck 900-tick smoke column: the producer
-	//     parameters are established (15-tick interval, 900-tick window,
-	//     appendStripSmokePuffer ready) but the trigger — the wreck-sinking
-	//     start in the features sinking path — is likewise outside this
-	//     unit's ownership.
+	// The strip-9 900-tick column is no longer among them, and it never was a
+	// sinking-wreck effect: its trigger is the corpse finalizer's LAND path at
+	// death time, and a sinking wreck emits nothing at all [03 R-LAYER §3].
+	// The finalizer calls appendWreckSmokeColumn (below) after the stamp.
 	// Ensure Clock and Snapshot are available (AI is fixed [10] per RS-02).
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
@@ -2476,6 +2475,32 @@ func (s *Session) explosionRaisesLandDust(x, y, z numeric.Fixed) bool {
 		return false
 	}
 	return int32(y.Raw())>>numeric.FractionBits > int32(s.World.SeaLevel)
+}
+
+// appendWreckSmokeColumn is step 5 of the corpse finalizer [03 R-LAYER §3]:
+// once the wreck is stamped and the death cause permitted notification, the
+// LAND path raises the long-lived smoke column at the wreck position, and the
+// underwater path clears the notification and is silent.
+//
+// The medium test is the finalizer's own, and it is the one the descent start
+// uses [05 "Feature sinking and water interaction"]: the INTERPOLATED terrain
+// height under the victim against the sea-level byte, never the victim's own
+// elevation — a wreck lying in a hollow above the waterline still smokes, and
+// a flier shot down over the sea does not. An off-map sample is the height
+// query's −1 sentinel, which is at or below every sea level and therefore
+// silent, the same way the sinking start reads it.
+//
+// It is deliberately not the explosion's land-dust gate above: that one tests
+// the impact CELL's water flag and the point's own Y, because the explosion
+// happens where the shot landed, not where the ground is.
+func (s *Session) appendWreckSmokeColumn(inst *features.Instance) {
+	if s == nil || inst == nil || s.World == nil {
+		return
+	}
+	if s.World.HeightAt(inst.X, inst.Z).Raw() <= s.World.SeaLevelWorld().Raw() {
+		return
+	}
+	s.appendStripSmokePuffer(9, [3]numeric.Fixed{inst.X, inst.Y, inst.Z}, SmokePuffWreckColumn)
 }
 
 // bindDamageReaction installs the damage-intake reaction routine's seams

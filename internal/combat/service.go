@@ -818,11 +818,47 @@ func (s *Service) acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int,
 	return s.acquireTargetForSlotRange(u, slot, idx, w, vis, terrain, simRNG, econ, -1, catalogs...)
 }
 
+// weaponlessSearchRuns reports whether the shared unit-level target search may
+// run for a slot that holds NO active weapon [06 §3.2].
+//
+// Exactly one caller reaches it that way: the sight-distance caller — the
+// opportunity scan of [04 R-STANCE-01 §3], which "makes exactly one
+// acquisition call with weapon slot 0" — on a shooter whose definition carries
+// `kamikaze`. That is the stock case, not an edge case: every stock `kamikaze`
+// definition (the twelve mines, `armvader` and `corroach`) authors an empty
+// `weapon1`, which resolves to the record-0 inactive sentinel and therefore
+// enables no slot [02 §5 R-CONTENT-02][06 §1.2], while [04 R-SPEC-01 §1]
+// states both that the kamikaze order variant is reached by the unarmed
+// definitions — "in stock content, the ones with no weapon of their own" —
+// and that "any registered enemy within `sightdistance` of an idle
+// fire-at-will kamikaze unit is a candidate". A search that refused a
+// weaponless slot would leave no stock kamikaze definition with any candidate
+// at all, and no stock mine could proximity-detonate.
+//
+// Nothing weapon-derived is consulted on this path. Check 3 bypasses the §3.1
+// physical gate ENTIRELY for a `kamikaze` shooter, and that gate is where
+// every weapon operand lives (range, medium, air, ballistic); check 5 cannot
+// fire, because no weapon is not a paralyzer; the bad-target mask that buckets
+// the survivors is carried by the UNIT definition, indexed by slot number
+// rather than by the weapon record [06 §3.1]; and the filter radius is the
+// caller's sight distance.
+//
+// Every other caller still requires an active weapon: the autonomous per-slot
+// scan (rangeLimit < 0) visits resolved, enabled slots only, and shot
+// admission, the manual/fire adapters and the reaction offer keep their own
+// weapon tests.
+func weaponlessSearchRuns(u *units.Unit, rangeLimit int32) bool {
+	return rangeLimit >= 0 && u != nil && u.Def != nil && u.Def.Kamikaze
+}
+
 // acquireTargetForSlotRange is the non-mutating form used by order-facing
 // acquisition. A nonnegative range overrides only the query's range operand;
 // the compiled WeaponDef remains immutable [02 "Weapon record"][06 §3.2].
 func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, rangeLimit int32, catalogs ...*content.Catalog) (pool.Handle, bool) {
-	if u == nil || w == nil || slot == nil || slot.Weapon == nil {
+	if u == nil || w == nil || slot == nil {
+		return 0, false
+	}
+	if slot.Weapon == nil && !weaponlessSearchRuns(u, rangeLimit) {
 		return 0, false
 	}
 	var catalog *content.Catalog
@@ -834,7 +870,9 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 		seaLevel = terrain.SeaLevelWorld()
 	}
 	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
-	candidates := s.primaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.Range)
+	// The filter radius is the caller's, the gate's range clause is the slot
+	// weapon's [06 §3.2][06 R-WPN-05 §1] clause 5.
+	candidates := s.primaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.FilterRange)
 	// The registry's secondary-list gate and its secondary list [06 §3.1].
 	// Both belong to the SCANNING PLAYER — the registry is per side and is the
 	// same for every slot of every unit that player owns — so they are read
@@ -848,15 +886,32 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	// not set the field and the reaction offer's §3.1-only admission keeps its
 	// gate [06 R-WPN-04 §2 part 3].
 	//
-	// It is stock-inert today: every stock `kamikaze` definition (the twelve
-	// mines, armvader and corroach) authors no weapon at all, and this search
-	// is entered only through a slot that holds a resolved weapon.
+	// In stock content this check is what makes the mines and the crawling
+	// bombs work at all: they carry no weapon, so the bypass is the only reason
+	// the sight-distance caller ever returns them a candidate — see
+	// weaponlessSearchRuns above [04 R-SPEC-01 §1]. (This used to claim the
+	// bypass was "stock-inert", on the reasoning that the search is entered
+	// only through a resolved weapon slot. That reasoning was the defect: it
+	// silenced every stock mine and crawling bomb.)
 	acq.KamikazeShooter = u.Def != nil && u.Def.Kamikaze
 	// Check 2's two shooter-side disjuncts [06 §3.2]. Like check 3 they belong
 	// to the picked-candidate order, not to the §3.1 gate routine, so
 	// slotAcquisition does not set them and the reaction offer's §3.1-only
 	// admission is unaffected [06 R-WPN-04 §2 part 3].
 	acq.ShooterControlByte = s.PlayerControlByteFor(u.Owner)
+	// Check 4 of the picked-candidate order [06 §3.2]: "for the SIGHT-DISTANCE
+	// CALLER ONLY, the candidate's definition index must be clear of the
+	// `nochasecategory` mask". That caller is the opportunity scan of
+	// [04 R-STANCE-01 §3] — the idle/loiter arms of `Standby`, `Standby_Mine`,
+	// `Patrol`, `VTOL_Standby`, `VTOL_Patrol` and `VTOL_SeekAttack`, "with its
+	// range argument taken from the definition's `sightdistance`" — and it is
+	// the only caller that supplies a radius here. The autonomous scan
+	// (rangeLimit < 0), the reaction offer's §3.1-only admission and the order
+	// handlers all leave the mask zero, so they bypass check 4 exactly as
+	// [06 §3.2] and [06 R-WPN-04 §2 part 3] require.
+	if rangeLimit >= 0 && u.Def != nil {
+		acq.NoChaseMask = u.Def.NoChaseCategoryMask
+	}
 	// acq.ShootAll stays false: it is the session mode-flags word's bit 10,
 	// whose only retail writer is the `+ShootAll` chat command, and the word is
 	// zero-filled with no loader, settings writer or save restore touching that
@@ -865,7 +920,7 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	// `+shootall` typed command; when one is added it writes a session flag
 	// that arrives here.
 	if len(candidates) == 0 && acq.HasUpgrade {
-		candidates = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.Range)
+		candidates = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.FilterRange)
 	}
 	s.targetQuery = TargetQuery{Candidates: candidates, Acquisition: acq, Shooter: u, Slot: slot, Index: idx, World: w, Terrain: terrain, Visibility: vis, Economy: econ, Catalog: catalog}
 	return s.rules().SelectTarget(s, &s.targetQuery)
@@ -978,12 +1033,42 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 }
 
 // slotAcquisition builds one weapon slot's acquisition-time gate set. A
-// nonnegative rangeLimit overrides only the query's range operand [06 §3.1].
+// nonnegative rangeLimit overrides the QUERY radius only [06 §3.2]; the gate's
+// range clause stays the slot weapon's authored `range` [06 R-WPN-05 §1].
+//
+// The slot may hold NO active weapon, but only on the one path
+// weaponlessSearchRuns admits: the sight-distance caller on a `kamikaze`
+// shooter. Every operand this builder takes from the weapon record belongs to
+// the §3.1 physical gate or to check 5, and check 3 bypasses that gate
+// entirely for such a shooter while no weapon is not a paralyzer, so the zero
+// values below are never consulted on that path [06 §3.2][04 R-SPEC-01 §1].
+// The bad-target mask is NOT one of them: it is the unit definition's own
+// per-slot bitset [06 §3.1], and the weaponless search buckets on it exactly
+// as an armed one does.
 func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, catalog *content.Catalog, seaLevel numeric.Fixed, rangeLimit int32) Acquisition {
 	weapon := slot.Weapon
-	queryRange := weapon.Range
+	var (
+		gateRange                                  int32
+		waterWeapon, toAir, ballistic, isParalyzer bool
+	)
+	if weapon != nil {
+		gateRange = weapon.Range
+		waterWeapon, toAir = weapon.WaterWeapon, weapon.ToAirWeapon
+		ballistic, isParalyzer = weapon.Ballistic, weapon.Paralyzer
+	}
+	// The caller's radius filters and materializes the candidate array; it is
+	// not the gate's range clause. The §3.1 filter's radius "depends on the
+	// caller: the autonomous scan passes the slot weapon's authored `range`,
+	// while the sight-distance caller passes the unit definition's sight
+	// distance" [06 §3.2], while the unit-to-unit gate's last clause is always
+	// "an inclusive signed 32-bit compare against the slot weapon's `range`"
+	// [06 R-WPN-05 §1] clause 5, because that gate "takes the shooter unit, the
+	// target unit and the slot" and knows nothing of the caller
+	// [06 R-WPN-05 §9]. The two coincide for the autonomous caller and differ
+	// for the opportunity scan of [04 R-STANCE-01 §3].
+	filterRange := gateRange
 	if rangeLimit >= 0 {
-		queryRange = rangeLimit
+		filterRange = rangeLimit
 	}
 	acq := Acquisition{
 		ShooterX: u.X,
@@ -993,15 +1078,17 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 		// top-height word too [06 §3.1][06 R-WPN-05 §1] clause 2.
 		ShooterModelTop: modelTop(u),
 		SeaLevel:        seaLevel,
-		Range:           queryRange,
+		Range:           gateRange,
+		FilterRange:     filterRange,
 		BadTargetMask:   badMaskForSlot(u.Def, idx),
 		MaskResolved:    catalog != nil && u.Def != nil,
-		WaterWeapon:     weapon.WaterWeapon,
-		ToAir:           weapon.ToAirWeapon,
-		Ballistic:       weapon.Ballistic,
+		WaterWeapon:     waterWeapon,
+		ToAir:           toAir,
+		Ballistic:       ballistic,
 		// A paralyzer slot rejects candidates that already carry the stunned
-		// mark [06 §3.2] check 5; every other weapon ignores it.
-		Paralyzer: weapon.Paralyzer,
+		// mark [06 §3.2] check 5; every other weapon ignores it, and a slot
+		// with no weapon is not one.
+		Paralyzer: isParalyzer,
 		RNG:       simRNG,
 	}
 	if vis == nil {
@@ -1017,7 +1104,7 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 			return vis.IsVisible(visibility.PlayerID(u.Owner), visibilityTarget(candUnit, candUnit.Flags))
 		}
 	}
-	if weapon.Ballistic {
+	if ballistic {
 		acq.BallisticFeasible = func(c Candidate) bool {
 			// The unit-to-unit gate's ballistic clause solves on the delta
 			// between the two units' OWN positions [06 R-WPN-05 §1]; no piece

@@ -129,8 +129,14 @@ func orderSlot(u *units.Unit, idx int) *units.Slot {
 // order executor. It uses the same deterministic candidate scan and physical
 // gates as the ordinary weapon step; no order-specific target predicate is
 // introduced [06 §3.1][06 §3.2].
+//
+// A slot with no active weapon is refused here EXCEPT on the one path
+// weaponlessSearchRuns admits — the sight-distance caller on a `kamikaze`
+// shooter, which is how every stock mine and crawling bomb acquires
+// [04 R-SPEC-01 §1]. The decision is made once, in the search itself, so this
+// adapter and the search cannot disagree about it.
 func (s *Service) AcquireWeaponTarget(u *units.Unit, idx int, rangeLimit uint32, w *units.World, vis *visibility.Service, terrain *world.Terrain, econ *economy.Service, catalog *content.Catalog, sim *rng.Simulation) (pool.Handle, bool) {
-	if s == nil || u == nil || idx < 0 || idx >= units.NumSlots || u.SlotAt(idx) == nil || u.SlotAt(idx).Weapon == nil {
+	if s == nil || u == nil || idx < 0 || idx >= units.NumSlots || u.SlotAt(idx) == nil {
 		return 0, false
 	}
 	limit := int32(-1)

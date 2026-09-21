@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
@@ -288,7 +289,7 @@ func TestStripEmptyTableSweepTouchesNothing(t *testing.T) {
 // TestStripProducerCensusKeepsWriterlessStripsEmpty: the complete producer
 // census gives strips 0/1/3/4/8 no writer anywhere [R-STRIP-01 §1]. The full
 // production producer set — strip-6 nano submissions, the strips-5/9 smoke
-// sites (impact, weapon-fire start, burning-feature, sinking-wreck
+// sites (impact, weapon-fire start, burning-feature, land-wreck
 // profiles), and the strips-2/7 sprinkle producers (the emit-sfx thrust and
 // sub-bubble cases) — must leave those five strips empty. Nothing may invent
 // events for the writerless strips.
@@ -301,12 +302,12 @@ func TestStripProducerCensusKeepsWriterlessStripsEmpty(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		s.appendStripNanoEmitter(point, farPoint)
 	}
-	s.appendStripSmokePuffer(9, point, SmokePuffInit{SpawnInterval: 15, Lifetime: 900}) // sinking-wreck smoke column profile
-	s.appendStripSmokePuffer(5, point, SmokePuffInit{SpawnInterval: 3, Lifetime: 30})   // burning-feature smoke profile
-	s.appendStripSmokePuffer(9, point, SmokePuffTrail)                                  // impact / weapon-fire smoke profile
-	s.appendStripSprinkle(2, point, point, 16, 1)                                       // emit-sfx thrust pair (type 2)
-	s.appendStripSprinkle(2, point, point, 8, 1)                                        // emit-sfx thrust pair (type 3)
-	s.appendStripSprinkle(7, point, point, 8, 0)                                        // emit-sfx sub-bubbles (0x103)
+	s.appendStripSmokePuffer(9, point, SmokePuffWreckColumn)                          // land-wreck smoke column profile
+	s.appendStripSmokePuffer(5, point, SmokePuffInit{SpawnInterval: 3, Lifetime: 30}) // burning-feature smoke profile
+	s.appendStripSmokePuffer(9, point, SmokePuffTrail)                                // impact / weapon-fire smoke profile
+	s.appendStripSprinkle(2, point, point, 16, 1)                                     // emit-sfx thrust pair (type 2)
+	s.appendStripSprinkle(2, point, point, 8, 1)                                      // emit-sfx thrust pair (type 3)
+	s.appendStripSprinkle(7, point, point, 8, 0)                                      // emit-sfx sub-bubbles (0x103)
 
 	for tick := uint32(10); tick <= 15; tick++ {
 		s.phaseObjectSweeps(tick)
@@ -1766,5 +1767,58 @@ func TestStripViewsPublishRemainingLifeAndItsAbsence(t *testing.T) {
 		if v.Family == frame.StripFamilyFlameTrail && v.HasRemaining && v.Remaining != 0 {
 			t.Fatalf("remaining = %d past the deadline, want 0", v.Remaining)
 		}
+	}
+}
+
+// TestWreckSmokeColumnLandPathOnly locks the corpse finalizer's step 5
+// [03 R-LAYER §3]: the stamped LAND wreck raises the parameterised strip-9
+// column — interval 15, window 900 — for one CRT draw, and the underwater
+// path raises nothing and spends nothing. The medium test is the interpolated
+// terrain height under the wreck against the sea-level byte, not the wreck's
+// own Y: the wreck below sits well above the waterline and still stays silent
+// because the ground beneath it does not.
+func TestWreckSmokeColumnLandPathOnly(t *testing.T) {
+	s, crt := newStripTestSession(23, 23)
+	s.Clock.GlobalTick = 400
+	terrain := &world.Terrain{CellW: 8, CellH: 8, Plot: make([]world.PlotCell, 64), SeaLevel: 10}
+	s.World = terrain
+
+	at := func(h uint8) *features.Instance {
+		for i := range terrain.Plot {
+			terrain.Plot[i][4] = h
+		}
+		return &features.Instance{
+			X: numeric.FixedFromInt(3 * 16),
+			Y: numeric.FixedFromInt(40),
+			Z: numeric.FixedFromInt(3 * 16),
+		}
+	}
+
+	draws := crt.Draws()
+	s.appendWreckSmokeColumn(at(20)) // land: terrain above the sea-level byte
+	if got := len(s.strips.strips[9]); got != 1 {
+		t.Fatalf("land wreck produced %d strip-9 objects, want 1 [03 R-LAYER §3]", got)
+	}
+	if got := crt.Draws() - draws; got != 1 {
+		t.Fatalf("the column spent %d CRT draws, want 1 (the first puff's last frame)", got)
+	}
+	o := s.strips.strips[9][0]
+	if o.family != stripFamilySmoke {
+		t.Fatalf("column family = %v, want the smoke puffer", o.family)
+	}
+	if o.spawnInterval != 15 || o.nextSpawn != 415 {
+		t.Fatalf("interval/nextSpawn = %d/%d, want 15/415 [03 R-LAYER §3]", o.spawnInterval, o.nextSpawn)
+	}
+	if o.windowEnd != 400+900 {
+		t.Fatalf("window end = %d, want %d (a 900-tick column)", o.windowEnd, 400+900)
+	}
+
+	draws = crt.Draws()
+	s.appendWreckSmokeColumn(at(10)) // terrain AT sea level is the underwater path
+	if got := len(s.strips.strips[9]); got != 1 {
+		t.Fatalf("underwater wreck added a strip-9 object (%d total); the underwater path is silent", got)
+	}
+	if got := crt.Draws() - draws; got != 0 {
+		t.Fatalf("the silent path spent %d CRT draws, want 0", got)
 	}
 }

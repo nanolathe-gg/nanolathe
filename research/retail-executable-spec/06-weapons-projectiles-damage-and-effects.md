@@ -615,6 +615,36 @@ RNG-driven; the filtered order is never preserved.
    clear of the `nochasecategory` mask;
 5. a paralyzer weapon rejects a candidate already carrying the stunned bit.
 
+##### Check 3 carries the weaponless suicide units, and their slot supplies nothing but its index — Established
+
+The search is entered with a weapon **slot index**, and for every stock
+`kamikaze` definition that slot holds no weapon: the twelve mines, `armvader`
+and `corroach` all author an empty `weapon1`, which the loader resolves to the
+inactive record-0 sentinel rather than to a weapon ([02 §5 R-CONTENT-02]). The
+search runs for them all the same, and nothing weapon-derived is read on that
+path:
+
+- check 3 removes the §3.1 physical gate **entirely**, and that gate is where
+  every weapon-derived operand lives — the authored `range`, the water branch,
+  the `toairweapon` clause and the ballistic solution;
+- check 5 reads the slot record's paralyzer flag, which an inactive sentinel
+  does not carry, so it cannot reject;
+- the preferred/fallback split reads the **shooter definition's** per-slot
+  bad-target bitset, which the unit definition carries indexed by slot number
+  (§3.1), never the weapon record;
+- the per-attempt filter's radius is the caller's, and for this caller it is
+  the shooter definition's `sightdistance`.
+
+A weaponless slot therefore contributes only its index, and an implementation
+that refuses the search whenever the slot holds no resolved weapon silences
+every stock mine and crawling bomb. [04 R-SPEC-01 §1] states the same
+consequence from the content side — "any registered enemy within
+`sightdistance` of an idle fire-at-will kamikaze unit is a candidate" — and
+notes that in stock content the kamikaze order variant is reached exactly by
+the definitions with no weapon of their own. The autonomous per-slot scan is
+unaffected: it visits enabled, resolved slots only (the per-slot admission
+above), so it never reaches a weaponless one.
+
 ##### The option bit of check 2 is the `+ShootAll` chat toggle, clear in a stock game — Established
 
 The third disjunct of check 2 is a single bit of the **session mode-flags

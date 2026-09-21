@@ -93,7 +93,7 @@ const (
 	stripFamilyNano stripFamily = iota + 1
 
 	// stripFamilySmoke is the strips-5/9 smoke-puff family (impact smoke,
-	// weapon muzzle and trail smoke, burning-feature smoke, the sinking-wreck
+	// weapon muzzle and trail smoke, burning-feature smoke, the land-wreck
 	// smoke column) [R-STRIP-01 §1 strips 5/9]. Its removal verdict requires
 	// its window to have passed as well as its list to be empty, and its spawn
 	// gate carries the window term [R-STRIP-01 §2][03 R-FX-01 §3 addendum].
@@ -1141,12 +1141,13 @@ type SmokePuffInit struct {
 	Selector uint8
 }
 
-// The four researched weapon-side smoke producers [06 R-WFX-01 §5]. Every one
-// of them goes to strip 9, and the parameters are what make them look
-// different from each other: the trail puff plays all twelve frames at hold 7
-// and dies, `startsmoke` plays four frames at hold 30 — a slow puff hanging at
-// the muzzle — and the land dust of an above-sea explosion spawns three
-// particles seven ticks apart.
+// The four researched weapon-side smoke producers [06 R-WFX-01 §5], plus the
+// corpse finalizer's wreck column [03 R-LAYER §3]. Every one of them goes to
+// strip 9, and the parameters are what make them look different from each
+// other: the trail puff plays all twelve frames at hold 7 and dies,
+// `startsmoke` plays four frames at hold 30 — a slow puff hanging at the
+// muzzle — the land dust of an above-sea explosion spawns three particles
+// seven ticks apart, and the wreck column keeps spawning for thirty seconds.
 var (
 	// SmokePuffTrail backs the trail puff, the timer-expiry puff, `endsmoke`
 	// at impact, and COB emit-sfx 0x102's white twin.
@@ -1158,6 +1159,14 @@ var (
 	// SmokePuffBlack is emit-sfx 0x102, the same shape as the trail puff on
 	// the second smoke entry.
 	SmokePuffBlack = SmokePuffInit{FrameCap: 0, SpawnInterval: 1, FrameHold: 0, Lifetime: 0, Selector: 1}
+	// SmokePuffWreckColumn is the one producer row that is not weapon-side:
+	// the long-lived column a LAND wreck raises at the death-time corpse stamp
+	// [03 R-LAYER §3]. It reaches the same parameterised producer as the land
+	// dust above, and the interval and the lifetime are the whole of the
+	// difference between the two sites; frame cap, hold and selector are the
+	// producer's own literals, so the column plays every frame of `smoke 1` at
+	// hold 7 and spawns one puff every fifteen ticks for nine hundred.
+	SmokePuffWreckColumn = SmokePuffInit{FrameCap: 0, SpawnInterval: 15, FrameHold: 0, Lifetime: 900}
 )
 
 // appendStripSmokePuffer creates a smoke-puff container on one strip

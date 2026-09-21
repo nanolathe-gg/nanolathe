@@ -310,10 +310,40 @@ type Acquisition struct {
 	// SeaLevel is the map's sea level in world units [03 §2.2] P0-10; the gate
 	// compares against its whole-unit byte.
 	SeaLevel numeric.Fixed
-	// Range is the weapon's ordinary fire range. Coverage is a SEPARATE scalar
-	// for projectile-target/interceptor behavior and is not this radius
-	// [06 §3.3] [06 §2.1] P0-10.
-	Range         int32
+	// Range is the GATE range: the slot weapon's authored `range`, the last
+	// clause of the unit-to-unit physical gate, "an inclusive signed 32-bit
+	// compare against the slot weapon's `range`" [06 R-WPN-05 §1] clause 5
+	// [06 R-WPN-05 §9]. It is never the caller's query radius — the gate
+	// routine "takes the shooter unit, the target unit and the slot" and reads
+	// the slot's own weapon, whichever caller filtered the candidate array.
+	// Coverage is a SEPARATE scalar for projectile-target/interceptor behavior
+	// and is not this radius either [06 §3.3][06 §2.1] P0-10.
+	Range int32
+	// FilterRange is the query radius of the §3.1 per-attempt filter, which
+	// "depends on the caller: the autonomous scan passes the slot weapon's
+	// authored `range`, while the sight-distance caller passes the unit
+	// definition's sight distance" [06 §3.2]. The two values coincide for the
+	// autonomous scan and differ for the opportunity scan of
+	// [04 R-STANCE-01 §3] — 29 stock mobile definitions author a weapon shorter
+	// than their sight distance — so only materializeCandidatesInRange reads
+	// this one and only `admits` reads Range.
+	//
+	// Using one value for both made a standby unit acquire, and chase, an enemy
+	// up to its whole sight radius away.
+	FilterRange int32
+	// NoChaseMask is check 4 of the picked-candidate order [06 §3.2]: "for the
+	// sight-distance caller only, the candidate's definition index must be
+	// clear of the `nochasecategory` mask". It is the SHOOTER definition's
+	// compiled no-chase bitset, tested against the CANDIDATE's definition mask
+	// — the same direction the retaliation branch and the guard's chase term
+	// read it [08 R-AI-01 §11][04 R-UNIT-06 §1].
+	//
+	// Only the caller-supplied-radius form of the shared unit-level target
+	// search installs it, so the autonomous scan, the reaction offer's
+	// §3.1-only admission (SlotAcquisitionAdmits) and the order handlers all
+	// leave it zero and bypass check 4, which is what [06 §3.2] requires. A
+	// zero mask never rejects.
+	NoChaseMask   content.CategoryMask
 	BadMask       uint32
 	BadTargetMask content.CategoryMask
 	MaskResolved  bool
@@ -330,6 +360,13 @@ type Acquisition struct {
 	// reaction offer's admission is the §3.1 gate alone [06 R-WPN-04 §2 part
 	// 3], which is why slotAcquisition leaves this clear and
 	// SlotAcquisitionAdmits therefore bypasses nothing.
+	//
+	// The bypass is also what makes a WEAPONLESS query legal: every stock
+	// kamikaze definition authors an empty `weapon1`, and with the gate gone
+	// there is no weapon operand left to read [06 §3.2 "Check 3 carries the
+	// weaponless suicide units"]. The query then depends on this field being
+	// true, so the entry guard and this assignment must agree — see
+	// weaponlessSearchRuns.
 	KamikazeShooter bool
 
 	// ShooterControlByte is the SECOND disjunct of check 2 [06 §3.2]: "the
@@ -507,6 +544,27 @@ func (a *Acquisition) admits(c Candidate) bool {
 // reaches here as byte<<16, so the same conversion recovers it exactly.
 func wholeYWord(v numeric.Fixed) int32 { return int32(int16(v.Raw() >> 16)) }
 
+// rejectsNoChase is check 4 of the picked-candidate order [06 §3.2]: "for the
+// sight-distance caller only, the candidate's definition index must be clear of
+// the `nochasecategory` mask". It sits between check 3 (the physical gate) and
+// check 5 (the paralyzer's stunned clause), so a rejection here removes that
+// candidate's scoring draw while leaving its sampling draw and its place in the
+// fifty-pick limit intact [06 §3.2 "Draw consequence"].
+//
+// The caller decides whether the check applies by installing the mask at all:
+// the autonomous scan and every order-side caller leave NoChaseMask zero, and a
+// zero mask intersects nothing. The masks are "indexed by unit-definition
+// index" [06 §3.1], so the test reads the candidate's own definition mask —
+// 65 stock ground definitions author `VTOL` here and 5 aircraft author
+// `UNDERWATER`, which is why an idle unit does not leave its post to chase an
+// aircraft overhead.
+func (a *Acquisition) rejectsNoChase(c Candidate) bool {
+	if a.NoChaseMask.IsZero() {
+		return false
+	}
+	return c.CategoryMask.Intersects(a.NoChaseMask)
+}
+
 // rejectsStunned is check 5 of the picked-candidate order [06 §3.2]: "a
 // paralyzer weapon rejects a candidate already carrying the stunned bit". It is
 // paralyzer-only — an ordinary weapon happily re-targets a stunned unit, and
@@ -563,15 +621,15 @@ func acquireFilteredTarget(candidates []Candidate, a Acquisition) (pool.Handle, 
 		// the candidate array is materialized; check 2 (`shootme`, computer
 		// controller, or the `+ShootAll` option bit) is admitsAsTarget; check 3
 		// (the §3.1 physical gate, or the shooter's `kamikaze` bypass of it) is
-		// admits; check 5 (a paralyzer rejects an already-stunned candidate) is
-		// rejectsStunned. Check 4 belongs to the sight-distance caller's
-		// `nochasecategory` mask alone.
+		// admits; check 4 (the sight-distance caller's `nochasecategory` mask,
+		// which only that caller installs) is rejectsNoChase; check 5 (a
+		// paralyzer rejects an already-stunned candidate) is rejectsStunned.
 		//
 		// The order is load-bearing for the stream, not only for the verdict:
 		// the scoring draw below is taken ONLY by a candidate that survives all
 		// five checks, so each rejection here removes one scoring draw
 		// [06 §3.2 "Draw consequence"].
-		if !a.admitsAsTarget(c) || !a.admits(c) || a.rejectsStunned(c) {
+		if !a.admitsAsTarget(c) || !a.admits(c) || a.rejectsNoChase(c) || a.rejectsStunned(c) {
 			continue
 		}
 		preferred := IsPreferredCategory(c.Category, a.BadMask)

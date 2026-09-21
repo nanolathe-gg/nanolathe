@@ -139,7 +139,7 @@ own class. For the flame, nano, trail and sprinkle families the removal
 verdict is "the internal list is empty" (the container dies once its last
 particle/segment expires). "The smoke family" is two classes: the strips-5/9
 smoke puffer — impact, muzzle, trail, emit-sfx, burning-feature and
-sinking-wreck smoke, which is all the smoke a player normally sees — has the
+land-wreck smoke, which is all the smoke a player normally sees — has the
 verdict "list empty **and** stored deadline passed" and a spawn gate that
 compares the next-spawn tick against both the object's window end and the
 global tick, so the deadline its producer stores is a real lifetime and a
@@ -226,6 +226,20 @@ not at any point during sinking. Its complete trigger, per death:
    smoke column (the smoke family's variant and life are the producer's
    second and third arguments; the strip index is its fourth and is the
    literal 9).
+
+**Established (direct-static) — the column's full parameter row.** The wreck
+column and the above-sea explosion's land dust are the two call sites of the
+**parameterised** smoke producer of [R-FX-02 §5], the one smoke-puff producer
+that takes a spawn interval and a lifetime from its caller instead of holding
+both as literals. Those two values are the whole of the per-site difference:
+the wreck column passes **interval 15, lifetime 900** where the land dust
+passes 7 and 15. Frame cap, frame hold and smoke selector are the producer's
+own literals and are the land-dust row's — cap 0 (every frame of the bound
+entry), hold 0, which the family reads as 7, and selector 0 (`smoke 1`) — so
+the emitter's six-argument init row of [06 R-WFX-01 §5] is
+`(wreck point, 0, 15, 0, 900, 0)`: one puff at the stamp and one every
+fifteen ticks while the window is open, sixty-one puffs over the column's
+thirty seconds, each spending the family's one CRT draw.
 
 The trigger is therefore the death/corpse-stamp event itself — a feature-state
 transition at death time — not a descent timer, not a height threshold during
@@ -4753,8 +4767,8 @@ on the record** with the viewing slot, while the marker branch follows the
 record's firing-unit pointer and compares that unit's owner slot, with no null
 check. **Established.**
 
-**The art selector is three weapon-definition flags.** Each record's first
-field is the pointer to the **weapon definition** it was fired from, and the
+**The art selector is three weapon-definition flags.** Each record carries a
+reference to the **weapon definition** it was fired from, and the
 selector reads that definition's behaviour flags word — not any per-record
 status or runtime word. In the definition the weapon parser writes,
 `targetable` and `interceptor` are the two high flags the selector tests
@@ -7327,7 +7341,8 @@ refuses the second spawn and the verdict retires the container on the first
 tick after its one puff is gone. That is what makes these producers
 one-shots. The two parameterised sites are the only ones with a real window:
 the above-sea explosion's land dust (interval 7, lifetime 15 — three puffs)
-and the sinking-wreck column (interval 15, lifetime 900). For the vent the
+and the land wreck's column (interval 15, lifetime 900; a wreck that sinks
+emits nothing at all, [R-LAYER §3]). For the vent the
 deadline is only an allocation hint: its container is never removed by the
 sweep — the 401-record eviction in the producer is the only thing that
 removes one — so a geothermal vent steams for the whole battle, and because
