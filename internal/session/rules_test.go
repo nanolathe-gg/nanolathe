@@ -102,6 +102,9 @@ func TestBindRulesProjectsEverySeam(t *testing.T) {
 		if s.Movement.Kernel != set.Path {
 			t.Fatalf("%s did not reach the movement search kernel", set.Name)
 		}
+		if s.Movement.Rules != set.Movement {
+			t.Fatalf("%s did not reach the movement policy seam", set.Name)
+		}
 		if s.orderRules() != set.Orders || s.unitLimitRules() != set.UnitLimit {
 			t.Fatalf("%s accessors did not read the bound set", set.Name)
 		}
@@ -160,6 +163,12 @@ func TestCompositionProjectsTheSearchKernelOntoMovement(t *testing.T) {
 	}
 	if s.Movement.Kernel == nil || s.Movement.Kernel != s.Rules.Path {
 		t.Fatalf("movement holds kernel %T, the bound set holds %T", s.Movement.Kernel, s.Rules.Path)
+	}
+	// The default session is Modern, so the composed movement system carries
+	// the learned-terrain policy and not the unbound Strict fallback
+	// (DESIGN_MOVEMENT_PATH "Modern learned terrain").
+	if _, modern := s.Movement.Rules.(*movement.ModernRules); !modern || s.Movement.Rules != s.Rules.Movement {
+		t.Fatalf("movement holds policy %T, the bound set holds %T", s.Movement.Rules, s.Rules.Movement)
 	}
 }
 
@@ -341,6 +350,7 @@ func TestLookupRuleSetBuildsOnceAndCompletesFromItsBase(t *testing.T) {
 		{name: "Combat", got: first.Combat, want: modern.Combat},
 		{name: "Construction", got: first.Construction, want: modern.Construction},
 		{name: "UnitLimit", got: first.UnitLimit, want: modern.UnitLimit},
+		{name: "Movement", got: first.Movement, want: modern.Movement},
 		{name: "Path", got: first.Path, want: modern.Path},
 		{name: "Planner", got: first.Planner, want: modern.Planner},
 		{name: "Orders", got: first.Orders, want: modern.Orders, overridden: true},

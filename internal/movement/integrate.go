@@ -73,6 +73,16 @@ type System struct {
 	// change how a route is found, never when one publishes.
 	Kernel path.Kernel
 
+	// Rules is the movement seam of the session's gameplay rule set
+	// (docs/DESIGN_GAMEPLAY_RULES.md): bound once, outside any tick. Nil
+	// answers as Strict 3.1, so a fixture or a system reconstructed by a
+	// restore keeps the retail blocked-mover loop [04 R-MOV-01 §7].
+	Rules Rules
+	// learned is the Modern learned-terrain grid, allocated at the first
+	// lesson and never by Strict (docs/DESIGN_MOVEMENT_PATH.md "Modern learned
+	// terrain"). It is derived state with no save field.
+	learned *LearnedTerrain
+
 	// airLegHandler is runAirOrderLeg bound once. The session re-registers
 	// every unit's owned rows on every visit, and a method value taken at
 	// that site is a fresh heap closure per unit per tick; the bound value
@@ -2610,6 +2620,16 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 					reg.ReviseFor(cls, profile, requester, revTick)
 				},
 			}
+			// Nanolathe Modern policy: a block the requester's owner learned
+			// from a rejected step is read from the stamped layer. The seam
+			// is asked once per opened search; Strict and an owner that has
+			// learned nothing keep the retail read above
+			// (docs/DESIGN_MOVEMENT_PATH.md "Modern learned terrain").
+			if learned := s.rules().LearnedTerrain(s); learned != nil {
+				cfg.PassableValue = func(c path.Cell) uint8 {
+					return layer.passableLearned(c.X, c.Z, footX, footZ, owner, learned)
+				}
+			}
 		} else {
 			// No authored terrain layer is available; keep this request inert
 			// rather than inventing permissive passability.
@@ -3272,6 +3292,11 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	fx, fz := coll.FootPrintX, coll.FootPrintZ
 	inBounds := commitRectInBounds(s.Terrain, proposedAnchor, fx, fz)
 	blockerID := -1
+	// staticReject records that the validator's first failing cell failed the
+	// static ground test rather than the occupant test. Retail's verdict
+	// carries no reason [04 R-COLL-01 §2]; only the Modern learned-terrain
+	// policy below reads this.
+	staticReject := false
 	perCell := func(c Cell) bool {
 		if !inBounds {
 			return coll.Mode == 2
@@ -3280,6 +3305,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			return true
 		}
 		if s.Terrain != nil && !moverProfile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
+			staticReject = true
 			return false
 		}
 		if s.Grid != nil {
@@ -3314,6 +3340,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		fastPath, isBlocked = coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
 	}
 	blocked = isBlocked
+	if isBlocked && staticReject {
+		// Nanolathe Modern policy: the owner learns the ground that rejected
+		// the step, so the follower's next ordinary repath routes around it.
+		// Strict does nothing here, as retail does [04 R-MOV-01 §7]
+		// (docs/DESIGN_MOVEMENT_PATH.md "Modern learned terrain").
+		s.rules().StaticRejection(s, u, proposedAnchor, moverProfile.FootPrintX, moverProfile.FootPrintZ)
+	}
 	// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
 	// the unit's occupancy-commit tick so the request revision pass of
 	// [04 §6.1 R-DOC04-B] sees it. The same-cell fast path commits the

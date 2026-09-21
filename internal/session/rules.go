@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 )
@@ -47,6 +48,11 @@ type RuleSet struct {
 	Orders       orders.Rules
 	Construction construction.Rules
 	UnitLimit    UnitLimitRules
+	// Movement is the movement system's policy seam: whether a ground mover
+	// rejected by static ground teaches its owner the blocks the route search
+	// had read as unexplored (DESIGN_MOVEMENT_PATH "Modern learned terrain").
+	// It is separate from Path below, which replaces the search itself.
+	Movement movement.Rules
 	// Path is the search kernel one route request is opened with. It is a
 	// whole-subsystem seam rather than a policy one: it decides how a route
 	// is found, while the scheduler keeps admission order, the per-player
@@ -125,6 +131,7 @@ func StrictRuleSet() RuleSet {
 		Orders:       orders.StrictRules{},
 		Construction: construction.StrictRules{},
 		UnitLimit:    StrictUnitLimit{},
+		Movement:     movement.StrictRules{},
 		Path:         path.RetailKernel{},
 		Planner:      ai.RetailPlanner{},
 	}
@@ -142,6 +149,7 @@ func ModernRuleSet() RuleSet {
 		Orders:       &orders.ModernRules{},
 		Construction: &construction.ModernRules{},
 		UnitLimit:    ModernUnitLimit{},
+		Movement:     &movement.ModernRules{},
 		// The retail search is what Modern means for pathfinding too: no
 		// approved Modern policy touches how a route is found.
 		Path: path.RetailKernel{},
@@ -278,6 +286,9 @@ func completeRuleSet(name string, set RuleSet) RuleSet {
 	if set.UnitLimit == nil {
 		set.UnitLimit = base.UnitLimit
 	}
+	if set.Movement == nil {
+		set.Movement = base.Movement
+	}
 	if set.Path == nil {
 		set.Path = base.Path
 	}
@@ -372,6 +383,7 @@ func (s *Session) BindRules(set RuleSet) {
 	}
 	if s.Movement != nil {
 		s.Movement.Kernel = set.Path
+		s.Movement.Rules = set.Movement
 	}
 	// The computer players are player-indexed with nil holes, so this is a
 	// direct indexed walk and never a map range [RS-02][I1]. A manager

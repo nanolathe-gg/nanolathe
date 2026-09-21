@@ -8637,8 +8637,11 @@ passability test returns: out-of-bounds → 0; the requesting player's bit absen
 per-player explored-terrain record whose save section is named `Mapping` and whose fill is
 chosen by the session's mapping option; there is no building bit in it,
 [03 R-LAYER §1], [R-PATH-01 §2]) → 2; otherwise the packed terrain value. Value 2 means "the
-requesting player has not explored this 2×2 block", and its index carries a quarter-footprint
-offset. EVERY consumer of the test — the A\* expansion and all greedy-ray probes — treats the
+requesting player has not explored this 2×2 block", the bit is the requesting unit's OWNER's
+slot, and its index carries a quarter-footprint offset. That index is unsheared while the
+LOS publisher stamps the same grid at a height-sheared tile, so an unexplored answer can
+persist over ground the player can see ([R-PATH-01 §2]). EVERY consumer of the test — the
+A\* expansion and all greedy-ray probes — treats the
 result as passable iff it is nonzero: **only the terrain value 0 hard-blocks**; steep (1),
 mapping miss (2), and clear (3) all expand. A building hard-blocks the A\* through the class
 layer's **occupant-age gate** (step 2 of the classifier above) unconditionally, having no
@@ -9430,11 +9433,13 @@ from the listed valid heap array; letters name distinct cells and numbers are
 explored-terrain record; no building mask exists ([03 R-LAYER §1]). Three
 independent sites settle it: the save writer
 emits it under the section name `Mapping` with a length of half a byte per
-attribute cell (one 16-bit word per 2×2 block); the map-load initializer fills
-it with all-ones when the session's *mapping* game-option bit is clear and with
-zeroes when it is set (fog on ⇒ nothing explored yet); and the visibility
-writer ORs the viewing player's slot bit into the word as blocks become seen.
-No building writes it.
+attribute cell (one 16-bit word per 2×2 block); map load only **allocates and
+zero-fills** the grid, and the option-dependent fill is the battle-entry bulk
+rebuild — all-ones when the session's *mapping* game-option bit is clear,
+zeroes when it is set (fog on ⇒ nothing explored yet), and skipped altogether
+when the refresh's history-reset argument is zero ([03 R-LAYER §1] write sites
+1 and 2, [03 R-VIS-01 §1]); and the visibility writer ORs the stamping unit's
+**owner** slot bit into the word as blocks become seen. No building writes it.
 
 **The probe — Established.** The search's passability probe, given
 the bound movement-class record and a cell, in order:
@@ -9445,9 +9450,28 @@ the bound movement-class record and a cell, in order:
    `bz = (z >> 1) + (FootPrintZ >> 2)` — half-resolution coordinates offset by
    a quarter of the class's authored footprint. If `bx >= mapWidth >> 1` or
    `bz >= mapHeight >> 1` → **0**.
-3. If the requesting player's slot bit is **absent** from the mapping word for
-   that block → **2**, without reading the terrain layer at all.
+3. Read the 16-bit word at `(bx, bz)` of the single per-map mapping word grid —
+   the array the LOS publisher writes ([03 R-LAYER §1]), one word per 2×2 cells,
+   i.e. per 32 world units, indexed in **ground** cells with no height term
+   anywhere. If bit `1 << requesterSlot` is **absent** → **2**, without reading
+   the terrain layer at all.
 4. Otherwise return the stamped two-bit terrain value 0/1/3 ([R-DOC04-B]).
+
+**Established — the slot is the requester's OWNER, and the option acts only
+through the grid's contents.** The bit tested is `1 << ownerSlot` for the owner
+of the unit the request belongs to, never the local or viewing player: the
+scheduler reaches a candidate by advancing its round-robin player cursor and
+then that player's own unit cursor ([R-PATH-01 §6]), so the requester is always
+drawn from the cursor player's unit block. Every seated row whose control byte
+is 1, 2 or 3 is gated this way — a computer player's units path against that
+computer player's explored memory exactly as a human's do. The writer side
+names the same bit by composition: the LOS stamp ORs the covering unit's owner
+row's slot byte into the tile, and seat setup fills that byte with the row's own
+index ([R-MOV-03 §11]). The probe never reads the visibility mode word; all
+option dependence arrives through the grid's *contents*. With the *mapping*
+option off the battle-entry rebuild has already set every usable player bit
+everywhere, so the bit is never absent and **value 2 can never be returned**;
+with it on the grid starts empty and gains bits only where units have stamped.
 
 So value **2 means "this block is unexplored by the requesting player"**, and
 every consumer treats it as passable. Retail units path optimistically straight
@@ -9460,6 +9484,41 @@ pair is **unsigned**, step 2's half-resolution mapping-block pair is
 **signed**. The difference is unobservable — `x` and `z` have already passed
 the unsigned pair, so they are non-negative, and both quarter-footprint terms
 are non-negative, so `bx` and `bz` can never be negative.
+
+**Established — the reader and the writer index the grid in different frames.**
+The probe's index above is a plain ground index: the cell pair halved, plus the
+quarter-footprint offset, with no height term. The publisher's is not. The
+LOS/mapping raster indexes the *same* array by the **height-sheared screen
+tile** — observer `tileZ = (worldZ_high − (emitter >> 1)) >> 5` with
+`emitter = clamp(modelTopByte + worldY_high, 0, 255)` — and the terrain
+height-word table its walk reads is itself built at map load in that same
+sheared frame, each cell scattering into row `(16z − height/2) >> 5`
+([03 R-P0-18-A §2], [03 R-P0-18-B §2]). Stamps therefore land at the sheared
+index while the probe consults the unsheared one. The two frames differ by the
+shear alone, so ground of height `h` is recorded about `h/64` tile rows **north**
+of the row the probe consults for that ground; equivalently, the "unexplored"
+answer the probe gets for a cell is the mapping state of ground about `h/2`
+world units further **south** than the ground it is asking about.
+
+**Established — the consequence: south-rising ground stays unexplored to the
+search.** At the foot of a south-rising face the ground the probe consults lies
+past the crest, behind the walk's horizon, and is never stamped. A unit's own
+ground tile can stay unmapped for the same reason: an emitter of 128 or more
+puts that tile two or more tile rows south of the stamped origin, and whether
+any spoke reaches back that far is the horizon test's business
+([03 R-VIS-01 §3]). A unit ordered south into rising unexplored ground therefore
+paths blind at terrain the player can already see on screen: the probe returns
+2, the expansion treats it as passable, the route runs into the face, and
+[R-MOV-01 §7] states why the resulting block never resolves.
+
+**Unverified — the stamp set at any particular cell.** That retail's authored
+data — the `los.tdf` spoke lines, the unit's model-top byte and its authored
+sight distance — yields the identical stamp set at a given cell is not traced;
+the frame mismatch above is. *Would settle it: a manual retail observation — one
+`ARMFLEA` on Crystal Maze under the default Mapping and True LOS, ordered due
+south across unexplored ground into a south-rising face (expected: it parks
+indefinitely), with the same trip northward and the same trip with Mapping off
+as controls (expected: both complete).*
 
 **Established — where a BUILDING blocks.** The class layer's classifier
 reads the attribute cell's occupant slot index — the same field the movement
@@ -11500,6 +11559,24 @@ onward. No yield, sidestep, retarget or priority comparison exists
 ([R-COLL-01 §7]); the outer caller for **replanning** is the
 follower/scheduler pair above.
 
+**Established — what a rejection does not do, and when the loop is
+permanent.** A rejected proposal records nothing about the cell that rejected
+it: no cell is marked known or blocked, no word of the mapping grid is written,
+no counter is kept, and no nudge, sidestep or rotation is attempted. There is
+exactly one passability entry for the search — no variant of the probe treats
+unknown ground as real terrain ([R-PATH-01 §2]) — so the repath the poll grants
+re-runs the same search over the same inputs. When the rejection came from
+terrain the search admitted only because the mapping word carried no bit for the
+requester, nothing in this loop can set that bit, and the new route is provably
+the old one. Its publication is non-empty, so it never raises the "cannot get
+there" bit `0x40` ([R-PATH-01 §4]) and `Move_Ground` neither re-arms nor fails
+([R-ORD-01 §0]). The parked-occupant case of [R-ORDER-02 §1] resolves within a
+throttle period because the occupant is walled into the class layer by a
+*different* writer; a block behind an unmapped tile has no such writer and is
+therefore **permanent** — the unit re-requests every 60 ticks for the life of
+the order, and only a player cancel or a new order ends it. The frame mismatch
+of [R-PATH-01 §2] is how ground the player can see reaches this state.
+
 ### The commit step, in order [R-COLL-01 §1]
 
 This section and the ones that follow trace the position-and-occupancy
@@ -11593,6 +11670,16 @@ cell pair into the cached pair and `mode` into the mode-mirror bits;
 transform-dirty; (6) call the LOS coverage wrapper ([03 §3.2 R-VIS-01 §2]),
 which floors the Y it publishes at `(seaLevel + 1) << 16`. Steps 1–6 finish
 before the sweep visits the next unit slot.
+
+**Supported inference — step 6 stamps from the pre-correction Y.** The wrapper
+runs inside the commit, ahead of the post-move correction gate of
+[R-MOV-01 §5], so the emitter byte it forms comes from the Y the commit has just
+written rather than the corrected one. Because the word grid only ever gains
+bits, the difference can at most map one extra tile where the two heights
+straddle a tile row or an emitter band edge; it cannot systematically clear an
+unmapped tile ahead of a moving unit, so it does not soften the frame mismatch
+of [R-PATH-01 §2]. *Would settle it: a manual retail observation comparing the
+tile a unit stamps while crossing a slope against its corrected height.*
 
 ### The mobile footprint validator, exactly [R-COLL-01 §2]
 
@@ -11696,6 +11783,16 @@ leaves a factory whose yard is open ([R-FAC-02 §5]). The class layer of §7.1
 additionally hard-blocks a building's cells for path search through the
 occupant-age gate ([R-PATH-01 §2], [R-PATH-01 §14]); the commit does not use
 the class layer.
+
+**Established — a rejection changes no search input.** Whatever rejected the
+proposal — map edge, blocking feature, building or parked unit — the commit
+writes nothing the search reads: it marks no
+cell, never touches the mapping word grid, and keeps no rejection count
+([R-MOV-01 §7]). The rejections that clear do so because some *other* writer
+moves the search's inputs — the class layer's occupant-age gate walls a parked
+mover ([R-ORDER-02 §1]), the feature phase removes a feature. A rejection over
+terrain the search admitted only because the mapping word lacked the
+requester's bit has no such writer, so it never clears ([R-PATH-01 §2]).
 
 ### Stamp and clear, exactly: the two planes, the overlap bits, and the sector list [R-COLL-01 §4]
 

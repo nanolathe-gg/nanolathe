@@ -39,8 +39,9 @@ clamps against its old footprint boundary and proposes the same move next tick; 
 looks like sidestepping emerges from two independent timers — the follower's
 60-tick repath and the class layer's 30-tick occupant age — and from nothing
 else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Unapproved additions in this area invent retail behaviour. The explicit
-Modern construction-clearance contract below is a user-authorized exception
-and must not be removed as a parity defect.
+Modern construction-clearance contract below and
+[Modern learned terrain](#modern-learned-terrain) are user-authorized
+exceptions and must not be removed as parity defects.
 
 ### Modern construction clearance priority
 
@@ -253,6 +254,12 @@ player's slot bit is absent from the visibility mapping word — the block is
 unexplored — and otherwise the packed terrain tier; 1, 2 and 3 all expand and
 only 0 hard-blocks, which is why retail units path optimistically straight
 through fog `[04 §6.1 R-DOC04-B]` `[04 R-PATH-01 §2]`.
+
+**The policy seam** (`rules.go`, `learned.go`). `Rules` is this package's
+gameplay seam, bound on `System.Rules` by the session's rule set; unbound it
+answers as Strict 3.1. It carries one policy,
+[Modern learned terrain](#modern-learned-terrain), and `LearnedTerrain` is the
+per-owner grid that policy keeps on the `System`.
 
 **Routes** (`route.go`). `Route` is up to twenty published points plus the
 active and dirty bits. `Publish` clamps the count first and applies the zero-
@@ -876,7 +883,16 @@ this wiring can be asserted without inventing a public kind on `Goal`.
 * **Units path optimistically straight through fog.** A cell whose mapping word
   lacks the requesting player's slot bit reads as unexplored, and unexplored
   expands. Only a hard-blocked cell stops the search `[04 §6.1 R-DOC04-B]`
-  `[04 R-PATH-01 §2]`.
+  `[04 R-PATH-01 §2]`. Both modes keep this.
+* **Under Strict 3.1, a unit that fog-paths into a wall parks there for the life
+  of its order.** A rejection changes no search input, so the sixty-tick repath
+  is provably the route it replaced; and because the search reads the mapping
+  grid in the unsheared ground frame while the LOS publisher writes it in the
+  height-sheared one, ground at the foot of a south-rising face stays unexplored
+  to the search while the player can see it `[04 R-MOV-01 §7]`
+  `[04 R-COLL-01 §3]` `[04 R-PATH-01 §2]`. That is retail and Strict reproduces
+  it. Modern removes only the permanent trap:
+  [Modern learned terrain](#modern-learned-terrain).
 * **There is no smoothing pass, and routes look angular because of it.** What is
   published is the direction-change points, converted to world coordinates
   (C13, C19) `[04 §7.5]` `[04 R-PATH-01 §7]`.
@@ -1216,3 +1232,160 @@ the captured fourteen-unit crowd, restoring five nearby tree footprints that
 were already cleared in the diagnostic. It drives an ordinary point move
 through live path rejection and verifies Modern idle/cleanup versus Strict
 retry. Decorative ground marks do not participate in its collision fixture.
+
+### Modern learned terrain
+
+**Nanolathe Modern policy.** A ground mover that static ground rejects teaches
+its owner the ground that rejected it, so the follower's next ordinary repath
+routes around it instead of reproducing the route that failed. Fog-of-war
+pathing stays honest — a unit still walks blind into ground its owner has not
+explored — and only the permanent trap is removed.
+
+**Strict 3.1 behavior.** The search answers "unexplored" for any block whose
+mapping word lacks the requester's owner bit and treats that answer as
+passable, without reading the class layer `[04 R-PATH-01 §2]`. The commit
+validator tests the real ground and rejects the step, and a rejection changes
+no search input: no cell is marked, the mapping grid is not written, no count
+is kept `[04 R-MOV-01 §7]` `[04 R-COLL-01 §3]`. The follower re-requests every
+sixty ticks and receives the same route for the life of the order. The LOS
+publisher does not rescue the unit, because it stamps the mapping grid at the
+height-sheared tile while the search consults the unsheared ground block: the
+ground at the foot of a south-rising face is read by the search from a block
+that lies behind the crest `[04 R-PATH-01 §2]` `[03 R-VIS-01 §3]`.
+`StrictRules` does nothing at the rejection and returns no grid at the request
+open, so every search input is retail's.
+
+**Modern behavior.** When the commit validator rejects a mode-1 ground
+proposal and the first failing footprint cell failed the *static* test —
+terrain or a blocking feature, `Profile.IsPassableCommitCell` — rather than the
+occupant test, `ModernRules.StaticRejection` sets the owner's bit in
+`System`'s `LearnedTerrain` grid for every mapping block the search consults
+for an anchor inside the rejected footprint rectangle, skipping blocks the
+owner's mapping word already carries. At each request open
+`ModernRules.LearnedTerrain` hands that grid to the search's passability port;
+a block the requester's owner has learned is then answered from the stamped
+class layer exactly as a mapped block is, and everything else keeps the retail
+four-step read. Nothing else changes: the blocked response, the half-speed cap,
+the sixty-tick throttle, the scheduler's single active request and its
+100-unit charge, the search budgets and the publication boundary are retail's
+in both modes.
+
+A set bit means "this owner has touched this block", never "this block is
+blocked". The verdict always comes from the class layer at search time, so a
+reclaimed feature or a changed layer is seen at the next search and learned
+knowledge cannot go stale.
+
+**Where the knowledge lives, and why not the mapping grid.** Writing the
+owner's bit into the visibility publisher's mapping word grid would have been
+one line and would have been saved for free. It was rejected because that grid
+has other readers, and every one of them indexes it by the height-sheared tile:
+the unit visibility sample (which reads the word grid directly when LOS is off
+and Mapping is on), the known-site placement gate, the aircraft landing accept,
+the explored-terrain fog and the minimap `[03 R-LAYER §1]` `[03 R-VIS-01 §3]`.
+A bit written at the search's unsheared index names, to all of them, ground
+about half the terrain height further south than the ground the unit touched:
+it would reveal a 32-pixel square of terrain the player has not seen, could
+make an enemy standing there visible and targetable, and could admit a build
+site. `LearnedTerrain` is therefore a separate grid of the same shape — one
+word per 2×2-cell block, one bit per player slot — indexed in the search's own
+frame and read by nothing but the search.
+
+**How much a rejection teaches.** Every block the search consults for an
+anchor inside the rejected rectangle, not only the proposed anchor's block.
+Measured on Crystal Maze with `ARMFLEA` under the default options (Mapping on,
+True LOS), over 42 single-unit start/goal pairs for 6000 ticks: both variants
+free all ten units Strict wedges, on identical completion ticks; across the 42
+pairs they differ in one, which the rectangle variant finishes 141 ticks
+sooner. In two 100-unit rally-style runs the rectangle variant left fewer units
+in transit at tick 9000 (53 and 30, against 67 and 52). The cost is the same.
+A unit "feels along" a long face one block per lesson, because each lesson
+reveals one block and the next blind route tries the block beside it. That
+cost is bounded and small: blocked ticks were 3–8.5 % of the affected trips
+(88–275 ticks of 1776–3723), with no stall episode of 150 ticks; the reported
+flea spends about 300 ticks working along its face. The rest of the gap to an
+all-mapped run (trips 1.3–1.8× longer) is walking into and back out of dead
+ends, which is what honest fog pathing costs and which no repath timing
+changes.
+
+**No prompt repath.** Letting Modern re-request immediately after a lesson,
+instead of waiting out the sixty-tick throttle, was considered and not adopted:
+it would be a second departure, and the measurement above bounds what it could
+recover at the blocked share of the trip. The throttle is retail's in both
+modes.
+
+**The seam.** `movement.Rules` (`internal/movement/rules.go`) is a new seam,
+composed as `session.RuleSet.Movement` beside the other package seams:
+`StrictRuleSet` binds `movement.StrictRules{}`, `ModernRuleSet` binds
+`&movement.ModernRules{}`, the registry completes an unstated field from the
+set's base, and `Session.BindRules` projects it onto `System.Rules` at the same
+site that projects the search kernel, so a system composed later or by a
+restore receives it through the same `RebindRules` call. No existing seam owns
+the two questions: they are asked by this package's own occupancy commit and
+request open about state this package owns; they are not an order decision
+(`orders.Rules`), not construction, and not a replacement search —
+`path.Kernel` still opens the same retail search over the same passability
+port, and what changes is one input to that port
+([DESIGN_GAMEPLAY_RULES §9](DESIGN_GAMEPLAY_RULES.md#9-extending-the-existing-mechanism)
+step 3). Both implementations are zero size. Both questions are asked at
+request granularity — once per rejected commit, once per opened search — and
+the per-node work is a slice read inside the search's existing passability
+closure, never an interface call
+([§4](DESIGN_GAMEPLAY_RULES.md#4-granularity)). An unbound `System` answers as
+Strict.
+
+**State.** `System.learned` is nil until the first lesson, so a Strict session
+never allocates it and a Modern session that has learned nothing keeps the
+retail passability closure. It is sized from the terrain (`CellW>>1 ×
+CellH>>1` words), lives as long as its `System` — one battle — and is never
+cleared: bits are only ORed, as the mapping grid's are. It is derived state
+with no retail save field and Nanolathe adds no save metadata
+([DESIGN_GAMEPLAY_RULES §6](DESIGN_GAMEPLAY_RULES.md#6-save-interaction)), so
+**a save does not carry it**: a loaded battle starts with nothing learned and
+relearns one rejection at a time, which costs the affected units their lessons
+again and nothing else. The visibility mapping grid a save does carry is never
+written by a lesson. After a switch to Strict the grid is kept but neither
+written nor read, so Strict's search inputs are retail's from the next request;
+a switch back to Modern resumes with what was learned. A route published
+before a switch is followed to its end in either direction.
+
+**Boundaries.** Only mode-1 ground commits teach; aircraft, carried units and
+buildings never reach the validator's cell scan. A rejection by another unit
+teaches nothing — the occupant-age gate is that case's writer
+`[04 R-COLL-01 §3]` — and neither does the map edge, which the search bounds
+itself. A rejection whose first failing cell is occupied teaches nothing on
+that tick even if a later cell is a wall. Knowledge is per owner: allies do not
+share it, computer players learn exactly as humans do, and nothing is learned
+with Mapping off, because every block is already mapped. The policy does not
+touch a wedge the search cannot see for another reason — a class layer that
+disagrees with the commit test, or the documented near-goal re-arm loop around
+an occupied destination `[04 R-PATH-01 §9]`. It does not promise a short
+route.
+
+**Determinism.** The write happens inside the phase-2 unit visit, in pool slot
+order, from committed state only. It draws from neither stream, touches no
+resource, writes no transform, occupancy, visibility or order state, and
+iterates no map. A scene in which no unit is rejected under ground its owner's
+search calls unexplored is bit-identical to the same scene without the policy:
+all eight locked fingerprints (`headless.TestStrictFingerprintIsLocked`,
+`headless.TestModernFingerprintIsLocked`) are unchanged, as are the
+simulation-cost benchmark's three Modern fingerprints, and the benchmark's cost
+is unchanged within run-to-run noise. A Modern scene that does take a lesson
+under unexplored ground diverges from its earlier self at the next repath, by
+design; Strict never does.
+
+**Verification.** `movement.TestModernTerrainRejectionTeachesOnlyTheOwner`
+(the owner's next search routes around; another player's is unchanged),
+`TestModernUnitRejectionTeachesNothing`,
+`TestModernMappedRejectionTeachesNothing`,
+`TestStrictTerrainRejectionLearnsNothing` (no grid, the same blind repath, no
+draw from either stream, bound or unbound),
+`TestStrictIgnoresTerrainLearnedBeforeASwitch` and
+`TestMovementRulesDispatchDoesNotAllocate`;
+`session.TestBindRulesProjectsEverySeam` and
+`TestCompositionProjectsTheSearchKernelOntoMovement` for the composition. In
+the retail tier, `session.TestModernLearnedTerrainFreesTheMazeFlea` runs the
+reported case in both modes — the Strict half encodes this build's LOS stamp
+set at that face, which `[04 R-PATH-01 §2]` records as not yet observed in
+retail, and says so — and `TestModernLearnedTerrainIsRelearnedAfterALoad` locks
+that a lesson never reaches the visibility grid, that a load restores nothing
+learned, and that the restored unit still gets free.

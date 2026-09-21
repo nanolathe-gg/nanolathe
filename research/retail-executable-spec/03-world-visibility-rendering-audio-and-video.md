@@ -2807,7 +2807,11 @@ greedy-ray probes ([04 §6.1 R-DOC04-B]); the build-site and placement
 validators; the order destination validators; and the mode-selected
 targeting/visibility predicates of section 3.1. This consumer set is what
 pins the grid's gameplay role as the per-player explored/mapping gate while
-the semantic naming hedge of section 3.1 item 2 stands.
+the semantic naming hedge of section 3.1 item 2 stands. The readers and write
+site 3 do not index the array in the same frame: the path probe's index is the
+unsheared ground pair, while the coverage raster stamps at the height-sheared
+tile of `[R-P0-18-A §2]`. The mismatch and its pathing consequence are stated
+in full at `[04 R-PATH-01 §2]`.
 
 **The occupancy commit has no write site either.** The occupancy commit,
 the footprint stamp and clear, unit creation and building completion do not
@@ -2973,6 +2977,14 @@ and the
 path search's passability probe, which returns its "unexplored" value 2 —
 treated as passable by every consumer — when the requesting player's bit is
 absent (`[R-PATH-01 §2]`). No building state is written to it.
+
+The two sides index the array in different frames. The coverage raster stamps
+at the height-sheared tile of `[R-P0-18-A §2]`, walking the height-word table
+that `[R-P0-18-B §2]` builds in that same sheared frame, while the path probe's
+index carries no height term at all. Explored memory for ground of height `h`
+is therefore recorded about `h/64` tile rows north of the row the probe consults
+for that ground, and south-rising ground can stay unexplored to the search while
+the player sees it; `[R-PATH-01 §2]` states the arithmetic and the consequence.
 
 The class-layer stamp that consumes the plot grid classifies a **rectangle,
 not a cell**: the class's authored `FootPrintX × FootPrintZ` rectangle
@@ -3370,8 +3382,10 @@ states both halves and their consequences (the highest reachable table is
 `TABLE numtables − 1`, the last loaded table is unreachable, and group 0 reads
 before the list's storage).
 
-**The walk**, per observer, after the origin cell has been admitted
-unconditionally:
+**The walk**, per observer, after the observer's own **height-sheared** tile
+(`[R-P0-18-A §2]`) has been OR'd into the word grid unconditionally — that OR is
+the only cell admitted without a comparison; there is no minimum radius and no
+unconditional ring around the observer:
 
 ```
 for each line of the selected table (all 4 × numlines of them):
@@ -3388,7 +3402,13 @@ for each line of the selected table (all 4 × numlines of them):
         step = step + 1
 ```
 
-Four details that a summary loses and an implementer needs:
+`heightWord(x, z).low` and `.high` name **byte positions in the word, not
+magnitudes**: byte 0 is the maximum-weighted blend and drives admission, byte 1
+is the minimum-weighted blend and drives the horizon advance
+(`[R-P0-18-B §1]` for the polarity, `[R-P0-18-B §3]` for the blend). Both use
+the same strict form against the same old retained pair, admission first.
+
+Seven details that a summary loses and an implementer needs:
 
 1. `step` advances on **every** point of the line, including points rejected by
    the bounds test and points rejected by the horizon test. It is the point's
@@ -3404,9 +3424,30 @@ Four details that a summary loses and an implementer needs:
    no other test, in particular no separate comparison of the difference
    against zero — so an exact tie fails both and therefore never admits and
    never advances the horizon.
+5. **A spoke never terminates.** There is no break, no early exit and no
+   per-line "blocked" state: the loop runs to the end of the authored point
+   list, the step ordinal advancing on every point including out-of-bounds
+   ones, and points that fail admission simply write nothing until one of them
+   clears the retained horizon and admits again.
+6. **The blocking tile is itself stamped.** Admission is tested before the
+   horizon advance and writes the bit, so the point that raises the horizon has
+   already been OR'd into the word grid. The occluder is visible; what lies
+   behind it is not.
+7. **The observer's tile is stamped whatever the spokes do**, by the
+   unconditional OR above — at the sheared tile, which is not in general the
+   tile the unit stands on.
 
 All products are signed 32-bit. `emitter` is the clamped 0–255 byte; the two
 height bytes are unsigned, so both differences lie in −255 … 255.
+
+**Established — two publishers, one walk.** History (the mapping word grid) and
+current coverage (the per-player byte grid) are separate publisher routines with
+**identical** walks: same table selection, same spoke expansion, same stored
+observer tile and same emitter byte, differing only in what they write and in
+the mode bit that runs them — bit 1 selects current coverage, bit 0 history
+(`[R-VIS-01 §1]`). Under True LOS no un-occluded circle stamp exists anywhere:
+the disc raster of §3.2 runs only for the Circular `LOSType`, so nothing fills
+in the cells the ray walk leaves out.
 
 ### 3.3 Fog and unexplored edges
 

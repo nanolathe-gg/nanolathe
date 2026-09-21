@@ -37,6 +37,7 @@ type RuleSet struct {
     Orders       orders.Rules
     Construction construction.Rules
     UnitLimit    UnitLimitRules
+    Movement     movement.Rules
     Path         path.Kernel
     Planner      ai.Planner
 }
@@ -45,7 +46,7 @@ type RuleSet struct {
 `StrictRuleSet()` and `ModernRuleSet()` are the two reserved sets;
 `RuleSetForMode` resolves a selection word to a set and `Session.BindRules`
 projects each field onto the service that asks it — `Combat.Rules`,
-`Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Kernel`, and every
+`Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Rules`, `Movement.Kernel`, and every
 computer player's `Planner` — and onto every queue binding composed
 afterwards. `Session.SetRules(name)` is the selection entry point
 that can report an unknown name; `SetGameplay` is the same selection for a
@@ -74,6 +75,7 @@ as a second way to select a policy: a composed session always binds.
 | `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), the three guard-assistance legs, and Modern danger response/protected work |
 | `construction.Rules` | `internal/construction` | [factory-exit](DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding) and [construction-site](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding) clearance; [authored build membership](DESIGN_ECONOMY_CONSTRUCTION.md#modern-authored-build-membership) |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
+| `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned |
 | `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); both reserved sets bind `path.RetailKernel` |
 | `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); both reserved sets bind `ai.RetailPlanner` |
 
@@ -93,7 +95,9 @@ order, because that call order is the whole future of the battle.
 `path.Search` is that search behind an interface. `path.RetailKernel` is the
 retail ray-and-A\* search, it is zero size, and **both reserved sets bind
 it** — there is no Modern kernel, because no approved Modern policy changes
-how a route is found. `Session.BindRules` projects the field onto
+how a route is found. ([Modern learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain)
+changes one *input* the retail search reads, through `movement.Rules`; the
+search is the same.) `Session.BindRules` projects the field onto
 `movement.System.Kernel`; a system with nothing bound searches as retail does,
 which is the fallback a fixture and a restored system rely on.
 
@@ -197,7 +201,7 @@ they are checked by tests rather than trusted:
    what makes an identity fingerprint the correct gate for a seam unit.
 4. **Strict policy answers add no randomness or state writes.** The policy
    methods in `combat.Rules`, `orders.Rules`, `construction.Rules` and
-   `UnitLimitRules` preserve the retail path without extra work. The whole
+   `UnitLimitRules` and `movement.Rules` preserve the retail path without extra work. The whole
    subsystem seams still execute retail search and planner behavior, including
    their established state writes and RNG consumption; they are not no-ops.
    An approved Modern change documents its RNG and resource effects and uses
@@ -269,8 +273,9 @@ not permission to invent save bytes or infer a set from loaded content.
 Two consequences are worth stating because they are observable:
 
 - Modern transient state that is not in the save is simply absent after a
-  load, whichever set is bound. Staged movement clearance routes are the
-  existing example.
+  load, whichever set is bound. Staged movement clearance routes and the
+  [learned-terrain grid](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain) are
+  the existing examples.
 - The unit-limit seam is asked on both sides of a save. The writer asks
   whether the summary records the live session limit; the loader asks whether
   a present, nonzero saved limit may size the pool. Both answers, their
@@ -298,6 +303,7 @@ Two consequences are worth stating because they are observable:
 | A registered name is selectable through the vocabulary, and an unselectable word is rejected with the name list | `session.TestGameplayVocabularyKnowsTheRegisteredNames`, `gameplay.TestARegisteredNameParsesAndSurvivesNormalization`, `gameplay.TestAnUnselectableWordIsRejectedWithTheSelectableNames`, `gameplay.TestWithoutARegistryOnlyTheReservedWordsAreSelectable` |
 | A set composed outside `internal/` registers, overrides one answer and inherits its base | `example.TestTheExampleSetIsRegisteredAndSelectable`, `example.TestTheExampleSetOverridesOneAnswerAndInheritsModern`, `example.TestSelectingTheExampleSetProjectsTheOverride` |
 | Only a command imports the mod list | `architecture.TestOnlyCommandsImportTheModList` |
+| The movement policy seam reaches the movement system, dispatches without allocating, and answers Strict when unbound | `session.TestBindRulesProjectsEverySeam`, `session.TestCompositionProjectsTheSearchKernelOntoMovement`, `movement.TestMovementRulesDispatchDoesNotAllocate`, `movement.TestStrictTerrainRejectionLearnsNothing` |
 | Both reserved sets bind the retail search kernel, and the composer projects it onto the movement system | `session.TestReservedRuleSetsBindTheRetailSearchKernel`, `session.TestCompositionProjectsTheSearchKernelOntoMovement` |
 | The retail kernel opens the retail search, is asked once per request, and its dispatch adds no allocation | `path.TestRetailKernelOpensTheRetailSearch`, `path.TestAKernelIsAskedOncePerRequest`, `path.TestRetailKernelDispatchAddsNoAllocation`, `movement.TestSearchFuncOpensItsSearchThroughTheBoundKernel`, `movement.TestAnUnboundKernelIsRetailAndCostsNothing` |
 | Both rule sets' fingerprints are locked to constants | `headless.TestStrictFingerprintIsLocked`, `headless.TestModernFingerprintIsLocked` |
@@ -418,7 +424,8 @@ to ask for the same approval again.
    ordering, RNG/resource effects and boundaries before implementing it.
 2. **Use the existing interface.** Compose a shipped implementation when it
    already answers the question. Add a method to the owning `combat.Rules`,
-   `orders.Rules`, `construction.Rules` or `session.UnitLimitRules` when the
+   `orders.Rules`, `construction.Rules`, `movement.Rules` or
+   `session.UnitLimitRules` when the
    package needs a new decision. Implement both Strict and Modern defaults,
    with Modern delegating to the strict answer where no departure is approved.
    Keep unbound fixtures' retail behavior. For a replacement search or think
