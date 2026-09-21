@@ -60,6 +60,11 @@ func TestInstallSkirmishDynamicGadgetsUsesAuthoredRows(t *testing.T) {
 	if w.Gadgets[3].Name != "Color0" || w.Gadgets[3].Status != 4 || w.Gadgets[9].Status != 7 {
 		t.Fatalf("row color status not carried into dynamic surface")
 	}
+	// A surface takes a press, and so can fire its row callback, only while
+	// its hot word is 1 [07 R-WGT-01 §8][08 R-SKIR-01 §1].
+	if w.Gadgets[3].HotOrNot != 1 || w.Gadgets[4].HotOrNot != 1 {
+		t.Fatalf("row surfaces Color0/Allies0 hot=%d/%d, want 1", w.Gadgets[3].HotOrNot, w.Gadgets[4].HotOrNot)
+	}
 	InstallSkirmishDynamicGadgets(w, []SkirmishSlot{{Side: 9, Color: 3}})
 	if len(w.Gadgets) != 7 {
 		t.Fatalf("reinstall retained stale dynamic controls: count=%d", len(w.Gadgets))

@@ -418,10 +418,12 @@ func (g *gameShell) activateDynamicSkirmishGadget(name string) {
 	g.refreshRetailPanel()
 }
 
-// nextRetailPlayerColor follows the retail implementation, including its unusual fallback:
-// the first candidate is checked only against other live rows, but once that
-// candidate conflicts, the fallback scans every configured row, including
-// open rows, from logo zero upward.
+// nextRetailPlayerColor is the Color%d callback: the row's colour steps one
+// logo frame per click, +1 on the left button and -1 on the right, modulo the
+// logos.gaf frame count, and re-steps while the candidate equals a live row's
+// colour. A live row is one whose controller is not Open, and the row itself is
+// excluded from that test. The callback never stores -1; the scan that can
+// store it belongs to the controller cycle below [08 R-SKIR-01 §1].
 func (g *gameShell) nextRetailPlayerColor(slot, delta int) int {
 	if g == nil || slot < 0 || slot >= session.SkirmishMaxPlayers {
 		return 0
@@ -431,31 +433,53 @@ func (g *gameShell) nextRetailPlayerColor(slot, delta int) int {
 	if delta != 1 && delta != -1 {
 		delta = 1
 	}
-	candidate := (g.setup.Players[slot].Color + delta) % logoCount
-	// C's signed remainder is what the retail idiv produces. The only
-	// negative remainder reachable from the normal logo range is -1.
-	if candidate == -1 {
-		candidate = logoCount - 1
+	current := g.setup.Players[slot].Color
+	candidate := current
+	// Retail's re-step loop has no bound. Walking logoCount steps visits
+	// every frame once and ends back on the row's own colour, which the
+	// conflict test excludes, so a bounded walk answers what retail answers
+	// wherever retail terminates. Only rows that already share a colour
+	// (reachable by editing the stored preferences, [08 R-SKIR-01 §8]) can
+	// leave every frame taken; retail spins there, and we keep the current
+	// colour rather than hang.
+	for step := 0; step < logoCount; step++ {
+		candidate = ((candidate+delta)%logoCount + logoCount) % logoCount
+		if !g.liveRowHoldsColor(slot, candidate) {
+			return candidate
+		}
 	}
+	return current
+}
 
-	conflict := false
+// liveRowHoldsColor reports whether a row other than slot, whose controller is
+// not Open, already shows color [08 R-SKIR-01 §1].
+func (g *gameShell) liveRowHoldsColor(slot, color int) bool {
 	for i := 0; i < g.setup.NumPlayers && i < session.SkirmishMaxPlayers; i++ {
 		if i == slot || g.retailControllers[i] == 0 {
 			continue
 		}
-		if g.setup.Players[i].Color == candidate {
-			conflict = true
-			break
+		if g.setup.Players[i].Color == color {
+			return true
 		}
 	}
-	if !conflict {
-		return candidate
-	}
+	return false
+}
 
-	// the retail implementation restarts at zero and tests all row color fields, without
-	// filtering on controller state. If every stock logo is present it stores
-	// -1, which is also what the frontend resolves back into the GUI art.
-	for candidate = 0; candidate < logoCount; candidate++ {
+// resolveRetailColorConflict runs when a row becomes live: its colour is tested
+// against every live row and, on a conflict, logo indices 0..9 are rescanned
+// for one that no configured row holds. That rescan ignores the controller
+// word, so an open row's colour blocks too, and it stores -1 when all ten are
+// taken — the one path that can store a negative colour [08 R-SKIR-01 §1].
+// Frame -1 is a retail quirk whose texture lookup is Unknown [08 R-SKIR-01 §8].
+func (g *gameShell) resolveRetailColorConflict(slot int) {
+	if slot < 0 || slot >= session.SkirmishMaxPlayers {
+		return
+	}
+	const logoCount = session.SkirmishMaxPlayers
+	if !g.liveRowHoldsColor(slot, g.setup.Players[slot].Color) {
+		return
+	}
+	for candidate := 0; candidate < logoCount; candidate++ {
 		used := false
 		for i := 0; i < g.setup.NumPlayers && i < session.SkirmishMaxPlayers; i++ {
 			if g.setup.Players[i].Color == candidate {
@@ -464,10 +488,11 @@ func (g *gameShell) nextRetailPlayerColor(slot, delta int) int {
 			}
 		}
 		if !used {
-			return candidate
+			g.setup.Players[slot].Color = candidate
+			return
 		}
 	}
-	return -1
+	g.setup.Players[slot].Color = -1
 }
 
 // cycleRetailController is the retail implementation's exact 0→2→(0|1) controller
@@ -505,6 +530,16 @@ func (g *gameShell) cycleRetailController(slot int) {
 		// compatibility data computer-coded so an accidental legacy caller
 		// cannot turn every open row into another human.
 		g.setup.Players[slot].Controller = 1
+	}
+	// The colour-collision scan is this callback's, not the Color gadget's:
+	// it runs on becoming live, which is the Open→live transition here
+	// [08 R-SKIR-01 §1].
+	// TODO(question): whether the 2→1 step, which leaves an already-live row
+	// live, re-runs the scan is not stated; it only matters when two live
+	// rows already share a colour. Settled by tracing the controller callback
+	// for a second call site of the scan.
+	if current == 0 && g.retailControllers[slot] != 0 {
+		g.resolveRetailColorConflict(slot)
 	}
 }
 

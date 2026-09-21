@@ -2469,7 +2469,12 @@ armed/pressed state), with the runtime help strings authored by the
 executable. There is no authored opponent-count, round-settings, or map-first
 control in `skirmish.gui`; the row count comes from the `NumSkirmishPlayers`
 registry value and the remaining setup values are the authored staged gadgets.
-[08 "Skirmish configuration"]
+[08 "Skirmish configuration"] **Supported inference:** the builder also makes
+the row's two surfaces, `Color%d` and `Allies%d`, hot — each has a row callback
+the setup screen dispatches ([08 R-SKIR-01 §1], Established) and a surface can
+take a press, the only way it can fire, only while its `hotornot` word is 1
+([R-WGT-01 §8], Established), so no other value leaves those callbacks
+reachable; the builder's own write of that field is not traced.
 
 GAF rendering uses each selected frame's authored dimensions at the `.GUI`
 control origin; `XOffset/YOffset` remain animation-anchor metadata and are not

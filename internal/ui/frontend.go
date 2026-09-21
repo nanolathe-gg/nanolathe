@@ -156,6 +156,13 @@ func dynamicButton(name string, x, y, w, h int, art string, status int) gui.Gadg
 	return gui.Gadget{Kind: gui.KindButton, Name: name, Rect: gui.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)}, Attribs: attribs, Active: 1, Status: int16(status), Art: art, SourceName: dynamicSkirmishSource}
 }
 
+// dynamicSurface builds the two clickable row surfaces, Color%d and Allies%d.
+// Both are hot. That the retail row builder sets the hot word is a **Supported
+// inference** forced by two Established facts: each name has a row callback the
+// setup screen dispatches [08 R-SKIR-01 §1], and a surface takes a press — the
+// only way it can fire — only while its hot word is 1 [07 R-WGT-01 §8]. The
+// row builder's own write of the field is not itself traced
+// [07 "Retail closure for the single-player menu slice"].
 func dynamicSurface(name string, x, y, w, h int, art string, status int) gui.Gadget {
-	return gui.Gadget{Kind: gui.KindSurface, Name: name, Rect: gui.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)}, Active: 1, Status: int16(status), Art: art, SourceName: dynamicSkirmishSource}
+	return gui.Gadget{Kind: gui.KindSurface, Name: name, Rect: gui.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)}, Active: 1, HotOrNot: 1, Status: int16(status), Art: art, SourceName: dynamicSkirmishSource}
 }
