@@ -28,6 +28,15 @@ func TestPaletteOrderButtonsReleaseWithLatch(t *testing.T) {
 			in.Mouse.SetPosition(220, 160)
 			switch action {
 			case "world order", "shift queue":
+				// The armed click is gated on the reduced cursor shape
+				// [07 R-CAM-01 §14] step 3, so the acting unit must be able
+				// to perform the armed order for the click to issue one and
+				// retire the latch. The fixture publishes the palette's
+				// CanAttack aggregate; the shape table and the resolver read
+				// the definition, which is this.
+				if def, ok := b.cat.Unit("armfav"); ok {
+					def.CanAttack = true
+				}
 				in.Kbd.SetKey(input.KeyShift, action == "shift queue")
 				in.Mouse.SetButton(input.MouseButtonLeft, true)
 				b.viewerStep(0, cl)

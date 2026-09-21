@@ -5658,14 +5658,23 @@ holds its `defaultmissiontype` standing record (the idle-queue refill of
 [04 §3.3]).
 
 Per selected unit the Type-0 shape is dispatched on the armed latch and gated
-on the same authored capability flags the order predicate reads, so the
-advertised action and the performed action cannot disagree. The armed rows
-also apply unchanged to Type 1:
+on the same authored capability flags the order predicate reads. That is half
+of why the advertised action and the performed action agree; the other half is
+the armed-click shape gate below, which refuses a click whose reduced shape is
+not an action shape. One residual disagreement survives both: over a
+reclaimable feature the armed RECLAIM row gives `cursorreclamate` for an actor
+carrying **both** `canresurrect` and `canreclamate`, while command code 12
+resolves `Resurrect` for that actor — the row's feature block has no resurrect
+arm and the resolver's does ([04 R-ORD-02 §1]). The armed rows also apply
+unchanged to Type 1:
 
 * Idle (latch 1, Type 0) rewrites itself to ATTACK over a hostile target the unit can
-  attack, and to RECLAIM over a hostile target a `canreclamate` unit could
-  strip; otherwise it yields `cursorrepair` over a friendly target needing
-  assistance, `cursorselect` over an own finished unit, `cursorrevive` or
+  attack, and to RECLAIM over a hostile target for a `canreclamate` unit —
+  this rewrite is a re-entry into the armed RECLAIM row below, so that row's
+  own admission predicate still decides, and a hostile commander or a hostile
+  airborne target falls back out of it; otherwise it yields `cursorrepair`
+  over a friendly target needing assistance,
+  `cursorselect` over an own finished unit, `cursorrevive` or
   `cursorreclamate` over a reclaimable feature depending on `canresurrect`
   versus `canreclamate`, `cursormove` for a `canmove` unit, and
   `cursornormal` otherwise.
@@ -5674,7 +5683,9 @@ also apply unchanged to Type 1:
   actor that also has a live mover**, the whole target block being gated on
   a present target *and* a live mover reference — `cursorcapture` over a
   hostile target for a `cancapture` unit, `cursorreclamate` over a hostile
-  target for a `canreclamate` unit, `cursorrepair` over a friendly target
+  target the unit-reclaim admission predicate of the RECLAIM row below admits
+  — the capture arm takes a `cancapture` actor first, so this arm is reached
+  only by an actor without that key — `cursorrepair` over a friendly target
   needing assistance, `cursorunload` when a flyer targets an `isairbase` unit,
   the transport pair below over a carriable target, and `cursordefend` over a
   friendly target for a `canguard` unit; anything that fails, including the
@@ -5707,8 +5718,23 @@ also apply unchanged to Type 1:
 * REPAIR (latch 8) requires a target the unit can assist and gives
   `cursorrepair`; PATROL (latch 9) requires `canpatrol` and gives
   `cursorpatrol`; TELEPORT (latch 0xB) gives `cursorteleport`.
-* RECLAIM (latch 0xC) requires `canreclamate` and a reclaimable feature or a
-  hostile target, and gives `cursorreclamate`; CAPTURE (latch 0xD) requires
+* RECLAIM (latch 0xC) applies two tests in order, and neither of them reads
+  the diplomacy row. **The feature test:** with `canreclamate` on the actor, a
+  pointer whose coarse tile is inside the map and mapped for the viewing
+  player and whose feature cell resolves to a reclaimable feature definition
+  gives `cursorreclamate`. An actor without `canreclamate` skips only this
+  block. **The unit test:** a hovered unit gives `cursorreclamate` when the
+  unit-reclaim admission predicate passes — the actor has `canreclamate`, the
+  target's mover mode is not airborne, and the target's definition does
+  **not** carry `cancapture`, which is what excludes the commanders. That is
+  the same predicate the `ReclaimUnit` handler applies at phase 0 ([04 §3]).
+  Hostility, the owner slot and build completion are **not** read: one's own
+  finished building and one's own nanoframe both give `cursorreclamate`, there
+  is no separate own-unit arm, and a selected unit never evaluates itself as
+  the target. Anything else gives `cursornormal`. Hostility is tested in the
+  two other reclaim shapes — the idle rewrite above, whose gate is
+  `canreclamate` plus hostility before it re-enters this row, and the MOVE row
+  above. CAPTURE (latch 0xD) requires
   `cancapture` and a target of another owner, and gives `cursorcapture`;
   MOBILEBUILD (latch 0xE) requires the actor's compiled build-option list to
   **exist** — which the catalog compiler allocates as one fixed-size block for
@@ -5720,6 +5746,17 @@ also apply unchanged to Type 1:
   which stock content does not produce.
 * Any gate that fails yields `cursornormal`, which is also the value the
   reduction starts from.
+
+**The armed click is gated on the shape, not on the resolver.** With an order
+armed, the world-click handler issues an order only when the reduced cursor
+index is an **action shape** — strictly below `cursorred`, index 17 — so
+`cursorred`, `cursorgrn` and `cursornormal` make the armed click do nothing at
+all. The comparison and the branch order around it are [R-CAM-01 §14] step 3,
+and that handler is region-agnostic, so a minimap click with a latch armed is
+judged by the same gate. This gate, and not the order resolver, is what keeps
+the advertised action and the performed action the same action: the resolver's
+code-12 unit arm, for one, imposes no admission test of its own and resolves
+`ReclaimUnit` against any live target a click reaches ([04 R-ORD-02 §1]).
 
 **The Type-1 idle row is relationship-coloured, not action-shaped.** It tests
 an own selectable finished target first and returns `cursorselect`; otherwise

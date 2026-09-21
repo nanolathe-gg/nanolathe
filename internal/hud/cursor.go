@@ -189,8 +189,13 @@ func isInspectable(t *units.Unit, viewer uint8) bool {
 // latch exactly as the retail order predicate is [07 §8][07 §9].
 //
 // Every gate below reads the same authored unit-record capability flags the
-// order resolver reads, so the advertised action and the performed action
-// cannot disagree [04 §3.4].
+// order resolver reads, and the client refuses an armed click whose reduced
+// shape is not an action shape, so what is advertised is what is performed
+// [07 §8][07 R-CAM-01 §14][04 §3.4]. One residual disagreement survives both:
+// over a reclaimable feature an actor carrying BOTH `canresurrect` and
+// `canreclamate` shows `cursorreclamate` under the armed RECLAIM latch, while
+// code 12 resolves `Resurrect` — the feature block of this row has no
+// resurrect arm, and the resolver's does [07 §8].
 func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorSelection) int {
 	def := u.Def
 	t := h.Target
@@ -223,7 +228,12 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 			if def.CanCapture && hostile {
 				return render.CursorCapture
 			}
-			if hostile && def.CanReclamate {
+			// Hostility AND the same unit-reclaim admission predicate the
+			// armed RECLAIM row applies [07 §8][04 §3 `ReclaimUnit`], so a
+			// hostile commander or a hostile aircraft keeps `cursormove`. The
+			// capture arm above runs first, so a `cancapture` actor never
+			// reaches this shape.
+			if hostile && reclaimUnitAdmits(u, t) {
 				return render.CursorReclamate
 			}
 			if allied && canAssist(def) && needsWork(t) {
@@ -328,10 +338,22 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 		return render.CursorTeleport
 
 	case input.LatchReclaim:
-		if !def.CanReclamate {
-			return render.CursorNormal
+		// Two tests in order, and neither of them reads hostility [07 §8].
+		//
+		// First the feature test: an actor carrying `canreclamate` over a
+		// reclaimable feature answers `cursorreclamate`. An actor without the
+		// flag skips only this block — it is not a gate on the whole row,
+		// although the unit test below demands the same flag, so the row is
+		// silent for such an actor either way.
+		if def.CanReclamate && reclaimableFeature(h) {
+			return render.CursorReclamate
 		}
-		if reclaimableFeature(h) || (t != nil && hostile) {
+		// Then the unit test: a hovered unit the reclaim admission predicate
+		// accepts, which is the predicate `ReclaimUnit`'s phase 0 applies
+		// [04 §3 `ReclaimUnit`]. Owner slot, diplomacy and build completion
+		// are not read: an own finished building and an own nanoframe are both
+		// reclaimable, and the arm has no separate own-unit row.
+		if reclaimUnitAdmits(u, t) {
 			return render.CursorReclamate
 		}
 		return render.CursorNormal
@@ -387,6 +409,10 @@ func contextualCursor(u *units.Unit, h CursorHover, sel CursorSelection, hostile
 	if def.CanAttack && hostile {
 		return cursorForActor(input.LatchAttack, u, h, sel)
 	}
+	// The RECLAIM rewrite is where hostility is tested: a `canreclamate` actor
+	// over a hostile target re-enters the table as the armed RECLAIM latch,
+	// and that row's own admission predicate then decides the shape — so a
+	// hostile commander or a hostile aircraft falls back out of it [07 §8].
 	if def.CanReclamate && hostile {
 		return cursorForActor(input.LatchReclaim, u, h, sel)
 	}
@@ -438,6 +464,49 @@ func transportCursor(def *content.UnitDef) int {
 		return render.CursorPickup
 	}
 	return render.CursorLoad
+}
+
+// reclaimUnitAdmits is the unit-reclaim admission predicate — the three
+// clauses `ReclaimUnit`'s phase 0 applies before it captions the work, and the
+// same three the executor re-checks on every visit [04 §3 `ReclaimUnit`]
+// [05 R-WORK-01 §4]: the ACTOR carries `canreclamate`; the target's mover mode
+// is not the airborne 2; and the target's definition does NOT carry
+// `cancapture`, which is what keeps a commander off the list — there is no
+// separate capture-immunity flag.
+//
+// It reads no diplomacy row, no owner slot and no build fraction, which is why
+// the armed RECLAIM shape appears over one's own finished building and over
+// one's own nanoframe alike [07 §8].
+//
+// The self term is the arm's own: a selected unit never evaluates itself as
+// the target. The selection copies and the hover copy are distinct records, so
+// identity is the pool handle where the caller supplies one, falling back to
+// pointer identity for a hand-built fixture.
+func reclaimUnitAdmits(actor, target *units.Unit) bool {
+	if actor == nil || actor.Def == nil || target == nil || target.Def == nil {
+		return false
+	}
+	if !actor.Def.CanReclamate {
+		return false
+	}
+	if sameUnit(actor, target) {
+		return false
+	}
+	if target.Move.Mode&0x3 == 2 {
+		return false // airborne [04 §3 `ReclaimUnit`][05 R-WORK-01 §4]
+	}
+	return !target.Def.CanCapture
+}
+
+// sameUnit reports the hovered target being the acting unit itself [07 §8].
+func sameUnit(actor, target *units.Unit) bool {
+	if actor == nil || target == nil {
+		return false
+	}
+	if actor.Handle != 0 && target.Handle != 0 {
+		return actor.Handle == target.Handle
+	}
+	return actor == target
 }
 
 // reclaimableFeature reports a reclaimable feature under the pointer

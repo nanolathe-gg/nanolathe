@@ -152,6 +152,12 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 	if !mouse.Released(d.button) {
 		return true
 	}
+	// A refused short release issued nothing, and the armed latch survives it
+	// exactly as it does on the retail click path: [07 R-CAM-01 §14] step 3
+	// not being taken means nothing happens, and a latch returning to idle
+	// would be something happening. The dragged branches below either
+	// dispatch or return early, so they keep the plain retire.
+	issued := true
 	if !d.dragged {
 		if d.product != "" {
 			b.updatePlacement(mx, my)
@@ -171,7 +177,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 				// A short Alt gesture is an explicit point move, even over a target.
 				code = hud.LatchToCode(input.LatchMove)
 			}
-			b.orderSelected(code, mx, my, modifiers.Shift)
+			issued = b.orderSelected(code, mx, my, modifiers.Shift)
 		}
 	} else {
 		switch d.latch {
@@ -217,7 +223,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 		} else {
 			b.disarmPlacement()
 		}
-	} else if d.latch != input.LatchNormal {
+	} else if d.latch != input.LatchNormal && issued {
 		if modifiers.Shift {
 			state.ShiftLatchSticky = true
 		} else {

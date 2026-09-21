@@ -330,15 +330,21 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	}
 
 	if mouse.Pressed(input.MouseButtonLeft) && b.battleState().Input.Latch != input.LatchNormal {
+		issued := false
 		code := hud.LatchToCode(b.battleState().Input.Latch)
 		if code != 0 {
-			b.orderSelected(code, mx, my, pointerModifiers.Shift)
+			issued = b.orderSelected(code, mx, my, pointerModifiers.Shift)
 		}
-		// Return latch to Normal after dispatch unless shift-queuing keeps it [07 §9][P0-I14].
-		if pointerModifiers.Shift {
-			b.battleState().Input.ShiftLatchSticky = true
-		} else {
-			b.resetOrderLatch()
+		// Return latch to Normal after dispatch unless shift-queuing keeps it
+		// [07 §9][P0-I14]. A click the shape gate refused issued nothing, and
+		// [07 R-CAM-01 §14] step 3 not being taken means nothing happens at
+		// all — so the latch stays armed and the player can aim again.
+		if issued {
+			if pointerModifiers.Shift {
+				b.battleState().Input.ShiftLatchSticky = true
+			} else {
+				b.resetOrderLatch()
+			}
 		}
 		b.battleState().Input.PlaceCaptured = true
 		return

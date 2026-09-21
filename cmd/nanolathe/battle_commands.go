@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
@@ -229,22 +230,65 @@ func (b *battleSession) playUICue(cl *client.Client, alias string) {
 // typed order command. Descriptor selection remains solely in orders.Resolve;
 // this integration layer does not guess an attack descriptor for ground clicks
 // [04 §3.4][07 §9].
-func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) {
-	targetHandle, _, pos := b.pickTarget(sx, sy)
+//
+// It is also the front door the world-click handler's shape gate sits in
+// [07 R-CAM-01 §14] step 3: with an order armed, the click issues an order
+// only when the reduced cursor shape is an ACTION shape — an index below
+// `cursorred` — and does nothing at all on `cursorred`, `cursorgrn` or
+// `cursornormal`. That gate, not the resolver, is what makes the advertised
+// action and the performed action the same action: the resolver's code-12 unit
+// arm, for one, accepts any live target and would strip a unit the armed
+// RECLAIM row never offered to strip.
+//
+// The reported bool is whether the click took that issue branch, which is what
+// the armed-click callers need to decide the latch: branch 3 not taken means
+// *nothing happens*, and a latch that retired would be something happening.
+// The branch counts as taken once the command is handed to the session, so a
+// command the session boundary then refuses retires the latch exactly as it
+// always has.
+//
+// TODO(question): what retail does with the latch when the shape admits the
+// click but the resolver rejects it for every selected actor — [R-CAM-01 §14]
+// step 3 describes the issue step and its Shift rule without saying whether
+// the latch reset follows the loop unconditionally or only a resolved
+// descriptor. The case is reachable: a mobile `canattack` actor with no
+// resolved weapon slot shows `cursorattack` and rejects code 3. Decider: a
+// manual retail observation of the pointer after such a click (arm ATTACK,
+// click, watch whether the shape returns to the arrow), or a trace of the
+// handler's branch-3 tail. Until then the latch retires, which is this
+// build's existing behaviour.
+func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) bool {
+	targetHandle, target, pos := b.pickTarget(sx, sy)
 	if pos == nil {
-		return
+		return false
 	}
 	// The HUD latch table is the single semantic mapping between an armed
 	// order and the session order code. Validate the caller's code by running
 	// it through that table; do not maintain a second switch here [07 §9].
 	latch := input.Latch(code)
 	if hud.LatchToCode(latch) != code {
-		return
+		return false
+	}
+	// The shape gate applies to the ARMED latches only. The contextual code
+	// the idle latch issues reaches this producer from the click classifier's
+	// own branches, which have already consumed the select and deselect
+	// answers [07 R-CAM-01 §14] steps 2 and 4.
+	//
+	// The handler is region-agnostic, so a minimap click with a latch armed is
+	// judged by the same gate, on the unit word `pickTarget` resolved for that
+	// region — the blip winner over the minimap, the hover winner in the view
+	// [07 R-CAM-01 §14][07 R-HUD-03 §1]. The Modern area drag dispatches its
+	// own target list and never reaches this producer; its short release does,
+	// and is judged like any other armed click (interface design §3.11). Armed
+	// placement is branch 1, which the placement paths own.
+	if latch != input.LatchNormal && b.cursorShapeForClick(latch, sx, sy, target) >= render.CursorRed {
+		return false
 	}
 	_ = b.DispatchOrderCommand(session.HumanOrderCommand{
 		Code: code, Target: targetHandle,
 		Position: *pos, Queued: queued,
 	})
+	return true
 }
 
 // selfDestructSelection is Ctrl+D. Retail resolves the SELFDESTRUCT order

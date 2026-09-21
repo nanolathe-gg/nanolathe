@@ -225,16 +225,22 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 		return
 	}
 	if b.battleState().Input.Latch != input.LatchNormal {
+		issued := false
 		code := hud.LatchToCode(b.battleState().Input.Latch)
 		if code != 0 {
-			b.orderSelected(code, mx, my, additive)
+			issued = b.orderSelected(code, mx, my, additive)
 		}
 		// The latch retires after dispatch unless Shift keeps it, as it does
-		// for a world click [07 §9][P0-I14].
-		if additive {
-			b.battleState().Input.ShiftLatchSticky = true
-		} else {
-			b.resetOrderLatch()
+		// for a world click [07 §9][P0-I14] — and, as there, only when the
+		// click issued something: the handler is region-agnostic, so a minimap
+		// click the shape gate refused leaves the latch armed too
+		// [07 R-CAM-01 §14].
+		if issued {
+			if additive {
+				b.battleState().Input.ShiftLatchSticky = true
+			} else {
+				b.resetOrderLatch()
+			}
 		}
 		return
 	}

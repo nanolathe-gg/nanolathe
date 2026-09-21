@@ -661,6 +661,18 @@ table's numbering is also its priority order `[07 §8]`. `CursorHover` is the
 pick result and `CursorSelection` the acting side, including the stocks the
 command-fire affordability gate reads.
 
+The same chooser is the armed click's front door. `battle_commands.go`'s
+`orderSelected` issues an armed order only when the reduced shape is an action
+shape — an index below `cursorred` — judged on the unit that click itself
+picked, so the advertised action and the performed action are the same action
+`[07 R-CAM-01 §14]`. A refused click does nothing at all, which includes
+leaving the order armed: only an issued click retires the latch, or keeps it
+under the Shift sticky rule. The world-region bit is the caller's business
+rather than the gate's — every caller has already classified the sample as a
+world click, and the Modern area drag (§3.11) dispatches its own target list
+and never reaches the producer; its short release does, and is judged, and
+leaves the latch, like any other armed click.
+
 **The footer** (`footer.go`). `BuildFooter` composes the bottom readout from the
 committed frame, the catalog and a `FooterHover`: the build-card line for a
 hovered build button, the feature line, and the unit readout with its name,

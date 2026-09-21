@@ -8,7 +8,10 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -22,12 +25,23 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	}
 	mouse, _ := cl.Input().PointerSample()
 	mx, my := int32(mouse.X), int32(mouse.Y)
-	region := b.classifyPointer(mx, my)
 	// The footer's pointer record is written by the same per-frame pointer
 	// pass, and by nothing else [07 R-HUD-03 §1].
 	b.updateFooterHover(mx, my)
+	cursors.SetIndex(b.cursorShapeAt(b.battleState().Input.Latch, mx, my))
+}
+
+// cursorShapeAt is the shape the chooser gives for the pointer's own position
+// under one latch [07 §8]. The latch is a parameter rather than a read of the
+// armed state because a client gesture may dispatch a latch other than the
+// armed one — the Modern Alt point move (interface design §3.11) — and a gate
+// judging a click must judge the order it is about to issue.
+func (b *battleSession) cursorShapeAt(latch input.Latch, mx, my int32) int {
+	if b == nil || b.sess == nil {
+		return render.CursorNormal
+	}
 	hover := hud.CursorHover{
-		OverWorld:      region != battlePointerChrome,
+		OverWorld:      b.classifyPointer(mx, my) != battlePointerChrome,
 		Placing:        b.battleState().PlacementArmed(),
 		PlacementValid: b.battleState().Input.BuildOK,
 	}
@@ -35,6 +49,42 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 		_, hover.Target, _ = b.pickTarget(mx, my)
 		hover.Feature = b.hoverFeature(mx, my)
 	}
+	return b.chooseCursorFor(latch, hover)
+}
+
+// cursorShapeForClick is the shape the armed-click front door is judged
+// against [07 R-CAM-01 §14] step 3. It is the same chooser and the same
+// latch, evaluated on the unit the click itself picked, so the gate can never
+// disagree with the order it guards.
+//
+// The world-region bit is not part of this gate. Every caller of the order
+// producer has already decided the sample is a world click — the view branch,
+// the minimap branch, or an active Modern command drag, whose release is
+// deliberately interpreted in the region the press began in (interface design
+// §3.11) — and retail's own interface pass consumes a click on the panel
+// before the world-click handler runs, so the region bits never reach this
+// branch there either.
+func (b *battleSession) cursorShapeForClick(latch input.Latch, mx, my int32, target *units.Unit) int {
+	if b == nil || b.sess == nil {
+		return render.CursorNormal
+	}
+	hover := hud.CursorHover{
+		OverWorld:      true,
+		Placing:        b.battleState().PlacementArmed(),
+		PlacementValid: b.battleState().Input.BuildOK,
+	}
+	if !hover.Placing {
+		hover.Target = target
+		hover.Feature = b.hoverFeature(mx, my)
+	}
+	return b.chooseCursorFor(latch, hover)
+}
+
+// chooseCursorFor completes a hover record with the acting side — the local
+// player's selection in committed pool order and its stocks — and runs the
+// shape table [07 §8][07 §9].
+func (b *battleSession) chooseCursorFor(latch input.Latch, hover hud.CursorHover) int {
+	b.fillHoverMoverMode(hover.Target)
 	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile}
 	if b.interfaceTypeRightClick() {
 		sel.InterfaceType = hud.InterfaceTypeRightClick
@@ -49,8 +99,6 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 				}
 			}
 		}
-	}
-	if f, ok := b.currentSnapshot(); ok {
 		for _, ev := range f.Economy {
 			if ev.Player == b.sess.LocalOwner {
 				sel.Metal, sel.Energy = ev.Metal, ev.Energy
@@ -58,7 +106,25 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 			}
 		}
 	}
-	cursors.SetIndex(hud.ChooseCursor(b.battleState().Input.Latch, sel, hover))
+	return hud.ChooseCursor(latch, sel, hover)
+}
+
+// fillHoverMoverMode copies the committed mover mode onto the short-lived
+// hover copy. Picking builds that copy from the status word alone, and the
+// unit-reclaim admission predicate of [04 §3 `ReclaimUnit`] reads the mode
+// mirror as well — it is the clause that keeps a flying unit off the reclaim
+// shape. The value is the published one, never a live pool read [I6].
+func (b *battleSession) fillHoverMoverMode(t *units.Unit) {
+	if t == nil || t.Handle == 0 {
+		return
+	}
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	if v, found := snapshotUnitByHandle(f, t.Handle); found {
+		t.Move.Mode = v.MoverMode
+	}
 }
 
 // overWorld reports whether a pointer position lies in the world viewport
