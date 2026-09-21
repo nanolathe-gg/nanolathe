@@ -516,6 +516,18 @@ func (s *Service) vtolBuildVisit(builder *units.Unit, node *orders.Node, satisfi
 		if satisfied&approachWakeNoRoute != 0 {
 			return 8, true
 		}
+		if s.getProductDefForNode(node) == nil {
+			// The shared visit answers an unresolvable product with retention
+			// and a hold that arms nothing, which is sound for the ground row
+			// because its caller is the per-unit step. This row's caller is the
+			// primary pump, where a hold with no gate reloads the same head
+			// forever inside one tick [04 R-ORD-01 §10]. Report the same
+			// diagnostic and tell the pump the record did not advance, so the
+			// retention is one visit per tick here too.
+			s.rejectPermanent(builder, node, tick,
+				fmt.Errorf("%w: product %q", world.ErrMissingPlacementDefinition, node.BuildDefKey))
+			return 0, false
+		}
 		return s.mobilePlacementVisit(builder, node, tick), true
 	case 3, 4:
 		if node.Phase == 3 && !builder.InBuildStance {

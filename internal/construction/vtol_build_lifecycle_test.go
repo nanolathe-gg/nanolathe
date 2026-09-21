@@ -163,3 +163,24 @@ func TestVTOLBuildCompletingWorkInstallsOrbitBeforePhaseFive(t *testing.T) {
 		t.Fatalf("completion kept record or omitted caption: retained=%v captions=%d", orders.QueueOfUnit(builder).Head() == node, completed)
 	}
 }
+
+// A `VTOL_MobileBuild` record whose product resolves to nothing must not hand
+// the primary pump a hold with no gate: the pump reloads the head on a hold
+// [04 R-ORD-01 §10], so that pair never leaves the tick. The ground row answers
+// the same condition with retention from the per-unit step; this row reports
+// the record as not advanced, which is the same retention seen from the pump.
+func TestVTOLBuildPlacementWithoutAProductDoesNotHoldThePump(t *testing.T) {
+	svc, builder, node := vtolBuildFixture(t)
+	node.Phase = 2
+	node.BuildDefKey, node.Param1 = "", 0
+	if svc.getProductDefForNode(node) != nil {
+		t.Fatal("the fixture's record still resolves a product; the test proves nothing")
+	}
+	code, advanced := svc.vtolBuildVisit(builder, node, 0, 150)
+	if advanced {
+		t.Fatalf("visit returned code %d as a pump result; with gate %#x and deadline %d the pump would reload it forever", code, node.DynamicGate, node.Deadline)
+	}
+	if node.Phase != 2 {
+		t.Fatalf("phase = %d, want the record retained at placement", node.Phase)
+	}
+}
