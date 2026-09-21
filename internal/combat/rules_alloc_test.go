@@ -34,7 +34,7 @@ func TestRulesDispatchDoesNotAllocate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &Service{Rules: tc.rules}
 			if got := testing.AllocsPerRun(100, func() {
-				rulesDispatchSink = svc.rules().HoldsFire(&shooter)
+				rulesDispatchSink = svc.rules().HoldsFire(&shooter, false)
 			}); got != 0 {
 				t.Fatalf("HoldsFire dispatch allocated %v per call", got)
 			}
@@ -65,11 +65,14 @@ func TestRulesDispatchDoesNotAllocate(t *testing.T) {
 func TestStrictRulesAnswerAsRetail(t *testing.T) {
 	var held units.Unit
 	held.Flags &^= units.StandingFieldMask << units.StandingFireShift
-	if !(&ModernRules{}).HoldsFire(&held) {
+	if !(&ModernRules{}).HoldsFire(&held, false) {
 		t.Fatal("Modern lost the Hold Fire contract of DESIGN_WEAPONS_PROJECTILES §2.6.1")
 	}
+	if (&ModernRules{}).HoldsFire(&held, true) {
+		t.Fatal("Modern Hold Fire suppressed ordered work; it suppresses autonomous fire only")
+	}
 	var strict StrictRules
-	if strict.HoldsFire(&held) {
+	if strict.HoldsFire(&held, false) || strict.HoldsFire(&held, true) {
 		t.Fatal("Strict 3.1 suppressed a held shooter; retail fires the installed target")
 	}
 	query := ShotQuery{Blocked: true}

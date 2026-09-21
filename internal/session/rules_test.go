@@ -190,7 +190,7 @@ func TestBoundRuleDispatchDoesNotAllocate(t *testing.T) {
 		t.Run(set.Name, func(t *testing.T) {
 			s.BindRules(set)
 			if allocs := testing.AllocsPerRun(200, func() {
-				ruleDispatchSink = s.Combat.Rules.HoldsFire(&shooter)
+				ruleDispatchSink = s.Combat.Rules.HoldsFire(&shooter, false)
 				ruleDispatchSink = s.Build.OrderBinding.Rules.HoldsFire(&shooter) || ruleDispatchSink
 				s.Build.Rules.YieldObstruction(nil, nil, rect, nil, 7, false)
 			}); allocs != 0 {

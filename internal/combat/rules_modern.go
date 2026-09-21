@@ -38,12 +38,19 @@ func (*ModernRules) AdmitShot(q *ShotQuery) bool {
 	return !q.Blocked
 }
 
-// HoldsFire suppresses new weapon work for a shooter whose standing fire field
-// is zero. It adds no liveness or generation check to retail shooter
-// references: a stale reference answers from the flags word it finds, exactly
-// as the retail readers do.
-func (*ModernRules) HoldsFire(u *units.Unit) bool {
-	return u != nil && u.Flags>>units.StandingFireShift&units.StandingFieldMask == 0
+// HoldsFire suppresses AUTONOMOUS weapon work for a shooter whose standing fire
+// field is zero, and never ordered work: Hold Fire stops a unit firing on its
+// own, not firing when told to. A slot an order holds aims and launches
+// through the ordinary reload, aim, resource and ammunition gates, which is
+// also what retail does with it [04 R-STANCE-01 §3]; what Modern adds is the
+// suppression of every slot the unit still owns itself.
+//
+// It adds no liveness or generation check to retail shooter references: a
+// stale reference answers from the flags word it finds, exactly as the retail
+// readers do.
+// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
+func (*ModernRules) HoldsFire(u *units.Unit, ordered bool) bool {
+	return !ordered && u != nil && u.Flags>>units.StandingFireShift&units.StandingFieldMask == 0
 }
 
 // previewsShot asks the spawner for the speculative spread of shotPreviewer:

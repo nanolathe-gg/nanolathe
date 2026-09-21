@@ -48,9 +48,12 @@ type Rules interface {
 	// BeforeCommand lets a new producer command supersede a Modern response.
 	BeforeCommand(q *Queue)
 
-	// HoldsFire reports whether the shooter's standing Hold Fire suppresses a
-	// combat join, including the guard's forced join whose force flag bypasses
-	// both retail standing-order fields [04 R-STANCE-01 §3][04 R-UNIT-06 §1].
+	// HoldsFire reports whether the shooter's standing Hold Fire keeps automatic
+	// combat off its weapon slots: it refuses a combat join, including the
+	// guard's forced join whose force flag bypasses both retail standing-order
+	// fields [04 R-STANCE-01 §3][04 R-UNIT-06 §1]; it declines the stationary
+	// guard's takeover of an acquired target [04 R-ORD-01 §3]; and at the
+	// standing-fire write it retires the automatic combat already running.
 	HoldsFire(u *units.Unit) bool
 
 	// DeferBomberLeash reports whether an accepted bombing pass may reach
@@ -82,7 +85,8 @@ type Rules interface {
 type StrictRules struct{}
 
 // HoldsFire is retail's answer: the standing-order fields are read by the
-// caller's own gates, and a forced join bypasses them [04 R-STANCE-01 §3].
+// caller's own gates, a forced join bypasses them, and the standing-fire
+// handler touches no record [04 R-STANCE-01 §2][04 R-STANCE-01 §3].
 func (StrictRules) HoldsFire(*units.Unit) bool { return false }
 
 // DeferBomberLeash is retail's answer: an air attack tests its maneuver leash

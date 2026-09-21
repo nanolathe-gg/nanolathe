@@ -63,8 +63,9 @@ func TestTheExampleSetOverridesOneAnswerAndInheritsModern(t *testing.T) {
 	if set.Orders.HoldsFire(held) {
 		t.Fatalf("%q still suppresses a combat join for a held unit", Name)
 	}
-	// The combat seam is untouched, so the launch gate keeps Modern's answer.
-	if !set.Combat.HoldsFire(held) {
+	// The combat seam is untouched, so the launch gate keeps Modern's answer
+	// for a slot the unit owns itself.
+	if !set.Combat.HoldsFire(held, false) {
 		t.Fatal("the combat seam lost Modern's Hold Fire answer; only the order seam is overridden")
 	}
 }

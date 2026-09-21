@@ -795,7 +795,11 @@ func guardNoMoveHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		// [04 R-ORD-01 §1] is withdrawn, so the guard's phase-1 test is an
 		// aliveness test satisfied by mobile targets, which is this build's own
 		// live flag.
-		if tgt != nil && tgt.Alive {
+		// A held unit's stationary guard takes no slot: the target would then
+		// be one an order holds, and fire through Hold Fire. Strict answers
+		// false and takes it, as retail does [04 R-STANCE-01 §3].
+		// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
+		if tgt != nil && tgt.Alive && !rulesOfUnit(u).HoldsFire(u) {
 			n.GoalX, n.GoalY, n.GoalZ = tgt.X, tgt.Y, tgt.Z
 			releaseSlot(u, 0)
 			bindSlotToUnit(u, 0, n.Target)

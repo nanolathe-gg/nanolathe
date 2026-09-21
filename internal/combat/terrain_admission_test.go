@@ -305,6 +305,6 @@ func (r *terrainSpyRules) AdmitShot(q *ShotQuery) bool {
 	return !q.Blocked
 }
 
-func (r *terrainSpyRules) HoldsFire(*units.Unit) bool { return false }
+func (r *terrainSpyRules) HoldsFire(*units.Unit, bool) bool { return false }
 
 func (r *terrainSpyRules) previewsShot() bool { return true }

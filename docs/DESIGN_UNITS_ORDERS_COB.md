@@ -309,7 +309,8 @@ interpretation `[08 R-SAVE-ORDER-01]` `[08 R-SAVE-02 §6]`.
 
 **Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
 selects the order package's rule set, `orders.Rules`, which the queue carries
-on its binding; the queue asks it `HoldsFire` at the join. `orders.StrictRules`
+on its binding; the queue asks it `HoldsFire` at the join, at the stance write
+and at the stationary guard's takeover. `orders.StrictRules`
 answers the retail way, so Strict 3.1 is preserved by the seam's zero-size
 default. Modern Hold Fire refuses the guard's forced combat join even though retail's
 force flag bypasses both standing-order fields `[04 R-STANCE-01 §3]`
@@ -317,15 +318,71 @@ force flag bypasses both standing-order fields `[04 R-STANCE-01 §3]`
 continues its ordinary movement/repair behavior. Standing move still has its
 retail force bypass, and Return Fire keeps its existing behavior.
 
-Changing fire stance retains explicit attack orders and their manually bound
-targets, so leaving Hold Fire resumes firing when the ordinary launch gates
-permit. The existing standing-order writer still clears autonomous slot
-targets for its exact unmasked parameters zero and one
-`[04 R-STANCE-01 §2]`; Modern adds no queue cancellation or replacement.
-The authoritative suppression of launches and pending burst cancellation are
-owned by [DESIGN_WEAPONS_PROJECTILES.md §2.6.1](DESIGN_WEAPONS_PROJECTILES.md#261-modern-hold-fire).
-Tests preserve queued attack/guard records, verify ground and aircraft guard
-combat-join suppression, and cover Strict bypass and Return Fire.
+Hold Fire suppresses what a unit would do on its own, never an explicit order.
+An attack, attack-ground, command-fire or launch order issued to a held unit is
+admitted as usual, takes its weapon slot through the ordinary release verb —
+which clears the slot control byte's autonomy bit `[04 R-ORD-01 §1]` — and
+fires: that cleared bit is the provenance the launch gate reads
+([DESIGN_WEAPONS_PROJECTILES.md §2.6.1](DESIGN_WEAPONS_PROJECTILES.md#261-modern-hold-fire),
+which also owns the suppression of own-slot launches and their burst
+remainders). Changing fire stance likewise retains explicit attack orders and
+their bound targets.
+
+**Automatic combat is retired at the stance write.** Three producers in this
+package take a slot the same way an explicit attack does, so the launch gate
+would let them fire on through Hold Fire:
+
+1. an attack record of the auto-engage issuer — the opportunity scans of
+   patrol, standby, the mine and the air seek, retaliation, and the guard's
+   combat join — which Modern tags at insertion;
+2. the Modern danger response, when it is an attack rather than a withdrawal
+   or a wait;
+3. the stationary `Guard_NoMove` record — the idle default of the definitions
+   that author it — whose phase 1 takes over a target the unit acquired
+   `[04 R-ORD-01 §3]`.
+
+*Strict 3.1:* the standing-fire handler deposits the field and, for its exact
+unmasked parameters zero and one, clears the targets of autonomous slots only
+`[04 R-STANCE-01 §2]`; it touches no record and no order-held slot, so such an
+engagement continues under its own handler's rules `[04 R-STANCE-01 §3]`.
+
+*Modern:* when the deposit leaves the field at zero, and before that retail
+slot walk, the handler removes every record of kinds 1 and 2 from the front
+segment through the ordinary unlink — goal payloads released, cancel
+notification delivered, a danger response's suspended assignment restarted —
+and restarts a kind-3 record in place (phase zero, gate, satisfied set and
+target reference cleared) because it is the unit's standing assignment, not a
+task. The ordinary unlink returns weapon slots only for the front record
+`[04 R-ORDER-02 §2]`, and the record that was running is not the front one at
+that moment — the standing record is — so when the running record was one of
+the three, all three slots are handed back by the same walk its removal would
+have run: autonomy bit set, target cleared, `TargetCleared` raised
+`[04 R-UNIT-06 §5 part 3]`. The unit therefore launches nothing from its next
+weapon visit on; shots already in the air continue.
+
+A held unit is kept from re-entering the same state: the auto-engage issuer
+refuses every engagement, forced or not; a danger response issues and keeps an
+attack only while the field is non-zero; the stationary guard's scan returns
+nothing; and its phase 1 declines to take a slot, holding on its ordinary
+30-tick deadline without its attempt-budget draw.
+
+Left alone, wherever they sit in the queue: explicit attack, suppress,
+command-fire and launch records; type-constrained `AttackUType` children; the
+return move a maneuver engagement left beneath itself, which now simply walks
+the unit back to its post; a withdrawal or wait response; and any attack whose
+producer is unknown — restored from a save or inserted directly — because the
+producer tag is transient and guessing it would cancel a player's order. The
+write draws no randomness and spends nothing in either mode.
+
+Tests (`modern_hold_fire_test.go`) preserve queued attack/guard records,
+verify that an explicit attack issued while held takes its slot, verify ground
+and aircraft guard combat-join suppression, and lock the stance write in both
+modes: a fire-at-will unit's automatic attack is retired alone with an
+explicit attack queued behind it untouched, its slot comes back empty and it
+does not re-engage, while Strict keeps record, slot and target; the stationary
+guard is restarted rather than removed and declines its takeover while held,
+while Strict takes the slot and draws; a danger attack ends and its assignment
+restarts while a withdrawal stays; Return Fire is covered by the join cases.
 
 ### Modern danger response
 

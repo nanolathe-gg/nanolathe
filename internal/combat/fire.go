@@ -205,7 +205,11 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	if svc == nil || slot == nil || slot.Weapon == nil {
 		return 0, false
 	}
-	if svc.holdsFire(ports.Shooter) {
+	// The per-shot slot copy carries the live control byte, so the spawner asks
+	// the same question the slot visit did, before any query, draw or callback.
+	// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
+	ordered := slotOrdered(slot.Flags)
+	if svc.holdsFire(ports.Shooter, ordered) {
 		return 0, false
 	}
 	w := slot.Weapon
@@ -477,6 +481,8 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	case CreationOrdinary, CreationBallistic, CreationVertical:
 		p.BurstRemaining = w.Burst
 		if w.Burst > 0 {
+			// An ordered shot's burst belongs to the order that launched it.
+			p.OrderedBurst = ordered
 			p.BurstDeadline = tick + uint32(w.BurstRate) // interval added to next deadline [06 §4.3]
 		} else {
 			p.BurstDeadline = 0
@@ -785,10 +791,20 @@ func (s *Service) SweepBurstAnchorsForShooter(shooter pool.Handle) int {
 	return killed
 }
 
-// holdsFire puts the shooter to the bound rule set. Strict 3.1 answers false at
-// every site; the Modern answer is the policy of
+// holdsFire puts one piece of a shooter's weapon work to the bound rule set.
+// Strict 3.1 answers false at every site; the Modern answer is the policy of
 // docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1. Neither adds a liveness or
 // generation check to retail shooter references.
-func (s *Service) holdsFire(u *units.Unit) bool {
-	return s != nil && s.rules().HoldsFire(u)
+func (s *Service) holdsFire(u *units.Unit, ordered bool) bool {
+	return s != nil && s.rules().HoldsFire(u, ordered)
 }
+
+// slotOrdered reports that an order holds the slot. The control byte's autonomy
+// bit is the provenance retail itself keeps: the slot initializer sets it, the
+// order verbs clear it when an attack, suppress, command-fire or launch order
+// takes the slot, and the order-removal walk sets it again while clearing the
+// target [06 R-WPN-05 §3][04 R-ORDER-02 §2]. It is the same bit the retail
+// standing-fire handler reads to decide which targets a Hold Fire command
+// clears [04 R-STANCE-01 §2], so Hold Fire and this gate agree on what
+// "the unit's own target" means.
+func slotOrdered(flags uint8) bool { return flags&units.SlotFlagAutonomous == 0 }

@@ -15,9 +15,12 @@ import (
 // whole session and is used by pointer.
 type ModernRules struct{}
 
-// Modern's authoritative Hold Fire also closes the guard's forced combat join,
-// which retail's force flag bypasses. The guard keeps its follow/assistance
-// record and its ordinary movement and repair behavior.
+// Modern's Hold Fire keeps automatic combat off the weapon slots, because the
+// launch gate lets a slot an order holds fire through it. It closes the guard's
+// forced combat join, which retail's force flag bypasses — the guard keeps its
+// follow/assistance record and its ordinary movement and repair behavior — and
+// the stationary guard's takeover, and it retires running automatic combat at
+// the stance write (retireAutomaticCombat).
 // Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
 func (*ModernRules) HoldsFire(u *units.Unit) bool {
 	return u != nil && u.Flags>>stanceFireShift&stanceFieldMask == 0

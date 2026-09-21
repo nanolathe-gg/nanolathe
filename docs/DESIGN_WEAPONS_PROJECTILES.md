@@ -697,40 +697,106 @@ anchor outlives its shooter.
 
 ### 2.6.1 Modern Hold Fire
 
-**Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
-selects the combat service's `combat.Rules` seam, whose `HoldsFire` answer is
-this policy for `combat.ModernRules`; `combat.StrictRules` answers false at
-every site and preserves Strict 3.1. This is
-an intentional departure from the retail standing-fire readers
-`[04 R-STANCE-01 §2]` `[04 R-STANCE-01 §3]`, which allow an already assigned
-explicit attack target to fire and allow forced guard combat joins.
+**Nanolathe Modern policy (user-authorized).** Hold Fire stops a unit firing
+*on its own*; it never stops a unit firing *when it is told to*. The central
+`gameplay.Mode` selects the combat service's `combat.Rules` seam, whose
+`HoldsFire(unit, ordered)` answer is this policy for `combat.ModernRules`;
+`combat.StrictRules` answers false at every site and preserves Strict 3.1.
 
-In Modern mode, standing fire zero suppresses all new unit weapon launches,
-including explicit unit/ground attacks, command-fire and stockpile weapons.
-The per-unit weapon visit continues the ordinary reload countdown, then skips
-new aim/query/fire work while held. The spawner also rejects a held shooter
-before muzzle queries, allocation, callbacks, reveal stamping or shot RNG.
-No launch means no shot reload assignment, resource debit or ammunition use.
-Already running scripts retain their ordinary scheduling; unrelated simulation
-RNG and economy work are outside this policy.
+**Strict 3.1 behavior.** No retail weapon-slot, aim, reload, shot-admission or
+projectile path reads the standing fire field. The field gates acquisition and
+the auto-engage issuer only, so any target already installed on a slot — by a
+manual order, a script, the guard's forced combat join, or an autonomous
+acquisition made before the stance changed and not caught by the stance
+handler's one-time clear — is aimed and fired `[04 R-STANCE-01 §2]`
+`[04 R-STANCE-01 §3]`.
 
-The projectile phase silently retires a held shooter's parked burst anchors
-before their next clone attempt, even before the next pellet deadline. Already
-launched pellets keep their ordinary motion and impact behavior. The cancelled
-remainder is neither refunded nor replayed. Leaving Hold Fire, or switching to
-Strict 3.1, allows retained attack orders and targets to fire through the normal
-reload, aim, resource and ammunition gates; a cancelled burst can only restart
-as a newly admitted shot. Missing shooter references retain the existing
-projectile behavior, and no new unit identity or generation scheme is added.
-Death explosions, self-destruction, environmental damage and stockpile
-production are outside this weapon-launch policy. Return Fire keeps its retail
-behavior. Order retention and guard admission are owned by
-[DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire"](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire).
+**Modern behavior.** While the standing fire field is zero:
 
-Tests cover existing unit and point targets, stance/mode resumption, Strict
-bypass, command-fire/stockpile admission, no suppressed-shot resource/ammo/RNG
-or callback effects, normal reload countdown, and cancellation of burst
-remainders while airborne pellets continue.
+- A slot **an order holds** takes the ordinary path. An attack-unit order, an
+  attack-ground (`Suppress`) order, a command-fire weapon and an ordered
+  stockpile launch all aim and fire through the normal reload, aim, resource
+  and ammunition gates, exactly as under Strict 3.1. This is what lets units
+  that *author* standing fire order zero — the long-range artillery, the
+  missile silos and their kin — fire at all.
+- A slot **the unit still owns itself** starts no aim, query or fire work,
+  whatever put a target on it. The per-unit weapon visit continues that slot's
+  ordinary reload countdown and then skips it, retaining the target. The
+  spawner asks the same question of the per-shot slot copy and rejects before
+  muzzle queries, allocation, callbacks, reveal stamping or shot RNG. No launch
+  means no shot reload assignment, resource debit or ammunition use.
+
+**The discriminator is the slot control byte's autonomy bit** `[06 R-WPN-05 §3]`,
+which is the provenance retail itself records and the only one this policy
+reads. The slot initializer sets the bit; the order verbs clear it when an
+order takes the slot and installs its target; the order-removal walk sets it
+again and clears the target `[04 R-ORDER-02 §2]`. It is the same bit the retail
+standing-fire handler reads to choose which targets a Hold Fire command clears
+`[04 R-STANCE-01 §2]`, so the command and the launch gate agree on what "the
+unit's own target" means. No order-queue state is consulted and no new slot or
+unit state is added.
+
+Consequences that follow from that choice, each deliberate:
+
+- **An ended order does not fall through into autonomous fire.** When the
+  ordered target dies or the order is removed, the removal walk hands the slot
+  back with its target cleared. The slot is then the unit's own, and Hold Fire
+  suppresses anything it subsequently acquires or is offered.
+- **Automatic combat does not hold a slot through Hold Fire.** Three producers
+  take a slot exactly as an explicit attack does — the auto-engage issuer's
+  attack records (opportunity scans, retaliation, the guard's combat join),
+  the Modern danger response when it is an attack, and the stationary
+  `Guard_NoMove` record that takes over a target the unit acquired — and the
+  launch gate cannot tell them from an order and must not guess. The order
+  package therefore keeps them off the slot while the field reads zero: it
+  refuses the join and the engagement where they are issued, declines the
+  stationary guard's takeover, and **retires or unbinds all three at the
+  stance write**, handing the slot back with its autonomy bit set and its
+  target cleared. A unit firing on its own thus stops at its next weapon visit
+  after the Hold Fire command runs, and does not re-engage. The rule, its
+  enumeration and its tests are owned by
+  [DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire"](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire).
+- **Return Fire keeps its retail behavior**; the field is non-zero and this
+  policy is not reached.
+- **Boundary — provenance this build does not have.** An attack record whose
+  producer is unknown — one restored from a save, or inserted directly rather
+  than through the auto-engage issuer — is treated as explicit and keeps its
+  slot. The producer tag is transient Modern state and is deliberately not
+  saved; guessing it would cancel orders the player gave.
+
+**Burst remainders.** The spawner stamps a burst anchor with the provenance of
+the slot that launched it (`Projectile.OrderedBurst`, implementation state that
+only this policy reads). The projectile phase silently retires a held
+shooter's parked anchors that are *not* ordered before their next clone
+attempt, even before the next pellet deadline; the cancelled remainder is
+neither refunded nor replayed, and a cancelled burst can only restart as a
+newly admitted shot. An **ordered burst completes**, including after its order
+has ended, because the shot was admitted as ordered work. Already launched
+pellets keep their ordinary motion and impact behavior in every case. Missing
+shooter references retain the existing projectile behavior, and no new unit
+identity or generation scheme is added.
+
+Leaving Hold Fire, or switching to Strict 3.1, lets retained targets on the
+unit's own slots fire through the normal gates. Already running scripts retain
+their ordinary scheduling; unrelated simulation RNG and economy work are
+outside this policy, as are death explosions, self-destruction, environmental
+damage and stockpile production.
+
+**Tests.** `internal/combat/modern_hold_fire_test.go` covers: an own-slot unit
+or point target retained and silent with no resource, ammunition, RNG, event,
+reveal or callback effect and a normal reload countdown, then resumed by stance
+or mode; an ordered slot producing the same shots, reload, debit, ammunition,
+reveal and stream state as Strict 3.1 for ordinary, command-fire and stockpile
+weapons, and staying silent once the slot is handed back; the spawner's
+pre-query rejection for an own slot and full retail shot work for an ordered
+one; retirement of an own-slot burst remainder while airborne pellets continue,
+completion of an ordered burst, and the anchor's provenance stamp. The
+order-side half — an explicit attack issued while held takes its slot — is in
+`internal/orders/modern_hold_fire_test.go`, beside the stance-write retirement
+cases. The retail tier (`internal/session/modern_hold_fire_retail_test.go`)
+runs both whole routes: an artillery piece and a missile silo that author Hold
+Fire obey an explicit attack, and a fire-at-will missile tower whose engagement
+its stationary guard holds stops launching once told to hold fire.
 
 ### 2.7 Motion families
 

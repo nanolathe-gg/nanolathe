@@ -182,10 +182,95 @@ func standingFireOrderHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
 		return Code(5)
 	}
 	u.Flags = (u.Flags &^ (stanceFieldMask << stanceFireShift)) | ((n.Param1 & stanceFieldMask) << stanceFireShift)
+	// Retail leaves every record alone, so an engagement the unit began on its
+	// own keeps its slot through Hold Fire [04 R-STANCE-01 §3]. Modern ends it
+	// here, at the write, before the retail slot walk below.
+	// Nanolathe Modern policy: docs/DESIGN_UNITS_ORDERS_COB.md "Modern Hold Fire".
+	if rulesOfUnit(u).HoldsFire(u) {
+		retireAutomaticCombat(u, n)
+	}
 	if n.Param1 == 0 || n.Param1 == 1 { // unmasked, exactly [04 R-STANCE-01 §2]
 		clearAutonomousSlotTargets(u)
 	}
 	return Code(5) // *complete* [04 R-ORD-01 §2]
+}
+
+// retireAutomaticCombat ends the combat a unit took up on its own, at the
+// moment it is told to hold fire. The launch gate lets a slot an order holds
+// fire through Hold Fire (DESIGN_WEAPONS_PROJECTILES §2.6.1), and these three
+// producers hold a slot exactly as an explicit attack does, so without this
+// the engagement would outlive the command:
+//
+//   - an attack record of the auto-engage issuer — the opportunity scans of
+//     patrol, standby, the mine and the air seek, retaliation, and the guard
+//     join — which Modern tags at insertion (MarkAutomaticAttack);
+//   - the Modern danger response, when it is an attack rather than a
+//     withdrawal or a wait;
+//   - the stationary `Guard_NoMove` record, the idle default of the definitions
+//     that author it, whose phase 1 takes over a target the unit acquired
+//     [04 R-ORD-01 §3]. It is the unit's standing assignment, so it is
+//     restarted rather than removed; its phase 1 then declines to take a slot
+//     while the unit holds fire.
+//
+// Everything else stays: explicit attack, suppress, command-fire and launch
+// records wherever they sit, the return move an automatic maneuver attack
+// left beneath itself, and a restored attack whose producer is unknown.
+//
+// Records go through the ordinary unlink, so movement goals and the cancel
+// notification are released as for any removal. The ordinary unlink returns
+// the weapon slots only for the front record [04 R-ORDER-02 §2], and the
+// record that was running is not the front one here — the standing record
+// being handled is. So when the running record is one of the above, its slots
+// are handed back by the same walk the removal would have run: autonomy bit
+// set, target cleared, `TargetCleared` raised [04 R-UNIT-06 §5 part 3]. It
+// draws no randomness and spends nothing.
+func retireAutomaticCombat(u *units.Unit, standing *Node) {
+	q := QueueOfUnit(u)
+	if q == nil {
+		return
+	}
+	var running *Node
+	for _, r := range q.primary {
+		if r != nil && r != standing {
+			running = r
+			break
+		}
+	}
+	if running == nil {
+		return
+	}
+	handBack := false
+	// Chosen from a snapshot and unlinked by identity: each cleanup can
+	// re-enter the queue (see spliceOutPrimary).
+	records := append([]*Node(nil), q.primary...)
+	for _, r := range records {
+		if r == nil || r == standing || q.indexOfPrimary(r) < 0 {
+			continue
+		}
+		switch {
+		case r == q.danger.response:
+			if r.Target == 0 {
+				continue // a withdrawal or a wait fires nothing
+			}
+			q.finishDangerResponse()
+		case r.automaticAttack:
+			q.unlinkPrimary(r)
+		case DescriptorFor(r.ID).Name == "Guard_NoMove":
+			if r.Phase == 0 {
+				continue
+			}
+			releaseGoalPayload(u, r)
+			r.BindTarget(0)
+			r.Phase, r.DynamicGate, r.Satisfied = 0, 0, 0
+			r.Deadline = -1
+		default:
+			continue
+		}
+		handBack = handBack || r == running
+	}
+	if handBack {
+		clearWeaponBuildTargets(u)
+	}
 }
 
 // clearAutonomousSlotTargets is the fire handler's slot walk

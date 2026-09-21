@@ -40,11 +40,14 @@ type Rules interface {
 	// query.
 	AdmitShot(q *ShotQuery) bool
 
-	// HoldsFire reports whether the shooter's standing Hold Fire suppresses aim
-	// dispatch and burst remainders (DESIGN_WEAPONS_PROJECTILES §2.6.1).
-	// StrictRules returns false: the retail standing-fire readers let an
-	// already assigned target fire [04 R-STANCE-01 §2] [04 R-STANCE-01 §3].
-	HoldsFire(u *units.Unit) bool
+	// HoldsFire reports whether the shooter's standing Hold Fire suppresses one
+	// piece of weapon work: a slot visit's aim and launch, a spawner attempt, or
+	// a parked burst remainder (DESIGN_WEAPONS_PROJECTILES §2.6.1). ordered says
+	// the work belongs to a slot an order holds — the slot control byte's
+	// autonomy bit is clear [06 R-WPN-05 §3] — rather than to a target the unit
+	// took on its own. StrictRules returns false: no retail weapon path reads
+	// the standing fire field [04 R-STANCE-01 §3].
+	HoldsFire(u *units.Unit, ordered bool) bool
 }
 
 // ShotQuery is one resolved fire attempt put to Rules.AdmitShot. It carries
@@ -100,10 +103,11 @@ type StrictRules struct{}
 // path [06 R-WPN-05 §1].
 func (StrictRules) AdmitShot(*ShotQuery) bool { return true }
 
-// HoldsFire never suppresses. Retail's standing-fire readers let an already
-// assigned explicit target fire and allow forced guard combat joins
+// HoldsFire never suppresses. No retail weapon-slot, aim, shot-admission or
+// projectile path reads the standing fire field: the field gates acquisition
+// and the auto-engage issuer, never a target already installed
 // [04 R-STANCE-01 §2] [04 R-STANCE-01 §3].
-func (StrictRules) HoldsFire(*units.Unit) bool { return false }
+func (StrictRules) HoldsFire(*units.Unit, bool) bool { return false }
 
 // strictRules is the shared retail answer handed back for an unbound service.
 // Holding the interface value in a package variable keeps the substitution off

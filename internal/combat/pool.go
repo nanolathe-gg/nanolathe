@@ -89,6 +89,12 @@ type Projectile struct {
 	ExpiryTick     uint32 // expiry [06 §6.1]
 	SmokeDeadline  uint32 // smoke deadline [06 §5.1]
 
+	// OrderedBurst marks a burst anchor whose root shot left a slot an order
+	// held. It is implementation policy, not retail record state: only the
+	// Modern Hold Fire retirement reads it, and Strict 3.1 never does
+	// (DESIGN_WEAPONS_PROJECTILES §2.6.1).
+	OrderedBurst bool
+
 	// Phase/latch flags [06 §5.1] "phase/latch flags"; visual propeller orientation, beam latch, two-phase state [06 §6.1].
 	BeamLatch    bool          // beam latch [06 §6.1]
 	TwoPhase     bool          // two-phase state [06 §6.1]

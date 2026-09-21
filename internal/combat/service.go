@@ -241,10 +241,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload != 0 {
 			slot.Reload = int32(int16(slot.Reload - 1))
 		}
-		// Countdown recovery continues, but Hold Fire starts no new aim or
-		// shot work. Retain targets for stance/mode resumption.
+		// Countdown recovery continues, but Hold Fire starts no aim or shot
+		// work for a slot the unit still owns itself. A slot an order holds
+		// takes the ordinary path below. Retain targets for stance/mode
+		// resumption.
 		// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
-		if s.holdsFire(u) {
+		if s.holdsFire(u, slotOrdered(slot.Flags)) {
 			continue
 		}
 		// Autonomous maintenance runs in phase 5 after AI dispatch [06 §3.2].
@@ -1602,8 +1604,10 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		if p.BurstRemaining > 0 {
 			// Cancel only the unlaunched remainder. The parked template never
 			// becomes a moving shot, and previously cloned pellets continue.
+			// A burst an ordered shot began completes whatever becomes of the
+			// order.
 			// Nanolathe Modern policy: docs/DESIGN_WEAPONS_PROJECTILES.md §2.6.1.
-			if w != nil && s.holdsFire(w.Unit(p.Shooter)) {
+			if w != nil && s.holdsFire(w.Unit(p.Shooter), p.OrderedBurst) {
 				s.MarkDead(h)
 				continue
 			}
