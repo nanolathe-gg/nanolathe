@@ -22,6 +22,7 @@ stable named heading and keeps its unresolved questions beside it.
 | [TA Demo Recorder session DLLs](ta-demo-recorder.md) | The community DirectPlay-replacement recorder shipped by all three packages: command catalog, feature families, the shared COB-extension ports, and the 3.9.2.0 → 3.9.2.416 version boundary. |
 | [Extended script ports](script-ports.md) | Recorder-provided ports `32` and `69`–`75` shared by all three packages: per-port arithmetic, authored census, and the remaining open questions. |
 | [Mod engine-package compatibility](mod-engine-compatibility.md) | Package architecture, input mappings and their collisions, content-key vocabulary, executable-level behavior differences, and whether one engine could host all three content sets. |
+| [Community patch pathfinding](community-patch-pathfinding.md) | The TA Unofficial Patch line (v3.9.01 of 2012, v3.9.02 of 2013) and the dated engine builds that continue it: the documented "pathfinding cycles" raise and its `AISearchMapEntries` setting, the movement-adjacent construction-unit notes of the 2024–2026 builds, and the census establishing that the 3.9.x documentation records a limit raise and nothing else. |
 | [Shared draw-DLL interface](draw-engine-interface.md) | The renderer family's megamap, whiteboard and selection interface: keys, zoom, icon configuration, ring thresholds, chat-stream markers, drag-filter masks, and the per-build preference-key differences. |
 
 ## Evidence policy
