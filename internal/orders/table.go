@@ -357,6 +357,12 @@ var (
 	rowVTOLLandIfCan   ID
 	rowVTOLHelpBuild   ID
 	rowBuildWeapon     ID
+	rowRepairUnit      ID
+	rowReclaim         ID
+	rowReclaimUnit     ID
+	rowVTOLRepairUnit  ID
+	rowVTOLReclaim     ID
+	rowVTOLReclaimUnit ID
 )
 
 func resolveRows() {
@@ -379,6 +385,12 @@ func resolveRows() {
 	rowVTOLLandIfCan = Lookup("VTOL_LandIfCan")
 	rowVTOLHelpBuild = Lookup("VTOL_HelpBuild")
 	rowBuildWeapon = Lookup("BuildWeapon")
+	rowRepairUnit = Lookup("RepairUnit")
+	rowReclaim = Lookup("Reclaim")
+	rowReclaimUnit = Lookup("ReclaimUnit")
+	rowVTOLRepairUnit = Lookup("VTOL_RepairUnit")
+	rowVTOLReclaim = Lookup("VTOL_Reclaim")
+	rowVTOLReclaimUnit = Lookup("VTOL_ReclaimUnit")
 }
 
 // handlerInstallers is the ordered list of per-family handler installers — the

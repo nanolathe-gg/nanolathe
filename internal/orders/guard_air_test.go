@@ -488,3 +488,82 @@ func TestVTOLFollowDivertsToTheOffMapLoiter(t *testing.T) {
 		t.Fatalf("the admit's orbit bearing was not drawn once the runner declined")
 	}
 }
+
+// TestVTOLFollowCopiesTheWardsWorkThroughTheAirLeg locks the air guard's own
+// "copy the ward's work" leg [04 R-ORD-02 §3 leg 3] against the ground leg it
+// used to share. Two things are easy to regress silently: `VTOL_MobileBuild`
+// belongs to the help-build arm (so an air builder guarding an air builder
+// joins as `VTOL_HelpBuild`), and the whole leg is behind nano-reach on the
+// ward head's TARGET, which a targetless head fails.
+//
+// The second half is the one a player sees. The ground leg's goal-bit arm
+// copied a targetless `VTOL_MobileBuild` head — target and goal, zero
+// parameters — and a build record with no product cannot be placed.
+func TestVTOLFollowCopiesTheWardsWorkThroughTheAirLeg(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		target    pool.Handle
+		wantSpawn string
+	}{
+		{name: "the ward is nanolathing a frame: help build it", target: 3, wantSpawn: "VTOL_HelpBuild"},
+		{name: "the ward has not stamped its site: orbit, copy nothing", target: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAirGuardFixture(t)
+			f.guard.Def.Builder, f.guard.Def.CanReclamate = true, true
+			f.ward.Def.Builder = true
+			frame := &units.Unit{
+				Handle: 3, Alive: true, Remaining: 0.5,
+				Def: &content.UnitDef{UnitName: "frame", FootprintX: 1, FootprintZ: 1, MaxDamage: 100},
+				X:   f.ward.X, Y: f.ward.Y, Z: f.ward.Z,
+			}
+			frame.MaxHealth, frame.Health = 100, 40
+			binding := QueueForUnit(f.guard).Binding()
+			wardOnly := binding.Lookup
+			binding.Lookup = func(h pool.Handle) *units.Unit {
+				if h == frame.Handle {
+					return frame
+				}
+				return wardOnly(h)
+			}
+			wq := QueueForUnit(f.ward)
+			wq.Push(rowVTOLMobileBuild, Node{
+				Owner: f.ward.Handle,
+				GoalX: numeric.Fixed(500 << 16), GoalZ: numeric.Fixed(700 << 16), GoalSupplied: true,
+			})
+			if tc.target != 0 {
+				// The build row is issued with a site and no target; placement
+				// binds the nanoframe it created [04 R-ORD-02 §2].
+				wq.Primary()[0].BindTarget(tc.target)
+			}
+
+			n := airGuardNode(f)
+			n.Phase = 2
+			code := guardHandler(f.guard, n, 0, 10)
+
+			gq := QueueForUnit(f.guard)
+			if tc.wantSpawn == "" {
+				if gq.LenPrimary() != 0 {
+					t.Fatalf("spawned %s from a targetless ward head; nano-reach needs the target to exist", DescriptorFor(gq.Primary()[0].ID).Name)
+				}
+				if len(f.air) == 0 {
+					t.Fatalf("code %d with no orbit marker; a declined leg falls to the orbit", code)
+				}
+				return
+			}
+			if gq.LenPrimary() != 1 {
+				t.Fatalf("guard queue holds %d records, want the one spawn", gq.LenPrimary())
+			}
+			got := gq.Primary()[0]
+			if name := DescriptorFor(got.ID).Name; name != tc.wantSpawn {
+				t.Fatalf("spawned %s, want %s", name, tc.wantSpawn)
+			}
+			if got.Target != tc.target {
+				t.Fatalf("spawn target = %d, want the ward head's %d", got.Target, tc.target)
+			}
+			if code != Code(3) || n.DynamicGate != 0 {
+				t.Fatalf("code %d gate %#x, want the wait code over a cleared gate", code, n.DynamicGate)
+			}
+		})
+	}
+}

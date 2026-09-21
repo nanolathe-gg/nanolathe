@@ -568,12 +568,13 @@ func wardIsDamaged(ward *units.Unit) bool {
 // applies that clear from the producer's Node.GoalSupplied statement, never
 // from the coordinates.
 //
-// Its one reader is the guard's leg-4 copy arm below, which takes the bit as
-// "this record has a goal to copy". The arm is reached only for a ward whose
-// front record carries bit 20 (the nanolathe/build-site class), and of those
-// rows only `MobileBuild` and `VTOL_MobileBuild` also carry bit 10;
-// `MobileBuild` is taken by the arm above, so `VTOL_MobileBuild` is the row
-// whose bit this test actually decides.
+// Its readers are the two guard copy arms — the ground leg 4 below and the air
+// row's own leg in vtolFollowCopyWork — which take the bit as "this record has
+// a goal to copy". Both are reached only for a ward whose front record carries
+// bit 20 (the nanolathe/build-site class), and of those rows only `MobileBuild`
+// and `VTOL_MobileBuild` also carry bit 10. The ground leg takes `MobileBuild`
+// in the arm above, leaving `VTOL_MobileBuild` as the row its test decides; the
+// air leg takes both build rows in its help-build arm [04 R-ORD-02 §3].
 const staticGoalObserver uint32 = 0x400
 
 func wardHasBuildOrder(ward *units.Unit) bool {
@@ -790,7 +791,16 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// Both arms construct the spawned record with the ward's front record's
 	// target AND goal triple, release the guard record's payload first, clear
 	// the dynamic gate and return the wait code.
-	if wardHasBuildOrder(ward) && canRepairGuard(u) && canRepairGuard(ward) && rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
+	//
+	// The air row has its own leg here, with a different first arm and a
+	// nano-reach gate the ground leg lacks [04 R-ORD-02 §3]; it never runs the
+	// ground arms below.
+	if air {
+		if vtolFollowCopyWork(u, n, ward, tick) {
+			n.DynamicGate = 0
+			return Code(3) // *wait* [04 §3.3]
+		}
+	} else if wardHasBuildOrder(ward) && canRepairGuard(u) && canRepairGuard(ward) && rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
 		var head *Node
 		if wq := QueueForUnit(ward); wq != nil && len(wq.primary) > 0 {
 			head = wq.primary[0]
@@ -832,6 +842,79 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// legs above [04 R-UNIT-06 §1][04 R-ORD-01 §8 point 3]; for the air twin it
 	// is leg 4 of [04 R-ORD-02 §3], which is the same position in the same list.
 	return guardFollowMaintenance(u, n, ward, satisfied, tick)
+}
+
+// vtolFollowCopyWork is the air guard's "copy the ward's work" leg
+// [04 R-ORD-02 §3 leg 3]. With `h` the ward's front record:
+//
+//	`h` exists with a nonzero identity, I have `builder`, nano-reach passes for
+//	`h`'s TARGET, the ward has `builder`, `h`'s static-mask copy has bit 20, and
+//	`h`'s target is not me. Then: `h` is `MobileBuild`, `BuildingBuild` or
+//	`VTOL_MobileBuild` and has a target → spawn `VTOL_HelpBuild` on that target;
+//	else (`h` has bit 9 and a target) or (`h` has bit 10) → spawn `h`'s own
+//	descriptor, substituting the air twin for `RepairUnit`, `Reclaim`,
+//	`ReclaimUnit` and `HelpBuild`, with `h`'s target and goal. Either spawn
+//	releases the payload and inserts at the head; any other `h` falls to the
+//	orbit.
+//
+// The air leg differs from the ground one ([04 R-UNIT-06 §1] leg 4) in three
+// ways that matter. `VTOL_MobileBuild` is in the first arm, so an air builder
+// guarding an air builder joins as a helper rather than copying the build
+// record. The helper is the air descriptor, not the ground one. And the whole
+// leg is behind nano-reach on `h`'s target, whose first term is that the target
+// exists: a ward still flying to a site it has not stamped has a targetless
+// head, fails the gate, and the guard orbits until the nanoframe exists.
+//
+// Running the ground arms for an air guard (the defect this replaces) copied a
+// ward's `VTOL_MobileBuild` record through the goal-bit arm. The copy carries
+// the target and goal only — zero parameters, so no product — and its
+// placement phase could resolve no definition.
+//
+// It reports whether it spawned; the caller clears the gate and waits.
+func vtolFollowCopyWork(u *units.Unit, n *Node, ward *units.Unit, tick uint32) bool {
+	if !canRepairGuard(u) || !canRepairGuard(ward) || !wardHasBuildOrder(ward) || !rulesOfUnit(u).AllowAutomaticRepair(u, tick) {
+		return false
+	}
+	wq := QueueForUnit(ward)
+	if wq == nil || len(wq.primary) == 0 {
+		return false
+	}
+	head := wq.primary[0]
+	if head == nil || head.ID == 0 || head.Target == u.Handle {
+		return false
+	}
+	if !nanoReach(u, liveUnitByHandle(u, head.Target)) {
+		return false
+	}
+	spawnID := ID(0)
+	switch {
+	case head.ID == rowMobileBuild || head.ID == rowBuildingBuild || head.ID == rowVTOLMobileBuild:
+		// Nano-reach has already established the target.
+		spawnID = rowVTOLHelpBuild
+	case head.StaticGate&staticTargetObserver != 0 && head.Target != 0,
+		head.StaticGate&staticGoalObserver != 0:
+		switch head.ID {
+		case rowRepairUnit:
+			spawnID = rowVTOLRepairUnit
+		case rowReclaim:
+			spawnID = rowVTOLReclaim
+		case rowReclaimUnit:
+			spawnID = rowVTOLReclaimUnit
+		case rowHelpBuild:
+			spawnID = rowVTOLHelpBuild
+		default:
+			spawnID = head.ID
+		}
+	}
+	if spawnID == 0 {
+		return false
+	}
+	releaseGoalPayload(u, n)
+	// The spawn has a goal exactly when the ward's record did, as in the ground
+	// leg's copy [04 R-ORD-01 §13].
+	goalSupplied := head.StaticGate&staticGoalObserver != 0
+	QueueForUnit(u).PushHead(spawnID, Node{Owner: u.Handle, Target: head.Target, GoalX: head.GoalX, GoalY: head.GoalY, GoalZ: head.GoalZ, GoalSupplied: goalSupplied, automaticWork: true})
+	return true
 }
 
 // guardAdmit is the ground guard's phase 0 [04 R-ORD-01 §8 points 1 and 2],
