@@ -17,16 +17,51 @@ func legalityTerrain(t *testing.T, w, h int32, height uint8) *Terrain {
 	return &Terrain{CellW: w, CellH: h, SeaLevel: height, Plot: ExpandPlot(attrs, int(w), int(h))}
 }
 
-func TestCheckPlacementBoundsAndHalfOpenRect(t *testing.T) {
+// TestCheckPlacementEntryBoundsByClass locks the building blocker's entry
+// bounds, which are strict on BOTH edges [05 R-ECO-02 §1][08 R-AI-03 §7.1]:
+// with the anchor (x,z) and footprint (fx,fz) in cells the validator requires
+// x >= 1, z >= 1, x + fx < mapWidthCells and z + fz < mapHeightCells, so a
+// building footprint never covers column 0 or row 0 and its last covered
+// column and row are at most width-2 and height-2. The mobile side admits
+// column 0 and row 0 [04 R-COLL-01 §2] and keeps the half-open ceiling this
+// validator has always used; this test used to lock the permissive envelope
+// for buildings too (EC-01).
+func TestCheckPlacementEntryBoundsByClass(t *testing.T) {
 	ter := legalityTerrain(t, 4, 4, 100)
 	extent, _ := NewFootprintExtent(2, 2)
-	inside, _ := NewFootprintRect(NewFootprintAnchor(2, 2), extent)
-	if _, err := ter.CheckPlacement(PlacementQuery{Rect: inside, Yard: []YardCell{0, 0, 0, 0}}); err != nil {
-		t.Fatalf("edge-touching half-open rectangle rejected: %v", err)
+	yard := []YardCell{0, 0, 0, 0}
+
+	// Anchor 1 with the last covered column and row at width-2 is the largest
+	// admitted building rectangle on this map.
+	fits, _ := NewFootprintRect(NewFootprintAnchor(1, 1), extent)
+	if _, err := ter.CheckPlacement(PlacementQuery{Rect: fits, Yard: yard}); err != nil {
+		t.Fatalf("building footprint ending at width-2 rejected: %v", err)
+	}
+	// One cell further out covers the map's last column and row: x + fx == 4
+	// fails the strict x + fx < mapWidthCells.
+	lastRing, _ := NewFootprintRect(NewFootprintAnchor(2, 2), extent)
+	if _, err := ter.CheckPlacement(PlacementQuery{Rect: lastRing, Yard: yard}); err == nil {
+		t.Fatal("building footprint covering the map's last column and row accepted")
+	}
+	// Column 0 and row 0 are unreachable for a building on either axis.
+	for _, anchor := range []FootprintAnchor{NewFootprintAnchor(0, 0), NewFootprintAnchor(0, 1), NewFootprintAnchor(1, 0)} {
+		rect, _ := NewFootprintRect(anchor, extent)
+		if _, err := ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard}); err == nil {
+			t.Fatalf("building footprint anchored at (%d,%d) accepted", anchor.Cell().X, anchor.Cell().Z)
+		}
+	}
+
+	// The mobile class keeps its own envelope: the low edge admits cell 0 and
+	// the ceiling stays half-open.
+	for _, anchor := range []FootprintAnchor{NewFootprintAnchor(0, 0), NewFootprintAnchor(2, 2)} {
+		rect, _ := NewFootprintRect(anchor, extent)
+		if _, err := ter.CheckPlacement(PlacementQuery{Rect: rect, Mobile: true}); err != nil {
+			t.Fatalf("mobile footprint anchored at (%d,%d) rejected: %v", anchor.Cell().X, anchor.Cell().Z, err)
+		}
 	}
 	oob, _ := NewFootprintRect(NewFootprintAnchor(3, 3), extent)
-	if _, err := ter.CheckPlacement(PlacementQuery{Rect: oob, Yard: []YardCell{0, 0, 0, 0}}); err == nil {
-		t.Fatal("rectangle extending beyond map accepted")
+	if _, err := ter.CheckPlacement(PlacementQuery{Rect: oob, Mobile: true}); err == nil {
+		t.Fatal("mobile rectangle extending beyond the map accepted")
 	}
 }
 
@@ -169,9 +204,11 @@ func TestCheckPlacementFeatureYardAndMobileModes(t *testing.T) {
 }
 
 func TestPlacementPreviewAndCommitShareCanonicalResult(t *testing.T) {
-	ter := legalityTerrain(t, 4, 4, 100)
+	// The map is one cell wider and deeper than the rectangle needs: a
+	// building anchor is never column or row 0 [05 R-ECO-02 §1].
+	ter := legalityTerrain(t, 5, 5, 100)
 	extent, _ := NewFootprintExtent(3, 2)
-	rect, _ := NewFootprintRect(NewFootprintAnchor(0, 1), extent)
+	rect, _ := NewFootprintRect(NewFootprintAnchor(1, 1), extent)
 	query := PlacementQuery{Rect: rect, Yard: []YardCell{0x18, 0x18, 0x18, 0x18, 0x18, 0x18}, Rules: PlacementRules{Terrain: true, ProfileResolved: true, MaxSlope: 20, MaxWaterDepth: 255}}
 	preview, err := ter.CheckPlacement(query)
 	if err != nil {

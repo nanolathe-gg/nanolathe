@@ -28,15 +28,18 @@ const (
 
 // Retail damage-kind bytes this package has to name. The full sixteen-value
 // enumeration and its producers live in internal/combat, which imports this
-// package and so cannot be imported back; these three are repeated here
-// because the save boundary and the coarse-label derivation below both need
-// them. Kind 3 is the self-destruct countdown and kind 5 the reclaim /
-// build-complete pulse [06 §12.1]; kind 0 is the scenario/load removal that
-// carries no packet at all.
+// package and so cannot be imported back; these four are repeated here
+// because the save boundary, the coarse-label derivation below and the
+// creator's feature-conversion arm all need them. Kind 3 is the self-destruct
+// countdown and kind 5 the reclaim / build-complete pulse [06 §12.1]; kind 0
+// is the scenario/load removal that carries no packet at all; kind 7 is the
+// feature conversion of [06 R-DMG-01 §12], stored directly rather than
+// through the packet builder.
 const (
-	damageKindNone         uint8 = 0
-	damageKindSelfDestruct uint8 = 3
-	damageKindReclaim      uint8 = 5
+	damageKindNone              uint8 = 0
+	damageKindSelfDestruct      uint8 = 3
+	damageKindReclaim           uint8 = 5
+	damageKindFeatureConversion uint8 = 7
 )
 
 // DeathCauseFromKind derives the coarse label from retail's damage-kind byte.
@@ -1773,6 +1776,35 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 	if alreadyBuilt && def.ActivateWhenBuilt {
 		u.SetActivationEdge(true)
 	}
+	// The second half of the same already-built block, and site 1 of the two
+	// cause-7 writers [06 R-DMG-01 §12]: when the definition carries
+	// `isfeature`, a FINISHED creation stores damage kind 7 directly — not
+	// through the packet builder — and raises the death latch, immediately
+	// after the `activatewhenbuilt` raise above. The unit is therefore a
+	// feature stand-in from the tick it is placed: the ordinary death sweep
+	// resolves cause 7 with severity 0, variant 1 and no `Killed` query, so it
+	// converts into its authored corpse feature with no explosion and no
+	// simulation RNG draw [06 §12.1].
+	//
+	// The gate is the `isfeature` bit ALONE — not health, not the corpse flag,
+	// not whether a corpse feature resolves [06 R-DMG-01 §12]. The other
+	// writer is the build-completion transition, which mirrors this arm
+	// (internal/construction: applyCompletionPosture).
+	//
+	// `alreadyBuilt` is what excludes a nanoframe: a frame creation skips the
+	// block entirely and converts only when completion writes the cause.
+	// Stock content reaches this through mission placement, which creates the
+	// six `isfeature` definitions (the dragon's teeth and the floating forts)
+	// already built [08 R-ENTRY-01 §6].
+	//
+	// Cause 7's credit branch is none and its attacker is not a packet field,
+	// so nothing writes LastDamageSide here [06 §12.1]. MarkDeath is
+	// DestroyBy's body; the pool and already-marked guards it applies are
+	// already established for a slot this call just allocated.
+	if alreadyBuilt && def.IsFeature {
+		u.LastDamageCause = damageKindFeatureConversion
+		MarkDeath(u, DeathKilled, 0) // direct latch, null attacker [06 §12.1]
+	}
 	w.liveCounters[player]++
 	w.createdCounters[player]++
 	if w.OnCreate != nil {
@@ -2024,6 +2056,11 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	if def.ActivateWhenBuilt {
 		u.SetActivationEdge(true)
 	}
+	// The creator's `isfeature` arm above is deliberately NOT mirrored here.
+	// Reconstruction is not a creation: the restore adapter that follows this
+	// call writes the record's own saved damage-kind byte (RetailUnitBase),
+	// so synthesizing cause 7 would overwrite a saved cause and latch a death
+	// the save image does not record.
 	w.liveCounters[player]++
 	w.createdCounters[player]++
 	if w.OnCreate != nil {

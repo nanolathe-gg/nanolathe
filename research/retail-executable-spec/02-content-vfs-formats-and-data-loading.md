@@ -3629,13 +3629,31 @@ them without changing a tick:
 * **OTA `[features]`.** Each record with a non-blank name (blanking rules:
   `[08 R-TRIG-01 §9]`) is resolved by a linear case-insensitive scan of the
   catalog in ordinal order; a miss calls the parser on demand, which appends
-  the definition or dies with the same fatal string. The anchor cell is the
-  authored pixel position converted to a cell for sprite features, and for
-  3-D features the pixel position minus half the footprint (integer division
-  by 2 of `footprintx`/`footprintz`) — then stamped through the shared
-  service with placer nibble 10 `[05 R-FEAT-01 §3]`. The mission pass runs
-  only on canonical terrain and not when a save is being restored
-  `[03 R-TERR-01 §1]`.
+  the definition or dies with the same fatal string. This section's
+  `XPos`/`ZPos` are **cell indices**, not map pixels: nothing on this path
+  divides them by the 16-pixel cell size, unlike `[units]` and `[specials]`
+  `[fmt ota]`. The resolved definition then selects the anchor. A **sprite**
+  definition — one that names a sprite `filename` — anchors at the authored
+  cell verbatim. Any other definition, including one that names neither a
+  sprite nor a model, anchors at `(XPos − footprintx/2, ZPos − footprintz/2)`:
+  the entry is centre-referenced, and the halving is a signed division
+  truncating toward zero of the definition's stored footprint. The in-bounds
+  test is applied to the **subtracted** anchor, so an entry whose authored
+  cell is inside the map can still be rejected, and one authored just past
+  the far edge can be accepted. The surviving anchor is stamped through the
+  shared service with placer nibble 10 `[05 R-FEAT-01 §3]`. The mission pass
+  runs only on canonical terrain and not when a save is being restored
+  `[03 R-TERR-01 §1]`; its place in the loader's per-cell order — before the
+  edge/lava void sweep, which therefore sees the cells this pass writes — is
+  §6.
+
+  The cell reading is corroborated by the authored corpus: across the
+  reference install no `[features]` record exceeds its map's cell dimensions,
+  and several maps spread records over most of the cell grid, which a
+  pixel-to-cell conversion would collapse into a corner of each map. This
+  text previously read "the authored pixel position converted to a cell";
+  no such conversion exists on this path, and the half-footprint subtraction
+  it described applies to the authored cell.
 * Matching is case-insensitive at both sites; the name is the TDF section
   name.
 

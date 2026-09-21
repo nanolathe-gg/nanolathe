@@ -236,10 +236,14 @@ func TestExhaustiveCandidateRejectsRowZeroLikeColumnZero(t *testing.T) {
 			t.Fatalf("exhaustive accepted candidate %d,%d: reason=%v err=%v", tt.x, tt.z, reason, err)
 		}
 	}
-	// Row 0 is rejected only by the exhaustive blocker's entry test; the
-	// scatter helper's bounds test admits it.
-	if _, _, reason, err := validateRetailAICandidate(terrain, pd, 2, 0, false); err != nil || reason != ReasonSuccess {
-		t.Fatalf("scatter rejected row 0: reason=%v err=%v", reason, err)
+	// The scatter helper's own bounds test admits row 0 [08 R-AI-03 §4], but
+	// the candidate then goes to the shared yard-map blocker, whose entry
+	// bounds are strict on both edges [05 R-ECO-02 §1] — so a building
+	// candidate in row 0 is rejected there instead, as blocked rather than as
+	// out of bounds. This assertion used to lock the blocker's missing low
+	// edge (EC-01).
+	if _, _, reason, err := validateRetailAICandidate(terrain, pd, 2, 0, false); err == nil || reason != ReasonBlocked {
+		t.Fatalf("scatter accepted row 0: reason=%v err=%v", reason, err)
 	}
 }
 

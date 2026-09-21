@@ -137,6 +137,25 @@ type Terrain struct {
 	// which is indistinguishable from a genuinely metal-free map and silently
 	// makes every extractor's yield wrong [05 "Terrain metal extraction"].
 	metalSeeded bool
+
+	// The edge/lava void sweep's undo record. voidSwept says the sweep has run
+	// at all, voidSweepLava is the lava rule's selector it ran with, and
+	// voidSweepUndo holds the feature word every converted cell carried before
+	// its conversion. RunMissionFeaturePass is the only reader: it is what
+	// lets the mission file's `[features]` pass see the plot as retail's
+	// loader hands it over, with the sweep still ahead of it
+	// [02 R-MAP-01 §6][03 R-TERR-01 §2].
+	voidSweepUndo []voidSweepUndoEntry
+	voidSwept     bool
+	voidSweepLava bool
+}
+
+// voidSweepUndoEntry is one cell the edge/lava void sweep converted, with the
+// feature word — empty or fringe, the only two words it converts — that the
+// cell held before it [03 R-TERR-01 §2].
+type voidSweepUndoEntry struct {
+	index   int32
+	feature uint16
 }
 
 // StaticObstacleRevision returns the shared movement-facing revision for
@@ -746,6 +765,11 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	// never invalidate it during the battle [03 §3.5][R-P0-18-B §4].
 	t.buildLOSHeightWords()
 	t.stampFeatureAnchors()
+	// The loader's order puts the mission file's own `[features]` pass between
+	// these stamps and the sweep [02 R-MAP-01 §6]. That pass goes through the
+	// feature service, which does not exist yet, so the session runs it through
+	// RunMissionFeaturePass instead — which undoes this sweep around it and
+	// replays it afterwards.
 	t.applyVoidFixup(mh)
 
 	return t, nil
@@ -764,7 +788,8 @@ func PlayInsets(cellW, cellH int32) (playRight, playBottom int32) {
 //
 // It runs once, after the derived floor pair exists (ExpandPlot's
 // deriveFloorPair — rule 5 reads the derived minimum) and after the feature
-// stamp, which is why Load calls it last. Void writes ONE thing and nothing
+// stamp, which is why Load calls it last. RunMissionFeaturePass replays it
+// after the mission file's feature pass, which the loader runs before it. Void writes ONE thing and nothing
 // else: the feature word at bytes 0x08/0x09 becomes 0xFFFD. No height byte, no
 // derived pair, no occupancy word and no flag bit is touched, and the sweep
 // only ever converts cells whose feature word is empty (0xFFFF) or fringe
@@ -809,16 +834,31 @@ func PlayInsets(cellW, cellH int32) (playRight, playBottom int32) {
 // Map-authored void sentinels (0xFFFC, stamped by the feature pass) still load
 // verbatim; only these engine-derived voids are added here.
 func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
+	t.applyVoidSweep(mh != nil && mh.LavaWorld != 0)
+}
+
+// applyVoidSweep is the sweep itself, with the lava rule's selector passed in
+// rather than re-read, so the replay of RunMissionFeaturePass runs the same
+// five rules the load-time sweep ran.
+//
+// Every cell it converts is recorded with the word it held, which is what
+// makes that replay possible: the record is the only way to put the plot back
+// into the state retail's loader hands the mission-file feature pass.
+func (t *Terrain) applyVoidSweep(lava bool) {
 	if t == nil || t.Plot == nil || t.CellW <= 0 || t.CellH <= 0 {
 		return
 	}
 	// Rule 1, play insets [03 R-TERR-01 §2]: Wpix = CellW*16, Hpix = CellH*16.
 	t.PlayRight, t.PlayBottom = PlayInsets(t.CellW, t.CellH)
+	t.voidSwept, t.voidSweepLava = true, lava
+	t.voidSweepUndo = t.voidSweepUndo[:0]
 	// The sweep's one conversion gate, shared by all four rules
 	// [03 R-TERR-01 §2].
-	voidIfConvertible := func(cell *PlotCell) {
+	voidIfConvertible := func(idx int32) {
+		cell := &t.Plot[idx]
 		if f := cell.Feature(); f == PlotFeatureNone || f == PlotFeatureFringe {
 			cell.SetFeature(PlotFeatureVoid)
+			t.voidSweepUndo = append(t.voidSweepUndo, voidSweepUndoEntry{index: idx, feature: f})
 		}
 	}
 	// Rule 2, right columns: (W−2, z) and (W−1, z) for every row
@@ -828,7 +868,7 @@ func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 			if cx < 0 {
 				continue
 			}
-			voidIfConvertible(&t.Plot[cz*t.CellW+cx])
+			voidIfConvertible(cz*t.CellW + cx)
 		}
 	}
 	// Rule 3, north strip: per column, stop at the first row whose
@@ -836,11 +876,11 @@ func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 	// [03 R-TERR-01 §2].
 	for cx := int32(0); cx < t.CellW; cx++ {
 		for cz := int32(0); cz < t.CellH; cz++ {
-			cell := &t.Plot[cz*t.CellW+cx]
-			if cz*16-int32(cell.Height()>>1) >= 0 {
+			idx := cz*t.CellW + cx
+			if cz*16-int32(t.Plot[idx].Height()>>1) >= 0 {
 				break
 			}
-			voidIfConvertible(cell)
+			voidIfConvertible(idx)
 		}
 	}
 	// Rule 4, south strip: per column, walk upward from the bottom row and stop
@@ -858,17 +898,81 @@ func (t *Terrain) applyVoidFixup(mh *content.MapHeader) {
 			if cz*16-int32(cell.Height()>>1) <= t.PlayBottom {
 				break
 			}
-			voidIfConvertible(&t.Plot[(cz-1)*t.CellW+cx])
+			voidIfConvertible((cz-1)*t.CellW + cx)
 		}
 	}
 	// Rule 5, lava flood: derived minimum <= SeaLevel, unsigned byte compare
 	// [03 R-TERR-01 §2].
-	if mh != nil && mh.LavaWorld != 0 {
+	if lava {
 		for i := range t.Plot {
 			// hmin is the derived floor minimum at byte 0x06 [03 R-TERR-01 §1].
 			if t.Plot[i].MinHeight() <= t.SeaLevel {
-				voidIfConvertible(&t.Plot[i])
+				voidIfConvertible(int32(i))
 			}
 		}
+	}
+}
+
+// RunMissionFeaturePass runs the mission file's `[features]` stamps where the
+// loader runs them: after the terrain file's own feature stamps and BEFORE the
+// edge/lava void sweep [02 R-MAP-01 §6] [02 R-MAP-01 §8] [05 R-FEAT-01 §3].
+//
+// Nanolathe cannot put the pass literally inside Load — those stamps go
+// through the feature service, which is composed after the terrain exists — so
+// the sweep is undone around them and replayed afterwards. Both halves of that
+// matter, because the sweep both vetoes and completes the stamps:
+//
+//   - A footprint reaching a cell the sweep has already converted is refused
+//     outright. The dense-pack teardown treats a void word as a sentinel and
+//     returns false, and a failed teardown drops the WHOLE feature, not the
+//     one cell [05 R-FEAT-01 §3 step 3][05 R-FEAT-01 §4]. Seven stock
+//     `[features]` records on three maps were lost this way.
+//   - A fringe cell of a mission feature that lies in the edge strips must
+//     still END void, because the sweep converts fringe as well as empty
+//     [03 R-TERR-01 §2]. Running the pass after a sweep that is never replayed
+//     would leave those cells fringe.
+//
+// The undo is exact: the sweep writes feature words and nothing else, and none
+// of its stop tests reads one, so the replay selects the same cells from the
+// same heights and converts every cell it converted before plus exactly those
+// the stamps added. Cells whose final word changed are handed to the class
+// restamp, since the classifier reads the plot [03 §5.1.2][03 R-LAYER §2].
+//
+// A terrain the sweep never ran on — an authored fixture, a hand-built plot —
+// is left alone: the stamps run and no sweep is invented for it.
+func (t *Terrain) RunMissionFeaturePass(stamp func()) {
+	if t == nil || !t.voidSwept || t.Plot == nil {
+		if stamp != nil {
+			stamp()
+		}
+		return
+	}
+	before := make([]uint16, len(t.Plot))
+	for i := range t.Plot {
+		before[i] = t.Plot[i].Feature()
+	}
+	for _, entry := range t.voidSweepUndo {
+		if entry.index >= 0 && int(entry.index) < len(t.Plot) {
+			t.Plot[entry.index].SetFeature(entry.feature)
+		}
+	}
+	if stamp != nil {
+		stamp()
+	}
+	t.applyVoidSweep(t.voidSweepLava)
+	// The pass runs once per battle, so the fresh record the replay just built
+	// has no second reader; releasing it keeps a flooded lava map from
+	// carrying a cell list for the whole battle.
+	t.voidSweepUndo = nil
+	changed := false
+	for i := range t.Plot {
+		if t.Plot[i].Feature() == before[i] {
+			continue
+		}
+		changed = true
+		t.NoteFootprintRestamp(int32(i)%t.CellW, int32(i)/t.CellW, 1, 1)
+	}
+	if changed {
+		t.BumpStaticObstacleRevision()
 	}
 }

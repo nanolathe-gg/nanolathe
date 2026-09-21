@@ -233,10 +233,26 @@ func (ctx *interpCtx) record(n orders.Node) orders.Node {
 // push queues one front-segment mission-script record on the acting unit's own
 // queue and marks the script as having issued, which is what the postlude's
 // bit-5 clear and tail `MakeSelectable` test [04 §3.6] C12.
+//
+// The insertion carries the QUEUED modifier: "each queuing verb resolves its
+// order through the descriptor registry canonical-name lookup and appends one
+// record in queued mode" [04 §3.6], restated by [04 §3.4] for the spawner's
+// positional verbs. The modifier's one consumer is the producer insertion's
+// caption-pending bit, which a non-queued (Replace) issue arms and a queued
+// (Append / Shift-queue) issue does not [04 R-ORD-01 §13] — so a non-queued
+// push made every mission-script record one-shot-armed, and the first handler
+// visit to run the shared caption clear spoke the `ok` cue on the viewing
+// player's units at the start of every mission with an InitialMission string.
+// Nothing else reads the modifier: the record lands in exactly the same place
+// it landed before, at the tail or behind the active marker.
+//
+// pushSecondary needs no counterpart. The rear-segment insertion has no
+// caption arm at all, so the modifier has no consumer on that path.
 func (ctx *interpCtx) push(id orders.ID, n orders.Node) {
 	if ctx == nil || ctx.unit == nil {
 		return
 	}
+	n.QueuedIssue = true
 	orders.QueueForUnit(ctx.unit).Push(id, ctx.record(n))
 	ctx.queued++
 }

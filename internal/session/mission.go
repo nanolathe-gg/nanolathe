@@ -532,41 +532,16 @@ func battleEntryPlacement(s *Session, m *mission.Mission) error {
 	return nil
 }
 
+// placeFeatures is the campaign path's mission `[features]` pass. The pass
+// itself — the anchor rule, the decode order and the stamp — is
+// stampMissionFeatures, which the skirmish path runs identically: the two
+// battle entries differ in what happens around the pass, never in the pass
+// [02 R-MAP-01 §8][05 R-FEAT-01 §3].
 func placeFeatures(s *Session, m *mission.Mission) error {
-	// Terrain-provided and mission-provided feature records converge on the same
-	// feature stamping service; deterministic load order matters [08 "Placement
-	// and battle entry"]. No RNG draws occur here [I4].
-	if s.World == nil || s.Features == nil {
+	if s == nil {
 		return nil
 	}
-	if m == nil || len(m.Features) == 0 {
-		return nil
-	}
-	// Deterministic source order: terrain features already stamped via world.Load's
-	// ExpandPlot + stampFeatureAnchors into Plot; we now stamp mission-authored
-	// features in decode order (not map iteration) [08 "Placement and battle entry"] [I1][04 §6.2].
-	for _, fp := range m.Features {
-		if !fp.IsPlaced() {
-			continue
-		}
-		name := fp.Name
-		if name == "" {
-			continue
-		}
-		var def *content.FeatureDef
-		if s.Catalog != nil && s.Catalog.Features != nil {
-			def = s.Catalog.Features[content.CanonicalKey(name)]
-		}
-		if def == nil {
-			continue
-		}
-		cx, cz := int(fp.X), int(fp.Z)
-		if cx < 0 || cz < 0 || cx >= int(s.World.CellW) || cz >= int(s.World.CellH) {
-			continue
-		}
-		s.Features.PlaceAt(cx, cz, def)
-	}
-	return nil
+	return stampMissionFeatures(s, m)
 }
 
 func reconstructUnits(s *Session, m *mission.Mission) error {

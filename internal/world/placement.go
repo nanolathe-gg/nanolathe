@@ -619,8 +619,10 @@ type PlacementResult struct {
 
 // CheckPlacement is the one canonical, read-only placement legality function
 // for preview, commit, AI, and factory exits. It checks the typed half-open
-// rectangle before walking cells in row-major order, then applies the gates of
-// the product's CLASS [04 R-P0-08 "class split"]:
+// rectangle against the entry bounds of the product's CLASS — strict on both
+// edges for a building [05 R-ECO-02 §1], the low cell admitted for a mobile
+// product [04 R-COLL-01 §2] — before walking cells in row-major order and
+// applying that same class's gates [04 R-P0-08 "class split"]:
 //
 //   - a building walks its compiled yard bytes and ends on the rectangle
 //     aggregate — one slope span against MaxSlope with no water pair, the
@@ -639,8 +641,37 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	if q.Rect.Width() <= 0 || q.Rect.Depth() <= 0 {
 		return PlacementResult{}, fmt.Errorf("%w: rectangle dimensions %dx%d", ErrInvalidFootprint, q.Rect.Width(), q.Rect.Depth())
 	}
-	if q.Rect.MinX() < 0 || q.Rect.MinZ() < 0 || q.Rect.MaxX() > t.CellW || q.Rect.MaxZ() > t.CellH {
-		return PlacementResult{}, fmt.Errorf("world: placement rectangle [%d,%d)x[%d,%d) out of bounds %dx%d", q.Rect.MinX(), q.Rect.MaxX(), q.Rect.MinZ(), q.Rect.MaxZ(), t.CellW, t.CellH)
+	// Entry bounds, by CLASS. The two sides of the shared validator do not
+	// admit the same rectangle:
+	//
+	//   - the BUILDING blocker is strict on both edges [05 R-ECO-02 §1], and
+	//     the computer player's own copy of the same entry test states it
+	//     identically [08 R-AI-03 §7.1]: with the anchor cell (x,z) and the
+	//     footprint (fx,fz) in cells it requires x >= 1, z >= 1,
+	//     x + fx < mapWidthCells and z + fz < mapHeightCells, all strict. So a
+	//     building footprint can never cover column 0 or row 0, and its last
+	//     covered column and row are at most mapWidth-2 and mapHeight-2. The
+	//     half-open rectangle carries x + fx as MaxX, so the high pair is
+	//     MaxX < CellW and MaxZ < CellH.
+	//   - the MOBILE side rejects only cellX < 0, cellZ < 0 and the upper pair
+	//     [04 R-COLL-01 §2]: column 0 and row 0 are enterable by a mover.
+	//
+	// Retail's mobile upper edge is strict too (cellX + fx >= width rejects for
+	// every non-airborne mode), but its verdict there is the caller's movement
+	// mode — an airborne mover is ACCEPTED off-map — and this validator has no
+	// mode argument to reproduce that with, so the mobile half keeps the
+	// half-open ceiling it has always had.
+	// TODO(question): the mobile half's strict upper edge and its mode-2
+	// off-map acceptance [04 R-COLL-01 §2 steps 1-4] are unmodelled here; what
+	// would settle it is a census of which Nanolathe callers pass an airborne
+	// product to this function and whether the mover commit path needs the
+	// mode verdict rather than an error.
+	class, minCell, maxX, maxZ := "mobile", int32(0), t.CellW, t.CellH
+	if !q.Mobile {
+		class, minCell, maxX, maxZ = "building", 1, t.CellW-1, t.CellH-1
+	}
+	if q.Rect.MinX() < minCell || q.Rect.MinZ() < minCell || q.Rect.MaxX() > maxX || q.Rect.MaxZ() > maxZ {
+		return PlacementResult{}, fmt.Errorf("world: placement rectangle [%d,%d)x[%d,%d) out of bounds %dx%d: the %s entry bounds require anchor >= %d and rectangle end <= %d,%d", q.Rect.MinX(), q.Rect.MaxX(), q.Rect.MinZ(), q.Rect.MaxZ(), t.CellW, t.CellH, class, minCell, maxX, maxZ)
 	}
 	plotArea, err := checkedPlacementArea(t.CellW, t.CellH)
 	if err != nil {

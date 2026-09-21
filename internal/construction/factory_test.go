@@ -239,11 +239,14 @@ func TestFactoryAllocationPreservesAuthoredExitTransform(t *testing.T) {
 }
 
 func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
-	terrain := &world.Terrain{CellW: 2, CellH: 1, Plot: make([]world.PlotCell, 2)}
+	// The site is cell (1,1) on a 3x3 map: a building-class placement never
+	// covers column 0 or row 0, and its last covered column and row are at
+	// most width-2 and height-2 [05 R-ECO-02 §1].
+	terrain := &world.Terrain{CellW: 3, CellH: 3, Plot: make([]world.PlotCell, 9)}
 	for i := range terrain.Plot {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 	}
-	terrain.Plot[0].SetOccupantA(9)
+	terrain.PlotAt(1, 1).SetOccupantA(9)
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{},
 		Movement: map[string]*content.MovementClass{
@@ -256,7 +259,7 @@ func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
 	cat.Units[prod.CanonicalKey] = prod
 	svc := NewService(terrain, cat, nil, nil)
 	extent, _ := world.NewFootprintExtent(1, 1)
-	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(0, 0), extent)
+	rect, _ := world.NewFootprintRect(world.NewFootprintAnchor(1, 1), extent)
 	if _, err := svc.validatePlacement(0, rect, prod, []world.YardCell{0}, false); err == nil {
 		t.Fatal("factory mobile product used building yard path and ignored occupancy")
 	}

@@ -120,7 +120,16 @@ validation rectangle from it.
 `CheckPlacement` is the single legality predicate, and it is **split by product
 class** exactly as retail's shared entry is `[04 R-P0-08]` "class split". It
 validates the rectangle, runs the known-site gate when a viewer record is
-supplied, then walks the rectangle in row-major order. A **building** applies
+supplied, then walks the rectangle in row-major order. **The entry bounds are
+class-split too.** The building blocker is strict on both edges — anchor
+`x >= 1`, `z >= 1` and `x + fx < CellW`, `z + fz < CellH` — so a building
+footprint never covers column 0 or row 0 and its last covered column and row
+are at most `CellW − 2` and `CellH − 2` `[05 R-ECO-02 §1]` `[08 R-AI-03 §7.1]`.
+The mobile side admits column 0 and row 0 and keeps the half-open ceiling
+`[04 R-COLL-01 §2]`; retail's mobile upper edge is strict as well, but its
+off-map verdict there is the caller's movement mode (an airborne mover is
+accepted off-map) and this predicate takes no mode, so that half is left as it
+was and carries a `TODO(question)`. A **building** applies
 its compiled yard bits per cell — structure-yard mark, ground occupancy,
 blocking feature, indestructible feature, geothermal — accumulates the bit-3
 slope and bit-4 height samples, and ends on the rectangle aggregate: one

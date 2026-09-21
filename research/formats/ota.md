@@ -91,8 +91,12 @@ Structure:
 
 ### Coordinates and size
 
-**Established.** `XPos`/`ZPos` are map pixels: X eastward, Z southward
-(see conventions in [README.md](README.md)). The Pass authors `size=7 x 4;`
+**Established.** In `[units]` and `[specials]`, `XPos`/`ZPos` are map pixels:
+X eastward, Z southward (see conventions in [README.md](README.md)).
+**`[features]` is the exception**: there the pair is a **cell** index — a
+16-pixel cell — which the loader uses with no pixel-to-cell conversion
+`[02 R-MAP-01 §8]`. Reading a `[features]` pair as pixels collapses every
+placement into a corner of the map. The Pass authors `size=7 x 4;`
 but its TNT is 3584×1632 pixels, about 7×3.2 in 512-pixel squares. `size`
 is an editor description, not a source of runtime dimensions.
 `YPos` is an integer placement coordinate, scaled like X/Z into 16.16.
@@ -232,12 +236,19 @@ when positive — so `StartPos0` and `StartPos1` collide on index 0, and
 [feature0]
 	{
 	Featurename=WaterAquaOre3;   // feature section name (tdf.md)
-	XPos=362;
-	ZPos=427;
+	XPos=362;                    // CELL index, not a pixel
+	ZPos=427;                    // CELL index, not a pixel
 	}
 ```
 
-These add to the features already embedded in the TNT's cell grid.
+These add to the features already embedded in the TNT's cell grid, and they
+are authored in the same cell units as that grid — the pixel convention of
+`[units]`/`[specials]` does not apply here. Both keys default to `-1`, and a
+negative value is cleared to that sentinel and never placed. The pair is the
+feature's **centre** for every definition that names no sprite `filename`:
+the loader subtracts half the definition's footprint before the bounds test
+and the stamp, so the authored cell is not in general the anchor
+`[02 R-MAP-01 §8]`, `[05 R-FEAT-01 §3]`.
 
 ### `[units]` — placed units (missions)
 

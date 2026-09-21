@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 func p28FactoryLifecycleBinding(u *units.Unit) *cob.CallbackBridge {
@@ -45,11 +46,15 @@ func p28CompletionFixture(t *testing.T, count int) (*Service, *units.Unit, *unit
 	cat.Units[factoryDef.CanonicalKey] = factoryDef
 	cat.Units[productDef.CanonicalKey] = productDef
 	w := newConstructionFixtureWorld(12, cat)
-	fh, err := w.Create(factoryDef, 0, 0, 0, 0)
+	// The fixture stands the factory away from the map edge: a building-class
+	// placement never covers column 0 or row 0 [05 R-ECO-02 §1], and this
+	// product definition is building class (BMCode 0).
+	origin := world.CellToWorld(4)
+	fh, err := w.Create(factoryDef, 0, origin, 0, origin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ph, err := w.Create(productDef, 0, 0, 0, 0)
+	ph, err := w.Create(productDef, 0, origin, 0, origin)
 	if err != nil {
 		t.Fatal(err)
 	}

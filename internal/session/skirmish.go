@@ -939,43 +939,15 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	return nil
 }
 
+// skirmishPlaceFeatures is the skirmish path's mission `[features]` pass. It
+// is the same pass the campaign path runs — one implementation, so the anchor
+// rule and the decode order cannot drift between the two entries
+// [02 R-MAP-01 §8][05 R-FEAT-01 §3].
 func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
-	if s.World == nil || s.Features == nil {
+	if s == nil {
 		return nil
 	}
-	// Deterministic source order: terrain features already stamped via world.Load's
-	// ExpandPlot + stampFeatureAnchors into Plot; we now stamp mission-authored
-	// features in decode order (not map iteration) [08 "Placement and battle entry"] [I1][04 §6.2].
-	// Each placement is tried in order; out-of-range or missing definition silently
-	// fails per pool limits 0x100/0x800/WH*0xD [P1-10][P1-15] without aborting earlier placements.
-	if m == nil || len(m.Features) == 0 {
-		return nil
-	}
-	for _, fp := range m.Features {
-		if !fp.IsPlaced() {
-			continue
-		}
-		name := fp.Name
-		if name == "" {
-			continue
-		}
-		var def *content.FeatureDef
-		if s.Catalog != nil && s.Catalog.Features != nil {
-			def = s.Catalog.Features[content.CanonicalKey(name)]
-		}
-		if def == nil {
-			continue
-		}
-		cx, cz := int(fp.X), int(fp.Z)
-		// Bounds check before stamping; OOB silently skips like retail [P1-15] WH*0xD.
-		if cx < 0 || cz < 0 || cx >= int(s.World.CellW) || cz >= int(s.World.CellH) {
-			continue
-		}
-		// Stamp via service PlaceAt which handles footprint fringe and pool limits [06 §13.1].
-		// No RNG draws here [08 "Placement and battle entry"].
-		s.Features.PlaceAt(cx, cz, def)
-	}
-	return nil
+	return stampMissionFeatures(s, m)
 }
 
 // shuffleEligibleStarts is the start-position walk of [08 "Randomization for
