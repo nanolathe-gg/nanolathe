@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -190,6 +191,51 @@ func battleSurfaceMetal(s *Session) (int32, error) {
 		}
 	}
 	return 0, fmt.Errorf("nanolathe: AI surface-metal binding failed: logical path %s, providers searched [map schema %q, OTA GlobalHeader], expected the selected schema's SurfaceMetal word [08 R-AI-03 §4-A]", s.Mission.TerrainKey, schemaName)
+}
+
+// battleAIProfileName is the single resolution of the `aiprofile` name every
+// battle-entry path shares: the campaign constructor, the skirmish
+// constructor and the save-restore reset all call it so a restored battle
+// runs the same profile record the live session did.
+//
+// `aiprofile` is a `[Schema N]` key, not a `[GlobalHeader]` key, and the
+// executable reads it with the chosen schema current [02 R-MAP-01 §5] row 7;
+// [08 R-CAMP-01 §2] restates it as a schema-branch read and [08 R-AI-01 §12]
+// names the resolution point. Across the reference install's 275 map .ota
+// files no [GlobalHeader] authors the key at all, while 608 of the 635
+// schemas author a non-empty one, so decoding it from the global section
+// returned the accessor default — an empty string — for every stock mission
+// and every stock map, and the fallback made every battle run
+// `ai/default.txt`. That is the same wrong-source defect class as the
+// SurfaceMetal binding above: the campaign maps name `MISSIONS` in their
+// Easy and Medium schemas, whose profile constrains the constructor plan and
+// bans the strategic weapons, and `DEFAULT` in their Hard schemas,
+// and the sea/hover/air skirmish schemas name profiles that reweight whole
+// unit families, so the computer player ignored the authored strategy
+// everywhere.
+//
+// Resolution order, matching Mission.StartingResources for the four
+// starting-resource words of the same row: the selected schema by name, then
+// the map's only schema when the file authors exactly one (both through
+// Mission.SchemaSection), then an authored [GlobalHeader] key but only when
+// it is actually present, kept for a hand-written mission that does author
+// one there. A name that is absent or blank is the established
+// `ai\default.txt` fallback, which is also what the loader applies when the
+// named profile does not resolve to a file [08 R-AI-01 §12]. The authored
+// casing is carried through unchanged; the archive lookup folds case.
+func battleAIProfileName(m *mission.Mission) string {
+	name := ""
+	authored := false
+	if sec := m.SchemaSection(); sec != nil {
+		name, authored = sec.StringValue("aiprofile", "")
+	}
+	if !authored && m != nil && m.OTA != nil && m.OTA.Global != nil {
+		name, _ = m.OTA.Global.StringValue("aiprofile", "")
+	}
+	if strings.TrimSpace(name) == "" {
+		return "default"
+	}
+	return name
 }
 
 // finishBattleEntry performs the tail owned solely by [08 R-ENTRY-01 §8]:

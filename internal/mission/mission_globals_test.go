@@ -130,7 +130,7 @@ func TestMissionGlobalsDefaults(t *testing.T) {
 		t.Fatalf("numplayers is a string slot, empty default [02 map-global keys][08 mission globals] got %q", mg.NumPlayers)
 	}
 	if mg.AIProfile != "" {
-		t.Fatalf("aiprofile empty default [02 map-global keys]; ai\\default.txt fallback happens at profile load [08 planner] got %q", mg.AIProfile)
+		t.Fatalf("aiprofile empty default [02 map-global keys]; the battle name is the SELECTED SCHEMA's string [02 R-MAP-01 §5] got %q", mg.AIProfile)
 	}
 	if mg.Mapping != 0 || mg.LineOfSight != 0 {
 		t.Fatalf("mapping/lineofsight accessor defaults 0 [02 map-global keys] got %d/%d", mg.Mapping, mg.LineOfSight)
@@ -143,6 +143,38 @@ func TestMissionGlobalsDefaults(t *testing.T) {
 	}
 	if mg.UpdateTime != 0 || mg.WinLoseTime != 0 || mg.DisplayTimer != 0 {
 		t.Fatalf("sibling timers i32 default 0 [08 player records] got %d/%d/%d", mg.UpdateTime, mg.WinLoseTime, mg.DisplayTimer)
+	}
+}
+
+// TestMissionGlobalsAIProfileIsNotAGlobalKey locks [02 R-MAP-01 §5] row 7 for
+// the decode side: `aiprofile` is authored inside `[Schema N]`, and the
+// [GlobalHeader] decode cannot see it. No reference map authors the key
+// globally, so a battle-setup consumer that read MissionGlobals.AIProfile got
+// the empty string and ran ai\default.txt everywhere. The schema-side
+// resolution (selected schema, then the file's only schema, then an authored
+// global key) lives with the battle-entry consumer; what this test forbids is
+// the global decode silently standing in for it [08 R-AI-01 §12].
+func TestMissionGlobalsAIProfileIsNotAGlobalKey(t *testing.T) {
+	sec := mustParseGlobalsTDF(t, `[GlobalHeader]
+{
+    missionname=schema-owned profile;
+    [Schema 0]
+    {
+        Type=Network 1;
+        aiprofile=SeaBattle;
+    }
+}
+`)
+	mg := DecodeMissionGlobals(sec)
+	if mg.AIProfile != "" {
+		t.Fatalf("a schema-authored aiprofile must not reach the GlobalHeader decode [02 R-MAP-01 §5]: got %q", mg.AIProfile)
+	}
+	schema := sec.Section("Schema 0")
+	if schema == nil {
+		t.Fatal("fixture lost its [Schema 0] section")
+	}
+	if value, ok := schema.StringValue("aiprofile", ""); !ok || value != "SeaBattle" {
+		t.Fatalf("the schema section owns the key [02 R-MAP-01 §5]: got %q ok=%v", value, ok)
 	}
 }
 

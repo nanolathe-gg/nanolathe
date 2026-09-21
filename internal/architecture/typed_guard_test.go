@@ -624,6 +624,9 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/clock/clock.go func lagThrottleFactor":           {6, "I2 retained multiplayer throttle expression [01 §4.2]"},
 	"internal/clock/clock.go func decodeBox":                   {2, "I2 clock save-box float32 validation [01 §4.2]"},
 
+	"internal/ai/selection.go func energyRaw": {6, "I2 candidate-score energy pressure: the capacity difference and its product at retail's 53-bit working precision, narrowed only by the two named truncations [08 R-P0-05 §3][08 \"Arithmetic and clamping\"]"},
+	"internal/ai/selection.go func metalRaw":  {6, "I2 candidate-score metal pressure: the capacity difference and its product at retail's 53-bit working precision, narrowed only by the two named truncations [08 R-P0-05 §3][08 \"Arithmetic and clamping\"]"},
+
 	"internal/economy/admission.go func settlePure":                   {12, "I2 settlement working precision [05 R-ECO-01 §1][05 R-ECO-01 §5]"},
 	"internal/economy/admission.go func *Service.settleOneResource":   {12, "I2 settlement working precision [05 R-ECO-01 §1][05 R-ECO-01 §5]"},
 	"internal/economy/ledger.go func rebuildCapacityPlayer":           {4, "I2 economy capacity working precision [05 R-ECO-01 §1]"},

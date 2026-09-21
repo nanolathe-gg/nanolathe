@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -65,14 +64,11 @@ func initializeRestoredBattleAI(s *Session, fs vfs.FSOps, m *mission.Mission, se
 	// One profile record is shared by every slot, resolved through the mission's
 	// authored name with the established `ai/default.txt` fallback
 	// [08 R-P0-05 §7] [08 R-AI-01 §12]. A restored battle resolves it exactly as
-	// a fresh one does: the profile is not in the bank either.
-	profileName := "default"
-	if m != nil && m.OTA != nil && m.OTA.Global != nil {
-		if mg := mission.DecodeMissionGlobals(m.OTA.Global); mg != nil && strings.TrimSpace(mg.AIProfile) != "" {
-			profileName = mg.AIProfile
-		}
-	}
-	prof, err := loadSkirmishAIProfile(fs, profileName)
+	// a fresh one does: the profile is not in the bank either. It therefore
+	// goes through the same selected-schema resolution the live session used,
+	// on the restored mission record, so the restored computer player keeps
+	// the profile it was playing [02 R-MAP-01 §5 row 7].
+	prof, err := loadSkirmishAIProfile(fs, battleAIProfileName(m))
 	if err != nil {
 		return err
 	}

@@ -220,3 +220,71 @@ func TestPostBattleEndingAdmission(t *testing.T) {
 		})
 	}
 }
+
+// TestPostBattleGlamourSoundPlaysAtFadeDone locks results state 6's three
+// instants [08 R-CAMP-01 §6]: the glamour sound plays ONCE the moment the fade
+// reports done — the stream's own two-second delay is why it is armed there
+// [03 R-AUD-02 §1] — while the one-second deadline the same instant sets gates
+// INPUT acceptance alone, and the `Click to continue.` prompt is five further
+// seconds after that deadline.
+func TestPostBattleGlamourSoundPlaysAtFadeDone(t *testing.T) {
+	c := NewPostBattleController(frame.ResultView{Ended: true, Kind: "victory"}, PostBattleConfig{
+		Kind: PostBattleCampaign, MissionIndex: 1, HasNext: true, CampaignCDOK: true,
+		ProgressCommitted: true,
+		Glamour:           "bitmaps/glamour/arm01.pcx", GlamourLoaded: true,
+		GlamourSound: "glamour01",
+	})
+	now := stepUntil(t, c, 0, PostBattleOutcome)
+	c.Step(now, false) // state 5 opens the glamour fade
+	now++
+	for range 4 {
+		c.Step(now, false)
+		now++
+	}
+	if n := countPostBattleEffect(c, PostBattleEffectGlamourSound); n != 0 {
+		t.Fatalf("the glamour sound played %d times during the fade, want 0", n)
+	}
+
+	done := now
+	if !c.GlamourFadeDone(done) {
+		t.Fatal("glamour fade completion refused")
+	}
+	if n := countPostBattleEffect(c, PostBattleEffectGlamourSound); n != 1 {
+		t.Fatalf("the glamour sound played %d times at fade completion, want exactly 1 [08 R-CAMP-01 §6]", n)
+	}
+
+	// Input acceptance, and only it, waits for the deadline; the comparison is
+	// strict, so the deadline unit itself is still refused.
+	c.Step(done+30, false)
+	if c.Handle(PostBattleControlKey, done+30) {
+		t.Fatal("input admitted at the one-second deadline")
+	}
+
+	// The prompt is five further seconds after the deadline.
+	for at := done + 31; at < done+180; at++ {
+		c.Step(at, false)
+	}
+	if n := countPostBattleEffect(c, PostBattleEffectStatPrompt); n != 0 {
+		t.Fatalf("the prompt was drawn before done+180 (%d times)", n)
+	}
+	c.Step(done+180, false)
+	if n := countPostBattleEffect(c, PostBattleEffectStatPrompt); n != 1 {
+		t.Fatalf("the prompt was drawn %d times at done+180, want 1", n)
+	}
+	if n := countPostBattleEffect(c, PostBattleEffectGlamourSound); n != 1 {
+		t.Fatalf("the glamour sound played %d times in all, want once per results pass", n)
+	}
+	if !c.Handle(PostBattleControlKey, done+181) {
+		t.Fatal("input refused past the deadline")
+	}
+}
+
+func countPostBattleEffect(c *PostBattleController, kind PostBattleEffectKind) int {
+	n := 0
+	for _, e := range c.Effects() {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
+}

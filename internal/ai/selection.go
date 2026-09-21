@@ -8,14 +8,17 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
-// TODO(T23): the AI resource-score expressions (energyRaw/metalRaw) are
-// float32 temporaries per I2. Doc 08 bounds the residual as platform class:
-// narrowing to float32 at every helper invocation boundary is established, and
-// only the control-word edge beyond those points is unknown
-// [08 "What remains not established"]. This file therefore evaluates the named
-// energyRaw and metalRaw expressions in float32 and narrows at the shown
-// truncations [08 "Established AI-facing data and rooted planner"]
-// [PLAN 11 C6] [INVARIANTS I2].
+// The AI resource-score expressions (energyRaw/metalRaw) carry their
+// difference and their product at the 53-bit working precision retail runs
+// with, and narrow only at the two truncations the formula names: the
+// capacity's truncation to an integer before the clamp, and the single
+// truncation of the scaled difference [08 R-P0-05 §3]. The working precision
+// is Established, not a platform residual: the C runtime installs 53-bit
+// precision control at startup, nothing reachable from the simulation writes
+// that field again, and the truncating helper touches only rounding control
+// [08 "Arithmetic and clamping"][08 "What remains not established"][01 §8]
+// [01 R-DET-01 §3]. The inputs and the multipliers stay single precision;
+// only the difference and the product are wider [INVARIANTS I2].
 
 // Candidate is the selected build target [PLAN 11 Public API].
 type Candidate struct {
@@ -93,9 +96,9 @@ func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 	}
 }
 
-// energyRaw computes the energyRaw term exactly as written [PLAN 11 C6] [08 "Established AI-facing data and rooted planner"].
-// Evaluate in float32, trunc toward zero [01 §8] [INVARIANTS I3]; the x87
-// control-word residual is the file-level platform-residual marker.
+// energyRaw computes the energyRaw term exactly as written:
+// trunc(max(0, (min(trunc(energyCapacity), 1000) - currentEnergy) * 0.125))
+// [08 R-P0-05 §3].
 func energyRaw(in ScoreInputs) int32 {
 	// The capacity is truncated toward zero to an INTEGER before the clamp, and
 	// the clamped integer is converted back to a float for the subtraction; the
@@ -106,12 +109,19 @@ func energyRaw(in ScoreInputs) int32 {
 	if cappedUnits > 1000 {
 		cappedUnits = 1000 // [08 R-P0-05 §3] min(trunc(cap),1000)
 	}
-	diff := float32(cappedUnits) - in.CurEnergy // float32
-	scaled := diff * float32(0.125)             // float32
+	// The difference and the product stay at the 53-bit working precision;
+	// that capacity truncation above and the single truncation below are the
+	// only narrowing steps in the expression [08 R-P0-05 §3]
+	// [08 "Arithmetic and clamping"][I2]. The multiplier keeps the single
+	// precision retail's operand has. Each result is wrapped in an explicit
+	// conversion so no backend can fuse the subtraction and the multiply into
+	// one rounding [I1].
+	diff := float64(float64(cappedUnits) - float64(in.CurEnergy))
+	scaled := float64(diff * float64(float32(0.125)))
 	if scaled < 0 {
-		scaled = 0
+		scaled = 0 // max(0, ·) in floating point, before the truncation
 	}
-	raw := numeric.TruncateFloat32ToLow32(scaled) // trunc toward zero [01 §8] [INVARIANTS I3]
+	raw := numeric.TruncateFloat64ToLow32(scaled) // trunc toward zero [01 §8] [INVARIANTS I3]
 	if in.NetEnergy < 1 {
 		raw += 20
 	}
@@ -123,19 +133,23 @@ func energyRaw(in ScoreInputs) int32 {
 	return raw
 }
 
-// metalRaw computes the metalRaw term exactly as written [PLAN 11 C6] [08].
+// metalRaw computes the metalRaw term exactly as written:
+// trunc(max(0, (min(trunc(metalCapacity), 500) - currentMetal) * 0.25))
+// [08 R-P0-05 §3].
 func metalRaw(in ScoreInputs) int32 {
-	// Same truncate-then-clamp order as energyRaw [08 R-P0-05 §3][I3].
+	// Same truncate-then-clamp order, same two narrowing steps and the same
+	// fusion guard as energyRaw [08 R-P0-05 §3][08 "Arithmetic and clamping"]
+	// [I1][I2][I3].
 	cappedUnits := numeric.TruncateFloat32ToLow32(in.CapMetal)
 	if cappedUnits > 500 {
 		cappedUnits = 500 // [08 R-P0-05 §3] min(trunc(cap),500)
 	}
-	diff := float32(cappedUnits) - in.CurMetal
-	scaled := diff * float32(0.25)
+	diff := float64(float64(cappedUnits) - float64(in.CurMetal))
+	scaled := float64(diff * float64(float32(0.25)))
 	if scaled < 0 {
 		scaled = 0
 	}
-	raw := numeric.TruncateFloat32ToLow32(scaled)
+	raw := numeric.TruncateFloat64ToLow32(scaled)
 	if in.NetMetal < 1 {
 		raw += 20
 	}

@@ -492,42 +492,64 @@ func TestSelectPreservesAuthoredBuildMenuOrder(t *testing.T) {
 	}
 }
 
-// TestFloat32Narrowing locks that energyRaw/metalRaw are evaluated in float32 with truncation, not float64 narrowing [PLAN 11 C6] [INVARIANTS I2].
-// Mirrors economy admission float32 fixture.
-func TestFloat32Narrowing(t *testing.T) {
-	// Deterministic divergence: cap 1000 cur 480.00003 (bits 43f00001) yields float32 trunc 65 vs float64 trunc 64 [INVARIANTS I2] [PLAN 11 C6].
-	// Found via brute that cap - cur in float32 rounds to 520.0 exactly while float64 gives 519.999969 => scaled 65 vs 64.999 -> trunc 65 vs 64.
-	curF32 := math.Float32frombits(0x43f00001) // 480.0000305175781
-	capF32 := float32(1000)
-	in := ScoreInputs{CurEnergy: curF32, CapEnergy: capF32, NetEnergy: 5, ProdEnergy: 300, CurMetal: 500, CapMetal: 500, NetMetal: 5, ProdMetal: 10}
-	f32val := energyRaw(in)
-	// float64 reference promoted from same float32 values but computed in float64
-	diffF64 := float64(capF32) - float64(curF32)
-	scaledF64 := diffF64 * 0.125
-	if scaledF64 < 0 {
-		scaledF64 = 0
+// narrowedPressure is the float32 evaluation of the pressure expression: the
+// difference and the product both rounded to single precision. It exists only
+// so the two fixtures below can assert that they still distinguish that form
+// from the working-precision one [08 "Arithmetic and clamping"].
+func narrowedPressure(capUnits int32, stock, multiplier float32) int32 {
+	diff := float32(float32(capUnits) - stock)
+	return int32(float32(diff * multiplier))
+}
+
+// TestPressureTermsCarryWorkingPrecision locks that energyRaw and metalRaw
+// carry the capacity difference and the product at the 53-bit working
+// precision retail runs with. The capacity's truncation to an integer and the
+// single truncation of the scaled difference are the only narrowing steps
+// [08 R-P0-05 §3][08 "Arithmetic and clamping"][INVARIANTS I2]. Each fixture
+// is a fractional stock whose single-precision difference rounds up onto an
+// integer boundary that the exact difference stays below, so the two widths
+// differ by one — the divergence that reaches the mix, the candidate score and
+// the cumulative reservoir bound.
+func TestPressureTermsCarryWorkingPrecision(t *testing.T) {
+	// Energy: capacity 1000 against stock 480.0000305…. The exact difference
+	// is 519.9999694…; times 0.125 that is 64.9999961…, truncating to 64. A
+	// single-precision difference rounds to 520 exactly and gives 65.
+	curEnergy := math.Float32frombits(0x43f00001)
+	inEnergy := ScoreInputs{CurEnergy: curEnergy, CapEnergy: 1000, NetEnergy: 5, ProdEnergy: 300, CurMetal: 500, CapMetal: 500, NetMetal: 5, ProdMetal: 10}
+	if got := energyRaw(inEnergy); got != 64 {
+		t.Fatalf("energyRaw = %d, want 64 at working precision [08 R-P0-05 §3]", got)
 	}
-	f64val := int32(scaledF64)
-	// With net>=1 prod>=200 no extra bumps, raw is just trunc
-	if f32val == f64val {
-		t.Fatalf("expected float32 vs float64 divergence but got same %d for cur %v cap %v diffF32 %v diffF64 %v", f32val, curF32, capF32, capF32-curF32, diffF64)
+	if got := narrowedPressure(1000, curEnergy, 0.125); got != 65 {
+		t.Fatalf("energy fixture no longer separates the widths: single-precision form gives %d, want 65", got)
 	}
-	if f32val != 65 {
-		t.Fatalf("float32 energyRaw expected 65 for divergence case, got %d (float64 would be %d)", f32val, f64val)
+
+	// Metal: capacity 500 against stock 128.0000152…, difference
+	// 371.9999847…, times 0.25 is 92.9999961… — 92 wide, 93 narrowed.
+	curMetal := math.Float32frombits(0x43000001)
+	inMetal := ScoreInputs{CurEnergy: 1000, CapEnergy: 1000, NetEnergy: 5, ProdEnergy: 300, CurMetal: curMetal, CapMetal: 500, NetMetal: 5, ProdMetal: 10}
+	if got := metalRaw(inMetal); got != 92 {
+		t.Fatalf("metalRaw = %d, want 92 at working precision [08 R-P0-05 §3]", got)
 	}
-	if f64val != 64 {
-		t.Fatalf("float64 reference expected 64, got %d", f64val)
+	if got := narrowedPressure(500, curMetal, 0.25); got != 93 {
+		t.Fatalf("metal fixture no longer separates the widths: single-precision form gives %d, want 93", got)
 	}
-	t.Logf("float32 narrowing divergence confirmed: cap %v cur bits %08x f32 %d f64 %d", capF32, math.Float32bits(curF32), f32val, f64val)
-	// Additional check: ensure metalRaw also float32
-	in2 := ScoreInputs{CurEnergy: 1000, CapEnergy: 1000, NetEnergy: 2, ProdEnergy: 300, CurMetal: 0, CapMetal: 500, NetMetal: 2, ProdMetal: 10}
-	if got := metalRaw(in2); got != int32(125) {
-		t.Fatalf("metalRaw 500*0.25=125 got %d", got)
+
+	// A fractional capacity loses its fraction before the difference, so the
+	// capacity truncation is a separate narrowing step from the final one
+	// [08 R-P0-05 §3]: capacity 100.9 against stock 92.1 gives 0, not 1.
+	inFractional := ScoreInputs{CurEnergy: 92.1, CapEnergy: 100.9, NetEnergy: 5, ProdEnergy: 300, CurMetal: 500, CapMetal: 500, NetMetal: 5, ProdMetal: 10}
+	if got := energyRaw(inFractional); got != 0 {
+		t.Fatalf("energyRaw with fractional capacity = %d, want 0 (capacity truncates before the clamp) [08 R-P0-05 §3]", got)
 	}
-	// Verify mixed: energyRaw/metalRaw use float32 narrow at trunc
+
+	// Integral stock: both widths agree, and the ladders still apply.
+	inIntegral := ScoreInputs{CurEnergy: 1000, CapEnergy: 1000, NetEnergy: 2, ProdEnergy: 300, CurMetal: 0, CapMetal: 500, NetMetal: 2, ProdMetal: 10}
+	if got := metalRaw(inIntegral); got != 125 {
+		t.Fatalf("metalRaw for 500 x 0.25 = %d, want 125", got)
+	}
 	inStarved := ScoreInputs{CurEnergy: 0, CapEnergy: 1000, NetEnergy: 0, ProdEnergy: 0, CurMetal: 0, CapMetal: 500, NetMetal: 0, ProdMetal: 0}
 	if got := energyRaw(inStarved); got != 245 {
-		t.Fatalf("starved energyRaw via float32 should be 245 got %d", got)
+		t.Fatalf("starved energyRaw = %d, want 245 (125 + 20 + 100) [08 R-P0-05 §3]", got)
 	}
 }
 

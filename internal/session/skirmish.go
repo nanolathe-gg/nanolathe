@@ -771,13 +771,11 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	}
 	var sharedProf *ai.Profile
 	if hasManagerOwner {
-		profileName := "default"
-		if m != nil && m.OTA != nil && m.OTA.Global != nil {
-			if mg := mission.DecodeMissionGlobals(m.OTA.Global); mg != nil && strings.TrimSpace(mg.AIProfile) != "" {
-				profileName = mg.AIProfile
-			}
-		}
-		prof, perr := loadSkirmishAIProfile(fs, profileName)
+		// The `aiprofile` name comes from the SELECTED SCHEMA, not
+		// [GlobalHeader]: a map's Network schemas name the profile that suits
+		// its terrain — SeaBattle, Hover, AirBattle — and no stock .ota
+		// authors a global key [02 R-MAP-01 §5 row 7][08 R-AI-01 §12].
+		prof, perr := loadSkirmishAIProfile(fs, battleAIProfileName(m))
 		if perr != nil {
 			return nil, perr
 		}
@@ -980,6 +978,36 @@ func skirmishPlaceFeatures(s *Session, m *mission.Mission) error {
 	return nil
 }
 
+// shuffleEligibleStarts is the start-position walk of [08 "Randomization for
+// skirmish starts"] [08 R-SKIR-01 §2], over the dense list of eligible slot
+// numbers, on the setup CRT stream.
+//
+// For element k = 1 … count−1 the swap partner is `draw mod k`: the divisor is
+// the element's own index, one for the second element and growing by one after
+// each swap, so the partner is drawn from the prefix BEFORE k and never from k
+// itself. One draw per swap, count−1 draws in total.
+//
+// Correction: this used to divide by `k+1`, which is the textbook Fisher–Yates
+// bound and admits `k` itself as its own partner. The draw count is the same
+// either way, so the defect was not a stream shift — every count and every
+// seed simply produced a different permutation from the same draws, and with
+// two eligible slots the pair stayed put half the time where the traced walk
+// always exchanges them. Dividing by the index instead means no element can
+// stay where it started: the walk produces only cyclic permutations, which is
+// a property the lock test asserts directly.
+//
+// A bound of one still consumes its draw. The CRT sampler takes its draw
+// before the divide at every bound, unlike the simulation sampler, whose
+// signed "below two" test returns zero WITHOUT advancing the stream
+// [01 §7.1][01 §7.2]; the two must not be harmonized, or the first swap here
+// would silently drop a draw and shift everything after it.
+func shuffleEligibleStarts(crt *rng.CRT, order []int) {
+	for k := 1; k < len(order); k++ {
+		r := crt.Uint32n(uint32(k))
+		order[k], order[r] = order[r], order[k]
+	}
+}
+
 func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission) error {
 	if s.Units == nil {
 		return fmt.Errorf("session: missing Units for skirmish battle entry [01 §6.1]")
@@ -1053,23 +1081,16 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	local28 := make([]int, n)
 	copy(local28, eligible)
 	if cfg.Location == 0 {
-		// Location==0 → randomized via CRT Fisher-Yates [P0-04].
+		// Location==0 → randomized via the CRT walk [08 "Randomization for
+		// skirmish starts"].
 		if n < 3 {
 			// Gate: (CRT_rand()*2)/0x8000 unbiased 0/1 ; if 0 skip shuffle [P0-04].
 			gate := (int(crt.Rand()) * 2) / 0x8000
 			if gate != 0 {
-				for j := 1; j < n; j++ {
-					bound := uint32(j + 1)
-					r := crt.Uint32n(bound)
-					local28[j], local28[r] = local28[r], local28[j]
-				}
+				shuffleEligibleStarts(&crt, local28)
 			}
 		} else {
-			for j := 1; j < n; j++ {
-				bound := uint32(j + 1)
-				r := crt.Uint32n(bound)
-				local28[j], local28[r] = local28[r], local28[j]
-			}
+			shuffleEligibleStarts(&crt, local28)
 		}
 	} else {
 		// Location !=0 → identity (no shuffle) [P0-04].

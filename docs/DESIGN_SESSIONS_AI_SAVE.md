@@ -1204,6 +1204,20 @@ subtraction — clamping the float and truncating only the product differs by on
 whenever a capacity carries a fraction, and the difference reaches the reservoir
 draw bound through the score `[08 R-P0-05 §3]` [I3].
 
+That capacity truncation and the single truncation of the scaled difference are
+the **only** narrowing steps: `energyRaw` and `metalRaw` carry their difference
+and their product at the same 53-bit working precision as the class routine's
+first pass, with `float32` inputs and single-precision multipliers, which is how
+the allowlist row reads `[08 R-P0-05 §3]` `[08 "Arithmetic and clamping"]` [I2].
+A single-precision difference rounds onto an integer boundary the exact one
+stays below — capacity 1000 against a stock of 480.0000305 gives 64 wide and 65
+narrowed — and that one count reaches the mix, the score and the reservoir
+bound. The width is Established, not a platform residual: the runtime installs
+53-bit precision control at startup and nothing reachable from the simulation
+writes that field again `[08 "What remains not established"]` `[01 §8]`
+`[01 R-DET-01 §3]`. Both terms wrap the difference and the product in explicit
+conversions so no backend can fuse them into one rounding [I1].
+
 The signed net-energy query reads the live wind scalar and the immutable map
 tidal strength, so a gated recompute observes the current wind rather than a
 copy `[08 R-P0-05 §1]` `[08 R-P0-05 §4]` `[05 R-PROD-01 §1]`
@@ -1601,10 +1615,6 @@ run with the session package in `tools/check` and `tools/check-retail`.
 
 Markers in these packages, one line each.
 
-* `TODO(T23)` in `internal/ai`'s candidate score — the same residual, at the
-  named energy and metal expressions, which are evaluated in single precision
-  and narrowed at the truncations §3.3 C6 shows
-  `[08 "Established AI-facing data and rooted planner"]` [I2].
 * `TODO(T23)` in `internal/session`'s effect-strip flame spawner — a span under
   five world units makes the segment life zero and retail's per-axis divide
   faults on it, so there is no behaviour to clone; the placeholder is the

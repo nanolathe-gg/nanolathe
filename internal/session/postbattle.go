@@ -362,6 +362,15 @@ func (c *PostBattleController) Handle(control PostBattleControl, now uint32) boo
 // advances once per unit until it equals its target, so a six-unit difference
 // takes six units even though the fade table was built with divisor five [08
 // R-CAMP-01 §6].
+//
+// Completion is also when the glamour sound plays: "when the current palette
+// equals the target the fade is done, then the glamour deadline is now + rate
+// (one second). **Once done: play slot 8 (glamour sound) once**; after the
+// deadline, any key press or mouse click populates `ENDMSN.GUI`" [08
+// R-CAMP-01 §6]. Only input acceptance waits for that deadline. The sound used
+// to be emitted on the first unit past it, which delayed the sting by a second
+// on top of the stream's own two [03 R-AUD-02 §1] — the stream carries delay 60
+// precisely because it is armed at fade completion.
 func (c *PostBattleController) GlamourFadeDone(now uint32) bool {
 	if c == nil || c.state != PostBattleGlamour || c.glamourDone {
 		return false
@@ -369,6 +378,10 @@ func (c *PostBattleController) GlamourFadeDone(now uint32) bool {
 	c.glamourDone = true
 	c.glamourDue = now + 30
 	c.glamourPrompt = c.glamourDue + 150
+	if !c.glamourSoundDone {
+		c.emit(PostBattleEffect{Kind: PostBattleEffectGlamourSound, Resource: c.cfg.GlamourSound})
+		c.glamourSoundDone = true
+	}
 	return true
 }
 
@@ -456,12 +469,12 @@ func (c *PostBattleController) Step(now uint32, dialogOpen bool) {
 			c.emit(PostBattleEffect{Kind: PostBattleEffectGlamourFadeStep})
 			return
 		}
+		// The deadline gates INPUT acceptance only — the sound already played at
+		// fade completion (GlamourFadeDone above) [08 R-CAMP-01 §6]. The prompt
+		// is five further seconds after that deadline, so it stays on this side
+		// of the gate.
 		if now <= c.glamourDue {
 			return
-		}
-		if !c.glamourSoundDone {
-			c.emit(PostBattleEffect{Kind: PostBattleEffectGlamourSound, Resource: c.cfg.GlamourSound})
-			c.glamourSoundDone = true
 		}
 		if now >= c.glamourPrompt && !c.promptDone {
 			c.emit(PostBattleEffect{Kind: PostBattleEffectStatPrompt})

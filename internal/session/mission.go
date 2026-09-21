@@ -205,12 +205,14 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	for i := range s.AI {
 		s.AI[i] = nil
 	}
-	mgAI := mission.DecodeMissionGlobals(m.OTA.Global)
-	aiProfileName := mgAI.AIProfile
-	if strings.TrimSpace(aiProfileName) == "" {
-		aiProfileName = "default"
-	}
-	sharedProf, perr := loadCampaignAIProfile(fs, aiProfileName)
+	// The `aiprofile` name comes from the SELECTED SCHEMA, not [GlobalHeader]:
+	// none of the 50 base campaign missions authors a global key, and their
+	// per-difficulty schemas do not all agree — every Medium schema and all
+	// but one Easy schema name `MISSIONS`, while all but one Hard schema name
+	// `DEFAULT`, so the difficulty a mission is started at decides whether the
+	// computer player runs under the campaign restrictions at all
+	// [02 R-MAP-01 §5 row 7][08 R-CAMP-01 §2][08 R-AI-01 §12].
+	sharedProf, perr := loadCampaignAIProfile(fs, battleAIProfileName(m))
 	if perr != nil {
 		return nil, perr
 	}
