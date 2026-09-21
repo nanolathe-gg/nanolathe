@@ -94,6 +94,25 @@ var knownFeatureKeys = map[string]struct{}{
 	"featuredead": {}, "featurereclamate": {}, "featureburnt": {},
 }
 
+// noDrawUnderGrayForcedNames are the four feature section names whose records
+// carry `nodrawundergray` whether or not they author it, compared
+// case-insensitively [02 §5 "Four section names force nodrawundergray"]
+// [05 R-FEAT-01 §1]. They are stored canonically so the comparison is the
+// catalog's one folding rule.
+var noDrawUnderGrayForcedNames = map[string]struct{}{
+	CanonicalKey("DragonsTeeth"):       {},
+	CanonicalKey("DragonsTeeth_Core"):  {},
+	CanonicalKey("Fortification"):      {},
+	CanonicalKey("Fortification_Core"): {},
+}
+
+// forcesNoDrawUnderGray reports whether a feature section name is one of the
+// four the parser forces the flag on for.
+func forcesNoDrawUnderGray(sectionName string) bool {
+	_, forced := noDrawUnderGrayForcedNames[CanonicalKey(sectionName)]
+	return forced
+}
+
 // compileFeatureSection compiles a single feature section into a FeatureDef.
 // It uses typed accessors only from formats/tdf_typed.go [02 §4].
 func compileFeatureSection(section *formats.Section, featureName string, prov Provenance) *FeatureDef {
@@ -198,6 +217,14 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	indestructible := storedFlag(section, "indestructible", false)
 	nodisplayinfo := storedFlag(section, "nodisplayinfo", false)
 	nodrawundergray := storedFlag(section, "nodrawundergray", false)
+	// Four section names force the bit on after the authored flag is stored,
+	// whatever the section authored — the parser ORs it in on a
+	// case-insensitive name match [02 §5 "Four section names force
+	// nodrawundergray"][05 R-FEAT-01 §1]. None of the four stock sections
+	// authors the key, so without this every dragon's-teeth and fortification
+	// wall took the renderer's draw-unconditionally arm instead of the
+	// placer-or-LOS gate.
+	nodrawundergray = nodrawundergray || forcesNoDrawUnderGray(featureName)
 
 	// Successor hops — string default empty [02 "Feature record"] [GAP T14].
 	//

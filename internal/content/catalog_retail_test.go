@@ -62,7 +62,8 @@ func compiledRetailCatalog(t *testing.T) *Catalog {
 // TestCompileRelationships compiles the whole reference install and asserts
 // relationships, never censuses: every unit's weapon links resolve or are
 // empty, feature successors resolve, every side has its 30 anchors, build
-// menus exist with buttons, and the downloadable enforcement fired verbatim.
+// menus exist with buttons, and the downloadable enforcement left the stock
+// corpus untouched (only download-record first products participate).
 func TestCompileRelationships(t *testing.T) {
 	cat := compiledRetailCatalog(t)
 	if err := cat.Validate(); err != nil {
@@ -93,24 +94,37 @@ func TestCompileRelationships(t *testing.T) {
 	if armcom.Buttons[0] != "ARMSOLAR" {
 		t.Fatalf("armcom first button = %q, want ARMSOLAR", armcom.Buttons[0])
 	}
-	// The downloadable enforcement ran and produced verbatim warnings for
-	// every menu-button unit lacking the bit. Spot-check a measured one:
-	// ARMAAP is an ARMADVANCE page button whose FBI omits downloadable=1.
-	found := false
+	// The downloadable enforcement walks only each download record's first
+	// product, never a CANBUILD button name [02 §5] "downloadable
+	// enforcement", [02 R-CAT-01 §8] step 3. Every stock download first
+	// product already authors downloadable=1, so the stock catalog raises no
+	// such warning at all and no menu-button definition is forced. ARMAAP is
+	// an ARMADVANCE page button whose FBI omits downloadable=1: it must stay
+	// clear. Campaign AI candidate selection rejects downloadable definitions
+	// [08 R-P0-05 §3], so forcing the bit here silently empties its build set.
+	const prefix = "Hey!  Somebody forgot to set downloadable=1 for "
 	for _, w := range cat.Warnings {
-		const prefix = "Hey! Somebody forgot to set downloadable=1 for "
-		if !strings.HasPrefix(w, prefix) {
-			t.Fatalf("warning not verbatim: %q", w)
+		if strings.HasPrefix(w, prefix) {
+			t.Errorf("stock catalog raised a downloadable warning; no stock download first product lacks the bit: %q", w)
 		}
-		if w == prefix+"ARMAAP" {
-			found = true
-			if u, ok := cat.Unit("ARMAAP"); ok && !u.Downloadable {
-				t.Fatal("warning issued but the bit was not forced on")
-			}
+		if strings.HasPrefix(w, "Hey! Somebody") {
+			t.Errorf("downloadable warning is not verbatim (two spaces after Hey!): %q", w)
 		}
 	}
-	if !found {
-		t.Fatalf("no downloadable warning for ARMAAP among %d warnings", len(cat.Warnings))
+	if u, ok := cat.Unit("ARMAAP"); !ok {
+		t.Fatal("ARMAAP missing from the stock catalog")
+	} else if u.Downloadable {
+		t.Fatal("ARMAAP was forced downloadable; a CANBUILD button name must not participate in the enforcement [02 R-CAT-01 §8]")
+	}
+	// Census lock: the stock corpus keeps 158 definitions non-downloadable.
+	clear := 0
+	for _, u := range cat.UnitRecords() {
+		if !u.Downloadable {
+			clear++
+		}
+	}
+	if clear != 158 {
+		t.Errorf("non-downloadable stock definitions = %d, want 158 (the authored downloadable=0 census; the enforcement forces none)", clear)
 	}
 }
 

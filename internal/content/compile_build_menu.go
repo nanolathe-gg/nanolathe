@@ -143,21 +143,3 @@ func sortedBuildMenuKeys(pages map[string]*BuildMenuPage) []string {
 	sort.Strings(keys)
 	return keys
 }
-
-// MenuButtonNames returns every distinct button name across all pages in
-// canonical form, sorted (I1). This is the set the downloadable enforcement
-// compares unit names against [02 "Unit record"].
-func MenuButtonNames(pages map[string]*BuildMenuPage) []string {
-	set := make(map[string]struct{})
-	for _, p := range pages {
-		for _, btn := range p.Buttons {
-			set[CanonicalKey(btn)] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}

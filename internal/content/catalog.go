@@ -111,10 +111,17 @@ type Catalog struct {
 	Movement map[string]*MovementClass // key = CanonicalKey(class Name) [02 "Movement class record"]
 	Sides    []*SideDef                // index = SIDE ordinal [02 §6] C8
 	Sounds   map[string]*SoundCategory // key = CanonicalKey(category name) [02 "Sound category record"]
-	Maps     map[string]*MapHeader     // key = CanonicalKey(basename) [02 "Map files"]
-	LOS      *LOSTables                // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
-	Sight    *SightShapes              // compiled anims/vismask*.gaf sight shapes [03 §3.2]
-	Meteor   *MeteorDefaults           // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
+	// SoundCategoryOrder preserves gamedata/sound.tdf section order. It is the
+	// ordinal domain of the `soundcategory` fallback — index 0 is the first
+	// authored section — which the name-keyed map above cannot express
+	// [02 §5 "Cross-reference failure policy"][02 R-CAT-01 §5]. Like AliasOrder
+	// it is a presentation-side ordering of definitions already hashed by name,
+	// so it contributes no bytes of its own to Catalog.Hash.
+	SoundCategoryOrder []*SoundCategory
+	Maps               map[string]*MapHeader // key = CanonicalKey(basename) [02 "Map files"]
+	LOS                *LOSTables            // compiled gamedata/los.tdf [02 §6] C15 [PLAN_02]
+	Sight              *SightShapes          // compiled anims/vismask*.gaf sight shapes [03 §3.2]
+	Meteor             *MeteorDefaults       // compiled gamedata/meteor.tdf [02 §6] C15 [PLAN_02]
 
 	// AIProfiles holds ai/*.txt profiles (10 in retail, incl default.txt) [08 "Computer-controlled players"].
 	// Not in the minimal PLAN_02 Public API snippet but discovery is part of WU-02-6 and consumed by phase 11.
@@ -142,8 +149,9 @@ type Catalog struct {
 	AliasOrder []*SoundAlias
 
 	// Warnings collects non-fatal load diagnostics verbatim, e.g. the
-	// downloadable enforcement's "Hey! Somebody forgot to set
-	// downloadable=1 for %s" [02 "Unit record"]. The caller owns display.
+	// downloadable enforcement's "Hey!  Somebody forgot to set
+	// downloadable=1 for %s" (two spaces after "Hey!") [02 §5]
+	// [02 R-CAT-01 §8]. The caller owns display.
 	Warnings []string
 
 	Manifest string // vfs.ManifestHash() [PLAN 02]
@@ -260,8 +268,10 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 		return nil, err
 	}
 	var sounds map[string]*SoundCategory
+	var soundOrder []*SoundCategory
 	if soundData != nil {
 		sounds = soundData.Categories
+		soundOrder = soundData.CategoryOrder
 	}
 	if sounds == nil {
 		sounds = make(map[string]*SoundCategory)
@@ -309,17 +319,19 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 	// Feature successors already linked inside CompileFeatures via LinkFeatureSuccessors [GAP T14] C9.
 	// Build menus [02 "Build-menu catalog keys"]: the pages live in
 	// gamedata/sidedata.tdf next to the sides. They must exist before the
-	// downloadable enforcement, which walks their button names after all unit
-	// definitions are compiled [02 "Unit record"].
+	// download-menu compiler, which appends generated buttons to them and runs
+	// the downloadable enforcement over the download records [02 R-CAT-01 §8].
 	report.Report(FamilyBattleTables, 100)
 	buildMenus, err := CompileBuildMenus(fs)
 	if err != nil {
 		return nil, err
 	}
-	warnings := catalogUnitWarnings(units, nil)
-	warnings = append(warnings, unitResult.warnings...)
+	// The downloadable enforcement is NOT run over build-menu button names:
+	// retail compares only each download record's first product [02 §5]
+	// "downloadable enforcement", [02 R-CAT-01 §8] step 3. It runs below,
+	// inside applyDownloadRecordMenus.
+	warnings := append([]string(nil), unitResult.warnings...)
 	warnings = append(warnings, mapWarnings...)
-	warnings = append(warnings, enforceDownloadableRecords(records, MenuButtonNames(buildMenus))...)
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelRecordCatalog(records)
@@ -350,6 +362,7 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 		Movement:           movement,
 		Sides:              sides,
 		Sounds:             sounds,
+		SoundCategoryOrder: soundOrder,
 		Maps:               maps,
 		LOS:                losTables,
 		Sight:              sightShapes,
@@ -371,22 +384,6 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 	// independent of map iteration, identical across two runs (I1) [02 §5] C12.
 	c.Hash = catalogHash(c)
 	return c, nil
-}
-
-// catalogUnitWarnings preserves the catalog's two independent unit diagnostics:
-// compatibility collection precedes the build-menu downloadable enforcement
-// [02 R-MALF-01 §5][02 "Unit record"].  Keep this at the assembly seam so a
-// later warning source cannot overwrite either earlier result.
-// catalogUnitWarnings collects the catalog's non-fatal unit diagnostics.
-// Retail also reports dropped incompatible units here; Nanolathe admits every
-// unit definition, so that message has no producer and is retired with the
-// gate (DESIGN_CONTENT_VFS §5 "Unit admission (Nanolathe policy)").
-func catalogUnitWarnings(units map[string]*UnitDef, buildMenus map[string]*BuildMenuPage) []string {
-	var warnings []string
-	if len(buildMenus) > 0 {
-		warnings = append(warnings, EnforceDownloadable(units, MenuButtonNames(buildMenus))...)
-	}
-	return warnings
 }
 
 // DownloadPlacementsForPage returns a copy of the resolved generated-page
@@ -835,6 +832,19 @@ func (c *Catalog) Clone() *Catalog {
 		out.Sounds = make(map[string]*SoundCategory, len(c.Sounds))
 		for k, v := range c.Sounds {
 			out.Sounds[k] = cloneSoundCategory(v)
+		}
+	}
+	// The ordinal domain is rebuilt from the cloned categories so the clone
+	// shares no mutable state, exactly as AliasOrder does below [02 R-CAT-01 §5].
+	if c.SoundCategoryOrder != nil {
+		out.SoundCategoryOrder = make([]*SoundCategory, 0, len(c.SoundCategoryOrder))
+		for _, v := range c.SoundCategoryOrder {
+			if v == nil {
+				continue
+			}
+			if cp, ok := out.Sounds[v.CanonicalKey]; ok {
+				out.SoundCategoryOrder = append(out.SoundCategoryOrder, cp)
+			}
 		}
 	}
 	// Maps deep copy

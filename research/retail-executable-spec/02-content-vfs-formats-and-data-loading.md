@@ -1966,7 +1966,14 @@ to a sample through the mount order of §2 and 13 do not (among them `build`,
 retained-but-unresolved outcome of `[03 §8.3]` and is silent by design, not a
 defect. Separately, 278 unit definitions name a `soundcategory`: 267 resolve
 against the table and 11 do not (`none` six times, plus `core_kbot`,
-`cor_tank` and `core_mex`), and those eleven units are voiceless. Weapon
+`cor_tank` and `core_mex`). Those eleven are **not** voiceless: none of the
+four spellings is numeric, so the failure policy above converts each to
+ordinal 0 and the eleven speak the first authored category's lines —
+`ARM_KBOT` in the reference install, which authors `select`, `ok`, `arrived`,
+`cant`, `underattack` and the countdown slots. An earlier reading of this
+corpus note claimed silence and contradicted both the failure-policy row and
+the `soundcategory`-resolution paragraph of `[R-CAT-01 §5]`; the failure row
+is the direct evidence and is what the loader does. Weapon
 sounds are a different family and are healthy: 198 weapon definitions supply
 62 distinct `soundstart`/`soundhit`/`soundwater` names and all 62 resolve.
 

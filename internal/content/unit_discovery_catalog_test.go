@@ -79,26 +79,33 @@ func TestUnitAdmissionRetailFixtureOrderUnchanged(t *testing.T) {
 	}
 }
 
-func TestCatalogUnitWarningsRetainBuildMenuDiagnostics(t *testing.T) {
-	units := map[string]*UnitDef{
-		"new": {UnitName: "NEW"},
-	}
+func TestDownloadableEnforcementIgnoresBuildMenuButtons(t *testing.T) {
+	// [02 §5] "downloadable enforcement" / [02 R-CAT-01 §8] step 3: ONLY the
+	// first item's product name of each download record participates. A
+	// CANBUILD button name never does, so a menu-only unit that authors
+	// downloadable=0 must stay clear and warn nothing.
+	menuOnly := &UnitDef{DefinitionHeader: DefinitionHeader{CanonicalKey: "menuonly"}, UnitName: "MENUONLY"}
+	downloaded := &UnitDef{DefinitionHeader: DefinitionHeader{CanonicalKey: "downloaded"}, UnitName: "DOWNLOADED"}
+	builder := &UnitDef{DefinitionHeader: DefinitionHeader{CanonicalKey: "builder"}, UnitName: "BUILDER", Builder: true}
+	records := []*UnitDef{builder, downloaded, menuOnly}
+	units := map[string]*UnitDef{"builder": builder, "downloaded": downloaded, "menuonly": menuOnly}
 	menus := map[string]*BuildMenuPage{
-		"builder": {Builder: "BUILDER", Buttons: []string{"new"}, BaseButtonCount: 1},
+		"builder": {DefinitionHeader: DefinitionHeader{CanonicalKey: "builder"}, Builder: "BUILDER", Buttons: []string{"MENUONLY"}, BaseButtonCount: 1},
 	}
-	warnings := catalogUnitWarnings(units, menus)
-	want := []string{
-		"Hey! Somebody forgot to set downloadable=1 for NEW",
+	placements := []DownloadMenuPlacement{
+		{Builder: "BUILDER", Menu: 1, Button: 1, Product: "DOWNLOADED", BuilderResolved: true, ProductResolved: true},
 	}
-	if len(warnings) != len(want) {
+
+	warnings := applyDownloadRecordMenus(records, units, menus, placements)
+
+	want := []string{"Hey!  Somebody forgot to set downloadable=1 for DOWNLOADED"}
+	if len(warnings) != len(want) || warnings[0] != want[0] {
 		t.Fatalf("warnings = %q, want %q", warnings, want)
 	}
-	for i := range want {
-		if warnings[i] != want[i] {
-			t.Fatalf("warning %d = %q, want %q", i, warnings[i], want[i])
-		}
+	if !downloaded.Downloadable {
+		t.Fatal("download record first product did not have downloadable forced on")
 	}
-	if !units["new"].Downloadable {
-		t.Fatal("build-menu warning did not enforce downloadable on its unit")
+	if menuOnly.Downloadable {
+		t.Fatal("a CANBUILD button name forced downloadable; only download-record first products may [02 R-CAT-01 §8]")
 	}
 }

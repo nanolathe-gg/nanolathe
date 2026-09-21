@@ -1024,28 +1024,27 @@ func applyMovementFootprintRecords(records []*UnitDef, movement map[string]*Move
 	}
 }
 
-// EnforceDownloadable walks every unit definition and compares its name case-insensitively
-// against every build-menu button name. A match whose downloadable bit is clear raises the
-// exact warning "Hey! Somebody forgot to set downloadable=1 for %s" once, silently forces
-// the bit on, and re-finalizes the record [02 "Unit record"] C10.
-// buildMenuNames are canonical button names (case-insensitive comparison via CanonicalKey).
+// enforceDownloadableRecords is the downloadable enforcement [02 §5]
+// "downloadable enforcement", [02 R-CAT-01 §8] step 3: after build-menu
+// compilation, ONLY the first item's product name of each download-menu record
+// is compared case-insensitively with a definition's unitname. A match whose
+// downloadable bit is clear has the bit set and the verbatim text formatted
+// (retail formats it into a stack buffer it never displays; we collect it on
+// Catalog.Warnings instead and let the caller own display). No CANBUILD button
+// name participates — build menus are not walked here.
 //
-// The warnings are returned verbatim in unit-key order instead of printed:
-// Compile routes them onto Catalog.Warnings so the caller owns diagnostics.
-// Each fixed unit is re-hashed through writeUnitCanonical; the catalog-level
-// hash is recomputed by the caller afterwards.
-func EnforceDownloadable(units map[string]*UnitDef, buildMenuNames []string) []string {
-	return enforceDownloadableRecords(unitMapRecords(units), buildMenuNames)
-}
-
-func enforceDownloadableRecords(records []*UnitDef, buildMenuNames []string) []string {
-	if records == nil || len(buildMenuNames) == 0 {
+// firstProducts are the download records' first product names; comparison is
+// case-insensitive via CanonicalKey. Each fixed unit is re-hashed through
+// writeUnitCanonical; the catalog-level hash is recomputed by the caller.
+func enforceDownloadableRecords(records []*UnitDef, firstProducts []string) []string {
+	if records == nil || len(firstProducts) == 0 {
 		return nil
 	}
-	// Canonicalize build menu names for case-insensitive comparison [02 "Unit record"].
-	menuSet := make(map[string]struct{}, len(buildMenuNames))
-	for _, n := range buildMenuNames {
-		menuSet[CanonicalKey(n)] = struct{}{}
+	// Canonicalize the download records' first products for case-insensitive
+	// comparison [02 R-CAT-01 §8].
+	productSet := make(map[string]struct{}, len(firstProducts))
+	for _, n := range firstProducts {
+		productSet[CanonicalKey(n)] = struct{}{}
 	}
 	// Deterministic iteration follows retained record order (I1).
 	var warnings []string
@@ -1053,13 +1052,13 @@ func enforceDownloadableRecords(records []*UnitDef, buildMenuNames []string) []s
 		if u.Downloadable {
 			continue
 		}
-		// Compare the unit's canonical UnitName against the menu buttons
-		// case-insensitively [02 "Unit record"] enforcement walk.
-		if _, ok := menuSet[CanonicalKey(u.UnitName)]; !ok {
+		// Compare the unit's canonical UnitName against the download records'
+		// first products, case-insensitively [02 R-CAT-01 §8] step 3.
+		if _, ok := productSet[CanonicalKey(u.UnitName)]; !ok {
 			continue
 		}
-		// Verbatim warning [02 "Unit record"] C10.
-		warnings = append(warnings, fmt.Sprintf("Hey! Somebody forgot to set downloadable=1 for %s", u.UnitName))
+		// Verbatim warning, two spaces after "Hey!" [02 §5][fmt fbi] C10.
+		warnings = append(warnings, fmt.Sprintf("Hey!  Somebody forgot to set downloadable=1 for %s", u.UnitName))
 		u.Downloadable = true
 		u.Hash = HashDefinition(writeUnitCanonical(u))
 	}

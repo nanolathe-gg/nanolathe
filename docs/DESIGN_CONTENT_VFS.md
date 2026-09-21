@@ -159,11 +159,12 @@ executable's own `[02 R-CAT-01 §5]`:
 6. battle tables (`gamedata/los.tdf`, `gamedata/meteor.tdf`) and the authored
    sight shapes `[03 §3.2]`;
 7. link: unit weapon slots resolve against the finished weapon table; build
-   menus compile from the side data and the downloadable enforcement walks
-   their button names; the model catalog is sorted and per-unit model tops and
-   page-count probes are filled `[02 R-CAT-01 §5]` `[02 R-CAT-01 §7]`;
-   generated download pages compile and apply `[02 R-CAT-01 §8]`; unit scripts
-   are resolved;
+   menus compile from the side data; the model catalog is sorted and per-unit
+   model tops and page-count probes are filled `[02 R-CAT-01 §5]`
+   `[02 R-CAT-01 §7]`; generated download pages compile and apply, and the
+   downloadable enforcement walks their records' first products there — never
+   the build menus' button names `[02 R-CAT-01 §8]`; unit scripts are
+   resolved;
 8. the manifest hash is taken from the VFS and `Catalog.Hash` is computed over
    canonical bytes.
 
@@ -490,10 +491,29 @@ keeps an unrelated broken unit from preventing use of the whole install; it
 never substitutes an empty VM. A model miss is fatal, reported
 against the `objects3d\<objectname>.3DO` path.
 
-**C10 — the downloadable enforcement.** A unit reachable from a build menu
-without `downloadable=1` produces the verbatim warning once (§4) and is
-forced; the warning is collected in `Catalog.Warnings` and the caller owns
-display `[02 §5]`.
+**Feature section names that force a flag.** `nodrawundergray` is not only an
+authored key. After the flag is stored, a section whose name matches
+`DragonsTeeth`, `DragonsTeeth_Core`, `Fortification` or `Fortification_Core`
+case-insensitively has the bit ORed on whatever it authored
+`[02 §5 "Four section names force nodrawundergray"]` `[05 R-FEAT-01 §1]`. No
+stock section authors the key, so the name is the only producer of the flag on
+those records, and the forced bit enters the definition hash exactly as an
+authored one would. The consumer is the renderer's feature draw gate: a flagged
+definition draws only for the local player's placer nibble or when one of the
+two footprint corners is currently visible, so a map-placed wall (placer 10) is
+hidden outside current LOS while a player-built wall's corpse keeps drawing for
+its owner `[03 §5.1.5]`.
+
+**C10 — the downloadable enforcement.** Only the **first item's product name
+of each `download/*.tdf` menu record** participates: a definition whose
+`unitname` matches one of those names case-insensitively and whose
+`downloadable` bit is clear has the bit forced on and produces the verbatim
+warning once (§4). No `CANBUILD` build-menu button name participates — build
+menus are not walked by this pass. The warning is collected in
+`Catalog.Warnings` and the caller owns display `[02 §5]`
+"downloadable enforcement", `[02 R-CAT-01 §8]` step 3. On the stock corpus
+every download first product already authors `downloadable=1`, so the pass
+forces nothing and warns never.
 
 **C11 — sound categories.** A category is 24 rows indexed by slot, with slot 0
 an unused sentinel and slots 1–23 the named events. Variants gather as `K`,
@@ -503,6 +523,24 @@ contiguous from 1 and a present-but-empty value still counts
 across categories; they are compiled in here from `[03 §8.3]` and consumed by
 the audio queue. Aliases from `gamedata/allsound.tdf` register in file order,
 capped at 255, with 32-byte names `[02 R-CAT-01 §6]`.
+
+The categories are also retained in `gamedata/sound.tdf` section order as
+`Catalog.SoundCategoryOrder`, because a unit's `soundcategory` is an **ordinal**
+whenever its text names no category: an absent key is index 0, and a present
+value that matches no category name goes through the ordinary C-runtime decimal
+conversion and the result indexes that order — non-numeric text such as `NONE`
+or `CORE_KBOT` converts to 0 and selects the first authored section (`ARM_KBOT`
+in the reference install). There is no placeholder record and a miss is never
+silence; eleven stock definitions take this path
+`[02 §5 "Cross-reference failure policy"]` `[02 R-CAT-01 §5]`.
+`Catalog.ResolveSoundCategory` is the one implementation, and the session's
+audio resolver is its only caller. Retail stores the converted ordinal
+unbounded and `[03 §8.3]` indexes the record table with it, so an ordinal above
+the loaded count reads past the categories; what it then plays is an open
+question marked at the resolver, and until it is settled such an ordinal
+resolves to no category here. Like `AliasOrder`, the order is a presentation-
+side sequencing of definitions the hash already covers by name, so it adds no
+bytes to `Catalog.Hash` (C12).
 
 **C12 — catalog identity.** `Catalog.Hash` is a digest over canonical
 definition bytes including applied defaults and the battle tables. Every map
@@ -601,7 +639,7 @@ character, because a user comparing against retail is comparing strings.
 | `Sub-record - opening '{' not found` | a section header with no body | `[02 §4]` |
 | `End of file - nextblock not zero` | an unclosed section at end of file | `[02 §4]` |
 | `Record "%s" missing from feature files` | a feature's dead, reclaimed or burnt successor names nothing | `[02 §5]` |
-| `Hey! Somebody forgot to set downloadable=1 for %s` | a build-menu-reachable unit without the flag | `[02 §5]` |
+| `Hey!  Somebody forgot to set downloadable=1 for %s` | a download record's first product without the flag (two spaces after `Hey!`) | `[02 §5]`, `[02 R-CAT-01 §8]` |
 | `Can't load GAMEDATA.TDF` | raised by a missing `SIDEDATA.TDF`; the message text is simply misnamed and no file of that name is ever opened | `[02 R-MALF-01 §5]`, SC2 |
 
 Everything Nanolathe raises on its own account follows one shape:

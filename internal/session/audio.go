@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
-	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -65,9 +64,9 @@ func (s *Session) InitAudio(fs vfs.FSOps) {
 }
 
 // audioResolver maps a unit handle to its Category, definition display name
-// and alive flag [03 §8.3] C17. It uses the catalog's Sounds map and the
-// unit's SoundCategory field via content.CanonicalKey [02 §5]. Presentation-
-// only, uses no Sim RNG.
+// and alive flag [03 §8.3] C17. The unit's authored SoundCategory text goes
+// through the catalog's category resolver [02 §5]. Presentation-only, uses no
+// Sim RNG.
 func (s *Session) audioResolver(h pool.Handle) (*audio.Category, string, bool) {
 	if s == nil || s.Catalog == nil || s.Units == nil {
 		return nil, "", false
@@ -76,12 +75,14 @@ func (s *Session) audioResolver(h pool.Handle) (*audio.Category, string, bool) {
 	if u == nil || u.Def == nil {
 		return nil, "", false
 	}
-	ck := content.CanonicalKey(u.Def.SoundCategory)
-	if ck == "" {
-		return nil, u.Def.Name, u.Alive && !u.Dying
-	}
-	sc, ok := s.Catalog.Sounds[ck]
-	if !ok || sc == nil {
+	// A name miss is not silence: the authored text is converted to a category
+	// ordinal, and an absent or non-numeric value lands on the first authored
+	// category [02 §5 "Cross-reference failure policy"][02 R-CAT-01 §5]. Eleven
+	// stock definitions — the Arm and Core dragon's-teeth, fortification and
+	// floating variants plus CORFAST, CORFHLT, CORSPY, CORMEX and CORSENT —
+	// name no category and speak the first category's lines.
+	sc := s.Catalog.ResolveSoundCategory(u.Def.SoundCategory)
+	if sc == nil {
 		return nil, u.Def.Name, u.Alive && !u.Dying
 	}
 	return audio.CategoryFromContent(sc), u.Def.Name, u.Alive && !u.Dying

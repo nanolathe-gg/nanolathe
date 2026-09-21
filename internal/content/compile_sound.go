@@ -193,18 +193,24 @@ func compileSoundCategorySection(section *formats.Section, categoryName string, 
 	return sc
 }
 
-// CompileSoundCategories compiles sound categories from gamedata/sound.tdf
-// [02 "Sound category record"] C11. Each top-level section is one category.
-// It returns a map keyed by CanonicalKey(section name) [02 §5].
-func CompileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
+// compileSoundCategoriesOrdered compiles sound categories from
+// gamedata/sound.tdf [02 "Sound category record"] C11. Each top-level section
+// is one category. It returns them keyed by CanonicalKey(section name) [02 §5]
+// and, in parallel, in the order the effective file authors them, one entry per
+// section. That order is the ordinal domain a unit's `soundcategory` falls back
+// to when its text names no category
+// [02 §5 "Cross-reference failure policy"][02 R-CAT-01 §5], and the name-keyed
+// map cannot express it. The VFS resolves one winning sound.tdf, so "file
+// order" is that single file's section order.
+func compileSoundCategoriesOrdered(fs vfs.FSOps) (map[string]*SoundCategory, []*SoundCategory, error) {
 	if fs == nil {
-		return nil, fmt.Errorf("content: nil VFS")
+		return nil, nil, fmt.Errorf("content: nil VFS")
 	}
 	data, err := fs.ReadFileLimit("gamedata/sound.tdf", 2<<20)
 	if err != nil {
 		// Both sound tables are optional.  Missing sound data leaves the
 		// catalog with no categories [02 "Sound category record"].
-		return map[string]*SoundCategory{}, nil
+		return map[string]*SoundCategory{}, nil, nil
 	}
 	prov := Provenance{}
 	if info, statErr := fs.Stat("gamedata/sound.tdf"); statErr == nil {
@@ -212,9 +218,10 @@ func CompileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, formats.WithTDFContext(fs, err, "gamedata/sound.tdf")
+		return nil, nil, formats.WithTDFContext(fs, err, "gamedata/sound.tdf")
 	}
 	result := make(map[string]*SoundCategory)
+	var ordered []*SoundCategory
 	for _, section := range doc.Root.Sections() {
 		name := trimTDFSemantic(section.OriginalName)
 		if name == "" {
@@ -223,8 +230,9 @@ func CompileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
 		sc := compileSoundCategorySection(section, name, prov)
 		key := CanonicalKey(name)
 		result[key] = sc
+		ordered = append(ordered, sc)
 	}
-	return result, nil
+	return result, ordered, nil
 }
 
 // CompileSoundAliasesOrdered returns the alias map and the same registrations
@@ -302,14 +310,17 @@ func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundA
 // gamedata/sound.tdf and gamedata/allsound.tdf [02 "Sound category record"] [02 "Sound aliases"].
 type SoundData struct {
 	Categories map[string]*SoundCategory
-	Aliases    map[string]*SoundAlias
-	AliasOrder []*SoundAlias
+	// CategoryOrder is gamedata/sound.tdf section order — the ordinal domain
+	// of the `soundcategory` fallback [02 §5][02 R-CAT-01 §5].
+	CategoryOrder []*SoundCategory
+	Aliases       map[string]*SoundAlias
+	AliasOrder    []*SoundAlias
 }
 
 // CompileSounds compiles both sound categories and aliases.
 // Discovery: gamedata/sound.tdf and aliases in gamedata/allsound.tdf [PLAN 02].
 func CompileSounds(fs vfs.FSOps) (*SoundData, error) {
-	cats, err := CompileSoundCategories(fs)
+	cats, catOrder, err := compileSoundCategoriesOrdered(fs)
 	if err != nil {
 		return nil, err
 	}
@@ -317,5 +328,39 @@ func CompileSounds(fs vfs.FSOps) (*SoundData, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SoundData{Categories: cats, Aliases: aliases, AliasOrder: aliasOrder}, nil
+	return &SoundData{Categories: cats, CategoryOrder: catOrder, Aliases: aliases, AliasOrder: aliasOrder}, nil
+}
+
+// ResolveSoundCategory maps a unit definition's authored `soundcategory` text
+// to a compiled category [02 §5 "Cross-reference failure policy"]
+// [02 R-CAT-01 §5]. Established: an absent key resolves to category index 0 —
+// the first section of gamedata/sound.tdf — and a present value is matched
+// case-insensitively against the category names; on a miss the authored text
+// is put through the ordinary C-runtime decimal conversion and the result is
+// used as the ordinal, so non-numeric text (`NONE`, `CORE_KBOT`) is 0 and again
+// selects the first category. There is no muted placeholder record: eleven
+// stock definitions reach this path and speak the first category's lines.
+//
+// An absent key and an authored empty value coincide here: the conversion of
+// empty text is 0, which is also the absent-key index.
+func (c *Catalog) ResolveSoundCategory(authored string) *SoundCategory {
+	if c == nil {
+		return nil
+	}
+	if key := CanonicalKey(authored); key != "" {
+		if sc, ok := c.Sounds[key]; ok && sc != nil {
+			return sc
+		}
+	}
+	ordinal := formats.ParseTDFInteger(authored)
+	if ordinal < 0 || int(ordinal) >= len(c.SoundCategoryOrder) {
+		// TODO(question): retail stores the converted ordinal unbounded and
+		// [03 §8.3] step 1 indexes the record table with it, so an out-of-range
+		// ordinal reads past the loaded categories; nothing establishes what it
+		// then plays. Settled by tracing the category-record indexing for an
+		// ordinal above the loaded count. Until then an out-of-range ordinal
+		// resolves to no category, which is silent.
+		return nil
+	}
+	return c.SoundCategoryOrder[ordinal]
 }
