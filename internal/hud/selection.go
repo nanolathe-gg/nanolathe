@@ -10,9 +10,10 @@ import "github.com/nanolathe-gg/nanolathe/internal/content"
 // range is stable ascending (I1) in every function that walks a slice.
 //
 // Drag selection itself is not here. The committed-frame rectangle walk is
-// internal/client's SnapshotUnitHandlesInRect and the membership writes are the
-// session's HumanSelectionReplace / Toggle / Clear commands, which is the one
-// path a shipped build takes [07 §9] C9.
+// internal/client's SnapshotUnitHandlesInBand, whose band is the two recorded
+// world endpoints projected at test time [07 §9], and the membership writes are
+// the session's HumanSelectionReplace / Toggle / Clear commands, which is the
+// one path a shipped build takes [07 §9] C9.
 
 const (
 	SelectionFlag     uint32 = 0x10       // [07 §9] membership bit

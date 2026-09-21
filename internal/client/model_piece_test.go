@@ -464,7 +464,7 @@ func TestSelectionPickingStable(t *testing.T) {
 	// The production drag picker projects the unit's own X/Z, not a piece
 	// offset, so the far turret never moves the pick.
 	inRect := func(v frame.UnitView) bool {
-		h := SnapshotUnitHandlesInRect(&frame.Frame{Units: []frame.UnitView{v}}, c.cam, rect, 0)
+		h := SnapshotUnitHandlesInBand(&frame.Frame{Units: []frame.UnitView{v}}, c.cam, bandOfRecordRect(rect), 0)
 		return len(h) == 1 && h[0] == v.Slot
 	}
 	if !inRect(view) {

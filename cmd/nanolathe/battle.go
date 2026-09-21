@@ -230,19 +230,40 @@ type battleSession struct {
 	currentUnit        pool.Handle
 }
 
-// factoryBuildDelta retains the signed count [07 R-P0-11 §1] and adds the
-// requested Alt batch of twenty (DESIGN_INTERFACE_HUD_INPUT §5).
-func factoryBuildDelta(modifiers input.Modifiers, rightClick bool) int {
+// countedClickDelta is the signed count the counted build-page producer takes
+// from a click: +1 for a plain left click, +5 for Shift+left, -1 for a plain
+// right click and -5 for Shift+right [07 R-P0-11 §1]. Shift scales the count —
+// it is not a queue mode — and the producer never purges.
+func countedClickDelta(shift, rightClick bool) int {
 	count := 1
-	if modifiers.Alt {
-		count = 20
-	} else if modifiers.Shift {
+	if shift {
 		count = 5
 	}
 	if rightClick {
 		count = -count
 	}
 	return count
+}
+
+// factoryBuildDelta retains the signed count [07 R-P0-11 §1] and adds the
+// requested Alt batch of twenty (DESIGN_INTERFACE_HUD_INPUT §5).
+func factoryBuildDelta(modifiers input.Modifiers, rightClick bool) int {
+	if !modifiers.Alt {
+		return countedClickDelta(modifiers.Shift, rightClick)
+	}
+	count := 20
+	if rightClick {
+		count = -count
+	}
+	return count
+}
+
+// stockpileClickDelta is the same counted producer for a MAKENUKE/MAKEANTI toy.
+// The Alt batch of twenty is deliberately NOT applied here: the divergence in
+// DESIGN_INTERFACE_HUD_INPUT §5 scopes itself out of the stockpile toys, so a
+// stockpile click keeps retail's ±1/±5 [07 R-P0-11 §1].
+func stockpileClickDelta(modifiers input.Modifiers, rightClick bool) int {
+	return countedClickDelta(modifiers.Shift, rightClick)
 }
 
 var clPtr *client.Client

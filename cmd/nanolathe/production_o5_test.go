@@ -96,7 +96,7 @@ func TestBattleCommandsPublishQueueAndShiftOverlay(t *testing.T) {
 	// gadgets [07 R-CAM-01 §14 item 3][07 §6]. DispatchStockpileGadget is the
 	// click body those gadgets reach; it names the unit on the committed
 	// command page, which the selection assertion above pinned.
-	if err := b.DispatchStockpileGadget(true); err != nil {
+	if err := b.DispatchStockpileGadget(1); err != nil {
 		t.Fatalf("stockpile gadget dispatch failed: %v", err)
 	}
 	controller.Step(BattleInputFrame{HeldKeys: []input.Key{input.KeyShift}, Modifiers: BattleModifiers{Shift: true}, Elapsed: 1.0 / 30.0}, nil)

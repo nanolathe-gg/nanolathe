@@ -16,7 +16,10 @@ func TestBattleSelectionDragBridgeMirrorsGestureAndClears(t *testing.T) {
 	}
 	b.battleState().Input = ui.BattleInputState{
 		Latch: input.LatchNormal, DragActive: true,
-		DragStartX: 140, DragStartY: 40, DragEndX: 144, DragEndY: 44,
+		// The box is the two recorded WORLD endpoints projected at draw time
+		// [07 §9 "Drag-rectangle conversion is closed"]. With the zero camera the
+		// projection is the identity, so these are the surface pixels below.
+		DragStartWorldX: 140, DragStartWorldZ: 40, DragEndWorldX: 144, DragEndWorldZ: 44,
 	}
 	b.syncSelectionDrag(cl)
 	// The bridge is intentionally exercised through composition: active drag
@@ -48,8 +51,8 @@ func TestBattleSelectionDragBridgeDrawsInEveryPanelState(t *testing.T) {
 		t.Fatalf("client.New: %v", err)
 	}
 	b.battleState().Input.DragActive = true
-	b.battleState().Input.DragStartX, b.battleState().Input.DragStartY = 140, 40
-	b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = 144, 44
+	b.battleState().Input.DragStartWorldX, b.battleState().Input.DragStartWorldZ = 140, 40
+	b.battleState().Input.DragEndWorldX, b.battleState().Input.DragEndWorldZ = 144, 44
 	for _, offset := range []int8{ui.PanelParked, -1, 1, ui.PanelVisible} {
 		b.battleState().PanelOffset = offset
 		b.syncSelectionDrag(cl)

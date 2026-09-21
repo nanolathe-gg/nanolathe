@@ -103,24 +103,27 @@ type BattleScheduleIntent struct {
 type BattleInputState struct {
 	Latch input.Latch
 
-	DragActive                       bool
-	DragPressClock                   uint32
-	DragStartWorldX, DragStartWorldZ int32
-	DragEndWorldX, DragEndWorldZ     int32
-	DragStartX                       int32
-	DragStartY                       int32
-	DragEndX                         int32
-	DragEndY                         int32
-	HUDCaptured                      bool
-	HUDPressX                        int32
-	HUDPressY                        int32
-	PlaceCaptured                    bool
-	ShiftHeld                        bool
-	ShiftLatchSticky                 bool
-	PointerX                         int32
-	PointerY                         int32
-	PrevMouseX                       float32
-	PrevMouseY                       float32
+	DragActive     bool
+	DragPressClock uint32
+	// A drag records both endpoints as whole three-component WORLD points, and
+	// the band — the tested rectangle and the drawn box alike — is those two
+	// points projected at the moment the band is used [07 §9 "Drag-rectangle
+	// conversion is closed"]. No screen pair is kept: one recorded in the
+	// press-time screen frame slides off the terrain as soon as the camera
+	// moves during the gesture, which is the common case of dragging into the
+	// edge-scroll strip.
+	DragStartWorldX, DragStartWorldY, DragStartWorldZ int32
+	DragEndWorldX, DragEndWorldY, DragEndWorldZ       int32
+	HUDCaptured                                       bool
+	HUDPressX                                         int32
+	HUDPressY                                         int32
+	PlaceCaptured                                     bool
+	ShiftHeld                                         bool
+	ShiftLatchSticky                                  bool
+	PointerX                                          int32
+	PointerY                                          int32
+	PrevMouseX                                        float32
+	PrevMouseY                                        float32
 
 	BuildDef    string
 	BuildFootX  int32

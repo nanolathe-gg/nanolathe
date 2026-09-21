@@ -44,7 +44,7 @@ func TestSelectionPickWorld(t *testing.T) {
 
 	// A rectangle covering the first two, inclusive on both endpoints.
 	rect := NormalizeRect(0, 0, 10, 0) // [07 §9] inclusive shell
-	got := SnapshotUnitHandlesInRect(committed, cam, rect, 0)
+	got := SnapshotUnitHandlesInBand(committed, cam, bandOfRecordRect(rect), 0)
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("handles in 0,0..10,0 = %v, want the first two in ascending slot order", got)
 	}
@@ -52,12 +52,12 @@ func TestSelectionPickWorld(t *testing.T) {
 	// The far endpoint is inclusive: a degenerate rectangle on the third unit
 	// picks it and nothing else.
 	rect2 := NormalizeRect(20, 0, 20, 0)
-	if got := SnapshotUnitHandlesInRect(committed, cam, rect2, 0); len(got) != 1 || got[0] != 3 {
+	if got := SnapshotUnitHandlesInBand(committed, cam, bandOfRecordRect(rect2), 0); len(got) != 1 || got[0] != 3 {
 		t.Fatalf("handles in the degenerate rectangle on the third unit = %v, want [3]", got)
 	}
 
 	// A rectangle between two units admits neither.
-	if got := SnapshotUnitHandlesInRect(committed, cam, NormalizeRect(11, 0, 19, 0), 0); len(got) != 0 {
+	if got := SnapshotUnitHandlesInBand(committed, cam, bandOfRecordRect(NormalizeRect(11, 0, 19, 0)), 0); len(got) != 0 {
 		t.Fatalf("handles between two units = %v, want none", got)
 	}
 }

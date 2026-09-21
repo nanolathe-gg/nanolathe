@@ -180,16 +180,19 @@ func TestInputWorldDragSurvivesMinimapHeldSample(t *testing.T) {
 	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
 	applyPendingBattleCommands(b)
 	b.battleState().Input.DragActive = true
-	b.battleState().Input.DragStartX = 300
-	b.battleState().Input.DragStartY = 200
-	b.battleState().Input.DragEndX = 300
-	b.battleState().Input.DragEndY = 200
+	// A sentinel no ground-resolved endpoint can take: the resolver clamps into
+	// the map, so a negative pair proves the held pass rewrote the moving
+	// endpoint rather than the minimap taking the gesture [07 §9].
+	b.battleState().Input.DragStartWorldX, b.battleState().Input.DragStartWorldZ = -1, -1
+	b.battleState().Input.DragEndWorldX, b.battleState().Input.DragEndWorldZ = -1, -1
 	in := input.NewState()
 	in.Mouse.SetPosition(50, 50)
 	in.Mouse.SetButton(input.MouseButtonLeft, true)
 	in.Mouse.ResetEdges()
 	b.handleInput(in, nil)
-	if !b.battleState().Input.DragActive || b.battleState().Input.DragEndX != 50 || b.minimapCameraCaptured {
+	wantX, _, wantZ := dragEndpointWorld(b.cursorWorld(50, 50))
+	got := b.battleState().Input
+	if !got.DragActive || got.DragEndWorldX != wantX || got.DragEndWorldZ != wantZ || b.minimapCameraCaptured {
 		t.Fatal("minimap stole active world drag")
 	}
 	in.Mouse.SetButton(input.MouseButtonLeft, false)

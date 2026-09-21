@@ -55,14 +55,18 @@ func StockpileGadget(gad gui.Gadget) bool {
 const guiAttribStockpileToy = 0x08
 
 // DispatchStockpileGadget is the click body of a MAKENUKE/MAKEANTI toy: it
-// queues one BUILDWEAPON round on the unit the committed command page names.
-// The alias supplies slot 0 and the session's enqueue guard refuses a slot that
-// holds no `stockpile` weapon [06 §11.1][06 R-WPN-05 §2].
+// adds or subtracts count BUILDWEAPON rounds on the unit the committed command
+// page names. A stockpile toy reaches the same counted producer every other
+// build-page toy does — MAKENUKE/MAKEANTI only route it to the BUILDWEAPON
+// descriptor instead of a build order — so the count is signed (+1/+5/-1/-5)
+// and the producer never purges [07 R-P0-11 §1]. The alias supplies slot 0 and
+// the session's enqueue guard refuses a slot that holds no `stockpile` weapon
+// [06 §11.1][06 R-WPN-05 §2].
 //
 // The order alias is the button's whole behavior — there is no placement, no
 // latch and no hotkey — so the caller needs only to recognise the gadget and
 // call this [07 R-CAM-01 §14 item 3].
-func (b *battleSession) DispatchStockpileGadget(queued bool) error {
+func (b *battleSession) DispatchStockpileGadget(count int) error {
 	f, ok := b.currentSnapshot()
 	if !ok {
 		return fmt.Errorf("nanolathe: stockpile round not dispatched: no committed frame")
@@ -74,7 +78,7 @@ func (b *battleSession) DispatchStockpileGadget(queued bool) error {
 	if unit == 0 {
 		return fmt.Errorf("nanolathe: stockpile round not dispatched: the committed command page names no unit the local player owns")
 	}
-	return b.DispatchStockpile(unit, queued)
+	return b.DispatchStockpile(unit, count)
 }
 
 // enqueueHumanCommand is the only battle-to-session mutation path. The UI
@@ -160,8 +164,8 @@ func (b *battleSession) DispatchCancelProduction(unit pool.Handle) error {
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanCancelProduction, CancelProduction: session.HumanCancelProductionCommand{Unit: unit}})
 }
 
-func (b *battleSession) DispatchStockpile(unit pool.Handle, queued bool) error {
-	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanStockpile, Stockpile: session.HumanStockpileCommand{Unit: unit, Queued: queued}})
+func (b *battleSession) DispatchStockpile(unit pool.Handle, count int) error {
+	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanStockpile, Stockpile: session.HumanStockpileCommand{Unit: unit, Count: count}})
 }
 
 // DispatchBuildPage submits an absolute authored page selected by the

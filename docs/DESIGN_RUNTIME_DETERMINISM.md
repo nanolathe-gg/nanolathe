@@ -336,6 +336,12 @@ rows, the visibility and fog channels, the radar picture, the selection and
 command page, the shake offset, the result, and the scheduler's two speed words
 plus the unit limit. Nothing presents between phases.
 
+**The paused boundary.** A pump with the pause bit set runs no sub-tick, and the
+input queue's only consumer is phase 1. The boundary that drains that queue and
+republishes the committed tick — without advancing the global tick, the
+scheduler anchor, either random stream or any phase — is owned by
+DESIGN_INTERFACE_HUD_INPUT §3.12.
+
 ### 2.6 `internal/frame` — the committed tick-end copy
 
 `Buffer` is two `Frame` slots and an atomic committed index. `BeginWrite`

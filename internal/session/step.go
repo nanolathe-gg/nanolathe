@@ -1146,6 +1146,41 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 	}
 }
 
+// stepPausedInput is the paused-input boundary of
+// docs/DESIGN_INTERFACE_HUD_INPUT.md §3.12. With the pause bit set the budget
+// is not evaluated and no sub-tick runs [01 §4.3], but the host frame — input,
+// click dispatch and the interface — still runs with the options window closed
+// [01 R-PLAT-01 §1 steps 2, 4, 5]. Retail's dispatch writes selection bits and
+// order records at that moment [07 R-CAM-01 §1]; this build routes the same
+// gestures through the input queue, so the queue needs a boundary that drains
+// while the clock stands still, and one that publishes what it changed.
+//
+// It is deliberately not a tick. The global tick, the scheduler anchor and
+// carry, and every phase from 2 to 12 stay where they are; the commands are
+// applied through phase 1's own path with phase 1's own tick argument — the
+// tick that has not run — so the authoritative result is identical to letting
+// the tick run instead. Idle-paused pumps do nothing at all.
+func (s *Session) stepPausedInput() {
+	if s == nil || s.State != StateBattle || s.Clock == nil || !s.Clock.Paused {
+		return
+	}
+	committed := s.Clock.GlobalTick
+	applied := s.applyPausedHumanCommands(committed+1, func() {
+		// Phase 1's leading act, in phase 1's position: the per-tick
+		// big-brother notices are cleared before the drain, so a republication
+		// cannot deliver the last tick's notice a second time and a notice a
+		// drained command raises is delivered exactly once [07 R-CAM-01 §12].
+		s.resetBigBrotherEvents()
+	})
+	if applied == 0 {
+		return
+	}
+	s.publishPausedSnapshot(committed)
+	if s.publicationObserver != nil {
+		s.publicationObserver(s.Snapshot.Current())
+	}
+}
+
 // Step is the single-player tick loop per PLAN_14 C6-C7 [01 §4.2][01 §4.3][01 §4.4].
 // It reads the time source (caller supplies scaledNow = floor(GetTickCount*30/1000) [01 §4.1]),
 // calls clock.AdvanceSP(scaledNow) which short-circuits behind the SP pause gate
@@ -1190,6 +1225,12 @@ func (s *Session) Step(scaledNow int32) {
 		return
 	}
 	ticks := s.Clock.AdvanceSP(scaledNow)
+	if ticks == 0 {
+		// The paused-input boundary stands exactly where the sub-ticks would
+		// have been, so the executor tail below still runs once per pump
+		// [01 R-PLAT-02 §7].
+		s.stepPausedInput()
+	}
 	for i := 0; i < ticks; i++ {
 		if s.State != StateBattle {
 			break // abort or victory transitioned out mid-batch [08] 6->2 or 6->7

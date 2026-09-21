@@ -248,11 +248,17 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 		}
 		return true
 	}
+	// A stockpile toy is a counted producer, not a one-shot: the click's signed
+	// count adds or subtracts rounds and the Shift axis scales it rather than
+	// selecting a queue mode, so a right click subtracts instead of being
+	// swallowed [07 R-P0-11 §1]. The cue is played before the routing, exactly
+	// as the factory-product arm below does, because retail's counted routine
+	// plays it first — a click that changes nothing is still audible.
 	if StockpileGadget(gad) {
-		if !rightClick {
-			if err := b.DispatchStockpileGadget(modifiers.Shift); err != nil {
-				h.dispatchErr = err
-			}
+		delta := stockpileClickDelta(modifiers, rightClick)
+		b.playUICue(nil, countedBuildCue(delta))
+		if err := b.DispatchStockpileGadget(delta); err != nil {
+			h.dispatchErr = err
 		}
 		return true
 	}

@@ -25,6 +25,13 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 	}
 	state := b.battleState()
 	in := state.Input
+	// The drawn box is the same band the release tests: both recorded world
+	// endpoints projected with the camera of this frame, in the surface pixels
+	// the overlay writer draws in [07 §9 "Drag-rectangle conversion is closed"]
+	// (DESIGN_GPU_RENDERER §16.3). Publishing the press-time pointer pixels
+	// instead left the box behind while the camera edge-scrolled or zoomed under
+	// it, and left it disagreeing with the handles the release admitted.
+	box := b.selectionBand(in).Surface
 	// The colour is chosen by the armed latch, not by the fact that a drag is
 	// running: an ordinary selection drag is white (logical entry 15 outer over
 	// entry 0 inner), and only an armed MOBILEBUILD latch takes the validity
@@ -34,10 +41,10 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 	// entry-15 branch unreachable.
 	cl.SetSelectionDrag(client.SelectionDrag{
 		Active:           in.DragActive,
-		StartX:           in.DragStartX,
-		StartY:           in.DragStartY,
-		EndX:             in.DragEndX,
-		EndY:             in.DragEndY,
+		StartX:           box.MinX,
+		StartY:           box.MinY,
+		EndX:             box.MaxX,
+		EndY:             box.MaxY,
 		MobileBuildLatch: in.Latch == input.LatchMobileBuild,
 		// Retail holds this in one interface flags byte, not two: bit 3 of
 		// that byte is the button gate every order-button arm clears, and
@@ -341,22 +348,28 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if mouse.Pressed(input.MouseButtonLeft) && !b.battleState().Input.DragActive {
 		state := &b.battleState().Input
 		state.DragPressClock = b.inputScaledClock()
-		wx, _, wz := b.cursorWorld(mx, my)
-		state.DragStartWorldX, state.DragStartWorldZ = int32(int16(wx.Floor())), int32(int16(wz.Floor()))
-		state.DragEndWorldX, state.DragEndWorldZ = state.DragStartWorldX, state.DragStartWorldZ
-		b.battleState().Input.DragActive = true
-		b.battleState().Input.DragStartX, b.battleState().Input.DragStartY = mx, my
-		b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = mx, my
+		// Both endpoints are whole three-component world points; the height is
+		// kept because the projection shears the vertical coordinate by each
+		// endpoint's OWN height [07 §9 "Drag-rectangle conversion is closed"].
+		state.DragStartWorldX, state.DragStartWorldY, state.DragStartWorldZ = dragEndpointWorld(b.cursorWorld(mx, my))
+		state.DragEndWorldX, state.DragEndWorldY, state.DragEndWorldZ = state.DragStartWorldX, state.DragStartWorldY, state.DragStartWorldZ
+		state.DragActive = true
 	} else if leftHeld && b.battleState().Input.DragActive {
-		wx, _, wz := b.cursorWorld(mx, my)
-		b.battleState().Input.DragEndWorldX, b.battleState().Input.DragEndWorldZ = int32(int16(wx.Floor())), int32(int16(wz.Floor()))
-		b.battleState().Input.DragEndX, b.battleState().Input.DragEndY = mx, my
+		// The moving endpoint follows the pointer: its world point is re-picked
+		// every held pass, and the band is projected from it [07 §9].
+		state := &b.battleState().Input
+		state.DragEndWorldX, state.DragEndWorldY, state.DragEndWorldZ = dragEndpointWorld(b.cursorWorld(mx, my))
 	} else if !leftHeld && b.battleState().Input.DragActive {
 		// The release point was resolved while the drag still selected the
 		// viewport branch. Preserve that region through the click adapter
 		// before retiring the presentation capture [07 R-CAM-01 §11][07 R-CAM-01 §14].
 		defer func() { b.battleState().Input.DragActive = false }()
-		rect := client.NormalizeRect(b.battleState().Input.DragStartX, b.battleState().Input.DragStartY, b.battleState().Input.DragEndX, b.battleState().Input.DragEndY)
+		// The band is the two recorded world endpoints projected with the camera
+		// of this moment, which is the frame the unit points are built in too
+		// [07 §9 "Drag-rectangle conversion is closed"]. The endpoints themselves
+		// are not refreshed here: the click classification below compares the
+		// stored world pair [07 R-CAM-01 §14].
+		band := b.selectionBand(b.battleState().Input)
 		if idleDragIsClick(b.battleState().Input, b.inputScaledClock()) {
 			// Idle viewport release classification [07 R-CAM-01 §14].
 			// Uses the immutable committed-frame picker so fog, radius, strict tie,
@@ -425,14 +438,11 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				}
 			}
 		} else {
-			// The drag rectangle is already in the framebuffer coordinate space
-			// used by the rendered world [03 §2.5][07 §8].
-			shellRect := rect
 			f, ok := b.currentSnapshot()
 			if !ok {
 				return
 			}
-			handles := b.eligibleHandlesInRect(f, shellRect)
+			handles := b.eligibleHandlesInBand(f, band)
 			kind := session.HumanSelectionReplace
 			if additive {
 				kind = session.HumanSelectionToggle

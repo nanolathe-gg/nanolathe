@@ -51,8 +51,8 @@ func TestRectangleSelectionGatesOnEligibility(t *testing.T) {
 
 	// A rectangle covering the whole surface, so membership is decided by the
 	// eligibility filter alone.
-	rect := client.Rect{MinX: -1 << 20, MinY: -1 << 20, MaxX: 1 << 20, MaxY: 1 << 20}
-	got := b.eligibleHandlesInRect(f, rect)
+	band := client.SelectionBand{Record: client.Rect{MinX: -1 << 20, MinY: -1 << 20, MaxX: 1 << 20, MaxY: 1 << 20}}
+	got := b.eligibleHandlesInBand(f, band)
 
 	want := []pool.Handle{1, 5}
 	if len(got) != len(want) {
@@ -65,7 +65,7 @@ func TestRectangleSelectionGatesOnEligibility(t *testing.T) {
 	}
 
 	// An empty rectangle selects nothing rather than everything.
-	if h := b.eligibleHandlesInRect(f, client.Rect{}); len(h) != 0 {
+	if h := b.eligibleHandlesInBand(f, client.SelectionBand{}); len(h) != 0 {
 		t.Fatalf("an empty rectangle selected %v", h)
 	}
 }

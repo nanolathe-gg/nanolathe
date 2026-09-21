@@ -139,7 +139,22 @@ func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 }
 
 // publishSnapshot publishes one immutable frame after every completed sub-tick [PLAN_03 C15].
-func (s *Session) publishSnapshot(tick uint32) {
+func (s *Session) publishSnapshot(tick uint32) { s.publishFrame(tick, false) }
+
+// publishPausedSnapshot replaces the committed view of the tick that already
+// ran, after the paused-input boundary applied commands
+// (docs/DESIGN_INTERFACE_HUD_INPUT.md §3.12). It writes the same fields from
+// the same authoritative state; nothing here is a second publication path.
+//
+// Every per-tick one-shot the frame carries is safe under repetition because
+// its producer is reset at its own commit: the staged presentation events are
+// reset by the previous publication, the big-brother notices by the boundary
+// itself, and the remaining channels — effects, debris, fragments, strips,
+// radar, result, economy, shake — are snapshots of live state that no phase
+// has advanced [03 §1][I6].
+func (s *Session) publishPausedSnapshot(tick uint32) { s.publishFrame(tick, true) }
+
+func (s *Session) publishFrame(tick uint32, paused bool) {
 	if s.publication != nil {
 		s.publication.wrecks.prune(s.Features, tick)
 	}
@@ -901,12 +916,27 @@ func (s *Session) publishSnapshot(tick uint32) {
 		published.Events = published.Events[:0]
 	}
 	s.publishDeveloper(published)
-	if err := s.Snapshot.Publish(tick); err != nil {
+	if err := s.commitFrame(tick, paused); err != nil {
 		panic(fmt.Sprintf("session: committed frame publication failed at tick %d: %v", tick, err))
 	}
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
 	}
+}
+
+// commitFrame closes the pending write. An ordinary publication advances the
+// committed tick; a paused one replaces the committed view of the tick that
+// already ran and therefore must not [01 §4.4][I6]. A paused boundary reached
+// before anything has been published — a session that never ticked and has no
+// opening frame — takes the ordinary path, because there is no committed view
+// of that tick to replace.
+func (s *Session) commitFrame(tick uint32, paused bool) error {
+	if paused {
+		if last, published := s.Snapshot.PublishedTick(); published && last == tick {
+			return s.Snapshot.Republish(tick)
+		}
+	}
+	return s.Snapshot.Publish(tick)
 }
 
 func containsCanonicalProduct(products []string, candidate string) bool {

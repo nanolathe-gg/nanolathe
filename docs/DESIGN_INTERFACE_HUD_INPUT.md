@@ -616,8 +616,16 @@ and `ModalPlacement` centres a modal in the surface width to the right of the
 the live size `[07 R-HUD-05]` `[03 §4.1]`.
 
 **Selection and pages** (`selection.go`, `build.go`). `NormalizeDragRect` and
-`DragRect.Contains` are the rubber band. The drag's membership writes are not
-here: `client.SnapshotUnitHandlesInRect` walks the committed frame and the
+`DragRect.Contains` are the rubber band. The rectangle itself is
+`client.WorldSelectionBand`: both drag endpoints are recorded as whole
+three-component *world* points and converted by the ordinary projection at the
+moment the band is used, each carrying its own half-height shear, exactly as the
+unit points tested against it are `[07 §9]`. One band serves both consumers — it
+is returned in the record space unit points project into and in the surface
+pixels the overlay draws in — so the accepted handles and the drawn box cannot
+disagree, and neither slides off the terrain when the camera scrolls or zooms
+mid-drag. The drag's membership writes are not here:
+`client.SnapshotUnitHandlesInBand` walks the committed frame and the
 session's `HumanSelectionReplace`/`Toggle`/`Clear` commands own the modifier
 truth table, which is the one path a shipped build takes `[07 §9]`.
 `AssignGroup`, `RecallGroup` and `TypeFilterPasses` are the control groups and
@@ -1675,9 +1683,12 @@ is routed through exactly one path, chosen on the **press** edge. In order:
 2. **Right button, anywhere else.** Under `Interface Type 0`, right is
    deselect and cancel only. Under `Interface Type 1`, an idle right-down in
    the viewport issues the contextual order; an armed placement or latch still
-   cancels on right. A factory product button is the one exception, subtracting
-   one or five from the matching tail node (or twenty with the Alt extension
-   in §5). Thus only Type 1's idle viewport
+   cancels on right. A counted build-page button is the one exception — a
+   factory product, or a `MAKENUKE`/`MAKEANTI` stockpile toy, which reaches the
+   same counted producer and only routes to the `BUILDWEAPON` descriptor
+   instead — subtracting one or five from the matching record (twenty for a
+   factory product under the Alt extension in §5, which the stockpile toys are
+   scoped out of). Thus only Type 1's idle viewport
    path queues a right-button order `[07 R-CAM-01 §5]` `[07 §9]` `[04 §3.4]`
    `[07 R-P0-11 §1]`.
 3. **Left press that lands on chrome** takes the HUD capture and records the
@@ -1696,8 +1707,12 @@ is routed through exactly one path, chosen on the **press** edge. In order:
    dispatches the latch and returns to idle unless Shift keeps it
    `[07 R-CAM-01 §14]`.
 6. **Otherwise the idle world drag.** Save the live scaled clock and both
-   ground-resolved whole-world endpoints on press. Held passes update the moving
-   endpoint; release classifies the stored endpoints without refreshing them.
+   ground-resolved whole-world endpoints — three components each, height
+   included — on press. Held passes re-pick the moving endpoint's world point;
+   release classifies the stored endpoints without refreshing them. No screen
+   pair is kept: the band is those two world points projected whenever it is
+   needed, which is what keeps it over the terrain while the camera moves
+   `[07 §9]`.
    A click requires each X/Z displacement strictly below 32 and the current live
    clock strictly below the wrapped press-plus-25 deadline under signed 32-bit
    comparison. Use the clock's wrapped multiply-before-divide arithmetic, not
@@ -1839,8 +1854,9 @@ by a simulation phase, and is not saved [I6].
   terrain record and the art variant selection. The factor drives everything
   that measures the view in world pixels — `EffectiveView`, `clampInsets`,
   `BattleView`, `Drag` and `ScreenToWorld` — because those describe what is on
-  screen. `ScreenToRecord` bridges the two for the hover hull and the drag
-  rectangle, which compare a pointer against corners projected at the step.
+  screen. `ScreenToRecord` bridges the two for the hover hull, which compares a
+  pointer against corners projected at the step; the drag band needs no bridge,
+  because it is projected from world points rather than from pointer pixels.
 * **Arrow-key scroll speed.** Arrow keys apply the existing setting, host-time
   delta and signed cap in screen pixels, then divide by the live zoom before
   moving the camera. Fractional map pixels carry per axis while zoom is steady;
@@ -2377,6 +2393,133 @@ four active factories per owner. Both captures were inspected. These are paced
 host measurements of ordinary battle load, not isolated GPU timing or a claim
 about maximum-size drag latency.
 
+### 3.12 The paused-input boundary
+
+**Retail parity, not a Modern departure.** Nothing here goes through
+`gameplay.Mode`, and Strict 3.1 behaves identically.
+
+While the single-player pause bit is set the battle host pump does not evaluate
+the budget and runs no sub-tick, so the scaled-time anchor stalls and unpausing
+yields the one capped burst `[01 §4.3]`. It still runs the host frame — input,
+click dispatch and the interface — for as long as the in-game options window is
+closed `[01 R-PLAT-01 §1 steps 2, 4, 5]`. In retail that frame *is* the
+mutation: click dispatch enters the order dispatcher and the hotkey row writes
+the per-unit selected bit and the group word, at dispatch time
+`[07 R-CAM-01 §1]`. So a paused retail battle selects, changes build pages and
+accepts orders; only their execution waits for the clock.
+
+This build routes those gestures through the immutable input queue of §3.7,
+whose sole consumer is phase 1 of a sub-tick. With no sub-tick there is no
+consumer, so the queue needs a boundary of its own.
+
+**The boundary.** `Session.stepPausedInput`, called from `Session.Step` in the
+position the sub-tick loop would have occupied — the battle state, the pause bit
+set, zero runnable ticks — so the once-per-pump executor tail still runs after
+it `[01 R-PLAT-02 §7]`. It does three things and nothing else:
+
+1. clears the per-tick big-brother notices, which is phase 1's own leading act;
+2. drains the due, paused-applicable **prefix** of the queue through
+   `applyHumanCommand`, the same path and the same order phase 1 uses;
+3. republishes the committed tick once.
+
+There is no second command path, no host-side predicted selection and no
+presentation write into live units: `cmd/nanolathe` is unchanged, because every
+dispatcher already resolves its actor from the committed frame (§3.7), and the
+republication is what makes that frame current.
+
+With nothing applicable queued the boundary returns without publishing, so an
+idle-paused host loop produces no republication churn.
+
+**The equivalence property.** The commands are applied with the tick they are
+due for — `GlobalTick + 1`, the tick that has not run — not with the committed
+tick. That is the choice that makes every creation stamp, deadline and
+queue-insertion decision the one the unpaused run would have written. Because
+phase 1 is the first mutation of a sub-tick and nothing runs between the paused
+boundary and the resumed tick, applying the prefix at pause time leaves
+authoritative state identical to letting tick `T+1` apply it: the same order
+queues and stamps, the same resources, and the same position in both random
+streams. Exactly-once follows from the queue itself — a drained command is gone
+before the clock resumes.
+
+The published frame keeps the committed tick `T`. The global tick, the scheduler
+anchor and carry, and phases 2 through 12 are untouched.
+
+**Which kinds apply while paused.**
+
+| Kind | Paused | Why |
+|---|---|---|
+| Selection replace / toggle / clear, make-selectable | applied | status-bit writes `[07 §9]` |
+| Group assign, group recall | applied | group word and selection bits `[07 §9]` |
+| Build page | applied | the unit's own page field `[07 §9]` |
+| Order (single and area batch), stop, cancel queued move | applied | queue edits stamped with the due tick `[04 §3.3]` |
+| Mobile build, factory build, cancel production, stockpile | applied | queue edits through the ordinary construction producers |
+| Activation, stance, cloak, self-destruct | applied | one record each, no draw `[04 R-STANCE-01 §2]` |
+| Shift state, big brother, no-shake, gameplay mode | applied | session bookkeeping |
+| Set resource, set logo, give, view, ATM, visibility, double/half shot, meteor **with** an argument | applied | player-row, visibility-mode and toggle writes, no draw |
+| Meteor **without** an argument | **deferred** | enters the storm-arm body: four CRT scheduling draws and a live strike window `[06 §6.5]` |
+| Spawn (Modern) | **deferred** | allocates a unit, which consumes creation draws |
+
+A deferred command is not skipped. The drain **stops** at it and leaves it and
+everything enqueued behind it in place, so enqueue order is exactly the order
+the next real tick applies. Both deferred kinds are chat-console commands, not
+battle input, and deferring them is what keeps the boundary's simplest
+guarantee true: **a paused pump never moves either authoritative random stream
+and never creates a world object**, which is retail's own reading of the pause
+bit — it "suppresses simulation progress" `[07 §11]`.
+
+**Acknowledgement voices need no rule of their own.** The producer insertion
+arms a record's one-shot caption-pending bit; the `ok` voice is emitted by the
+*pump*, when the record is first visited `[04 R-ORD-01 §1]` `[04 R-ORD-01 §13]`.
+No pump runs while paused, so an order issued under pause speaks on the tick it
+is first pumped — exactly when the unpaused run would have spoken.
+
+**What the republication must not repeat.** `frame.Buffer.Republish` replaces
+the committed view of a tick instead of advancing it. Every per-tick one-shot
+the frame carries is reset by its own producer before the boundary runs, which
+is why repetition is impossible rather than merely unlikely:
+
+* **Presentation events** (audio, voice, message-ring lines, effect spawns, the
+  single event cursor) are staged in a window the previous publication reset, so
+  a republication retains only what the drained commands raised — and no applied
+  kind raises any `[03 R-AUD-01 §7]`.
+* **Big-brother notices** (cycle, reset-visited, cancel-follow) are cleared by
+  step 1 above, in phase 1's position, so the last tick's notice cannot be
+  delivered twice and a drained toggle's notice is delivered once
+  `[07 R-CAM-01 §12]`.
+* **The interpolation pair.** The superseded slot holds the *same* tick, so it
+  must not become the previous one: `Republish` leaves the previous pair cleared
+  and `Buffer.Previous` reports nil until the next ordinary publication supplies
+  a real earlier tick. The Enhanced blend therefore holds the current pose
+  instead of blending two copies of one tick, and no snap occurs
+  (DESIGN_GPU_RENDERER §13.5). The paused world raster's digest keys on the
+  committed slot, so each republication invalidates it and the new selection is
+  drawn (DESIGN_GPU_RENDERER §13.10).
+* **Retained channels** — effects, debris, fragments, strips, radar contacts,
+  the result, economy rows, the shake offset — are snapshots of live state that
+  no phase has advanced, so rewriting them writes the same values.
+* **Developer diagnostics** keep their contract: enabling them never forces a
+  publication while paused (DESIGN_DEVELOPER_TOOLS §3.1). A republication the
+  *input* triggered carries the developer view exactly as the next ordinary
+  publication would.
+* **Publication counting** is a sub-tick diagnostic and is not incremented by a
+  paused republication.
+
+**Modality is preserved.** With the options window open the pump skips the host
+frame entirely `[01 R-PLAT-01 §1 step 2]`, and this build matches that by not
+reaching `Session.Step` at all from a modal host frame: input queued before the
+window opened waits until it closes. The diagnostic capture path also pauses and
+snapshots before any drain, so its `pending_human_commands` dump stays coherent.
+
+**Tests.** `internal/session/paused_input_boundary_test.go` locks the tick, both
+random streams, the published selection and command page, the empty-queue
+no-op, the absent interpolation pair, the deferral prefix rule, the one-shot
+audit, and the equivalence property — the last by comparing a
+paused-then-resumed run against an unpaused run with the same script through
+`PartialStateFingerprint`. `cmd/nanolathe/paused_input_host_test.go` locks the
+host half: a mobile build dispatched while paused through the real dispatcher is
+addressed to the unit selected while paused and lands on it exactly once, and an
+open options window drains nothing.
+
 ## 4. Retail behaviour that is not a bug
 
 * **The footer shows the *hovered* unit, never the selected one.** It persists
@@ -2443,8 +2586,11 @@ about maximum-size drag latency.
   and no modifier retains one. The shared product callback uses the held
   modifiers at activation, including a product quickkey. Counts use the existing
   signed queue command, so addition coalesces and subtraction consumes matching
-  queued products normally. Mobile building placement and stockpile toys keep
-  their existing actions. This is host input policy, not a retail behavior claim.
+  queued products normally. Mobile building placement keeps its existing
+  action, and the `MAKENUKE`/`MAKEANTI` stockpile toys are scoped out of the
+  batch: they are counted producers too, but they keep retail's ±1/±5 under
+  every modifier `[07 R-P0-11 §1]`. This is host input policy, not a retail
+  behavior claim.
 
 * **Tab resumes an already paused battle.** As user-requested host policy,
   Tab with no modal open resumes the battle directly; F2 still opens options.
@@ -2596,10 +2742,13 @@ each one.
 * Whether the interface's non-world-click queued issues share that producer. The
   section scopes the test to "every world order the interface issues", and the
   two world-click boundaries are its only callers; the side panel's own buttons
-  — Stop, the activation toggle, stockpile, Ctrl+D, the two stance gadgets —
-  issue no world point, and nothing says whether a Shift-held press of one runs
-  the test, which would make a second Shift-press cancel the first. A trace of
-  those button handlers settles it `[07 R-P0-11 §6]` (same site).
+  — Stop, the activation toggle, Ctrl+D, the two stance gadgets — issue no world
+  point, and nothing says whether a Shift-held press of one runs the test, which
+  would make a second Shift-press cancel the first. A trace of those button
+  handlers settles it `[07 R-P0-11 §6]` (same site). The stockpile toys are no
+  longer among them: §1 establishes that they reach the counted producer, where
+  Shift scales the count and the shift-chain flag does not participate
+  `[07 R-P0-11 §1]`.
 * The user-facing name of the interface-flags bit F4 toggles. No string in the
   image names it. Both of its readers are closed and nothing reads a name, so
   this is a naming curiosity rather than a behavioural gap `[07 §2]`

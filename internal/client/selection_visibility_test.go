@@ -42,7 +42,7 @@ func TestSelectionHandlesInRectVisibility(t *testing.T) {
 	}}
 	x, y := cam.WorldToScreen(frame.Units[0].X, 0, frame.Units[0].Z)
 	r := NormalizeRect(x-camera.OriginX, y-camera.OriginY, x-camera.OriginX, y-camera.OriginY)
-	h := SnapshotUnitHandlesInRect(frame, cam, r, 0)
+	h := SnapshotUnitHandlesInBand(frame, cam, bandOfRecordRect(r), 0)
 	if len(h) != 1 || h[0] != 1 {
 		t.Fatalf("visible handles=%v, want own unit only", h)
 	}

@@ -183,9 +183,16 @@ type HumanMeteorCommand struct {
 	ArgumentPresent bool
 	Enabled         bool
 }
+
+// HumanStockpileCommand is one MAKENUKE/MAKEANTI click. Count is the click's
+// signed count, the same counted producer every build-page toy reaches: +1 for
+// a plain left click, +5 for Shift+left, -1 for a plain right click and -5 for
+// Shift+right [07 R-P0-11 §1]. Shift scales the count; it is not a queue mode,
+// which is why this command carries no queued flag. A zero Count is a caller
+// that named no count and enqueues a single round.
 type HumanStockpileCommand struct {
-	Unit   pool.Handle
-	Queued bool
+	Unit  pool.Handle
+	Count int
 }
 
 // HumanBuildPageCommand selects one authored build page for a selected builder.
@@ -351,6 +358,72 @@ func (s *Session) applyHumanCommands(tick uint32) {
 	for _, c := range cmds {
 		s.applyHumanCommand(c, tick)
 	}
+}
+
+// pausedInputApplicable reports whether a queued command may be applied at the
+// paused-input boundary of DESIGN_INTERFACE_HUD_INPUT §3.12, where no sub-tick
+// runs. A kind is refused here only when applying it would be simulation work
+// rather than input bookkeeping: a random draw on either authoritative stream,
+// or a new world object. Retail's pause "suppresses simulation progress"
+// [07 §11], and both refusals are chat-console commands, not battle input.
+//
+// Refusing is not skipping. The drain stops at the first refused command and
+// leaves it and everything behind it queued, so enqueue order is preserved
+// exactly and the next real tick applies the remainder in sequence.
+func pausedInputApplicable(c HumanCommand) bool {
+	switch c.Kind {
+	case HumanSpawn:
+		// The Modern spawn command allocates a unit, which consumes creation
+		// draws (see spawn_command.go).
+		return false
+	case HumanMeteor:
+		// The argument-free form enters the storm-arm body, which spends four
+		// CRT scheduling draws and starts a strike window [06 §6.5]. The
+		// argument form only writes the enabled bit.
+		return c.Meteor.ArgumentPresent
+	}
+	return true
+}
+
+// applyPausedHumanCommands drains the longest due, paused-applicable PREFIX of
+// the input queue through the same applyHumanCommand path phase 1 uses, and
+// reports how many commands were applied. before runs once, after the prefix
+// has been taken and before the first application, so a caller can reproduce
+// phase 1's own leading work in phase 1's order.
+//
+// tick is the tick the commands are due for — the tick that has not run — so
+// every creation stamp and deadline is the one the unpaused run would have
+// written. Exactly-once follows from the queue: a drained command is gone
+// before the clock resumes, so phase 1 of that tick applies it no second time
+// [01 §4.4].
+func (s *Session) applyPausedHumanCommands(tick uint32, before func()) int {
+	if s == nil {
+		return 0
+	}
+	s.humanMu.Lock()
+	n := 0
+	for n < len(s.pendingHuman) {
+		c := &s.pendingHuman[n]
+		if c.DueTick > tick || !pausedInputApplicable(*c) {
+			break
+		}
+		n++
+	}
+	if n == 0 {
+		s.humanMu.Unlock()
+		return 0
+	}
+	cmds := make([]HumanCommand, n)
+	copy(cmds, s.pendingHuman[:n])
+	s.pendingHuman = append(s.pendingHuman[:0], s.pendingHuman[n:]...)
+	s.humanMu.Unlock()
+	if before != nil {
+		before()
+	}
+	for _, c := range cmds {
+		s.applyHumanCommand(c, tick)
+	}
+	return n
 }
 
 func (s *Session) humanUnit(h pool.Handle) *units.Unit {
@@ -1031,12 +1104,54 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		// only where slot 0 holds a stockpile weapon — so refusing is both safe
 		// and indistinguishable from retail here.
 		const stockpileAliasSlot = 0 // [06 §11.1] the alias's build-type argument
+		// The stockpile toy is a counted producer like every other build-page
+		// toy: the click's signed count adds or subtracts rounds against the
+		// BUILDWEAPON record, and the producer never purges [07 R-P0-11 §1].
+		// A caller that named no count asks for one round.
+		count := c.Stockpile.Count
+		if count == 0 {
+			count = 1
+		}
+		if count < 0 {
+			// Negative count: the scan does not stop at the first match, so
+			// the TAIL-most matching record is consumed first; a record
+			// holding more than the remaining magnitude is subtracted in
+			// place, otherwise it is unlinked and the scan repeats with the
+			// reduced remainder [07 R-P0-11 §1]. CancelTailMost is that step
+			// for a magnitude of one — it decrements a record holding more
+			// than one and unlinks it otherwise — so the loop below reaches
+			// the same state the single scan does. BUILDWEAPON lives on the
+			// REAR segment [04 §3.1], which CancelTailMost searches after the
+			// primary one; the match is the descriptor plus the record's
+			// build-type operand, the only id a BUILDWEAPON record carries.
+			// Nothing matching means nothing changes: the click is already
+			// audible, because the cue precedes the routing.
+			s.bindOrderQueue(u)
+			q := orders.QueueForUnit(u)
+			if q == nil {
+				return
+			}
+			matchRound := func(n orders.Node) bool {
+				return n.ID == id && n.Param1 == uint32(stockpileAliasSlot)
+			}
+			for i := 0; i < -count; i++ {
+				if !q.CancelTailMost(matchRound) {
+					break
+				}
+			}
+			return
+		}
 		if !orders.StockpileSlotAcceptsBuildWeapon(u, stockpileAliasSlot) {
 			return
 		}
 		s.bindOrderQueue(u)
-		n := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, c.Stockpile.Queued)
-		n.Param1, n.Param2 = uint32(stockpileAliasSlot), 1
+		// The queued/non-queued argument is NOT the click's Shift bit: the
+		// world-order shift chain does not participate on the counted path
+		// [07 R-P0-11 §1], and this producer issues no Replace, so it never
+		// purges. The argument is inert for a rear-segment record in any case
+		// — the caption clear is never called for BUILDWEAPON [04 R-ORD-01 §1].
+		n := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
+		n.Param1, n.Param2 = uint32(stockpileAliasSlot), uint32(count)
 		if q := orders.QueueForUnit(u); q != nil {
 			q.CoalesceTail(id, n)
 		}

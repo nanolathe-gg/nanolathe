@@ -110,8 +110,8 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 	// The two are the same space at every rest factor and differ only while the
 	// modern executor's free zoom is in flight, which is what the bridge is for
 	// (DESIGN_GPU_RENDERER §16.4). Surface pixels carry no beam origin, so the
-	// bridge is taken about it, exactly as recordRect takes it for the drag
-	// rectangle: passing the surface point straight to ScreenToRecord, which
+	// bridge is taken about it: passing the surface point straight to
+	// ScreenToRecord, which
 	// expects beam pixels, shifted the pick by the view origin scaled through
 	// the factor, and a click off a rest step selected the wrong unit.
 	sx, sy = recordPoint(cam, sx, sy)
@@ -147,18 +147,61 @@ func PickSnapshotUnit(f *frame.Frame, sx, sy int32, cam *camera.Camera, viewer u
 	return best, bestView, best != 0
 }
 
-// SnapshotUnitHandlesInRect returns visible handles in stable frame order.
-// It does not mutate the frame or any authoritative selection flags.
-func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, viewer uint8) []pool.Handle {
+// SelectionBand is the drag-selection rectangle of [07 §9] "Drag-rectangle
+// conversion is closed", carried in the two spaces its consumers need.
+//
+// Retail records both drag endpoints as whole three-component world points and
+// converts each one by the ordinary projection at the moment the rectangle is
+// tested, so the band and the unit points compared against it are built by the
+// same formula, from the same camera, each carrying its own half-height shear.
+// A band derived instead from the pointer pixels the gesture passed through
+// stays in the press-time screen frame, and any camera movement during the drag
+// — an edge scroll, a held arrow key, a wheel zoom — slides it off the terrain
+// it was drawn over.
+//
+// Record is the band in the space unit positions are projected into
+// (WorldToSurface at the record step); Surface is the same band in the surface
+// pixels of the presented picture, which is where the overlay draws it
+// (DESIGN_GPU_RENDERER §16.3, §16.4). At a rest factor the two are equal.
+type SelectionBand struct {
+	Record  Rect
+	Surface Rect
+}
+
+// WorldSelectionBand converts the two recorded drag endpoints into the band
+// [07 §9]. Each endpoint goes through the ordinary world→surface projection
+// with its own height, exactly as the unit points it will be tested against do,
+// and the two projected corners are then sorted independently per axis.
+func WorldSelectionBand(cam *camera.Camera, ax, ay, az, bx, by, bz numeric.Fixed) SelectionBand {
+	t := NewViewportTransform(cam, 0, 0)
+	pa := t.WorldToSurface(ax, ay, az)
+	pb := t.WorldToSurface(bx, by, bz)
+	sax, say := surfacePoint(cam, pa.X, pa.Y)
+	sbx, sby := surfacePoint(cam, pb.X, pb.Y)
+	return SelectionBand{
+		Record:  NormalizeRect(pa.X, pa.Y, pb.X, pb.Y),
+		Surface: NormalizeRect(sax, say, sbx, sby),
+	}
+}
+
+// SnapshotUnitHandlesInBand walks the committed frame against a band whose
+// corners were already projected from the recorded world endpoints, so no
+// surface→record bridge is applied to them.
+func SnapshotUnitHandlesInBand(f *frame.Frame, cam *camera.Camera, band SelectionBand, viewer uint8) []pool.Handle {
+	return snapshotUnitHandlesInRecordRect(f, cam, band.Record, viewer)
+}
+
+// snapshotUnitHandlesInRecordRect returns visible handles in stable frame
+// order. The rectangle is already in the record space unit positions project
+// into, which is the space WorldSelectionBand converts the drag endpoints to;
+// there is no surface-pixel entry point, because the only rectangle a shipped
+// path tests is that band. It does not mutate the frame or any authoritative
+// selection flags.
+func snapshotUnitHandlesInRecordRect(f *frame.Frame, cam *camera.Camera, rect Rect, viewer uint8) []pool.Handle {
 	if f == nil || cam == nil || rectEmpty(rect) {
 		return nil
 	}
 	out := make([]pool.Handle, 0)
-	// The rectangle arrives in surface pixels of the presented picture and the
-	// unit positions are projected at the record step, so the rectangle converts
-	// first (§16.4). Surface coordinates carry no beam origin, so the bridge is
-	// applied about it and taken off again.
-	rect = recordRect(cam, rect)
 	for i := 0; i < len(f.Units); i++ {
 		v := f.Units[i]
 		if v.Slot == 0 || !SnapshotVisible(f, v, viewer) {
@@ -185,13 +228,15 @@ func recordPoint(cam *camera.Camera, x, y int32) (int32, int32) {
 	return rx - camera.OriginX, ry - camera.OriginY
 }
 
-// recordRect is recordPoint on both corners of a surface-space rectangle. It
-// is the identity at every rest factor.
-func recordRect(cam *camera.Camera, r Rect) Rect {
+// surfacePoint is recordPoint's inverse: it carries a point of the record space
+// unit positions project into back to the surface pixels of the presented
+// picture (§16.4). ViewScale.Inverse is exact on a coordinate ViewScale.Project
+// produced, so the result equals projecting the same world offset at the live
+// factor. It is the identity at every rest factor.
+func surfacePoint(cam *camera.Camera, x, y int32) (int32, int32) {
 	if cam == nil || cam.AtRestStep() {
-		return r
+		return x, y
 	}
-	minX, minY := recordPoint(cam, r.MinX, r.MinY)
-	maxX, maxY := recordPoint(cam, r.MaxX, r.MaxY)
-	return Rect{MinX: minX, MinY: minY, MaxX: maxX, MaxY: maxY}
+	z, s := cam.EffectiveZoom(), cam.EffectiveScale()
+	return z.Project(s.Inverse(x)), z.Project(s.Inverse(y))
 }

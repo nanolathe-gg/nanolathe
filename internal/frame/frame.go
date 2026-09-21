@@ -13,6 +13,9 @@ var (
 	ErrPublishWithoutWrite = errors.New("frame: publish without BeginWrite")
 	// ErrNonMonotonicTick rejects duplicate and out-of-order publication.
 	ErrNonMonotonicTick = errors.New("frame: non-monotonic tick publication")
+	// ErrRepublishTick rejects a same-tick republication that does not name the
+	// already committed tick. See Republish.
+	ErrRepublishTick = errors.New("frame: republication of a tick that is not committed")
 )
 
 // Capacities controls the top-level preallocation performed by NewBuffer.
@@ -1378,6 +1381,37 @@ func (b *Buffer) Publish(tick uint32) error {
 	b.committed.Store(uint32(b.writeSlot) + 1)
 	b.lastTick = tick
 	b.published = true
+	b.writing = false
+	return nil
+}
+
+// Republish commits the pending write at the tick that is already committed,
+// replacing the committed view of that same tick without advancing it. Its one
+// caller is the paused-input boundary (docs/DESIGN_INTERFACE_HUD_INPUT.md
+// §3.12): while the scheduler is paused no sub-tick runs, so a command that
+// takes effect must reach presentation on the tick that already ran.
+//
+// The superseded slot holds the SAME tick, so it is not a previous tick and
+// must not become one: BeginWrite has already cleared the previous pair and
+// this method leaves it cleared, so Previous reports nil until the next
+// ordinary publication supplies a real earlier tick. That is what keeps the
+// Enhanced blend from pairing two copies of one tick
+// (docs/DESIGN_GPU_RENDERER.md §13.5) [I6].
+func (b *Buffer) Republish(tick uint32) error {
+	if b == nil || !b.writing {
+		return ErrPublishWithoutWrite
+	}
+	if !b.published || tick != b.lastTick {
+		return ErrRepublishTick
+	}
+	f := &b.slots[b.writeSlot]
+	f.Tick = tick
+	// Only occurrences staged since the last publication are here: the writer
+	// resets its staging window at every commit, so a republication retains
+	// what the paused boundary raised and never the previous tick's again
+	// [03 R-AUD-01 §7][I6].
+	b.retainCommittedEvents(f.Events)
+	b.committed.Store(uint32(b.writeSlot) + 1)
 	b.writing = false
 	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -289,7 +290,36 @@ func (b *battleSession) snapshotAirBase(v frame.UnitView) bool {
 	return ok && def != nil && def.IsAirBase
 }
 
-// eligibleHandlesInRect is the drag-rectangle walk of [07 §9] as
+// dragEndpointWorld narrows a resolved cursor point to the whole
+// three-component world endpoint a drag records [07 §9 "Drag-rectangle
+// conversion is closed"]. The horizontal pair keeps the signed 16-bit narrowing
+// the click classification of [07 R-CAM-01 §14] compares; the height is kept so
+// the band's projection can shear the vertical coordinate by that endpoint's
+// own height, the way the unit points it is tested against are sheared.
+func dragEndpointWorld(wx, wy, wz numeric.Fixed) (x, y, z int32) {
+	return int32(int16(wx.Floor())), int32(wy.Floor()), int32(int16(wz.Floor()))
+}
+
+// selectionBand projects the two recorded drag endpoints into the band used by
+// both the membership test and the drawn box [07 §9 "Drag-rectangle conversion
+// is closed"]. It is deliberately computed from the stored world pair at every
+// use rather than kept in screen pixels: the camera can move during a gesture,
+// and only a band re-projected with the current camera stays over the terrain
+// the player dragged across.
+func (b *battleSession) selectionBand(in ui.BattleInputState) client.SelectionBand {
+	if b == nil {
+		return client.SelectionBand{}
+	}
+	return client.WorldSelectionBand(b.cam,
+		numeric.FixedFromInt(int64(in.DragStartWorldX)),
+		numeric.FixedFromInt(int64(in.DragStartWorldY)),
+		numeric.FixedFromInt(int64(in.DragStartWorldZ)),
+		numeric.FixedFromInt(int64(in.DragEndWorldX)),
+		numeric.FixedFromInt(int64(in.DragEndWorldY)),
+		numeric.FixedFromInt(int64(in.DragEndWorldZ)))
+}
+
+// eligibleHandlesInBand is the drag-rectangle walk of [07 §9] as
 // [07 R-WGT-01 §10] restates it: "walk the local player's unit slice in
 // ascending record order; for each record with `E(u)` true, apply the inclusive
 // rectangle test... A record failing `E(u)` is neither written, toggled, nor
@@ -302,7 +332,7 @@ func (b *battleSession) snapshotAirBase(v frame.UnitView) bool {
 // the carrier clause through the carrier definition's airbase mirror — so the
 // two are composed rather than the predicate being written twice. Both inputs
 // are frame order, which is pool-slot order [I1], so the result stays ascending.
-func (b *battleSession) eligibleHandlesInRect(f *frame.Frame, rect client.Rect) []pool.Handle {
+func (b *battleSession) eligibleHandlesInBand(f *frame.Frame, band client.SelectionBand) []pool.Handle {
 	if b == nil || f == nil {
 		return nil
 	}
@@ -312,7 +342,7 @@ func (b *battleSession) eligibleHandlesInRect(f *frame.Frame, rect client.Rect) 
 			eligible[v.Slot] = struct{}{}
 		}
 	}
-	inRect := client.SnapshotUnitHandlesInRect(f, b.cam, rect, f.ViewingPlayer)
+	inRect := client.SnapshotUnitHandlesInBand(f, b.cam, band, f.ViewingPlayer)
 	out := make([]pool.Handle, 0, len(inRect))
 	for _, h := range inRect {
 		if _, ok := eligible[h]; ok {
