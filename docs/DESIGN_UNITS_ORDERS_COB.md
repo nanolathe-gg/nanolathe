@@ -476,8 +476,21 @@ reaction. Combat owns threat ranking. Return Fire does not perform that
 opportunity acquisition. Explicit attack orders and explicit/scripted weapon
 targets are retained. A progressing manual move is also retained; a blocked
 manual move may suspend and later restart with its original destination.
-Every new primary producer command, including a queued command or stance
-change, clears danger memory and supersedes the automatic reaction. A response
+Every new primary producer command, including a queued command, movement
+stance change or cloak toggle, clears danger memory and supersedes the automatic
+reaction. The movement-stance and cloak producers use ordinary head insertion
+without a replacement purge: leading automatic records are removed, caption
+admission applies, and the assigned mission survives [04 R-ORD-01 §13].
+Fire stance retains its existing boundary because the narrower **Modern Hold
+Fire** contract above preserves withdrawal/wait responses and retires automatic
+attacks at the stance write. Converting that producer to ordinary insertion
+remains separate work: it must preserve that policy while reconciling the
+leading-auto and caption bookkeeping required by the retail contract.
+`internal/session/command_producer_test.go` checks movement stance and both cloak
+toggles in Modern and Strict, mission retention, leading-auto removal, caption
+admission, danger cleanup and unchanged RNG/resources. Its response case checks
+that movement stance and cloak supersede a withdrawal while Hold Fire retains
+it through the stance write. A response
 displaced by a temporary control/task head, especially `Paralyze`, cannot
 retarget or insert another response ahead of that head; a stunned unit likewise
 cannot begin a new response. Contact timers still expire and expired reactions

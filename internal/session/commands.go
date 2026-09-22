@@ -957,13 +957,21 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			if q == nil {
 				continue
 			}
-			// The handler completes on its single visit and returns code 5, so
-			// the record is consumed the tick it runs and the displaced head
-			// resumes behind it [04 R-STANCE-01 §2]. A stance change is not a
-			// new mission: it must not purge the queue the way Stop does.
 			node := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
 			node.Param1 = uint32(c.Stance.Value)
-			q.PushHead(id, node)
+			if c.Stance.Fire {
+				// Keep the existing fire-stance boundary: Modern Hold Fire
+				// preserves withdrawal/wait responses and retires automatic
+				// attacks at the stance write (DESIGN_UNITS_ORDERS_COB
+				// "Modern Hold Fire"). Generic command cleanup would end both.
+				q.PushHead(id, node)
+			} else {
+				// Preserve-queue skips only the replacement purge. Ordinary
+				// producer insertion still drops leading auto records and arms
+				// the caption before head insertion [04 R-ORD-01 §13]. It also
+				// lets Modern supersede danger while retaining the assignment.
+				q.Push(id, node)
+			}
 		}
 	case HumanCloak:
 		// The cloak arm of the same battle-panel handler as the two stance
@@ -999,12 +1007,10 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			if q == nil {
 				continue
 			}
-			// The handler returns code 5, so the record is consumed on its
-			// single visit and the displaced head resumes behind it
-			// [04 R-ORD-01 §2]. A cloak toggle is not a new mission and must
-			// not purge the queue the way Stop does — the same reading the
-			// stance arm above applies.
-			q.PushHead(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false))
+			// Both cloak descriptors preserve the mission without bypassing
+			// producer bookkeeping or Modern command precedence. Push inserts
+			// them at the head after the leading-auto drop [04 R-ORD-01 §13].
+			q.Push(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false))
 		}
 	case HumanMobileBuild:
 		u := s.humanUnit(c.MobileBuild.Builder)
