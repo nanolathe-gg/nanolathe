@@ -14,6 +14,18 @@ the rest of each package live in [ProTA](prota-engine.md),
 Base `zdraw.dll` (`34993ee8…`), plus the two optional Zero `zdraw.dll`
 replacements. All are builds of one lineage; this document states per-build
 differences where they exist. No third-party implementation source was read.
+The lineage's current-generation source is now available under MIT (`src/DDraw`
+of the TADR repository, [community patch engine behavior](community-patch-engine.md));
+it is cited only where it settles the *current* line, since these inspected
+builds are older releases of the same family.
+
+**Evidence provenance.** Much of the behavior below was decoded from these
+shipped binaries — a method the [evidence policy](README.md#evidence-policy)
+does not permit for third-party patch binaries. The wording is clean-room and
+the observations stand as recorded, but no new contract may be closed by this
+method: future gaps must be settled from documentation, authored content,
+appropriately licensed source (now available for this family), or a bounded
+manual observation.
 
 ## Megamap
 
@@ -68,9 +80,12 @@ resolved by the engine's category lookup. The reserved names `nothing`,
 
 **Established — sensor rings are clutter filters.** `MegamapRadarMinimum`,
 `MegamapSonarMinimum`, `MegamapRadarJamMinimum`, `MegamapSonarJamMinimum`
-(default −1 = no filter) and `MegamapAntiNukeMinimum` (built-in default 512)
-are thresholds: a ring is drawn only when the unit's range for that sensor
-*exceeds* the value. Antinuke rings need an antinuke-flagged weapon slot and
+(default −1 = no filter) and `MegamapAntiNukeMinimum` are thresholds: a ring is
+drawn only when the unit's range for that sensor *exceeds* the value. The
+antinuke default is disputed: the earlier decode of these builds read a
+built-in default of 512, while the family's current source reads the key with
+default −1 like the others; the per-build values are not established. Antinuke
+rings need an antinuke-flagged weapon slot and
 are drawn dashed while the unit is armed.
 
 **Established — colours.** `MegamapRadarColor`, `MegamapSonarColor`,
@@ -133,18 +148,19 @@ was found for circle select, the `CTRL+S` on-screen-weapons predicate, or the
 idle-builder/idle-factory cycle order, camera behavior and shift variants; the
 DLL contributes only the filter masks.
 
-## Preference-key census
+## Preference keys
 
-**Established — keys read from the `Preferences` section.** All three builds
-read: `UnicodeSupport`, `UnicodeSupport_Background`, `UnicodeSupport_Color`,
-`DoubleClick`, the megamap block above, `FullScreenMinimap`,
-`ShareDialogExpand`, `MenuWidth`/`MenuHeight`/`MenuResolution`,
-`UseVideoMemory`, `DisableDeInterlaceMovie`, `DisplayModeMinHeight768`,
-`AISearchMapEntries`, `SfxLimit`, `UnitLimit`, `MegaMapConfig`,
-`PlayerMarkerPcx`, `PlayerMarkerBackground`, `PerPlayerMarkerWidth`,
-`PerPlayerMarkerHeight`, the player dot colours, and the option keys
-`ClickSnapOverrideKey`, the autoclick key (stored in the registry, default
-`X`), `WhiteboardKey` and `MegamapKey`.
+**The inventory is owned elsewhere.** The complete preference-file key
+inventory and per-key scope live in
+[community patch engine behavior](community-patch-engine.md) §4.1, and the
+control options (including `ClickSnapOverrideKey`, the autoclick key,
+`WhiteboardKey` and `MegamapKey`) in its §4.2; this section keeps only what
+differs across the inspected builds. Two placements worth keeping straight:
+`UseDefaultIcon` is an `[Option]` key of the icon-config file named by
+`MegaMapConfig` (above), not a preference-file key, and
+`DisableDeInterlaceMovie` is a registry-backed host toggle.
+
+**Established — per-build differences.** Keys read by some builds only:
 
 | Key | ProTA `tdraw` | Escalation `TAESC` | Zero `zdraw` |
 |---|---|---|---|

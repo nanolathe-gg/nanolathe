@@ -43,8 +43,13 @@ veterancy and unit-definition extension machinery absent from the other two.
 Exact source provenance and license are not established.
 
 No executable addresses, offsets, disassembly or decompiler output are
-recorded here; inspection was performed outside this repository under the
-extension evidence policy.
+recorded here. **Evidence provenance:** the implementation detail below was
+decoded from the shipped binaries — a method the
+[evidence policy](README.md#evidence-policy) does not permit for third-party
+patch binaries. The wording is clean-room and the observations stand as
+recorded, but no new contract may be closed by this method: future gaps must
+be settled from documentation, authored content, appropriately licensed
+source, or a bounded manual observation.
 
 ## Global engine changes (not asset-driven)
 
@@ -167,6 +172,22 @@ configuration key exists in the shipped DLLs, and no arithmetic comparing two
 unit types' worker or build values could be isolated in the hook bodies.
 A runtime trace of the repair step, or a comparison of the repair contribution
 between the retail and Escalation executables, would settle it.
+
+**Supported inference (from the community patch source) — the fix is in the
+executable's repair helper and makes contribution proportional.** The later
+TADR repair module replaces the repair/HealTime helper at its single entry
+point, is enabled only for the Escalation build, and models the helper it
+replaces as `max(1, ceil(...))` on both the heal and the energy term — a
+proportional contribution with a one-point floor. That is exactly the shape
+the documented exploit fix needs (retail's helper instead clamps every
+positive term **to** exactly one, so retail repair is a flat one health point
+and one energy unit per accepted call whatever the repairer's tier
+([05 "Repair"])); moving to proportional contribution is what makes cheap
+constructors less effective on high-tier targets. The evidence is the MIT
+community patch source's characterization of the function it hooks, not an
+inspection of this package's executable, so the question stays open; see
+[community patch engine behavior](community-patch-engine.md) CP-DMG-4 for the
+full comparison.
 
 **Supported inference — other machinery.** The engine DLL additionally
 contains machinery whose documented description is thinner than the
@@ -291,11 +312,22 @@ unit-definition key restricts allowed facings — facing 0 is always allowed,
 any other facing requires its letter, case-insensitively, in the unit type's
 string — but no Gold 10.2 unit definition authors `Rotations`, and neither
 rotation GAF ships in the package (path census), so both the restriction and
-the four-frame overlay are dormant in this release.
+the four-frame overlay are dormant in this release. **Established (source) —
+the current line implements the same feature**: the licensed community-patch
+source carries this machinery verbatim in its rotation module (same key
+names, same `/` default, same four-frame GAFs, facing 0 always allowed) and
+additionally settles how the facing persists — the unit's heading word, the
+creation and give packets, resurrection from the wreck's stored orientation
+([community patch engine behavior](community-patch-engine.md) CP-CON-5).
 
 ## Asset-driven extensions
 
 ### Unit-definition keys registered by the engine DLL
+
+The registry behind these keys survives in the licensed community-patch
+source, whose contracts state the current line's exact readers (CP-UD-1
+veterancy, CP-UD-2 preview keys, CP-CON-5 rotations); those are the settling
+evidence for the reader semantics where they agree with the table below.
 
 **Established — registered keys.** The engine DLL registers these extended
 unit-definition keys and the authored content uses them. Values below are the
@@ -304,7 +336,7 @@ authored forms; the reader semantics follow.
 | Key | Registered as | Authored by | Authored values | Reader semantics |
 |---|---|---|---|---|
 | `VeterancyThresholds` | string | 197 units | five space-separated kill counts, e.g. `10 20 30 40 50`, `20 40 60 80 100`, `50 100 150 200 250`, `100 200 300 400 500` | parsed into a per-unit-type threshold list; absent or empty seeds `5 10 15 20 25`. The level is the index of the highest threshold not above the kill count; above the last threshold it keeps growing at the last interval's spacing; with one threshold it is `kills / threshold`. This level replaces the retail five-kill step in damage, reload, accuracy, veterancy tests and HUD labels |
-| `VeterancyAccuracyBuffRate` | integer | 197 units | `24`, `48`, `120`, `240` (tier-scaled) | below 1 it becomes 0; otherwise `kills / rate` replaces the retail fixed `kills / 6` divisor at the accuracy site |
+| `VeterancyAccuracyBuffRate` | integer | 197 units | `24`, `48`, `120`, `240` (tier-scaled) | below 1 it becomes 0; otherwise `kills / rate` replaces the retail fixed `kills / 12` divisor at the accuracy site ([06 §4.4](../retail-executable-spec/06-weapons-projectiles-damage-and-effects.md)) |
 | `PreviewPieces` | string | 15 units | comma-separated piece names, e.g. `body, turret2, sleeve, barrel` | the nanoframe ghost is composed from the named pieces of the unit's own model; absent, the ghost is the whole model |
 | `PreviewPiecesS/E/N/W` | string | none observed | — | directional variants selected by a facing index (0 S, 1 E, 2 N, 3 W) with fallback to `PreviewPieces`; registered but unauthored in this release |
 | `PreviewObject3D` | string | none observed | — | loads the ghost model from the named 3DO instead of the unit model; registered but unauthored |

@@ -8,7 +8,9 @@ no reader for.
 
 This document records what three shipped content sets document and author, and
 the implementation evidence the inspected Escalation engine build provides. It
-does not establish a complete admission predicate for any key, and it approves
+does not establish a complete admission predicate for any key against the Gold
+10.2.0 build — the current-generation community-patch line is settled from
+licensed source in the final section below — and it approves
 no Nanolathe behavior. Retail's own unit-to-unit target gate — the medium
 clauses, the `toairweapon` mover-mode clause and their order — stays owned by
 [06 R-WPN-05 §1](../retail-executable-spec/06-weapons-projectiles-damage-and-effects.md)
@@ -107,6 +109,13 @@ selection hotkeys and bad-target categories.
 
 ## Escalation implementation evidence
 
+**Evidence provenance:** everything in this section was decoded from the
+shipped Escalation DLL and executable — a method the
+[evidence policy](README.md#evidence-policy) does not permit for third-party
+patch binaries. The wording is clean-room and the observations stand as
+recorded, but no new contract may be closed by this method (the contracts
+section below already treats them as such).
+
 **Established — the engine DLL parses the three keys as flags.** During weapon
 parsing the DLL reads `nottoair` and, when set, marks the weapon record with a
 high flag bit; it reads `surfacefire` and `nottounderwater` and, when set,
@@ -134,12 +143,15 @@ mechanism behind the keys' documented intent (restricting or extending what a
 weapon acquires); the validator cluster additionally refuses some authoring
 combinations.
 
-**Unknown — the bit-to-key mapping and the fire-time predicate.** Which flag
-bit each key sets, which table entry it consults, and how the acquisition
-routine's per-weapon condition reads them are not mapped, and the validator's
-waterline comparison need not be the predicate (if any) that admits surface or
-submerged targets at fire time. Versioned patch documentation, licensed
-source, or a bounded observation would settle it.
+**Unknown — the bit-to-key mapping and the fire-time predicate (Gold 10.2.0).**
+Which flag bit each key sets, which table entry it consults, and how the
+acquisition routine's per-weapon condition reads them are not mapped, and the
+validator's waterline comparison need not be the predicate (if any) that
+admits surface or submerged targets at fire time. Licensed source has since
+settled both questions for the current-generation line (final section); what
+remains open here is whether the Gold-era build implements the same
+predicates. Versioned patch documentation or licensed source for that build
+would settle it.
 
 ## Contracts
 
@@ -221,8 +233,36 @@ either. Do not supply an admission test for it.
 key, appropriately licensed source, or a bounded manual observation of a ProTA
 4.8 anti-missile battery with and without the key, stated with its setup.
 
+## The community-patch line settles the current-generation predicates
+
+**Established (source) — the later TADR line implements three of the four keys,
+and its predicates are exact.** The MIT `tdraw` source
+([community patch engine behavior](community-patch-engine.md), pinned commit
+`dcff5dd`) implements `nottoair`, `surfacefire` and `nottounderwater` with
+readers its own contract states exactly: `nottoair` rejects a target whose
+committed movement state is airborne at the shared per-weapon auto-aim check
+(so a landed aircraft is eligible — the operand question its section below
+poses is answered for this line); `surfacefire` bypasses both "target above
+sea level" rejections, the can-aim depth sequence, the COB script-action
+ATTACK gate for submersibles (which reads weapon slot 0 only) and,
+unconditionally for any tagged self-propelled projectile, the in-flight
+guidance kill for water weapons; `nottounderwater` rejects a target whose
+bounding-box top (target height plus the definition's vertical extent, both
+truncated to whole world units) is at or below the map's sea level. That line
+adds four further keys (`notoverwater`, `notoverland`, `nomapweaponalert`,
+`reloadbar`) and does **not** implement `toaironly` at all.
+The per-key sections below are not rewritten by this: the earlier build is a
+distinct release, and whether Gold 10.2.0's implementation matches the source
+line's predicates is a version question the source cannot answer. What would
+settle that: appropriately licensed source for the Gold-era build, or a
+bounded observation of the two builds side by side.
+
 ## Open questions
 
+- **Unknown — whether the Gold 10.2.0 build matches the community-patch
+  line's predicates.** The current-generation implementation is settled from
+  source (final section); this build's readers are not. A side-by-side
+  observation or its own licensed source would settle it.
 - **Unknown — what the keys change outside autonomous acquisition.** The
   executable's autonomous acquisition routine is known to be modified, but
   whether the keys also apply at manual attack-order installation, guard

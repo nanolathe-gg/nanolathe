@@ -292,7 +292,15 @@ scripts use only retail ports.
   under their own names, (c) implements the shared recorder port extensions
   once, and (d) does not adopt any one package's keyboard overrides as
   universal. No inspected artifact does this; the packages each ship their own
-  build.
+  build. **Established (since) — the current community-patch line is that
+  engine.** One MIT-licensed source tree builds the family once per package
+  profile (seven at the pinned revision, including `prota`, `escalation`,
+  `tazero` and `ota`), each with its own preference-file and registry identity
+  and its matched recorder DLL
+  ([community patch engine behavior](community-patch-engine.md) §3); it
+  implements three of the four non-retail weapon keys (not `toaironly`) and the
+  shared recorder ports once. The remaining condition (d) is a policy choice
+  for that line, not a capability gap.
 - **Engine-level mutual exclusions are small and enumerable**: the keyboard
   overrides in the table above (especially `CTRL+F`, `Q`, `B`, `W`, `O`, `L`,
   `U`, `F4`), the differing AI difficulty multiplier values, and the
@@ -302,9 +310,16 @@ scripts use only retail ports.
 
 ## Unknown
 
-- **Unknown — the remaining port questions.** The unit-id iteration fields,
-  the relation table's meaning and the visibility class's exact test stay
-  open in [Extended script ports](script-ports.md).
+- **Unknown — the remaining port questions (since reduced).** The unit-id
+  iteration fields, the relation test and port `75`'s exact test are settled
+  from recorder source in
+  [Extended script ports](script-ports.md); what stays open there is the
+  `x100` kill scale on port `32` and the port-`73` out-of-range contract.
 - **Unknown — ProTA's exact key table.**
-- **Unknown — recorder version behavior differences.** See
-  [TA Demo Recorder](ta-demo-recorder.md).
+- **Unknown — recorder version behavior differences (since reduced).** The
+  version lineage and per-build command differences are recorded in
+  [TA Demo Recorder](ta-demo-recorder.md), and the current recorder line's
+  placement against the `3.9.2.x` versions in
+  [community patch engine behavior](community-patch-engine.md) CP-SES-8; what
+  remains open is the behavior of the old builds where it differs from the
+  current source.

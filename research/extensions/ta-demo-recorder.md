@@ -26,6 +26,20 @@ engine DLL; it is not itself the recorder. An early recorder build (self-named
 version 0.99) was present in the inspection baseline; it is not shipped by any
 of the three packages and appears only in the version-history comparison.
 
+**Established — source availability and a version boundary.** The recorder
+source is now MIT-licensed (`src/Recorder` in
+[the TADR repository](community-patch-engine.md)) and builds the current
+distribution, whose version is date-based (`2026.9.9`). The inspected
+`3.9.2.416` and `3.9.2.0` binaries predate that source revision: the repository
+history contains `3.9.2.2` → `3.9.2.437` in the Delphi project version series
+and does not contain `3.9.2.416` at all, so the version resources of the
+shipped binaries do not map onto a repository revision. Claims below about the
+recorder surface remain claims about the identified binaries; the
+source-established port semantics for the current line are owned by
+[Extended script ports](script-ports.md), and the current `mods.ini` location
+is `%LOCALAPPDATA%\TADR\mods.ini` with `MOD<id>` sections (the inspected
+2013-era binary's demos-subfolder location may differ).
+
 **Established — what the DLLs are.** Each DLL exports the DirectPlay entry
 points under a renamed file, so the game's DirectPlay calls resolve to the
 recorder. The recorder registers its user-facing commands with the game's

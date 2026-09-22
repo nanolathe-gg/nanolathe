@@ -59,8 +59,13 @@ community author by handle and ask the user to send `Errorlog.txt` and the
 replay file. Source provenance and license are not established.
 
 No executable addresses, offsets, disassembly or decompiler output are
-recorded here; inspection was performed outside this repository under the
-extension evidence policy.
+recorded here. **Evidence provenance:** the implementation detail below was
+decoded from the shipped binaries — a method the
+[evidence policy](README.md#evidence-policy) does not permit for third-party
+patch binaries. The wording is clean-room and the observations stand as
+recorded, but no new contract may be closed by this method: future gaps must
+be settled from documentation, authored content, appropriately licensed
+source, or a bounded manual observation.
 
 ## Documented engine-level behavior
 

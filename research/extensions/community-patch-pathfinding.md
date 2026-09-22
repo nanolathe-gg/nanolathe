@@ -27,12 +27,17 @@ restating their findings.
 | `https://files.tauniverse.com/files/ta/unofficial-patch/` | `TA_Patch_3902.exe` and `TA_Patch_Resources.exe`, both timestamped 03-Oct-2013 | the publisher's own download index: the newest release it offers is v3.9.02 |
 | `ProTA4.8/ProTA.ini`, `TA_Zero_Alpha_5/TAZero.ini`, Escalation Gold 10.2.0 `TAESC.ini` (local packages; see the per-package documents for their artifact identity) | shipped preference files | the `AISearchMapEntries` setting and its documented comment block |
 | `ProTA4.8/ProTA 4.8 changelog.txt`, "Engine notes" | reproduces the "TA engine v2025.8.29" release notes | the continuing engine line's dated change list |
-| `https://github.com/tanvanman/TADR` release notes (46 releases read, `v2024.3.2` … `dev-dcff5dd`, newest 2026-09-20) | the maintainers' own dated release notes for the recorder/engine DLL pair; repository license is **NOASSERTION** (no license granted) | dated change list and a per-package feature matrix |
+| `https://github.com/tanvanman/TADR` release notes (46 releases read, `v2024.3.2` … `dev-dcff5dd`, newest 2026-09-20) | the maintainers' own dated release notes for the recorder/engine DLL pair; repository license is **MIT** since 2026 (retrieved 2026-09-21, LICENSE covers `src/DDraw`, `src/Recorder`, `src/Server`) | dated change list and a per-package feature matrix |
 | `https://github.com/Skirmisher/TA-Patch-Installers` (`Patch/notes.txt`, `Patch/TODO`, `README`, retrieved 2026-09-21; repository carries **no license**) | the patch installer project's own notes | names the superseded standalone "TA Pathfinding Fix" and an unreleased version string `3.9.3` |
 
-Because the last two repositories grant no license, only their published
-documentation text was read; no source file was read, copied or translated, and
-no claim in this document rests on implementation source.
+Because the last repository granted no license when this document was first
+written, only its published documentation text was read at that time. **Update
+2026-09-21:** TADR now grants MIT for the engine and recorder source, and the
+current source has since been read for
+[Community patch engine behavior](community-patch-engine.md); the two
+inferences below are now settled there by source, and this document records the
+correction rather than restating the source analysis. The no-license statement
+below applied only to the earlier retrieval.
 
 ## The releases this line comprises
 
@@ -139,11 +144,14 @@ were). Community posts quoting other values (for example 77777 or 90050) are
 recollection and establish nothing. What would settle it: the `TA.ini` shipped
 inside `TA_Patch_3902.exe`, read as text.
 
-**Unknown — which engine field the adjuster writes.** The readmes name a value
-and its retail default; they do not name the field. Establishing the write site
-would require inspecting the patch binary, which the
-[evidence policy](README.md#evidence-policy) forbids. The numeric coincidence
-with our retail research is treated as inference below, not as fact.
+**Established — source-settled (2026-09-21). Which engine field the adjuster
+writes.** The recorder/engine source now available under MIT shows the engine
+DLL writing the configured `AISearchMapEntries` value directly into the
+compiled path-search step-allowance field named by our retail research, with no
+validation of the value. This replaces the earlier **Unknown** and upgrades the
+inference below to established: the community patch's "pathfinding cycles" is
+our per-scheduler-call step allowance, raised from 1333 to the configured value
+(66650 shipped).
 
 ## What the 3.9.x documentation does not say
 
@@ -255,15 +263,11 @@ The retail mechanism our research states, for comparison only:
   **passable**
   ([04 R-PATH-01 §2](../retail-executable-spec/04-units-orders-scripts-and-movement.md#the-coarse-word-the-search-tests-is-mapping-memory-not-a-building-mask-r-path-01-2)).
 
-**Supported inference — the patch's "1333" is our step allowance.** The value
-the patch names as the retail default is the value our research establishes for
-the per-scheduler-call step allowance, under a setting name the authors gloss as
-"pathfinding cycles", and our research finds no other retail path constant equal
-to 1333. Missing evidence: the patch does not name the field, and confirming the
-write site would require binary inspection the evidence policy forbids. An
-alternative that the documentation cannot exclude is that the adjuster writes a
-different budget with the same seed value. Do not implement anything that
-depends on the identification without further evidence.
+**Established — the patch's "1333" is our step allowance.** The value the
+patch names as the retail default is the value our research establishes for the
+per-scheduler-call step allowance, under a setting name the authors gloss as
+"pathfinding cycles"; the source now shows the adjuster writing exactly that
+field, and our research finds no other retail path constant equal to 1333.
 
 **Supported inference — raising the unit limit also moves a path constant.**
 The same releases raise the per-player unit limit from retail's 250 to a
@@ -335,12 +339,15 @@ stands or falls on Nanolathe's own retail research and measurements.
 
 ## Unknown
 
-- **The documented range of `AISearchMapEntries`.** No source states a minimum
-  or maximum. Settled by the patch's own `TA.ini`, read as text.
+- **The documented range of `AISearchMapEntries`.** The source applies no
+  validation at all: the configured integer is written as-is. What the shipped
+  v3.9.02 `TA.ini` contained remains unread; the derived package INIs are
+  recorded above.
 - **The v3.9.02 `TA.ini` text.** Only the three derived package INIs were read;
   the patch's own preference file and its comment block were not.
-- **Which engine field the adjuster writes.** Not documented; not establishable
-  under the extension evidence policy.
+- **Which engine field the adjuster writes.** Settled by source, 2026-09-21:
+  the compiled path-search step-allowance field (see the established note
+  above).
 - **Any post-3.9.02 TA Patch release for unmodified TA.** The publisher's index
   stops at v3.9.02; the engine line continued under date versions inside mod
   packages, and whether a standalone patch release carries them is unestablished.

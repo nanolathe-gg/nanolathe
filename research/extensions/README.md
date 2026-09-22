@@ -15,12 +15,13 @@ stable named heading and keeps its unresolved questions beside it.
 | Reference | Scope and source version |
 |---|---|
 | [Extended build menus](build-menus.md) | TA Zero Alpha 5 authored placements, repeated membership records, and documented twelve-slot sidebar; patch membership semantics remain unknown. |
-| [Non-retail weapon target keys](weapon-target-keys.md) | `nottoair`, `nottounderwater` and `surfacefire` as authored and described by TA: Escalation Gold 10.2.0, and `toaironly` as authored by ProTA 4.8; TA Zero Alpha 5 uses none. Documented intent, authored census and the inspected Escalation parser/acquisition evidence — the complete admission predicate and `toaironly` remain unknown. |
+| [Non-retail weapon target keys](weapon-target-keys.md) | `nottoair`, `nottounderwater` and `surfacefire` as authored and described by TA: Escalation Gold 10.2.0, and `toaironly` as authored by ProTA 4.8; TA Zero Alpha 5 uses none. Documented intent, authored census and the inspected Escalation parser/acquisition evidence — the Gold-era admission predicate and `toaironly` remain unknown; the current community-patch line's predicates are settled from source in the document's final section. |
 | [ProTA 4.8 engine package](prota-engine.md) | The stock-executable + engine-DLL package: documented global features (megamap, click snap, selection, construction-unit behaviour, session tooling) and the asset surface, which stays on the retail key/port/opcode set. |
 | [TA: Escalation Gold 10.2.0 engine package](taesc-engine.md) | The patched-executable + engine-DLL package: documented engine changes, the executable patch inventory, the extension-key registry (veterancy, preview pieces, rotations) with the authored key census, and the recorder-provided script-port surface. |
 | [TA Zero Alpha 5 engine package](ta-zero-engine.md) | The patched executable and renamed data trees/registry/save format, the executable patch inventory, the documented controls and commands, and the small asset extension surface (ports 70/74, `UnitControl`, `SoundLava`). |
 | [TA Demo Recorder session DLLs](ta-demo-recorder.md) | The community DirectPlay-replacement recorder shipped by all three packages: command catalog, feature families, the shared COB-extension ports, and the 3.9.2.0 → 3.9.2.416 version boundary. |
-| [Extended script ports](script-ports.md) | Recorder-provided ports `32` and `69`–`75` shared by all three packages: per-port arithmetic, authored census, and the remaining open questions. |
+| [Extended script ports](script-ports.md) | Recorder-provided ports `32` and `69`–`75` shared by all three packages: per-port arithmetic, authored census, and the remaining open questions. Source-established for the current recorder line, whose handler also serves a much larger grouped set (21–400, with setter arms) not yet recorded per port; port `75` is controller locality, not visibility. |
+| [Community patch engine behavior](community-patch-engine.md) | The TADR `tdraw.dll` line (MIT source, pinned commit `dcff5dd`, seven build profiles): compatibility target definition, profile matrix, configuration surface, behavior contracts for limits, simulation fixes, weapon/unit keys, construction (including click snap), environment, spawns, and session protocol, verified claim by claim against the source on 2026-09-21; recorder distribution 2026.9.9, draw DLL self-version 2026.8.6. |
 | [Mod engine-package compatibility](mod-engine-compatibility.md) | Package architecture, input mappings and their collisions, content-key vocabulary, executable-level behavior differences, and whether one engine could host all three content sets. |
 | [Community patch pathfinding](community-patch-pathfinding.md) | The TA Unofficial Patch line (v3.9.01 of 2012, v3.9.02 of 2013) and the dated engine builds that continue it: the documented "pathfinding cycles" raise and its `AISearchMapEntries` setting, the movement-adjacent construction-unit notes of the 2024–2026 builds, and the census establishing that the 3.9.x documentation records a limit raise and nothing else. |
 | [Shared draw-DLL interface](draw-engine-interface.md) | The renderer family's megamap, whiteboard and selection interface: keys, zoom, icon configuration, ring thresholds, chat-stream markers, drag-filter masks, and the per-build preference-key differences. |
@@ -44,7 +45,12 @@ by itself establishes behavior outside that scope, or retail behavior.
 
 Do not disassemble or decompile third-party patches. Extension investigation
 uses the sources above and bounded manual observations; the retail static
-analysis workflow does not extend to patch binaries.
+analysis workflow does not extend to patch binaries. Several documents retain
+behavior decoded from shipped patch binaries under earlier practice, marked
+with an **Evidence provenance** note: that material is clean-worded background,
+its observations stand as recorded, but no new contract may be closed by that
+method. Where an appropriately licensed source now settles the same ground
+(the community-patch line's is MIT), the source is the settling evidence.
 
 Use these confidence labels on every claim:
 
