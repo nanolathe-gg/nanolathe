@@ -7,7 +7,8 @@ ProTA 4.8, TA: Escalation Gold 10.2.0, and TA Zero Alpha 5 — and records where
 their behaviors agree, where the same input does different things, and where
 the differences are content vocabulary rather than engine exclusivity. It
 covers implementation packaging, configuration identity, input mappings,
-script interfaces and content-key vocabulary. It does not establish retail
+script interfaces and content-key vocabulary, with an authored-asset audit and
+bounded observations of the Nanolathe host. It does not establish retail
 behavior and approves no Nanolathe behavior; per-package details live in
 [ProTA](prota-engine.md), [Escalation](taesc-engine.md) and
 [TA Zero](ta-zero-engine.md).
@@ -29,7 +30,7 @@ two different mechanisms.**
 | Music | `wgmus.dll` (WGMUS by MnHebi, BASS-based) plus Audiere-based `tmusi.dll` | `emusi.dll` (TA Music Player by Rime, winmm-based) | Audiere-based `zmusi.dll` (identical file to ProTA's `tmusi.dll`) |
 | Registry root | stock Cavedog path for the executable; recorder under `Software\ProTA` | `Software\TA Esc` | `Software\TA Zero` |
 | Preferences | `ProTA.ini` | `TAESC.ini` | `TAZero.ini` |
-| Content trees | retail names inside `ProTA.gp3` | renamed `unitsE`, `weaponE`, `gamedatE`, `unitpicE`, `downloadsE`, `guie`, `aE` | renamed `ZUnits`, `ZWeapon`, `ZGameDat`, `ZUnitPic`, `ZBuildMenu`, `zgui`, `zi` |
+| Content trees | `units`/`ai` retain retail names; renamed `gamedatP`, `weaponP`, `guiP`, `unitpicsP`, empty `downloadP` | renamed `unitsE`, `weaponE`, `gamedatE`, `unitpicE`, `downloadsE`, `guie`, `aE` | renamed `ZUnits`, `ZWeapon`, `ZGameDat`, `ZUnitPic`, `ZBuildMenu`, `zgui`, `zi` |
 | Savegame | retail `.sav` (stock executable) | retail `.sav` | `.zsv` |
 | Replay suffix | `.pro` (4.3 release note) | not established | not established |
 
@@ -49,7 +50,10 @@ explosion-cap telemetry), ProTA's is intermediate (limit adjusters,
 verification, construction-unit options, ten-player funnel), TA Zero's 2013
 build is the smallest and carries neither the extension-key registry nor the
 construction-unit options. Exact source provenance and licensing are not
-established.
+established for those historical DLLs. The current TADR source has an MIT
+license; its pinned revision and per-profile matrix are recorded in
+[community patch engine behavior](community-patch-engine.md). That source
+does not identify the revision of an older DLL.
 
 The shared renderer interface these builds expose — the megamap, the
 whiteboard, the selection filters and their preference-key differences — is
@@ -268,22 +272,22 @@ all three packages found no non-retail opcode in executable position; the
 apparent anomalies are trailing compiler banner text. Reused-opcode
 divergence does not occur between these packages.
 
-**Established — extended ports are a shared recorder interface, not a
-collision.** All three recorders install the same COB-extensions handler over
-the executable's port reader, expose the same port set (`32`, `69`–`75`) and
-resolve each port to the same value; the 3.9.2.0 and 3.9.2.416 builds differ
-only in implementation route. Escalation content reads `32` and `69`–`75`, TA
-Zero content reads `70` and `74`, and ProTA content reads none; a script from
-any package would see the same answers under any recorder build. The port
-semantics are recorded in [Extended script ports](script-ports.md). ProTA
-scripts use only retail ports.
+**Established — authored subset and current shared interface.** Escalation
+content reads `32` and `69`–`75`, Zero reads `70` and `74`, and ProTA reads no
+extended ports. The pinned recorder source gives those numbers one shared
+meaning; it also handles the wider command/setter surface in
+[Extended script ports](script-ports.md). Its mod-id gates affect supporting
+plugins, and individual commands have distinct locality/playback gates.
+**Unknown — historical equivalence outside the recorded subset:** the older
+DLLs' wider interfaces and edge behavior need version-matched evidence; one
+source tree does not prove identical answers under every historical build.
 
 ## Verdict
 
 - **Asset data is portable only in the retail vocabulary.** All three packages
   compile from retail unit keys and retail script opcodes. New unit-definition
   keys are Escalation-only; new weapon keys are package-specific names;
-  extended script ports overlap by number and need per-package semantics.
+  extended script ports overlap by number and need version-scoped semantics.
 - **Engine builds are not interchangeable.** Executables import package-named
   DLLs, and the renderer/session DLLs carry package-specific feature sets and
   configuration names.
@@ -292,21 +296,201 @@ scripts use only retail ports.
   under their own names, (c) implements the shared recorder port extensions
   once, and (d) does not adopt any one package's keyboard overrides as
   universal. No inspected artifact does this; the packages each ship their own
-  build. **Established (since) — the current community-patch line is that
-  engine.** One MIT-licensed source tree builds the family once per package
+  build. **Established — current shared source, separate builds.** One
+  MIT-licensed source tree builds the family once per package
   profile (seven at the pinned revision, including `prota`, `escalation`,
   `tazero` and `ota`), each with its own preference-file and registry identity
   and its matched recorder DLL
   ([community patch engine behavior](community-patch-engine.md) §3); it
   implements three of the four non-retail weapon keys (not `toaironly`) and the
-  shared recorder ports once. The remaining condition (d) is a policy choice
-  for that line, not a capability gap.
+  shared recorder ports once. This establishes shared implementation with
+  profile-specific choices, not binary interchangeability or equivalence to
+  each older package's engine. Input condition (d) remains a per-profile
+  behavior to preserve.
 - **Engine-level mutual exclusions are small and enumerable**: the keyboard
   overrides in the table above (especially `CTRL+F`, `Q`, `B`, `W`, `O`, `L`,
   `U`, `F4`), the differing AI difficulty multiplier values, and the
   package-specific registry/INI/save identities. They are configuration
   dimensions, not algorithmic incompatibilities. The extended script ports
   are *not* on this list: they are one shared recorder contract.
+
+## Completeness boundary and contract owners
+
+**Established — evidence boundary.** Three independent targets must be named:
+the authored release content, its distributed engine/recorder, and the current
+TADR profile with the same mod name. The first two are identified in the
+package documents; current source here means
+[TADR revision dcff5ddeb6bd1030e3f452c0f16e5f005850f62f](https://github.com/tanvanman/TADR/tree/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f).
+Source-established behavior at that revision does not settle older builds by
+name alone. Catalog compilation proves neither scripts nor visual fidelity.
+
+**Established — ownership index, not implemented-support status.** These
+domains collectively bound a claim of full support. A claim must name the
+release and the domains verified. Recording a domain outside the present
+single-player implementation scope does not make it implicitly supported.
+
+| Domain | Contract owner and boundary |
+|---|---|
+| Directory aliases, overlay, limits, LOS tables, maps | Package references and the asset audit below; the same mod name can denote different layouts. |
+| Weapon/unit keys, targeting, damage, healing, veterancy, transport, wrecks | [Community engine](community-patch-engine.md), [target keys](weapon-target-keys.md), historical package contracts. |
+| Construction, rotations, previews, membership, queue/placement | Community engine, [build menus](build-menus.md), [rendering](community-patch-rendering.md); display does not prove footprint or COB agreement. |
+| Movement, path budgets, builder schedules | [Pathfinding](community-patch-pathfinding.md) and community-engine construction; a capacity raise does not establish a new path algorithm. |
+| COB queries, commands, setters, effects, spawning, callbacks | [Script ports](script-ports.md); preserve locality, playback, caller and mod-id gates, not only port numbers. |
+| Models, animated/team textures, composites, palette/SHD, nanoframes, projectiles | Rendering reference, authored audit below and retail format contracts. |
+| Strategic view, contacts, icons, rings, whiteboard, selection | [Draw interface](draw-engine-interface.md) and rendering contracts; each visibility predicate matters. |
+| Faction HUD, GUI pages, third side, controls | Package references and input mappings; do not assume ARM/CORE occupy side indexes zero/one. |
+| Campaigns, schemas, AI, sound, music | Package references, recorder and community-engine schema contracts; compilation does not exercise a mission or its victory condition. |
+| Saves, configuration identity, replay/session tooling | Package references, [recorder](ta-demo-recorder.md), community-engine session contracts; historic and current formats stay distinct. |
+| Multiplayer claims, sharing, votes, verification, packet extensions | Community engine and recorder; researched surface, with networking/full replay outside the repository's present implementation scope. |
+
+## Authored rendering audit
+
+### Reproduction and admission
+
+**Established — local host observation, 2026-09-22 UTC.** At Nanolathe revision
+`857de633`, mount the reference retail install, followed by these roots in
+order, and resolve the named built-in content profile:
+
+| Profile | Additional roots |
+|---|---|
+| `prota` | ProTA 4.8 extracted distribution |
+| `zero` | TA Zero Base's `TA Zero` directory, then TA Zero Alpha 5 |
+| `escalation` | Escalation Gold 10.2.0 `Step_2_Install Main Files` directory |
+
+The private bundle `~/ta-decompile/mods/notes-support-20260922/` retains audit
+source, root/archive manifest, full JSON, definition-reference matches, test
+logs and captures. The probe uses production VFS/profile detection, catalog
+compilation, 3DO/GAF decoders and metadata validation. It deduplicates
+case-folded logical paths and reads the overlay winner without donor files.
+The corpus includes mounted but potentially unused assets; file identities
+below hash decoded authored resource bytes with SHA-256.
+
+**Established — admission.** ProTA compiles 317 unit definitions and Zero 269.
+Escalation admits its enlarged definition/map/LOS domains but stops at
+`objects3d/armast_dead.3do`. The existing
+`TestEscalationContentSetStopsAtItsPackagingGap` passes by asserting that
+failure. Conversely, `cmd/modinventory` deliberately inserts donors following
+missing-resource errors; its tolerant report does not prove original art loads.
+
+| Corpus | Decoded 3DOs | GAF banks decoded under default limits | Banks rejected by pixel budget | Unresolved textured-face names |
+|---|---:|---:|---:|---:|
+| ProTA 4.8 | 654 | 441 | 0 | 0 |
+| Zero Alpha 5 | 1,145 | 932 | 1 | 2 |
+| ESC Gold 10.2.0 | 1,189 | 722 | 3 | 27 |
+
+**Established — observation scope.** Every enumerated 3DO decoded. Texture
+checking compares nonempty textured-face names against nonempty entries of
+the winning `textures/*.gaf` banks, case-insensitively. It establishes presence,
+not duplicate-entry precedence, face visibility, or an original-engine lookup
+rule absent from this probe.
+
+### Large effect banks exceed a host budget
+
+**Established — authored content and host observation.** Four banks fail the
+production default GAF limit of 134,217,728 unique decoded pixels. Pixel-free
+metadata validation succeeds when only the probe's aggregate/expanded pixel
+budgets are enlarged. The counts sum `width × height` once per distinct frame,
+including composite children: they are geometry budgets, not encoded sizes or
+peak-memory estimates. No production limit was changed.
+
+| Bank under `anims/` | Encoded bytes | Unique frame pixels | Largest frame pixels |
+|---|---:|---:|---:|
+| Zero `modfx.gaf` | 138,877,905 | 138,769,269 | 1,081,668 |
+| ESC `esc_nuke_a_02.gaf` | 111,898,352 | 138,251,088 | 4,665,600 |
+| ESC `esc_nuke_x_01.gaf` | 234,063,808 | 282,025,456 | 9,144,576 |
+| ESC `esc_weap_x_01.gaf` | 238,541,376 | 288,556,992 | 10,497,600 |
+
+**Established — resource identities**, in the same order:
+
+- `modfx.gaf`: `c31dc7e72fb03595f58378ccbb2a6375d69d67eda930e1f0b7ea27d712614d1b`.
+- `esc_nuke_a_02.gaf`: `955ae24a1f19f4f6e68d6a6b4fdc201f859f86b90b8d5d06e030358899b00c6b`.
+- `esc_nuke_x_01.gaf`: `0f77fa777d7d86b47b52168b4b1bfa1032a899b99350584e90c4908bcceb6205`.
+- `esc_weap_x_01.gaf`: `f46eec172d562f8d6fcfa7a5950e4703ea95ac2478b92a7038e7e4e28eaa28f3`.
+
+**Established — authored dependencies.** Zero's `ZWeapon/ArmWeapons.tdf`
+references `ModFX` for `Arm_ComDGun`, and `Death.tdf` for `Death_Commander`;
+its other faction weapon files use the bank too. Escalation's
+`T4ESC2.ufo:weaponE/TAESC4.tdf` uses `esc_nuke_a_02` for `NUKE_SUPER`;
+`T5ESC.ufo:weaponE/TAESC5.tdf` uses `esc_weap_x_01` for `CANNON_BFG`,
+`esc_nuke_x_01` for `CANNON_OLYMPUS`, and `esc_nuke_a_02` for `NUKE_SSILO`,
+including water/lava variants. These files have active authored references.
+
+**Established — host consequence.** `formats.LoadGAFFile` uses that aggregate
+limit; `internal/client.EffectBank` records a diagnostic and caches a null bank
+when loading fails. The metadata loader enforces the same geometry budget.
+Thus catalog success can coexist with unresolved effect art. **Unknown — full
+presentation:** raster materialization, upload/atlas use, memory cost and
+all-frame appearance remain unverified. Settling evidence is a bounded host
+loading strategy and captures across the authored effect's complete lifetime
+on both renderers, retaining actual bank identity. Raising a file-read cap
+alone cannot fix this decoded-pixel failure.
+
+### Missing model and texture references
+
+**Established — Escalation authored references.** Five absent models are named
+by corresponding corpse sections:
+
+| Missing model under `objects3d/` | File under `features/corpses/` |
+|---|---|
+| `armast_dead.3do` | `ARM_T3_corpses.tdf` |
+| `armmanta_dead.3do` | `ARM_T2_corpses.tdf` |
+| `corast_dead.3do` | `CORE_T3_corpses.tdf` |
+| `corcapsub_dead.3do` | `CORE_T2_corpses.tdf` |
+| `cortrog_dead.3do` | `CORE_T5_corpses.tdf` |
+
+**Unknown — package completion.** Determine whether another required authored
+archive supplies them, or whether the historical engine handles those
+references differently. A visually similar replacement settles neither.
+
+**Established — Zero unresolved texture names.** `armcolormeta4_1` appears on
+`armcommander.3do` and `armt1aaturret.3do`; `goksphere2_5` appears in 22 models,
+including `armt1sub.3do`, `coret2ewhover.3do`, `gokt2suphover.3do`. Neither
+resolves in the audited namespace. **Established — Escalation unresolved
+names:** `armhrk1_01` on `corfrig_dead.3do`; `dcom2` and `metal1` on
+`cormkl.3do` and its two audited wreck variants; `s01` through `s24` on
+`corfus_upgrade.3do` and `corsfus_upgrade.3do`.
+
+**Established — authored piece/script follow-up.** The private audit bundle's
+`textures/` directory records model/FBI/script identities, every matching
+polygon and all inspected script visibility commands. None of the targeted
+Zero polygons or Escalation `s01`–`s24` polygons is selection geometry.
+
+| Missing name and model pieces | Shipped script evidence |
+|---|---|
+| Zero `armcolormeta4_1`: commander `head`, AA turret `socle` | The commander hides its head during arrival, then explicitly shows it. The turret has no hide/show/explode command for its pedestal. These are ordinary model surfaces requiring visual acceptance. |
+| Zero `goksphere2_5`: wake-effect pieces | Of 100 matching quads, 93 are hidden in the straight-line beginning of `Create`, with no later show command in the inspected scripts, including the bound AI variants. Emitting an effect from a piece does not itself show its polygon. |
+| Zero remaining seven wake quads | `coret1sub` has model piece `wake` but script piece `wake1`; the missing-name binding outcome is **Unknown**. `gokt1consub` and `gokt1sub` each have `wake1`–`wake3` in both model and script, but no hide/show/explode command for them. Their role as effect emitters does not establish invisibility. |
+| Escalation upgrade models: `s01`–`s24` | Both scripts hide all 24 matching pieces during the straight-line start of `Create`, before waiting for construction. Neither script later shows them. |
+
+**Unknown — intended visible appearance.** Script hiding does not settle
+unscripted model displays, extension build previews or pre-script startup.
+Actual projected pixels, occlusion, the unresolved piece binding, any further
+documented texture resolver and matching historical captures remain to be
+checked. The other Escalation names above have not received this piece/script
+follow-up. Do not equate every missing name with a demonstrated visible defect
+or choose substitute art from the census alone.
+
+### Bounded model captures
+
+**Established — host observation, not a retail comparison.** On the same
+Nanolathe revision, macOS GPU captures used the roots above, empty temporary
+settings, `--renderer modern --shot-renderer both --shot-size 800x600`, heading
+zero and the default unanimated pose. Subjects were ProTA
+`--shot-model armfndry` and Zero `--shot-model gokt3suprpod`; all four images
+were opened and inspected. Both render recognizable textured geometry, but at
+`--shot-model-scale 2` the classic image has approximately twice the modern
+image's width and height. GPU telemetry reports one subject, no skipped body
+and no lane overflow. This route does not exercise COB `Create`, build-preview
+filtering, combat or a battle camera.
+
+**Established — preview-scale discrepancy.** Repeating ProTA at scale 1 changes
+the classic PNG; the modern PNG is byte-identical at scales 1 and 2 (SHA-256
+`121511284f8ad8e7f7ed295b39f365568b5713f39cbce254509fa7e81711b476`). The default
+comparison tolerance accepts these differences; a zero exit code is not a
+visual parity assertion. **Unknown — scope and remedy:** trace the isolated
+preview transform and recorded geometry against the battle executor before
+calling this a general battle-scale defect. Large effects and Escalation
+battle rendering are not visually certified by these model captures.
 
 ## Unknown
 
@@ -323,3 +507,9 @@ scripts use only retail ports.
   [community patch engine behavior](community-patch-engine.md) CP-SES-8; what
   remains open is the behavior of the old builds where it differs from the
   current source.
+
+- **Unknown — full rendering acceptance.** Resolve the large-bank admission,
+  missing references and preview-scale observation above; compare matching
+  battle scenes, animations, factions, underwater effects, team colours,
+  fog/sensor states and construction on both renderers. Source contracts and
+  parser success alone do not certify visual fidelity.

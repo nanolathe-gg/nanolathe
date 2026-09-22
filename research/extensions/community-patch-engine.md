@@ -301,7 +301,7 @@ desync-relevant; HOST keys are local preferences.
 | `WheelZoom` / `WheelMoveMegaMap` | TRUE / TRUE | TRUE / TRUE | HOST: wheel behaviour |
 | `DoubleClickMoveMegamap` | FALSE | FALSE | HOST: double-click to move |
 | `UnderAttackFlash` | FALSE | TRUE | HOST: icon flash when attacked |
-| `MegamapRadarMinimum`, `MegamapSonarMinimum`, `MegamapRadarJamMinimum`, `MegamapSonarJamMinimum`, `MegamapAntiNukeMinimum` | unset (-1) | 0 | HOST: range-ring thresholds |
+| `MegamapRadarMinimum`, `MegamapSonarMinimum`, `MegamapRadarJamMinimum`, `MegamapSonarJamMinimum`, `MegamapAntiNukeMinimum` | unset (-1) | 0 | HOST: configuration sentinel; effective defaults and the radar-jammer comparison are specified in [rendering contracts](community-patch-rendering.md) |
 | `MegamapWeapon1..3Color`, `MegamapRadarColor`, `MegamapSonarColor`, `MegamapRadarJamColor`, `MegamapSonarJamColor`, `MegamapAntinukeColor` | unset (-1) | absent | HOST: ring colours (code spelling "Antinuke") |
 | `PlayerNDotColors` (1–10) | per-player defaults | same | HOST: dot colours |
 | `PerPlayerMarkerWidth` / `PerPlayerMarkerHeight` | 10 / 10 | 10 / 10 | HOST: whiteboard marker size |
@@ -1442,8 +1442,12 @@ nearest cardinal, falling back to the chosen facing when none is found; it
 **deliberately bypasses the `Rotations` restriction** (the author's signal
 that the unit's heading is script-driven). It is gated to at least one
 selected, live, completed own unit with a positive authored build distance
-whose distance to the rectangle centre is within it (squared, inclusive), so
-fog of war cannot be scanned. `PreviewObject3D` substitutes a different 3DO
+whose distance to the rectangle centre is within it (squared, inclusive).
+**Established — source boundary:** this restricts the cursor's distance from
+the builder; it does not test enemy visibility, mapping or cloak. An unseen
+enemy's first slot can still determine facing inside that circle. The source
+comment describes mitigation of remote scanning, not complete protection
+against information from fog. `PreviewObject3D` substitutes a different 3DO
 model, loaded from the archive's model directory on first use and cached;
 a missing file is reported and the preview falls back, and the other keys
 still apply to the substitute. Presentation only: the module renders and
@@ -1750,11 +1754,14 @@ Retail keys the community line authors beyond the executable's own vocabulary
 **Established — the COB ports are recorder-provided, not tdraw-provided.**
 `tdraw` adds no script opcode, port, or VM instruction; rotation is expressed
 through existing state and packets (CP-CON-5). Compatibility with community
-content scripts therefore means reproducing the recorder's extension ports 32
-and 69–75 (and the retail ports), whose exact per-port semantics are recorded
-in [Extended script ports](script-ports.md). The recorder's source analysis
-settles the open questions there; that document is kept updated from it rather
-than restated here.
+content scripts includes the authored census's ports 32 and 69–75 alongside
+retail ports. The current recorder additionally exposes getter/setter groups
+through port 400, including commands with side effects, documented in
+[Extended script ports](script-ports.md#current-source-dispatch-contract).
+Its [script integration](ta-demo-recorder.md#current-source-script-integration)
+also records callback payloads, mod-id-gated consumers, optional script-slot
+capacity and map scripts. Those source contracts and remaining unknowns are
+owned there; an eight-port census is not the full capability surface.
 
 **Established — the COB VM dispatch patch is Escalation-only and claimed
 bit-identical.** `CobDispatchTable` replaces the interpreter's opcode

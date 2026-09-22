@@ -72,14 +72,13 @@ leading dot. Feature families:
 - **Interface upgrade**: `.ehaon`/`.ehaoff`/`.ehareport` control recorder-side
   interface features — the idle-construction-unit finder and the hundred-unit
   build queue — for all players in the game.
-- **Script-port extensions ("COB Extensions")**: the recorder hooks the
-  executable's script-port reader and answers the extended ports `32` and
-  `69`–`75` for unit scripts (unit-id iteration range, own id, target owner,
-  target build progress, relation and visibility tests, and the reader's kill
-  count); retail ports pass through. The hook is installed after a
-  byte-signature check of the host executable and has no off switch. All
-  inspected builds (3.9.2.0 and 3.9.2.416) implement the same port set with
-  the same semantics; see [Extended script ports](script-ports.md).
+- **Script-port extensions ("COB Extensions")**: the shared content census
+  uses `32` and `69`–`75` (kill count, ids, owner, build progress, alliance and
+  controller locality). The pinned source implements a much larger getter
+  and setter interface, including stateful commands and visual controls;
+  [Extended script ports](script-ports.md) owns the current-source contract.
+  The source's broader surface and callback extensions must not be projected
+  onto older shipped DLLs without release-specific evidence.
 - **Reporting**: `.report`, `.status`, `.date`, `.time`, `.units`, `.players`,
   `.ehareport`, `.hookreport`; `.reportmod` publishes each player's configured
   mod name/version from `mods.ini` (newer builds only).
@@ -149,6 +148,122 @@ The recorder stores those values but never reads them back, and its
 queue and report an external companion program's presence. The colour values
 are therefore consumed outside this DLL (**Supported inference**), by that
 companion or another component.
+
+## Current-source script integration
+
+**Established — scope and registration.** This section records source behavior
+at TADR commit `dcff5ddeb6bd1030e3f452c0f16e5f005850f62f`, inspected on
+2026-09-22. It does not extend the earlier binary observations to callbacks or
+ports that those observations did not cover. The
+[`Plugins` registration path](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/Plugins.pas)
+registers the extended port handler for every mod identity, while registering
+extended script callbacks, map scripting, extra GAF sequences and the
+unit-action/GUI-variant consumers only when configured mod id is greater than
+1. Each plugin also requires the supported host-version check. Presence of a
+port handler is therefore insufficient to establish that all its backing
+consumers were installed. Registration's two installation phases are timing
+choices, not disabled-plugin flags.
+
+**Established — complete interface owner.** The current recorder handles the
+grouped port interface from 21 through 400 described in
+[Extended script ports](script-ports.md#current-source-dispatch-contract).
+It includes player economy/visibility, health and cloak, creation and killing,
+search result arrays, order inspection/issuance, definition copies/edits,
+speech/sound/animation, other-unit script calls, shared data, map queries and
+map-mission commands. Many are getter-shaped commands. Selected mutating
+getters are suppressed during playback; others, including healing, giving,
+shared-data writes, template edits and mission commands, are not. Setter
+permissions divide into unrestricted, local human/AI, and local human/AI plus
+not-playback groups. The eight ports found in the package census are a subset
+of this source implementation, not a limit on recorder capability.
+
+### Additional callbacks and call arguments
+
+**Established — callback calls.** The
+[`ScriptCallsExtend` plugin](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/ScriptCallsExtend.pas)
+uses existing COB invocation machinery; it does not add a script opcode. Its
+active call sites provide these arguments and scheduling options:
+
+| Callback | Arguments supplied by the source | Start mode |
+|---|---|---|
+| `AimPrimary`, `AimSecondary`, `AimTertiary` | Extend the aim call to three arguments: existing heading/pitch plus target unit id; ground targeting passes zero id. The ballistic path supplies zero for both angle arguments and the same unit-id-or-zero third argument. | Existing aim invocation |
+| `WeaponHit` | Weapon id, source hit-test result 0/1, projectile current X and Z in raw fixed point. Requires attacker and attacker script state. The wrapper does not reduce X/Z to integer map coordinates. | Immediate |
+| `TookDamage` | Damage type, damage amount, attacker id; requires the target's alive state and no death latch at this hook. | Deferred |
+| `SetNewMaxReloadTime` | Weapon selector `130`–`132` and new reload-time word. | Deferred |
+| `ConfirmedKill` | Death-type argument sent to the unit entering the death-finalization path, not to its credited killer. The call is inserted before the original death handling. | Immediate |
+| `ConfirmVTOLTransport` | Loading flag, piece, transported unit id. Loading uses 1 and the load-order piece; unloading uses 0 and piece 0. Both unit references must be present. | Immediate |
+
+The generic
+[`TAUnit.CobStartScript` helper](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/TAMem/TA_MemUnits.pas)
+counts supplied argument values, fills omitted ones with zero, and does
+nothing when the unit or its script state is absent. Matching the source
+binding to the retail adapters establishes that the wrapper's “guaranteed”
+option selects immediate execution: after allocation, all active slots run
+with zero delta and one zero-delta piece pass follows. False selects deferred
+execution; neither guarantees a free slot ([04 §4.2](../retail-executable-spec/04-units-orders-scripts-and-movement.md)).
+The death callback recipient matches the retail finalization entry
+([04 §5.1](../retail-executable-spec/04-units-orders-scripts-and-movement.md));
+the damage guard matches its alive/death-latch predicates. The
+commented-out expansion of `HitByWeapon` is not registered; no extra damage
+argument to that existing callback is established by this source.
+
+**Unknown — full callback trigger semantics.** The source settles callback
+names, payloads and invocation options, but the patched engine call sites
+still need matching to retail behavioral evidence to establish the full
+`WeaponHit` test and the damage helper's preceding admission/scaling before
+`TookDamage`. Their payloads are established, but complete event-delivery
+contracts still require that caller match; no binary-patch
+analysis is authorized by this reference.
+
+### Script capacity and map-script scheduling
+
+**Established — optional 64 slots.** The
+[`MaxScriptSlots` plugin](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/MaxScriptSlots.pas)
+raises unit script capacity from eight to 64 slots only when mod id is greater
+than 1 and `[Preferences] IncScriptSlotsLimit` is true. The
+[`INI reader`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/IniOptions.pas)
+defaults the setting to false. The replacements cover allocation,
+initialization, start admission, dispatcher loops and the unit-loop script
+runner. The
+[`SaveGame` companion](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/SaveGame.pas)
+uses the same two gates for the matching save/load changes. This establishes
+a capacity change; it is not evidence for a different COB instruction budget,
+`SLEEP` unit or ordering policy.
+
+**Established — map COB entry.** The mod-only
+[`MapExtensions` plugin](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/MapExtensions.pas)
+derives a `.cob` path from the loaded map's terrain pathname. When the file
+exists, it creates a separate script host using a copy of catalog unit type 1
+with that COB file substituted and the local player as owner. For non-menu
+game types it starts `MapMission` with two arguments: game type
+(1 campaign, 2 skirmish, 3 multiplayer) and difficulty (0 easy, 1 medium,
+2 hard), using immediate execution. The host later reports id 65535. The
+start precedes that id assignment, so the initial synchronous drain cannot
+rely on the final id having been assigned. A continuing update hook invokes
+the engine script runner for this host when script state exists; it is not merely a one-shot startup call. The
+precise placement of that hook within an authoritative tick still needs a
+retail phase match.
+
+**Established — map command tables.** If a companion `.tdf` file exists, the
+loader reads `sounds`, `features`, `unitsmissions`, and `textmessages`
+sections. Sound/feature/initial-mission lists contain section **keys** in the
+reader's returned order. The text list instead contains values looked up by
+those keys. Script ports use zero-based list indices; most callers do not
+check an index or even the table's presence. Map initialization clears mouse
+lock and fade. Extension cleanup releases those lists, removes the map-script
+host and clears shared data/search arrays. See
+[map and mission ports](script-ports.md#map-mission-and-arithmetic-ports) for
+individual commands and their remaining delegate questions.
+
+**Unknown — authored map-table contract and persistence.** The source tells
+which file/section strings are requested, but not which of the inspected
+packages actually ships compatible map scripts or what ordering an author
+expects from the INI-style section reader. A versioned authored-file census
+would settle that boundary. Save/load restores the explicitly submitted
+shared-data prefix and result-array families; map-host scheduling and all
+private-definition/forced-height/visual state must not be assumed persistent
+without tracing their save/load consumers. A compatible Nanolathe save design
+remains a separate decision.
 
 ## Unknown
 

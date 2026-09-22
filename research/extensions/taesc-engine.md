@@ -21,6 +21,7 @@ identified by its bundled `ESC_READ_ME.txt`, `GOLD_10_2_0.txt` and
 | `emusi.dll` | `b798698f3d818989beeb673011b7a06e9ee54b1c30e55398cbb448ba7b4ef558` | music backend |
 | `TAESC.ini` | — | engine preferences |
 | `ddraw.dll` | — | optional cnc-ddraw renderer (Step 3) |
+| `TAESC.gp3` | `5959dde9d33e12bf0eb874bfe36f7943fff6a50e85a715323886d96e2a15eb09` | Gold 10.2.0 basic content archive |
 
 **Established — the executable is a rebranded retail build.** Its size equals
 retail 3.1's, its code section is retail's with a bounded set of patches, its
@@ -40,7 +41,9 @@ challenge/response verification, factory recycling fix, start-position
 assignment, wind synchronization, "Swedish Eye ver 0.8" diagnostics). It is
 the most feature-loaded observed build, adding build-preview, rotation,
 veterancy and unit-definition extension machinery absent from the other two.
-Exact source provenance and license are not established.
+The shipped DLL's source revision is not established. The current TADR tree
+is MIT-licensed and builds an `escalation` profile, with the separate version
+and distribution boundary recorded below.
 
 No executable addresses, offsets, disassembly or decompiler output are
 recorded here. **Evidence provenance:** the implementation detail below was
@@ -170,8 +173,8 @@ complete in %d seconds."; a per-tick callback performs it at the deadline.
 higher tier cons"), but no repair-related string, definition key or
 configuration key exists in the shipped DLLs, and no arithmetic comparing two
 unit types' worker or build values could be isolated in the hook bodies.
-A runtime trace of the repair step, or a comparison of the repair contribution
-between the retail and Escalation executables, would settle it.
+A matching licensed historical source revision or a bounded manual comparison
+of repair contributions between retail and this release would settle it.
 
 **Supported inference (from the community patch source) — the fix is in the
 executable's repair helper and makes contribution proportional.** The later
@@ -200,9 +203,10 @@ arithmetic are not established here.
 
 ### Executable patch inventory
 
-**Established — source-level comparison with retail found these behavior
-changes in the image** (string, registry, directory, savegame and import
-renames excluded):
+**Established — the earlier binary comparison recorded these behavior
+changes in the image** (the legacy provenance note applies; this is not a
+comparison of licensed source). String, registry, directory, savegame and import
+renames are excluded:
 
 - **Weapon-slot handling on orders.** The special/disintegrator order
   deactivates only its own weapon slot instead of slots 1 and 3 together, so
@@ -289,15 +293,23 @@ player presses the ability key and clicks a point above or below the lab.
 **Established — the aim callback snaps the plate.** The factory scripts define
 the third-weapon aim callback (for example the shipyard's) as: when the aim
 heading lies strictly between 90° and 270°, turn the buildpad piece instantly
-to 180°; otherwise turn it to 0°; then, gated on the unit's own visibility
-(recorder ports `71` and `75`, see
-[Extended script ports](script-ports.md)), briefly show and animate a
-dedicated arrow piece as the direction indicator. The plate therefore has
+to 180°; otherwise turn it to 0°; then, gated by recorder ports `71` and `75`,
+briefly show and animate a dedicated arrow piece as the direction indicator.
+The plate therefore has
 exactly two valid positions and the snapping is the script's, matching the
 mechanism traced for TA Zero's identical ability (same display name, range
 800). The release readme describes the same user flow ("Direction" button or
 `D`, then attack an area above or below the lab) for non-spinning pad
 factories.
+
+**Established — correction to the port interpretation.** The current licensed
+recorder source identifies port `71` as the reading unit's index and port
+`75` as controller locality: local human or local AI, not visibility. Thus the
+gate is not evidence of an LOS predicate; see
+[Extended script ports](script-ports.md#port-table). Its exact applicability
+to the historical Gold DLL still requires a source-version match or bounded
+observation, and the arrow's historical visibility must not be inferred from
+the earlier, incorrect name for port `75`.
 
 **Established — placement rotation.** The engine DLL holds a
 `RotateBuildKey` virtual-key field (the load message names `/` as the
@@ -487,6 +499,126 @@ the extended ports and the port-valued `GET`/`GET5` results.
 Copyright © 2008–2026 The Registered One and Wotan (as stated by the bundle);
 this document claims no rights.
 
+## Version boundary: current TADR profile
+
+**Established — source and distribution.** MIT TADR at
+`dcff5ddeb6bd1030e3f452c0f16e5f005850f62f` selects `TDRAW_CONFIG_ESCALATION`
+in [`config_escalation.h`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/DDraw/config_escalation.h).
+Its [`release workflow`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/.github/workflows/compile.yml)
+packages a newly compiled `tdraw.dll`, generic `totala.ini`, feature text and
+the committed `dist/escalation/eplayx.dll` in `tdraw-escalation.zip`; the
+recorder distribution is `2026.9.9`. The installation table in `tdraw.txt`
+still names Escalation 9.9.6 and requires renaming the draw DLL and INI to
+`taesc.dll` and `TAESC.ini`. Neither the profile name nor that older example
+identifies the Gold 10.2.0 binary hashes recorded above.
+
+**Established — profile choices in the later source.** Current `escalation`
+enables air-stack splash handling, the contested-cell tie-break, aircraft
+wreck fall, extended weapon IDs, the build-weapon slot guard, COB dispatch
+optimization, share-abuse guard, local mute and percentage-share commands.
+The proportional repair module has repair and self-heal health multipliers
+of three, with its energy term independently calculated. Construction guard,
+patrol and kick-out changes are on. The off-map aircraft margin is 32 tiles;
+metal/geothermal snap is disabled and wreck snap is limited to one cell.
+Allied queued-build display is disabled. These source selections are not a
+backdated description of Gold 10.2.0. In particular the current off-map/splash
+patches do not prove the mechanism of the historical package's scripted
+offscreen/stack penalties, and the current repair multipliers do not settle
+its older repair-exploit fix. Full source contracts and defaults belong to
+[Community patch engine behavior](community-patch-engine.md#31-feature-matrix-at-the-pinned-revision).
+
+## Authored package, interface and single-player coverage
+
+**Established — documented install composition.** `ESC_READ_ME.txt`
+"Installation & Troubleshooting" requires original TA plus Core Contingency.
+Its file list describes `TAESC.gp3` as Basic, `TXESC.ufo` as shared effects
+and data, `T2ESC.ufo` as the added T1/T2 set and `T3ESC.ufo` as T3.
+The two T4 archives depend on Basic and Strategic; Tactics is optional for
+those. The list labels the Utility T5 package pending, yet `T5ESC.ufo` is
+present in the inspected full download. Consequently the full package's
+authored census is a concrete archive composition, not proof that every
+subset suggested by the readme has been validated. Asset providers and
+missing-resource observations are recorded in
+[Mod engine-package compatibility](mod-engine-compatibility.md).
+
+**Established — authored namespace and side resources.** `TAESC.gp3` supplies
+`unitsE`, `weaponE`, `gamedatE`, `unitpicE`, `downloadsE`, `guiE` and `aE`.
+Its `gamedatE/SIDEDATA.tdf` lists Arm then Core with commanders `ARMCOM` and
+`CORCOM`. Arm uses `ARMINT`; Core uses `NEWINT`, not the retail `CORINT`.
+Both sides select `armbutt` as their button font. Both use energy index 208
+and metal index 224. The archive's `guiE` includes per-unit upgrades and
+faction panels; the readme documents twelve build buttons plus unit orders
+on one panel. These fields, the `TAESC.ini` player-color overrides and
+`Icon/iconcfg.ini` are independent interface inputs. A renderer that paints
+stock faction panels or chooses a font from the side's name bypasses the
+authored contract.
+
+**Established — campaign overlays and AI.** The readme's "Missions" section
+calls mission compatibility beta and says original missions generally limit
+build access to classic units, with exceptions where a moved technology tier
+requires an ESC unit. The shipped archives author mission OTA files,
+`camps/briefs` text, `camps/useonly` restrictions and a replacement
+`data/1.ZRB` alongside `data/OTA_1.ZRB`. This establishes assets to resolve,
+not complete campaign correctness. `aE` supplies distinct map-style AI files
+including Default and Krogoth. The readme distinguishes its basic bundled AI
+from separately downloadable TAfan97 AI packages; their behavior must not be
+attributed to the inspected full release. Difficulty income, commander
+orders and appliance shutdown still depend on the documented engine changes
+above, independently of these AI profiles.
+
+**Established — local music contract and a documentation conflict.**
+`Music/_README_MUSIC.txt` names tracks `2.mp3` through `17.mp3`, with the
+root `Music` directory and `MP3Player=2` required for its local-file path.
+It instructs disabling the setting when the directory is absent; the shipped
+`TAESC.ini` sets it to 2. The general install readme illustrates zero-padded
+filenames, while the delivered files and the music readme use unpadded names.
+The delivered namespace is established; exact filename fallback is
+**Unknown** without backend documentation or a bounded manual observation.
+The intro/bonus `1.mp3` must not silently become the first ordinary game
+track. This is separate from startup movie audio and from the draw wrapper.
+
+### Documented unit systems outside the extension-key census
+
+**Established — documented intent, not completed implementation contracts.**
+`ESC_READ_ME.txt` "ESC Features" documents the following player-visible
+systems. A catalog of unfamiliar FBI keys alone misses them: authored unit,
+weapon, script and GUI wiring can express substantial behavior using known
+fields and ports. The table records acceptance boundaries without claiming
+that the readme settles script timing or every arithmetic operation.
+
+| System | Gold 10.2.0 documentation | Evidence still needed for exact behavior |
+|---|---|---|
+| Adjacency and charging | Power-plug build pictures identify pairable units; blue/yellow bolt symbols identify charging providers/recipients. Pairing and charging bonuses do not add together, but adjacency can preserve the benefit when charging disappears. | The readme's charging paragraph says a general 150% boost while its following tier examples use differing percentages. Resolve per-unit amounts, range, stacking and update timing from authored scripts/content or bounded observations; do not derive a universal multiplier. |
+| Area shields | Protect buildings, with documented 75% absorption; mobiles are excluded. Coverage indicators are owner-visible, shield hits produce a dome and a one-second energy-drain interval, and shields overlap without stacking the health benefit. | Per-unit radius, damage classes, rounding, energy shortage behavior, timing, indicator exposure and save state. The documented owner-visible icon is distinct from the dome described as visible beyond LOS. |
+| Factory and mobile upgrades | Upgrading a factory affects later-produced eligible mobiles, not already-built or resurrected units. Build pictures carry upgrade markers. | Follow each parent/product script pair and the identified missing menu references; the retail menu mechanism alone does not establish propagation or effects. |
+| Commander/decoy upgrades | Research buildings upgrade own, same-faction commanders/decoys while the buildings survive; multiple research buildings accumulate benefits. | Exact scanning order, effect values, removal after destruction, capture/transfer behavior and serialization. |
+| Teleporters | Link a receiving gate to an originating gate, then move own units into the originating circle. Mobile teleporters receive only. Allied source gates can feed an owned destination. | Capacity, delay, cost, order preservation, re-linking, destination obstruction and restore behavior from the actual units' scripts/definitions. |
+| Automatic transports | Surface transports have manual/automatic modes and accept only own units; last-loaded units unload first. Multi-unit aircraft load nearby units after landing and account for unit-size slots; repair-pad landing does not trigger load/unload. | Authored size/capacity rules, selection order, water/land rejection, landing/attach callbacks, full capacity and save/load. |
+| Offscreen and stack penalties | Aircraft returning from outside the map temporarily lose weapon/sensor/unload capability. T3/T4 aircraft below a stack's first unit lose firing and health benefits until separated. | The transport-stack paragraph contradicts itself about unloading. Settle that branch and penalty timing from authored scripts or manual observations; do not replace it with the 2026 engine's splash fix. |
+
+### Package acceptance cases
+
+These are evidence-based requirements, not a report that Nanolathe passes them:
+
+- Identify the exact archive set, resolve all renamed trees and report missing
+  models, textures and effect resources with their original provenance. A
+  donor asset or successful partial census cannot certify the full package.
+- Capture Arm and Core panels, twelve-slot pages, portraits, upgrade/charging
+  symbols and `NEWINT` art using the supplied fonts and colors. Include the
+  startup movie, briefing, save/load and faction-selection screens.
+- Exercise authored veterancy thresholds, preview pieces, factory direction,
+  one valid upgrade and the known dead upgrade references. Check locality
+  separately from LOS when validating script-driven visual indicators.
+- Settle and test one representative of each documented system above,
+  including an allied gate, a full mixed-size transport, an upgraded factory
+  with old/new/resurrected products, shield energy shortage, charging removal
+  and offscreen/stack penalty recovery. Preserve unresolved cases explicitly.
+- Run a campaign restriction/briefing/progression case and each difficulty's
+  skirmish AI resource path; identify any optional AI package separately.
+- Validate the largest shipped explosion sequences against the actual GAF
+  resources and local MP3 track boundaries. Catalog admission, one rendered
+  commander, and the current TADR profile name are insufficient substitutes.
+
 ## Unknown
 
 - **Unknown — the Aegis upgrade's reachability.** The shield generator authors
@@ -496,8 +628,8 @@ this document claims no rights.
   A bounded in-game observation would settle it.
 - **Unknown — the repair-rate exploit fix.** The release notes document it, but
   no shipped DLL string, definition key or configuration key describes it and
-  no matching arithmetic was isolated; a runtime trace or a retail-vs-Escalation
-  repair-contribution comparison would settle it.
+  no matching arithmetic was isolated; a matching licensed historical source
+  or bounded manual retail-versus-Escalation repair comparison would settle it.
 - **Unknown — the snap override key's default.** The key code is configurable
   and the changelog names a default, but the shipped default value could not be
   read from the configuration surface.

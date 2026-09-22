@@ -21,6 +21,7 @@ dated 29 August 2025), identified by its bundled `ProTA 4.8 changelog.txt` and
 | `tmusi.dll` | `bfd96f5385984e8082db694f4d0192d65b660c1479df70f1a243a9e959beb202` | MP3 music backend (identical to TA Zero's `zmusi.dll`) |
 | `wgmus.dll` | `5ab702665d01390e49fb8c8af34569a83db1342ab7e848f2a7f2794e1931f09c` | alternative music backend (WGMUS 0.0.24) |
 | `ProTA.ini` | — | engine preferences, documented as "TA v2025.8.29" defaults |
+| `ProTA.gp3` | `ba2ee5c758eaaa1e6409800206f6983515a05ea833d04f40193bda88bd73aa6b` | authored content inspected independently of the executable |
 
 **Established — the shipped executable is unmodified retail.** The executable
 is byte-identical to the retail 3.1 baseline used by this project
@@ -146,14 +147,19 @@ adjustment, is not established in this document.
 
 ## Asset-driven extensions
 
-**Established — no new unit-definition keys are read by this engine build.**
-A census of the installed unit and weapon text found no non-retail
-unit-definition key with a demonstrated reader. ProTA's FBI files author the
+**Established — authored key census.** A census of the installed unit and
+weapon text found no non-retail unit-definition key with a demonstrated
+reader. ProTA's FBI files author the
 retail key set plus localized/mission metadata (for example `Designation`,
 `NoAutoFire`, `Ovradjust`, `SteeringMode`, `TEDClass`, `ThreeD`, `UnitNumber`,
 `altfromsealevel`, `resurrect`, `TransMaxUnits`, `Scale`, `ai_limit`), which
 are the same keys stock content uses; several are simply not yet compiled by
-Nanolathe's catalog.
+Nanolathe's catalog. This establishes the inspected content's vocabulary,
+not that the DLL cannot read other keys. The current source's common startup
+offers rotation and veterancy readers for the `prota` build too, and registers
+preview keys unless the host disables nanoframe preview;
+their absence from ProTA 4.8 content does not remove those readers from the
+later source (see the version boundary below).
 
 **Established — scripts use retail opcodes and retail ports.** A scan of all
 compiled unit scripts found only the retail instruction set and only the
@@ -165,7 +171,7 @@ table. The shipped recorder DLL exposes the shared extended ports (see
 extended-port reads. Apparent unknown opcode words in the census are trailing
 Scriptor banner text after a script's return, not executable instructions.
 
-**Supported inference — one non-retail weapon key is authored with no
+**Established — one non-retail weapon key is authored with no
 established reader.** `toaironly=1` appears on the two anti-missile
 interceptor rockets (`amd_rocket`, `fmd_rocket`); see
 [Non-retail weapon target keys](weapon-target-keys.md) for the census and the
@@ -186,6 +192,115 @@ release ships; the 4.6 change list in particular is the source for start
 position/team handling, click snap, queue dragging, patrol behaviour, the
 factory identity-recycle fix, whiteboard refinements, wind synchronization and
 ten-player support. Earlier ProTA releases are not covered here.
+
+### Current source profile is a separate target
+
+**Established — source, not a reconstruction of 4.8.** The MIT TADR tree at
+`dcff5ddeb6bd1030e3f452c0f16e5f005850f62f` selects `TDRAW_CONFIG_PROTA` in
+[`config_prota.h`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/DDraw/config_prota.h).
+Its [`compile.yml`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/.github/workflows/compile.yml)
+packages a newly compiled `tdraw.dll`, generic `totala.ini`, feature text and
+the committed `dist/prota/tplayx.dll` as `tdraw-prota.zip`. The recorder
+distribution is `2026.9.9`. This is a later engine-pair distribution, not the
+ProTA 4.8 content archive or its 2025 engine binaries. The installation table
+in that revision's `tdraw.txt` still names ProTA 4.6 and instructs users to
+rename configuration files to the mod's names; its version label does not
+certify a match to 4.8.
+
+**Established — selected source behavior.** This profile enables guarding and
+patrolling construction changes, construction-site kick-out, air-stack splash
+handling and the contested-cell tie-break. Its off-map aircraft margin is one
+tile, metal/geothermal snap radius is three cells and wreck snap radius one.
+It disables the proportional repair module, aircraft-wreck fall, extended
+weapon-ID protocol, share-abuse guard, local mute and percentage-share
+commands; allied queued-build display also remains disabled. Common startup
+and the host's preview setting, not the `prota` name, govern the shared
+unit-key readers. Exact contracts and effective fallback values belong to
+[Community patch engine behavior](community-patch-engine.md#31-feature-matrix-at-the-pinned-revision).
+Neither these switches nor the `prota` name establish the historical 4.8
+switches, authorize Nanolathe gameplay changes, or follow from choosing a
+content directory profile.
+
+## Authored package, interface and single-player coverage
+
+**Established — archive namespace.** The identified `ProTA.gp3` uses
+`gamedatP`, `guiP`, `unitpicsP` and `weaponP`; it also declares an empty
+`downloadP` directory. Unit definitions remain under `units`, AI profiles under
+`ai`, and models, scripts, textures, sounds and animation keep their shared
+names. Therefore "retail content directories" is incorrect for this release,
+even though its executable on disk matches retail. Empty `downloadP` is not
+evidence that retail `download` records should be imported. Sources: the
+archive directory and `gamedatP/SIDEDATA.TDF`; the latter supplies `[CANBUILD]`
+lists including the separately named rotated shipyards.
+
+**Established — authored interface.** `SIDEDATA` orders Arm then Core, with
+commanders `ARMCOM` and `CORCOM`, interface GAFs `ARMINT` and `CORINT`, and
+button fonts `armbutt` and `corbutt`. `guiP` contains the faction main panels,
+per-builder pages and front-end windows, including campaign and save/load
+windows. The 3.1-to-4.3 changelog documents twelve build icons per page,
+orders on the same panel, build hotkeys and their overlays. These are required
+interface inputs; recognizing the unit definitions alone does not exercise
+them. The 4.6 changelog further specifies that idle-builder/factory shortcuts
+prefer authored `CTRL_B`/`CTRL_F` categories over heuristics, and armed-unit
+selection uses `CTRL_W` with `NOTAIR`/`NAIR`. It does not provide the complete
+order/build hotkey table.
+
+**Established — palette and artwork overrides.** The archive supplies
+`palettes/PALETTE.PAL`, `GUIPAL.PAL`, `GUIPAL.PCX`, `PALETTE.SHD`,
+`PALETTE.LHT` and `PALETTE.ALP`, as well as replacement textures, models,
+cursors, build pictures and fonts. The 4.8 changelog documents pink/slate
+replacing white/black team colors and revised minimap colors; the shipped
+`Icon/iconcfg.ini` and `ProTA.ini` configure megamap art separately. A stock
+palette, stock interface or stock icon set cannot stand in for these assets
+when assessing ProTA rendering.
+
+**Established — campaign and AI are part of the package.** The 4.4 changelog
+documents enabling retail and Core Contingency campaigns; 4.5 documents
+campaign build-menu, campaign AI and Core mission 1 display fixes; 4.7 documents
+correcting Core Contingency mission 6 maximum wind from 9 to 900. The archive
+supplies campaign descriptors, briefs and `camps/useonly` restrictions,
+`ai/MISSIONS.txt` alongside skirmish profiles, `maps/CC01.TNT` and
+`maps/EXP1CC06.OTA`. Those are overlays on original mission assets, not a
+self-contained campaign distribution. The 4.5 AI changes also include nuke
+and anti-nuke use, stockpile queue limiting, low-energy appliance shutdown
+and a higher builder threshold. Authored AI files and documented engine
+changes are separate requirements; loading an `ai` file proves neither the
+patched decision logic nor campaign progression.
+
+**Established — music configuration is separate from content layout.** The
+4.8 notes include WGMUS 0.0.24; `wgmus.ini` selects MP3 files, folder playback
+and `MusicFolder=music`. The bundled WGMUS readme instead describes `tamus`
+as its default and warns that filename ordering depends on consistent number
+padding. No music directory or tracks appear in the inspected 4.8 package
+alone. Both `tmusi.dll` and `wgmus.dll` ship, so their coexistence and this INI
+do not prove which backend is active. The active backend, fallback and track
+ordering for this exact package remain **Unknown** without primary loader
+documentation or a bounded manual observation. No third-party music code is
+required to reproduce the authored music-directory contract independently.
+
+### Package acceptance cases
+
+These are acceptance requirements derived from the established sources above,
+not reported passing tests or new gameplay authorization:
+
+- Mount original assets followed by the identified 4.8 archive; resolve
+  `SIDEDATA`, GUI pages, pictures and weapons from the renamed trees while
+  preserving winning archive provenance. Show the new Spark, Blaze and Apex
+  entries and both faction commanders from their authored definitions.
+- Capture the Arm and Core twelve-slot build menus, hotkey overlays, page
+  changes, unit portraits and pink/slate team colors with the package's own
+  palette/shade/interface assets. Exercise the distinct shipyard exit variants
+  rather than introducing one generic rotation command.
+- Enter an original campaign and a Core Contingency mission, apply their
+  use-only restrictions, issue build orders through the campaign GUI and
+  advance to the next mission. Check the documented Core mission 1 layout and
+  Core Contingency mission 6 wind overlay with their actual base maps.
+- Exercise campaign and skirmish AI separately, including low-energy
+  shutdown, stockpiles and the named difficulty resource factors; do not infer
+  the patched AI behavior from successful catalog loading.
+- Verify music configuration with an explicitly identified backend and
+  user-supplied tracks. A silent launch without that backend evidence is not
+  evidence of music compatibility.
 
 ## Unknown
 
