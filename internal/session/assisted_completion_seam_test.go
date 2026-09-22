@@ -30,7 +30,7 @@ func assistSeamSession(t *testing.T) *Session {
 	mk("assistseamcon", func(d *content.UnitDef) {
 		d.Builder = true
 		d.WorkerTime = 300
-		d.BuildDistance = 400 << 16
+		d.BuildDistance = 400
 	})
 	mk("assistseamprod", func(d *content.UnitDef) {
 		d.BuildTime = 100
@@ -94,6 +94,9 @@ func TestFrameFinishedByAHelperJoinsTheWorld(t *testing.T) {
 		t.Fatalf("create nanoframe: %v", err)
 	}
 	helper, frame := w.Unit(hHelper), w.Unit(hFrame)
+	// The directly allocated helper needs the registration a session spawn supplies.
+	s.Movement.BindWorld(w)
+	s.Movement.EnsureUnit(helper)
 	frame.Remaining = 1
 	frame.Health = 0
 	frame.MaxHealth = int32(prodDef.MaxDamage)
@@ -106,7 +109,10 @@ func TestFrameFinishedByAHelperJoinsTheWorld(t *testing.T) {
 	// stance byte is set here; it is the only thing `HelpBuild` phase 2 waits on
 	// [04 R-ORD-01 §5].
 	helper.InBuildStance = true
-	q.Push(orders.Lookup("HelpBuild"), orders.Node{Owner: hHelper, Target: hFrame})
+	q.Push(orders.Lookup("HelpBuild"), orders.Node{
+		Owner: hHelper, Target: hFrame,
+		GoalX: frame.X, GoalY: frame.Y, GoalZ: frame.Z, GoalSupplied: true,
+	})
 
 	for tick := uint32(1); tick <= 60 && frame.Remaining > 0; tick++ {
 		s.Clock.GlobalTick = tick

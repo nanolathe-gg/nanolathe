@@ -270,11 +270,6 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		if !installWorkGoalWithRadius(u, n, target.X, target.Y, target.Z, u.Def.BuildDistance) {
 			return 7
 		}
-		if inBuildRangeOf(u, target) {
-			// Already within reach: the ground twin's phase 0 records why the
-			// approach gate is left clear in that case (work.go, PT3-04).
-			return 1
-		}
 		n.DynamicGate = gateMoveOutcomes
 		return 1
 	case 2:

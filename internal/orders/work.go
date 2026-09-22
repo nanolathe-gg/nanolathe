@@ -776,17 +776,8 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
 			return 7
 		}
-		if inBuildRangeOf(u, target) {
-			// Already inside the annulus. Retail's route follower asks the
-			// installed payload whether the unit has arrived on its very next
-			// service and raises pending 0x20 straight away for a unit that is
-			// already there [04 §10 "The follower's per-tick service"], so the
-			// record reaches phase 1 without any motion. The bound movement
-			// service publishes that result through the node's pending word; the
-			// gate is therefore left clear and the pump cascades into phase 1 in
-			// this same pass.
-			return 1
-		}
+		// The follower owns arrival, including an already-satisfied annulus
+		// [04 R-ORD-01 §5][04 R-PATH-01 §8].
 		n.DynamicGate = gateWorkApproach
 		return 1
 	case 1:
@@ -1207,55 +1198,8 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		if !installWorkGoal(u, n, bx, n.GoalY, bz) {
 			return 7
 		}
-		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
-			// In reach the gate is left clear and the pump cascades into phase
-			// 1 in this same pass: retail's follower raises arrival on its next
-			// service for a unit already at its goal [04 §10 "The follower's
-			// per-tick service"], where this build's follower raises it only
-			// after a movement step it has no reason to take. Arming 0xE0 for a
-			// builder already standing on the goal border would therefore wait a
-			// tick on the arrival of a walk of length zero — half of PT3-05, and
-			// the same defect the assist row carried.
-			return 1
-		}
-		// Out of reach the row does exactly what it does in reach — the row
-		// carries NO reach test [04 R-ORD-01 §5] — except that the gate it
-		// arms is the movement-outcome set, so the advance parks the record at
-		// phase 1 until the follower reports arrival (`0x20`), no route
-		// (`0x40`) or a payload release (`0x80`). The gate IS the wait; phase 1
-		// is not re-entered until one of those three producers fires.
-		//
-		// Closed 2026-09-01 (WU-19-24). An open-question marker stood here asking why
-		// a BLOCKING one-cell feature — every stock tree and rock — abandoned:
-		// the rectangle's only admissible cell was the feature's own, which the
-		// ground search cannot enter, so the request published an empty route,
-		// the publisher raised `0x40` and phase 1 abandoned. It asked whether
-		// retail's searched passability layer carries blocking features at all.
-		// It does, in both layers [04 R-PATH-01 §12]; the difference was neither
-		// the row nor the goal class but the arithmetic between the installer's
-		// arguments and the class's stored fields. The constructor grows the
-		// argument rectangle by the MOVER's own footprint, so a one-cell feature
-		// and a one-cell reclaimer give an eight-cell ring of anchor cells
-		// around the feature and the feature's own cell is interior, never
-		// enumerated. internal/movement now builds the goal that way
-		// (grownGoalRect), and the same growth answers `RepairUnit`'s and
-		// `Capture`'s rectangles on a live target's occupied footprint.
-		//
-		// Correction (WU-19-5). An accepted-blocked placeholder stood here holding at
-		// phase 0 behind a plain thirty-tick re-poll, on the reading that
-		// "nothing in this build approaches for a work descriptor". Both halves
-		// of that premise are false now and one was false when it was written:
-		// internal/session's activation boundary lists `Reclaim` and
-		// `Resurrect` among the work records that keep the mover, and
-		// internal/movement binds an arrival handle for whatever payload the
-		// record installed — a rectangle-perimeter goal answers arrival by
-		// membership of its border [04 §7.2][04 R-PATH-01 §9]. What was
-		// genuinely missing was the payload: the installer had no feature-
-		// footprint case, so the rectangle was never built. It is built now
-		// (installWorkGoalWithRadius), so the row's own advance is restored and
-		// the placeholder is deleted, not replaced. A right-click on a distant
-		// rock or wreck therefore walks to the grown rectangle's border and
-		// reclaims [04 R-PATH-01 §12].
+		// Feature work always waits for the rectangle outcome; build distance
+		// does not admit work before border arrival [04 R-PATH-01 §12].
 		n.DynamicGate = gateMoveOutcomes
 		n.MoveState = MoveEnRoute
 		return 1 // advance; phase 1 waits behind 0xE0
@@ -1474,17 +1418,8 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if !installWorkGoal(u, n, bx, n.GoalY, bz) {
 			return 7
 		}
-		if inBuildRange(u, bx, bz, def.FootprintX, def.FootprintZ) {
-			// Already on the footprint: the gate is left clear for the same
-			// reason `Reclaim`'s phase 0 leaves it clear — this build's
-			// follower raises arrival only after a movement step, so arming
-			// 0xE0 here would wait on the arrival of a walk of length zero.
-			return 1
-		}
-		// The rectangle goal on the feature's footprint, gate 0xE0, advance —
-		// and the gate is the wait, exactly as `Reclaim`'s phase 0 is
-		// [04 R-ORD-01 §5]. See reclaimHandler for why the placeholder hold
-		// that used to stand in both rows is gone.
+		// As with reclaim, even an already-satisfied rectangle waits for the
+		// follower's next service [04 R-PATH-01 §12].
 		n.DynamicGate = gateMoveOutcomes
 		n.MoveState = MoveEnRoute
 		return 1

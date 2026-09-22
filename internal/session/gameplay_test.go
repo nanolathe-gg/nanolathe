@@ -176,8 +176,17 @@ func TestModernGuardCompletesNearbyWorkAndResumes(t *testing.T) {
 			guard := q.Primary()[0]
 			buckets := s.Econ.UnitBuckets(builder.Handle)
 			sim, crt := *s.SimRNG(), *s.CrtRNG()
+			s.Movement.BindWorld(s.Units)
 			for tick := uint32(1); tick <= 200; tick++ {
 				builder.InBuildStance = true
+				// Service the installed approach, including stationary border arrival.
+				if active := q.Head(); active != nil {
+					s.Movement.ActivateMove(builder, active)
+				}
+				s.Movement.Scheduler.Tick(tick)
+				s.Movement.BeginTick(tick)
+				s.Movement.StepUnit(builder.Handle, tick)
+				s.Movement.EndTick(tick)
 				q.Pump(builder, tick)
 				if len(q.Primary()) == 0 {
 					t.Fatalf("queue emptied at tick %d; node=%+v diagnostics=%v", tick, guard, q.Diagnostics())

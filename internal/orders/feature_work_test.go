@@ -207,21 +207,24 @@ func TestFeatureWorkOutOfRangeAdvancesAndWaitsOnTheGate(t *testing.T) {
 func TestFeatureReclaimEmitsOncePerVisitOnlyWhileAboveFifteen(t *testing.T) {
 	tree, _ := retailShapedTree()
 	f := newFeatureWorkFixture(t, []*content.FeatureDef{tree}, 4, 5)
-	// Stand the builder on the feature's own cell so the row reaches its work
-	// phases without a mover; the approach is the previous test's subject.
+	// This work-phase fixture supplies the movement outcome explicitly below.
 	f.builder.X, f.builder.Z = world.CellToWorld(4), world.CellToWorld(5)
 
 	f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
 	head := f.q.Primary()[0]
 
 	emittingVisits, silentVisits := 0, 0
+	// Complete the approach before measuring the work visits.
+	f.q.Pump(f.builder, 0)
+	f.q.Head().Satisfied |= gateArrived
+
 	for tick := uint32(1); tick <= 400 && f.q.LenPrimary() > 0; tick++ {
 		before, countdown := f.segments, head.Param1
 		f.q.Pump(f.builder, tick)
 		// A work visit is one that changed the countdown from phase 3 or later;
 		// the ticks between them sit behind the row's own two-tick deadline and
 		// change nothing. The first visit is reached in the same pump as the
-		// seeding write, because phases 0, 1 and 2 all return *advance* and the
+		// seeding write, because phases 1 and 2 return *advance* and the
 		// pump restarts from the head after each one.
 		if head.Param1 == countdown || head.Phase < 3 {
 			continue
@@ -363,6 +366,10 @@ func TestResurrectionProducesTheUnitAndRemovesTheCorpse(t *testing.T) {
 	}
 
 	completed := false
+	// Complete the approach before measuring the work visits.
+	f.q.Pump(f.builder, 0)
+	f.q.Head().Satisfied |= gateArrived
+
 	for tick := uint32(1); tick <= 2000; tick++ {
 		f.q.Pump(f.builder, tick)
 		if f.q.LenPrimary() > 0 && DescriptorFor(f.q.Primary()[0].ID).Name != "Resurrect" {
@@ -432,6 +439,10 @@ func TestResurrectionOfAnUnresolvableCorpseUsesRetailsMisspelling(t *testing.T) 
 		},
 	}
 	f.q.Push(Lookup("Resurrect"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5), GoalSupplied: true})
+	// Complete the approach before measuring the work visits.
+	f.q.Pump(f.builder, 0)
+	f.q.Head().Satisfied |= gateArrived
+
 	for tick := uint32(1); tick <= 50 && f.q.LenPrimary() > 0; tick++ {
 		f.q.Pump(f.builder, tick)
 	}

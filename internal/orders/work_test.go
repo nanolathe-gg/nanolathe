@@ -416,6 +416,9 @@ func assistFixture(quanta ...int32) (*economy.Service, []*units.Unit, *units.Uni
 		q.SetBinding(binding)
 		BindQueue(b, q)
 		q.Push(Lookup("HelpBuild"), Node{Owner: b.Handle, Target: frame.Handle})
+		// Rate tests begin after the approach outcome, before the first work tick.
+		q.Pump(b, 0)
+		q.Head().Satisfied |= gateArrived
 	}
 	return econ, builders, frame
 }

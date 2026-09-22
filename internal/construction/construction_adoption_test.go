@@ -278,6 +278,9 @@ func assistFixture(t *testing.T, factoryWorkerTime int32, assistantQuanta ...int
 		aq := orders.QueueForUnit(a)
 		aq.SetBinding(binding)
 		aq.Push(orders.Lookup("HelpBuild"), orders.Node{Owner: ah, Target: ph})
+		// Measure construction after the isolated movement seam reports arrival.
+		aq.Pump(a, 0)
+		aq.Head().Satisfied |= 0x20
 		assistants = append(assistants, a)
 	}
 	return svc, factory, assistants, product
