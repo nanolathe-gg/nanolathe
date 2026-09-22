@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -12,6 +13,41 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
+
+// The faction is a staged selection, independent of the held-button state
+// [07 R-WGT-01 §3]. SIDEx carries its ARM/CORE lettering in the released art;
+// leaving the button down after the callback selects an unlabelled frame.
+func TestRetailSkirmishSideSelectionRemainsVisible(t *testing.T) {
+	g, _, cl := retailAssetShell(t)
+	g.setup.Players[0].Side = 0
+	g.openMenu(modeMenuSkirmish)
+	p := g.activePanel()
+	index := p.Index("Side0")
+	for _, name := range []string{"initial-arm", "core", "arm", "core-again", "reopened-core"} {
+		switch name {
+		case "initial-arm":
+		case "reopened-core":
+			g.openMenu(modeMenuSkirmish)
+			p = g.activePanel()
+			index = p.Index("Side0")
+		default:
+			clickRowGadget(t, g, p, cl, "Side0", input.MouseButtonLeft)
+		}
+		if dir := os.Getenv("NANOLATHE_SKIRMISH_SIDE_SHOTS"); dir != "" {
+			writeShellShot(t, cl, filepath.Join(dir, name+".png"))
+		}
+		wantSide := 1
+		if name == "initial-arm" || name == "arm" {
+			wantSide = 0
+		}
+		if got := g.setup.Players[0].Side; got != wantSide {
+			t.Fatalf("%s: configured side = %d, want %d", name, got, wantSide)
+		}
+		if p.StageAt(index) != wantSide || p.DownAt(index) != 0 {
+			t.Fatalf("%s: stage/down = %d/%d, want %d/0", name, p.StageAt(index), p.DownAt(index), wantSide)
+		}
+	}
+}
 
 // The map chooser leaves its parent screen visible outside its own surface
 // [07 §4]. Opening a fresh runtime window must preserve that parent's art.

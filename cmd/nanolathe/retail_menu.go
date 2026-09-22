@@ -493,7 +493,10 @@ func (g *gameShell) refreshSkirmishPanel() {
 			// Controller is text written by the retail implementation; the skirmname art
 			// retains its ordinary/hover frame state.
 			p.SetStatus("Player"+prefix, 0)
-			p.SetStatus("Side"+prefix, player.Side)
+			// Faction selects the released stage, not the pressed frame
+			// [07 R-WGT-01 §3]. Restore both when reopening the setup.
+			p.SetStatus("Side"+prefix, 0)
+			p.SetStageAt(p.Index("Side"+prefix), player.Side)
 			p.SetStatus("Allies"+prefix, g.retailAllyIconFrame(i))
 			p.SetStatus("Color"+prefix, player.Color)
 		}
