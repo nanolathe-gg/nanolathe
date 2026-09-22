@@ -235,9 +235,11 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 		}
 		isSelected := selected[q.Unit]
 		isPrivileged := isSelected
+		showDashes := false
 		for _, h := range privileged {
 			if h != 0 && h == q.Unit {
 				isPrivileged = true
+				showDashes = true
 				break
 			}
 		}
@@ -265,107 +267,93 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 		prevWorld := QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}
 		prev := opt.Project(prevWorld.X, prevWorld.Y, prevWorld.Z)
 		rangeDrawn := false
-		for list, orders := range [][]frame.OrderView{q.Primary, q.Secondary} {
-			for _, order := range orders {
-				orderMask := queueOrderMask(order.Kind) & mask
-				if orderMask == 0 {
-					continue
+		// The retail dispatcher walks the primary order list only [07 R-P0-11 §3].
+		for _, order := range q.Primary {
+			orderMask := queueOrderMask(order.Kind) & mask
+			if orderMask == 0 {
+				continue
+			}
+			// Retail connects order anchors directly; the movement route is
+			// not an input to this helper [07 R-P0-11 §3].
+			// TODO(question): publish the target-tracking/cached anchor for
+			// targeted orders; stored goals remain the existing fallback until
+			// that presentation binding is supplied [07 R-P0-11 §3].
+			anchor := QueueWorldPoint{X: order.GoalX, Y: order.GoalY, Z: order.GoalZ}
+			point := opt.Project(anchor.X, anchor.Y, anchor.Z)
+			// The bit-8 helper is also the anchor getter, and the bit-2
+			// helper's first act is to call it, so an order kind that sets
+			// bit 2 without bit 8 still runs the icon helper.  Whether an
+			// icon appears is decided by the descriptor's icon byte alone,
+			// and it is drawn before the chain that needed the anchor
+			// [R-P0-11 §3 "The dash chain's artwork, and the anchor getter
+			// that doubles as the icon"].
+			icon, iconByte := queueOrderIcon(order.Kind)
+			runIconHelper := iconByte && icon != 0 &&
+				orderMask&(QueueDashMask|QueueIconMask) != 0
+			iconHandled := false
+			emitIcon := func() {
+				if !runIconHelper || iconHandled {
+					return
 				}
-				world := orderWorldPoints(order)
-				points := make([]QueuePoint, len(world))
-				for i, w := range world {
-					points[i] = opt.Project(w.X, w.Y, w.Z)
-				}
-				// The bit-8 helper is also the anchor getter, and the bit-2
-				// helper's first act is to call it, so an order kind that sets
-				// bit 2 without bit 8 still runs the icon helper.  Whether an
-				// icon appears is decided by the descriptor's icon byte alone,
-				// and it is drawn before the chain that needed the anchor
-				// [R-P0-11 §3 "The dash chain's artwork, and the anchor getter
-				// that doubles as the icon"].
-				icon, iconByte := queueOrderIcon(order.Kind)
-				runIconHelper := iconByte && icon != 0 &&
-					orderMask&(QueueDashMask|QueueIconMask) != 0
-				iconHandled := false
-				emitIcon := func() {
-					if !runIconHelper || iconHandled {
-						return
-					}
-					iconHandled = true
-					centerWorld := world[len(world)-1]
-					center := points[len(points)-1]
-					if opt.ShowRanges && (icon == 1 || icon == 2) {
-						if set, ok := resolveRanges(); ok {
-							base := QueuePrimitive{Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center}
-							out = appendAttackRanges(out, base, centerWorld, set, opt)
-						}
-					}
-					if opt.Icon == nil {
-						return
-					}
-					frameIndex, ok := opt.Icon(icon, opt.Tick)
-					if !ok {
-						return
-					}
-					// The anchor is the order's own point — the target's
-					// position for a targeted node, the node's stored position
-					// otherwise — which is the last of this order's points.
-					out = append(out, QueuePrimitive{Kind: QueuePrimitiveIcon, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center, IconFrame: frameIndex, IconKnown: true, IconCursor: icon})
-				}
-				// Helpers run in draw-mask bit order: marker (1), dash (2),
-				// circle (4), icon (8) [R-P0-11 §3].
-				if orderMask&QueueMarkerMask != 0 && order.BuildProduct != "" && opt.BuildRect != nil {
-					if rect, ok := opt.BuildRect(order); ok {
-						segments := BuildMarkerSegments(rect.Left, rect.Top, rect.Right, rect.Bottom, int(age(opt.Tick, order.CreationTick)), isSelected)
-						out = append(out, QueuePrimitive{Kind: QueuePrimitiveMarker, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Color: segments[0].Color, ColorKnown: true, Segments: segments})
-					}
-				}
-				if orderMask&QueueDashMask != 0 {
-					emitIcon()
-					for i, p := range points {
-						// The dash chain is a sprite chain, not a line: the
-						// instruction keeps the world segment and the order's age
-						// and leaves placement to DashSprites, so an integration
-						// cannot substitute a guessed solid line [R-P0-11 §3].
-						out = append(out, QueuePrimitive{Kind: QueuePrimitiveDash, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, A: prev, B: p, WorldA: prevWorld, WorldB: world[i], DashAge: age(opt.Tick, order.CreationTick)})
-						prev, prevWorld = p, world[i]
-					}
-				} else if orderMask&QueueIconMask != 0 {
-					// The icon helper is also the anchor getter, and it is the
-					// ONLY other helper that resolves and advances the running
-					// point [R-P0-11 §3 "The dash chain's artwork, and the anchor
-					// getter that doubles as the icon"]. An order whose mask sets
-					// neither bit 2 nor bit 8 never calls it in retail, so the
-					// running anchor must stay put. The idle-queue refill's
-					// Standby/Standby_Mine head record is the reachable case:
-					// mask 0x10 (range rings only) and "no target, goal, or
-					// parameters" [04 "The idle-queue refill from
-					// `defaultmissiontype`"] — advancing the anchor to that
-					// record's zero-valued goal made the next queued order's dash
-					// chain run from world origin instead of from wherever the
-					// anchor actually was.
-					prev, prevWorld = points[len(points)-1], world[len(world)-1]
-				}
-				if orderMask&QueueCircleMask != 0 && opt.Circle != nil {
-					if radius, ok := opt.Circle(order); ok && radius > 0 {
-						center := points[len(points)-1]
-						for _, chord := range circle15(center, radius) {
-							out = append(out, QueuePrimitive{Kind: QueuePrimitiveCircle, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Color: compactRangeColor, ColorKnown: true, A: chord[0], B: chord[1], Center: center, Radius: radius})
-						}
-					}
-				}
-				if orderMask&QueueIconMask != 0 {
-					emitIcon()
-				}
-				if orderMask&QueueRangeMask != 0 && !rangeDrawn {
-					// The one-shot latch belongs to the per-unit descriptor walk: the
-					// first range-bit node consumes it even when the integration has no
-					// range data, and later nodes never run the helper [R-P0-11 §3].
-					rangeDrawn = true
+				iconHandled = true
+				centerWorld := anchor
+				center := point
+				if opt.ShowRanges && (icon == 1 || icon == 2) {
 					if set, ok := resolveRanges(); ok {
-						base := QueuePrimitive{Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: opt.Project(u.X, u.Y, u.Z)}
-						out = appendUnitRanges(out, base, QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}, u.Cloaked, set, opt)
+						base := QueuePrimitive{Unit: q.Unit, Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center}
+						out = appendAttackRanges(out, base, centerWorld, set, opt)
 					}
+				}
+				if opt.Icon == nil {
+					return
+				}
+				frameIndex, ok := opt.Icon(icon, opt.Tick)
+				if !ok {
+					return
+				}
+				out = append(out, QueuePrimitive{Kind: QueuePrimitiveIcon, Unit: q.Unit, Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: center, IconFrame: frameIndex, IconKnown: true, IconCursor: icon})
+			}
+			// Helpers run in draw-mask bit order: marker (1), dash (2),
+			// circle (4), icon (8) [R-P0-11 §3].
+			if orderMask&QueueMarkerMask != 0 && order.BuildProduct != "" && opt.BuildRect != nil {
+				if rect, ok := opt.BuildRect(order); ok {
+					segments := BuildMarkerSegments(rect.Left, rect.Top, rect.Right, rect.Bottom, int(age(opt.Tick, order.CreationTick)), isSelected)
+					out = append(out, QueuePrimitive{Kind: QueuePrimitiveMarker, Unit: q.Unit, Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Color: segments[0].Color, ColorKnown: true, Segments: segments})
+				}
+			}
+			if orderMask&QueueDashMask != 0 {
+				emitIcon()
+				// Selection alone admits icons but suppresses the chain;
+				// tracked, page and hover contexts enable it [07 R-P0-11 §3].
+				if showDashes {
+					out = append(out, QueuePrimitive{Kind: QueuePrimitiveDash, Unit: q.Unit, Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, A: prev, B: point, WorldA: prevWorld, WorldB: anchor, DashAge: age(opt.Tick, order.CreationTick)})
+				}
+				prev, prevWorld = point, anchor
+			} else if orderMask&QueueIconMask != 0 {
+				// Icon-only orders advance the anchor too. Range-only idle
+				// orders leave it at the unit or preceding order, rather than
+				// replacing it with their unused zero goal [07 R-P0-11 §3].
+				prev, prevWorld = point, anchor
+			}
+			if orderMask&QueueCircleMask != 0 && opt.Circle != nil {
+				if radius, ok := opt.Circle(order); ok && radius > 0 {
+					center := point
+					for _, chord := range circle15(center, radius) {
+						out = append(out, QueuePrimitive{Kind: QueuePrimitiveCircle, Unit: q.Unit, Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Color: compactRangeColor, ColorKnown: true, A: chord[0], B: chord[1], Center: center, Radius: radius})
+					}
+				}
+			}
+			if orderMask&QueueIconMask != 0 {
+				emitIcon()
+			}
+			if orderMask&QueueRangeMask != 0 && !rangeDrawn {
+				// The one-shot latch belongs to the per-unit descriptor walk: the
+				// first range-bit node consumes it even when the integration has no
+				// range data, and later nodes never run the helper [R-P0-11 §3].
+				rangeDrawn = true
+				if set, ok := resolveRanges(); ok {
+					base := QueuePrimitive{Unit: q.Unit, Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, Center: opt.Project(u.X, u.Y, u.Z)}
+					out = appendUnitRanges(out, base, QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}, u.Cloaked, set, opt)
 				}
 			}
 		}
@@ -675,18 +663,6 @@ func queueOrderMask(kind string) QueueOverlayMask {
 func queueOrderIcon(kind string) (uint8, bool) {
 	d, ok := queueDescriptors[kind]
 	return d.icon, ok
-}
-
-func orderWorldPoints(o frame.OrderView) []QueueWorldPoint {
-	points := make([]QueueWorldPoint, 0, len(o.Route)+1)
-	for _, route := range o.Route {
-		points = append(points, QueueWorldPoint{X: route.X, Y: route.Y, Z: route.Z})
-	}
-	goal := QueueWorldPoint{X: o.GoalX, Y: o.GoalY, Z: o.GoalZ}
-	if len(points) == 0 || points[len(points)-1] != goal {
-		points = append(points, goal)
-	}
-	return points
 }
 
 // Travelling-dash chain constants [R-P0-11 §3]. Retail advances a phase along

@@ -2,6 +2,7 @@ package hud
 
 import (
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -417,23 +418,8 @@ func TestQueueOverlayPrivilegedSourcesGetTheFullMask(t *testing.T) {
 	}
 }
 
-// TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal locks a
-// play-test regression: the first queued move's dash chain appeared to
-// originate from a corner of the map instead of from the unit.
-//
-// The idle-queue refill constructs its Standby/Standby_Mine head record with
-// "no target, goal, or parameters" [04 "The idle-queue refill from
-// `defaultmissiontype`"] — GoalX/Y/Z are legitimately zero — and that record's
-// draw mask (`0x10`, range rings only) sets neither the dash bit nor the icon
-// bit. Per [R-P0-11 §3 "The dash chain's artwork, and the anchor getter that
-// doubles as the icon"], the icon helper IS the anchor getter, and only the
-// dash helper (by calling it) or the icon helper itself ever resolves and
-// advances the running anchor; an order whose mask carries neither bit is
-// never visited by it, so the anchor must stay wherever it was. A once-idle
-// unit's queue is exactly `[Standby, <the first shift-queued move>]` once the
-// player queues a move, so the running anchor has to survive that Standby head
-// untouched and still be the unit's position when the dash chain for the
-// actual queued move is built.
+// A range-only idle head has no goal and must not move the running anchor
+// to world origin before the first queued move [07 R-P0-11 §3].
 func TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal(t *testing.T) {
 	const unitX, unitZ = 500, 700
 	f := &frame.Frame{
@@ -448,7 +434,7 @@ func TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal(t *testin
 			{Unit: 1, Index: 1, Kind: "Move_Ground", GoalX: numeric.Fixed(600 << 16), GoalZ: numeric.Fixed(800 << 16), CreationTick: 18},
 		}}},
 	}
-	ops := QueueOverlay(f, QueueOverlayOptions{Tick: 20, ShiftHeld: true, LocalOwner: 0, Project: queueTestProject})
+	ops := QueueOverlay(f, QueueOverlayOptions{Tick: 20, ShiftHeld: true, LocalOwner: 0, HoveredUnit: 1, Project: queueTestProject})
 	var sawDash bool
 	for _, op := range ops {
 		if op.Kind != QueuePrimitiveDash {
@@ -468,15 +454,16 @@ func TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal(t *testin
 // TestQueueOverlayRangeOrderingAndLatch locks the two ordering edges that are
 // easy to lose when the draw-mask helpers are refactored: attack-icon detail
 // rings precede that icon, and the first bit-16 order consumes the per-unit
-// range latch across both queue lists [07 R-P0-11 §3].
+// range latch within the primary list [07 R-P0-11 §3].
 func TestQueueOverlayRangeOrderingAndLatch(t *testing.T) {
 	f := queueTestFrame()
 	f.OrderQueues[0].Primary = []frame.OrderView{
 		{Unit: 1, Index: 0, Kind: "Attack_Chase", GoalX: numeric.Fixed(8 << 16)},
 		{Unit: 1, Index: 1, Kind: "Standby"},
+		{Unit: 1, Index: 2, Kind: "HelpBuild", GoalX: numeric.Fixed(16 << 16)},
 	}
 	f.OrderQueues[0].Secondary = []frame.OrderView{
-		{Unit: 1, Index: 2, Kind: "HelpBuild", GoalX: numeric.Fixed(16 << 16)},
+		{Unit: 1, Index: 3, Kind: "HelpBuild", GoalX: numeric.Fixed(32 << 16)},
 	}
 	rangeCalls := 0
 	ops := QueueOverlay(f, QueueOverlayOptions{
@@ -632,5 +619,77 @@ func TestRangeRingChordCountIsBoundedAbove(t *testing.T) {
 	}
 	if got := appendRangeRing(nil, QueuePrimitive{}, center, under, 14, "", 0, opt); len(got) != int(chords)+1 {
 		t.Fatalf("radius %d emitted %d primitives, want %d", under, len(got), chords+1)
+	}
+}
+
+// A moving order's pathfinder detour must not kink its queued-order connector
+// or restart the travelling sprites at every route point [07 R-P0-11 §3].
+func TestQueueOverlayConnectsOrderAnchorsWithoutMovementRoute(t *testing.T) {
+	f := queueTestFrame()
+	f.Units[0].X, f.Units[0].Y, f.Units[0].Z = 80<<16, 40<<16, 96<<16
+	f.OrderQueues[0].Primary[0].GoalX = 320 << 16
+	f.OrderQueues[0].Primary[0].GoalY = 64 << 16
+	f.OrderQueues[0].Primary[0].GoalZ = 192 << 16
+	opt := QueueOverlayOptions{Tick: 20, ShiftHeld: true, LocalOwner: 0, Project: queueTestProject, BuildRect: queueTestRect,
+		Icon: func(uint8, uint32) (int32, bool) { return 0, true },
+	}
+	want := QueueOverlay(f, opt)
+	f.OrderQueues[0].Primary[0].Route = []frame.RoutePoint{
+		{X: 96 << 16, Z: 112 << 16},
+		{X: 96 << 16, Z: 224 << 16},
+		{X: 304 << 16, Z: 224 << 16},
+	}
+	got := QueueOverlay(f, opt)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("movement route changed the queued-order overlay; connectors must run directly between order anchors")
+	}
+	previous := QueueWorldPoint{X: f.Units[0].X, Y: f.Units[0].Y, Z: f.Units[0].Z}
+	count := 0
+	for _, op := range got {
+		if op.Kind != QueuePrimitiveDash {
+			continue
+		}
+		order := f.OrderQueues[0].Primary[count]
+		anchor := QueueWorldPoint{X: order.GoalX, Y: order.GoalY, Z: order.GoalZ}
+		if op.WorldA != previous || op.WorldB != anchor {
+			t.Fatalf("connector %d = %+v -> %+v, want %+v -> %+v", count, op.WorldA, op.WorldB, previous, anchor)
+		}
+		previous = anchor
+		count++
+	}
+	if count != len(f.OrderQueues[0].Primary) {
+		t.Fatalf("got %d connectors, want one per queued destination", count)
+	}
+}
+
+// Full-mask selection retains the icon but only the first three privileged
+// contexts enable the travelling chain [07 R-P0-11 §3].
+func TestQueueOverlaySelectedOnlySuppressesDashes(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		tracked, page, hovered pool.Handle
+		dash                   bool
+	}{
+		{name: "selection alone"},
+		{name: "tracked selection", tracked: 1, dash: true},
+		{name: "page selection", page: 1, dash: true},
+		{name: "hovered selection", hovered: 1, dash: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := queueTestFrame()
+			f.CommandPage.Builder = 0
+			ops := QueueOverlay(f, QueueOverlayOptions{Tick: 20, ShiftHeld: true, Project: queueTestProject,
+				TrackedUnit: tc.tracked, PageUnit: tc.page, HoveredUnit: tc.hovered,
+				Icon: func(uint8, uint32) (int32, bool) { return 0, true },
+			})
+			icon, dash := false, false
+			for _, op := range ops {
+				icon = icon || op.Kind == QueuePrimitiveIcon
+				dash = dash || op.Kind == QueuePrimitiveDash
+			}
+			if !icon || dash != tc.dash {
+				t.Fatalf("icon=%v dash=%v, want icon=true dash=%v", icon, dash, tc.dash)
+			}
+		})
 	}
 }

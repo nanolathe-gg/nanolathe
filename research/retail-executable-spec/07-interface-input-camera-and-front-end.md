@@ -7104,9 +7104,12 @@ Two details. First, **every** selected unit gets the full mask, not only a
 lone one; the command-page subject (2) is the separate notion that
 is single-unit-ish, and it is an id the page machinery owns, not a count of the
 selection. Second, the walker passes the dispatcher one further byte that
-distinguishes the selected-unit branch from the other three; no helper reads
-it, so it changes nothing that is drawn. In particular the marker's colour pair
-is still chosen from the **order node's owning unit's** selected flag (3/10 when
+distinguishes the selected-unit branch from the other three. **Established:**
+the dash helper reads it after resolving the anchor and drawing any order icon.
+It suppresses the travelling sprites for selection alone; tracking, command-page
+or hover admission enables them, including when that unit is also selected.
+The icon and running anchor still update in the selected-only case. The
+marker's colour pair is still chosen from the **order node's owning unit's** selected flag (3/10 when
 set, 1/9 when clear), exactly as the marker paragraph in §9 states, and never
 from which branch admitted the unit.
 
@@ -7161,6 +7164,14 @@ icon helper, and whether an icon appears is decided by the descriptor's icon
 byte alone. For MOBILEBUILD and VTOL_MOBILEBUILD that byte is **0**, so a
 queued build site draws no per-order icon — the sprites a player sees strung
 between queued build sites are the `pathicon` dash chain, not order icons.
+
+**Established — direct order connectors.** Each dash helper saves the incoming
+anchor, resolves the current order's single anchor, and places sprites along
+that one straight three-dimensional segment. It never reads the movement
+route or subdivides the connector at pathfinding waypoints. The running anchor
+starts at the unit's position and advances to the resolved order point. The
+dispatcher traverses only the primary order list; the separate secondary
+production list does not contribute overlay nodes. Dash phase and frame cadence restart once per order, not once per movement waypoint.
 
 *The per-kind census.* The two static tables, each record as draw mask /
 icon byte. Ground-state table, in table order — Standby `0x10`/15, Standby_Mine `0x10`/15, Move_Ground `0x12`/14,

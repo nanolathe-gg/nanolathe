@@ -709,7 +709,9 @@ pointer into simulation state and mutating nothing, so holding Shift cannot
 move the partial state fingerprint `[07 R-P0-11 §3]` `[07 R-P0-11 §4]`. The walker's
 privileged sources are the follow camera's tracked unit, the unit whose command
 page is open, the hovered unit, and every selected unit; all four draw the full
-five-bit mask, every other local unit draws marker-only, and the marker-only
+five-bit mask, but selection alone suppresses travelling sprites while retaining
+icons and anchor advancement. The walk visits only the primary order list.
+Every other local unit draws marker-only, and the marker-only
 fallback runs only when one of the first three resolves to a live builder.
 `queueDescriptors` is the per-kind census of the order descriptor's two overlay
 bytes — the draw-mask word (marker 1, dash 2, circle 4, icon 8, range 16) and
@@ -718,8 +720,15 @@ pointer uses. An icon byte of 0 is the "no icon" encoding rather than cursor
 slot 0. Helpers run in mask-bit order, and the bit-8 helper is also the anchor
 getter, so a kind that sets bit 2 without bit 8 still draws its icon first.
 `DashSprites` places the authored sprite chain along a world-space segment —
-the dash is a sprite chain, never a line to rasterise. `BuildMarkerSegments` is
+the dash is a sprite chain, never a line to rasterise. Each connector runs
+directly from the preceding anchor to the order destination; published movement
+route points are not overlay vertices `[07 R-P0-11 §3]`. `BuildMarkerSegments` is
 the eight-segment build marker with its ten-tick sweep.
+
+Remaining integration gap: targeted-order icons/connectors still consume the
+stored goal. The retail target-tracking/cached anchor is established by
+`[07 R-P0-11 §3]`, but needs an immutable publication binding before the overlay
+can follow it faithfully; the code marks this with `TODO(question)`.
 
 ### 2.6 `cmd/nanolathe` — the front-end screens
 
