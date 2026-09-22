@@ -3931,7 +3931,7 @@ surface and admits no reflection site.
 `frame.WindView { Heading uint16; Strength int32 }` and `Frame.Wind` copy the
 session wind at publication [01 §7.3][I6]; reset clears the value, and the
 renderer never reads the live wind service. `drawlist.WaterSurface { Enabled;
-Tick; Fraction16; WindHeading; WindStrength; DriftX, DriftZ, Energy }` is the
+Tick; Fraction16; WindHeading; WindStrength; DriftX, DriftZ, Energy; TidalDriftX, TidalDriftZ }` is the
 value field `Terrain.Water`, enabled by the terrain recorder only for Enhanced
 non-strategic world drawing, from committed tick and wind plus the presentation
 fraction; paused captures retain their phase. `drawlist.SurfaceWake { X, Y, AxisX,
@@ -3954,7 +3954,7 @@ stationary hovercraft emit nothing, while previously emitted specks finish fadin
 Hover bob and turning in place do not count as travel. Grounded mode admits
 hovercraft without comparing model Y to the
 centre terrain height, because the four-corner conform can differ from that sample
-[04 R-MOV-01 §5]. Hot or damaging liquid receives no water foam. Building foam also excludes
+[04 R-MOV-01 §5]. Lava receives no water foam; acid admits building rings but no shoreline foam. Building foam also excludes
 cloaked units. Its surface test uses the canonical committed model transforms and
 hierarchy visibility [03 §2.4], excludes selection faces, unused vertices and
 non-drawing primitives, and requires one visible face to span the sea plane
@@ -3962,22 +3962,32 @@ inclusively. Static definition bounds can include hidden or retracted geometry;
 they cannot prove a building intersects the surface. Missing models and entirely
 submerged poses emit no foam. Mobile units do not feed building foam; Enhanced
 hover dust remains restricted to dry ground, and terrain waves depend only on
-terrain and wind. Retail script sprinkles keep their existing draw and lifetime.
+terrain, tidal strength and wind direction. Retail script sprinkles keep their existing draw and lifetime.
 
 
 GPU ownership is `water.go` and `water_reflections.go`. A conservative water/shore
 mask is cached in painted map coordinates through the terrain inverse projection
 [07 §8][03 §2.5]; a negative height sentinel is never water; painted colours are
-preserved; the treatment draws before objects and fog; wake fragments clip to the
+preserved; the treatment draws before objects and fog, except admitted seabed
+sprites are part of its terrain input; wake fragments clip to the
 matching wet/dry mask. No postprocess displaces units, HUD or fog. Cache resources
 are released on map replacement and disposal.
 
 ### 26.3 Surface treatment and cost bounds
 
-**The mask** is one RGBA image per terrain identity: red ordinary water, green
-inward shore distance, blue valid dry ground, **alpha the damp band's ring term**
-(§32.3); excluded liquid and invalid terrain belong to neither medium. It starts
-at one painted map pixel per texel and doubles
+**The mask** is one RGBA image per terrain identity: red liquid coverage,
+green inward shore distance, blue valid dry ground (1) or void liquid (0.5),
+**alpha the damp band's ring term** (§32.3). Water and acid require terrain below
+sea; lava also admits terrain exactly at the liquid level, including flat
+height-zero pools on zero-level maps. Invalid terrain belongs to neither medium.
+Shore foam is suppressed for damaging water, lava and topologically void liquid;
+this does not depend on the selected unit's depth or slope limits. Lava retains
+painted colors without blue highlights, cyan shallow tint or wet-edge darkening,
+and gains neither model reflections nor building rings. Acid retains water tint,
+damp edge, reflections and building rings. These are renderer policies only;
+damage, pathfinding and all gameplay remain unchanged.
+
+The mask starts at one painted map pixel per texel and doubles
 that step until its largest side is ≤2,048 texels (≤16 MiB of GPU pixels). Two
 integer chamfer sweeps approximate distance up to 32 world pixels; a separable
 nine-tap blur smooths the distance channel without changing wet/dry labels, its
@@ -4007,49 +4017,76 @@ the pass for the damp band (§32.3). Otherwise the scheduler copies the terrain
 composite and applies a viewport water shader before objects. Every constant in
 that shader is an authored presentation choice.
 
-**The ripple.** Three smooth value-noise layers displace the terrain sample by up
-to 3.4 world pixels per axis, plus a domain warp that deforms them. **None of the
-three scrolls on a velocity of its own**: each travels only on the integrated wind
-drift, because translation alone reads as a moving tile.
+**The selected surface.** The fixed hybrid treatment combines current-driven
+translation with bounded in-place deformation. The chosen values are pattern
+size 0.5, surface opacity 0.5, current multiplier 3, ripple deformation 5,
+shore/building foam opacity 0.6, and an 11.2-map-pixel inward edge fade (the
+selected 0.7 factor in 16-pixel units). Distortion, contrast, tint, damp edge,
+foam width, building ring size and both animation clocks retain their original
+unit multipliers. There is no tuning command, mode selector or preset file;
+the normal Water option (§30) controls the treatment.
+
+The edge fade uses the existing rounded distance field and does not expand
+water onto dry terrain. It softens disagreement between height and painted
+shorelines without claiming to reconstruct the painted boundary. Surface opacity
+scales the surface treatment and damp edge, but not reflections or foam. Shore
+foam retains its original world-space pattern, clock and wind-energy response,
+then applies its own opacity and the common shoreline fade. Building rings retain
+their size and original phase with only their opacity scaled.
 
 | Layer | Travel | Deformation |
 |---|---|---|
-| broad ripple | 6 × the integrated drift | offset up to 0.8 of its cells by the warp |
-| fine ripple | 11 × the drift | offset up to 0.45 of its cells; lattice rotated 37° about the map origin — one fixed rotation, never a wind-following one, so its cell rows never coincide with the broad lattice's |
-| coarse gust patch | 22 × the drift | where it passes, up to a fifth more ripple amplitude and displacement and up to 5% darker water at full wind energy |
-| domain warp | the only term that advances on time alone, ≈0.08 cell per second | two noise evaluations on a lattice about 4× coarser than the broad ripple; a deformation, so cells stretch, split and merge in place instead of marching past |
+| broad ripple | 6 × the scaled integrated tidal drift | bounded local warp |
+| fine ripple | 11 × the drift | same warp, lattice rotated a fixed 37° to avoid aligned grid rows |
+| coarse patch | 22 × the drift | spatially varying ripple contrast and displacement |
+| local warp | no directional scroll | two stationary noise phases drive sine deformation at 0.65 and 0.83 radians/second, amplitude 2.5 per component |
 
-**The field is translated by the wind and never oriented by it.** Retail re-rolls
-the wind heading to a fresh random value every 150 to 420 ticks
-[05 "The wind phase, its draws, and the generator notification"], so crests
-aligned to the heading would swing through a new angle every few seconds; and any
-rotation about a fixed point sweeps distant pixels in proportion to their distance
-from it.
+All noise coordinates use map position divided by pattern size before drift is
+subtracted, so size 0.5 also halves apparent travel in map pixels. Keeping this
+order preserves the selected appearance. Surface energy is fixed at 0.5 and
+ignores wind strength; wind energy still affects the original foam and reflection
+paths. Six value-noise evaluations contribute to a wet pixel (coarse patch,
+two warp phases, broad, fine and shore patch). Bilinear terrain sampling prevents
+subpixel displacement from snapping. The edge fade reuses the distance sample;
+no extra texture or full-screen pass is added.
 
-Moving brightness and blue highlights make the motion readable against fine
-painted texture, and bilinear terrain sampling keeps displacement from snapping
-between original pixels. Shore fronts travel toward the coast along the blurred
-distance field on a ≈4-second cycle with spatially varying phase and opacity;
-broad crests fade across the last seven world pixels before the wet/dry boundary,
-so its grid is not outlined. Surface brightness varies between −16.5% and +11.5%
-of the painted colour at full wind strength inside a gust and between −6.7% and
-+6.7% in a dead calm; the blue highlight blend is bounded to 8% at full wind
-strength. A wet pixel costs six value-noise evaluations — gust, two warp, broad,
-fine and the shore patch. No new pass, texture, uniform or allocation.
+**Current response.** `water_motion.go` observes committed wind heading through
+its negative sine/cosine direction [R-WIND-01]. Base current speed is
+`max(0, tidal)/20`, with non-finite tidal values treated as zero. The shader's
+current multiplier 3 gives `0.15 × tidal` before layer multiples and pattern size.
+Direction eases along the shortest arc by 1/90 of the remaining angle per tick:
+a roughly three-second response, about 95% settled after nine seconds. The unit
+direction preserves tidal-derived speed through turns and reversals. Integrating
+it preserves pattern position; the lattice never rotates with a wind reroll.
+Tidal zero retains local ripples with no directional current.
 
-**Wind response.** `water_motion.go` observes committed wind through its negative
-sine and cosine components [R-WIND-01]. Strength is normalized against 5,000 and
-clamped to [0,1]; target drift speed is 0.4–2 world pixels per second; velocity
-and visual strength approach the target by 1/90 of the remaining difference each
-tick. Integrating the velocity preserves pattern position across wind changes,
-heading wrap and reversals included. Recording interpolates previous and current
-visual values with the permitted presentation fraction. Repeated ticks do nothing;
-source and renderer changes, tick rewinds and observation gaps over 300 ticks
-reset the state. The value noise reduces its integer lattice coordinate onto a
-289-cell period before hashing, because the drift scrolls that lattice without
-bound and an unbounded hash argument leaves float precision, whereas a modulo on
-time itself would make the pattern jump; the resulting tile is thousands of world
-pixels across, wider than any viewport.
+The original wind velocity and energy accumulator remains separate for foam,
+reflections and aircraft shadows, with its existing 1/90 response. Recording
+interpolates previous/current presentation drift. Repeated ticks do nothing;
+source/renderer changes, tick rewinds and gaps over 300 ticks reset the state.
+The value-noise hash wraps lattice corners at a 289-cell period to avoid
+unbounded hash arguments; neither time nor integrated position is periodically
+reset, which would jump the pattern.
+
+**Authored tidal range checked locally.** Of 54 installed ordinary-water maps
+with skirmish schemas, 49 use tidal 15–30; the outliers are Evad River Confluence
+(0), Lake Shore (3), Trout Farm (7), Brilliant Cut Lake (10), and Metal Isles
+(32). Across campaign and skirmish ordinary-water maps the observed range is
+0–48; the high extreme is cc09. Installed active-acid maps use 20 except Acid
+Pools (23); lava maps use 0 or 20. This is a local content census, not a promise
+about all mods. No minimum-current floor or maximum tidal clamp is imposed.
+
+**Submerged ground sprites.** Fully submerged, nonblocking static sprite features
+with authored height below 10 are recorded as `Sprite.SubmergedGround`, including
+their shadow/body pair. Burning/runtime features, models, tall/blocking objects,
+partially submerged objects, lava, Original and disabled Water keep their normal
+ordering. This admits the installed short AquaOre decals while excluding metal
+towers. The executor gathers the admitted sprites into reused storage and draws
+them after terrain, before the existing water pass, skipping their later replay.
+The input already passed normal feature visibility; fog still composites afterward.
+No additional screen-sized target or water pass is needed. It adds a sprite-list
+scan and may change batching. Replay clears borrowed frame references afterward;
+a view with no active water pass retains normal sprite replay.
 
 **Particles.** History is bounded to 8,192 marks and 4,096 tracked unit
 identities. Hover-spray age and building-foam ring phase both add the presentation
@@ -4102,7 +4139,7 @@ onto water. Installed-script fixtures exercise both hover script families.
 ### 26.4 Above-water screen-space reflections
 
 `ModelGeometry.ReflectWater` admits a visible body whose origin is over valid
-ordinary water; `ReflectionSea` is absolute sea height in recording-scale pixels,
+water or acid; `ReflectionSea` is absolute sea height in recording-scale pixels,
 alongside `WorldHeight`. Vertex `Height` remains physical relative height,
 supersampled geometry included. `Sprite.ReflectWater/ReflectionHeight` and
 `Line.ReflectWater/ReflectionHeight0/1` carry signed above-sea height for admitted
@@ -4143,7 +4180,7 @@ premultiplied result by that coverage, keeping the early-out where coverage is
 zero. The source plane is allocated only when needed and released on source reset.
 Nothing here reconstructs offscreen or hidden surfaces, traces rays or solves
 inter-unit reflected depth ordering; overlapping reflected subjects remain an
-approximation. Shore foam's opacity is reduced by one quarter beside it.
+approximation. Shore foam has its own selected opacity (§26.3).
 
 ### 26.6 Aircraft and boat reflections
 
@@ -4709,8 +4746,8 @@ judged it was not earning its keep and asked for motion that reads as living
 water instead of a tiled sheet sliding across the screen. The lobe, the
 half-vector it met and the shared two-layer height function it needed are all
 gone, and the four value-noise evaluations they cost went with them. The
-replacement is §26.3: no fixed scroll, three downwind speeds, a slow domain warp,
-a rotated fine lattice, and coarse gust patches.
+replacement is §26.3: tidal current with eased wind direction, bounded local
+ripples, a rotated fine lattice, and coarse patches.
 
 ### 32.2 Reflected explosions and impacts
 
@@ -4769,17 +4806,18 @@ channel, times one minus water coverage. The gate is deliberately low: its only
 job is to exclude terrain that is neither medium, since invalid ground and
 excluded liquid carry no dry flag at all, and a higher threshold would suppress
 the band exactly at the waterline, where it belongs. The band darkens the painted
-colour by up to twelve percent, half of that steady and half pulsing on the lap
-phase the shore foam carries at the boundary, so the ground darkens as a wave
-front arrives. All of this runs before the shader's dry early-out, because the
+colour by up to twelve percent before the selected 0.5 surface opacity,
+for a final maximum of six percent. Half is steady and half pulses on the
+original lap clock; the surface pattern size scales its spatial phase. All of this runs before the shader's dry early-out, because the
 band lives on dry texels; a pixel with no water on its ring returns the painted
 colour unchanged, and the mask's alpha says so without a second lookup.
 
 On the water side, the result mixes eight percent toward a pale cyan
 `(0.62, 0.80, 0.84)`, rising over a 0.0-to-0.10 smoothstep of the shore distance
 and falling over a 0.10-to-0.40 one, so water lightens as the bottom rises
-without the tint ending on the strict wet boundary (§26.3). Deep water is
-untouched.
+without the tint ending on the strict wet boundary (§26.3). The selected
+surface opacity and inward edge fade further attenuate it; lava disables both
+tint and damp edge. Deep water is untouched.
 
 ### 32.4 Verification
 
@@ -4846,7 +4884,7 @@ integrated coverage away from clipping is what makes thin details fade as the
 penumbra grows. No framebuffer colour is filtered. These are artistic constants,
 not an optical calibration.
 
-Each receiving pixel samples the ordinary-water mask with its existing 0.8–1
+Each receiving pixel samples the non-lava liquid mask with its existing 0.8–1
 coverage ramp. Wet pixels interpolate shadow opacity from one half to one fifth,
 add half a world pixel of filter radius, and displace the silhouette with bounded
 world-anchored waves driven by committed water phase and integrated wind drift.

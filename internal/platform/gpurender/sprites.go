@@ -86,6 +86,9 @@ func (r *Renderer) gafImageFor(f *formats.GAFFrame) *ebiten.Image {
 // (anchored/plain), the scaled kind and opaque feature kinds are copied here;
 // destination-reading variants route to the helpers in deststage.go.
 func (r *Renderer) Sprite(sp drawlist.Sprite) {
+	if r != nil && sp.SubmergedGround && r.water.bedDrawn {
+		return
+	}
 	if r == nil || r.surfaces[0] == nil {
 		return
 	}

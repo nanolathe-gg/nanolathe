@@ -75,7 +75,7 @@ func (r *Renderer) commitAircraftShadow(g *drawlist.ModelGeometry, body modelDir
 	var mask *ebiten.Image
 	water := &r.water
 	step, phase, driftX, driftZ := float32(0), float32(0), float32(0), float32(0)
-	if water.source != nil && water.source == water.record.Terrain && water.mask != nil {
+	if water.source != nil && !water.source.LavaWorld && water.source == water.record.Terrain && water.mask != nil {
 		mask, step = water.mask, float32(water.step)
 		if water.record.Water.Enabled && !water.disabled {
 			phase = (float32(water.record.Water.Tick) + float32(water.record.Water.Fraction16)/65536) / 30

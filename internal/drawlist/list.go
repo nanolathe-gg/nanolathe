@@ -171,7 +171,11 @@ type Sprite struct {
 	// HeatSource and HeatTime drive the modern burning-feature shimmer (GPU design §27).
 	// Time is committed ticks plus presentation fraction; classic ignores both.
 	HeatSource bool
-	HeatTime   float32
+	// SubmergedGround lets the Enhanced GPU water pass include fully
+	// submerged, short nonblocking feature art in its terrain input. Classic
+	// retains the recorded order and ignores this presentation-only hint.
+	SubmergedGround bool
+	HeatTime        float32
 	// Pal is the palette a BlitLit sprite resolves its LHT row against; nil for
 	// every other kind (WU-1.8). Carrying it on the record makes the lit glyph
 	// blit self-contained under deferred replay: the classic sink reads Pal here

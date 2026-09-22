@@ -44,7 +44,7 @@ func TestReflectionModelRefreshKeepsPhysicalSeaPlane(t *testing.T) {
 	}
 }
 
-func TestReflectionWaterRejectsInvalidAndHotTerrain(t *testing.T) {
+func TestReflectionWaterRejectsInvalidAndLavaTerrain(t *testing.T) {
 	for _, name := range []string{"missing", "empty", "west", "edge", "dry", "lava", "damage"} {
 		t.Run(name, func(t *testing.T) {
 			c := reflectionScene(t)
@@ -67,8 +67,8 @@ func TestReflectionWaterRejectsInvalidAndHotTerrain(t *testing.T) {
 			case "damage":
 				c.terrain.WaterDoesDamage, c.terrain.WaterDamage = 1, 5
 			}
-			if c.reflectionWaterAt(x, z) {
-				t.Fatal("invalid or nonordinary water admitted")
+			if got, want := c.reflectionWaterAt(x, z), name == "damage"; got != want {
+				t.Fatalf("reflection admission = %v, want %v", got, want)
 			}
 		})
 	}

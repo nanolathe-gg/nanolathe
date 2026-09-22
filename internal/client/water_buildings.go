@@ -16,7 +16,7 @@ func (c *Client) drawBuildingFoam(cur *frame.Frame) {
 		return
 	}
 	t := c.terrain
-	if t.SeaLevel == 0 || t.LavaWorld || t.WaterDoesDamage != 0 && t.WaterDamage != 0 {
+	if t.SeaLevel == 0 || t.LavaWorld {
 		return
 	}
 	c.waterFoam = c.waterFoam[:0]

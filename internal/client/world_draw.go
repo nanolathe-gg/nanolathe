@@ -883,6 +883,13 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 	if !f.RuntimeLive || f.EventSeqName != "" {
 		normalFrame = c.viewFrame(c.featureFrameFor(*f, false))
 	}
+	// Enhanced water distorts seabed decals with terrain (GPU design §26). Limit
+	// promotion to short, nonblocking static sprite features fully below sea;
+	// taller objects and runtime fire/death cursors keep their ordinary order.
+	submerged := c.enhanced && c.effects.Water && !c.strategicView() &&
+		c.terrain != nil && !c.terrain.LavaWorld && c.terrain.SeaLevel != 0 &&
+		!f.Blocking && !f.RuntimeLive && !f.IsBurning && f.Height < 10 &&
+		f.Y >= 0 && int64(f.Y)+int64(max(f.Height, 0))*65536 < int64(c.terrain.SeaLevelWorld())
 	// Record the shadow then the normal frame through the committed-frame draw
 	// list, in the same order the direct blits ran. drawFeature subtracts the
 	// frame's XOffset/YOffset here, so the recorded X/Y are the final top-left
@@ -895,11 +902,12 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// proxy based on EventSeqName.
 		shadowTrans := f.ShadTrans && !f.RuntimeLive
 		c.emitSprite(drawlist.Sprite{
-			Frame: shadowFrame,
-			X:     sx - int32(shadowFrame.XOffset),
-			Y:     sy - int32(shadowFrame.YOffset),
-			Kind:  drawlist.BlitFeatureShadow,
-			Trans: shadowTrans,
+			SubmergedGround: submerged,
+			Frame:           shadowFrame,
+			X:               sx - int32(shadowFrame.XOffset),
+			Y:               sy - int32(shadowFrame.YOffset),
+			Kind:            drawlist.BlitFeatureShadow,
+			Trans:           shadowTrans,
 		})
 	}
 	if normalFrame != nil {
@@ -940,11 +948,12 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		c.emitSprite(drawlist.Sprite{
 			HeatSource: heat, HeatTime: heatTime, LightingScale: scale, LightingGround: lightingGround,
 			LightingKind: lightingKind, LightingTime: lightingTime, WorldHeight: lightingHeight,
-			Frame: normalFrame,
-			X:     sx - int32(normalFrame.XOffset),
-			Y:     sy - int32(normalFrame.YOffset),
-			Kind:  drawlist.BlitFeatureNormal,
-			Trans: normalTrans,
+			SubmergedGround: submerged,
+			Frame:           normalFrame,
+			X:               sx - int32(normalFrame.XOffset),
+			Y:               sy - int32(normalFrame.YOffset),
+			Kind:            drawlist.BlitFeatureNormal,
+			Trans:           normalTrans,
 		})
 	}
 }

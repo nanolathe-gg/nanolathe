@@ -16,6 +16,8 @@ import (
 const waterBlockSize = 128
 
 type waterLayer struct {
+	bedSprites         []drawlist.Sprite
+	bedDrawn           bool
 	disabled           bool
 	shader, wakeShader *ebiten.Shader
 	source             *world.Terrain
@@ -35,11 +37,13 @@ func newSurfaceWakeShader() (*ebiten.Shader, error) {
 }
 
 // waterMaskPixels builds a conservative, bounded-resolution projected mask.
-// Red is foam-compatible water, green is distance inward from the shore (0..32
-// world pixels), blue is valid dry ground, and alpha is the damp band's ring
-// term (waterRingField). The chamfer sweeps cost linear time and allocate once
-// per terrain identity; they do not inspect or modify occupancy or simulation
-// RNG.
+// The surface includes acid and lava pools; shoreline foam is admitted
+// separately for ordinary, non-void water.
+// Red is liquid coverage, green is distance inward from the shore (0..32
+// world pixels), blue is dry ground (1) or void liquid (0.5), and alpha is
+// the damp band's ring term (waterRingField). The chamfer sweeps cost linear
+// time and allocate once per terrain identity; they do not inspect or modify
+// occupancy or simulation RNG.
 func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []bool, bw, bh int) {
 	if t == nil || t.CellW <= 1 || t.CellH <= 1 || len(t.Plot) < int(t.CellW)*int(t.CellH) {
 		return
@@ -54,7 +58,7 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 	bw, bh = (pw+waterBlockSize-1)/waterBlockSize, (ph+waterBlockSize-1)/waterBlockSize
 	blocks = make([]bool, bw*bh)
 	distance := make([]uint16, w*h)
-	waterAllowed := t.SeaLevel != 0 && !t.LavaWorld && !(t.WaterDoesDamage != 0 && t.WaterDamage != 0)
+	waterAllowed := t.SeaLevel != 0 || t.LavaWorld
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			i := y*w + x
@@ -64,7 +68,13 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 			if ground < 0 {
 				continue
 			}
-			if ground >= t.SeaLevelWorld() {
+			submerged := ground < t.SeaLevelWorld()
+			// Lava's impassable flood includes the level itself. Include flat pools
+			// at height zero too, which occur on zero-level lava maps.
+			if t.LavaWorld {
+				submerged = ground <= t.SeaLevelWorld()
+			}
+			if !submerged {
 				pixels[i*4+2] = 255
 				continue
 			}
@@ -72,6 +82,11 @@ func waterMaskPixels(t *world.Terrain) (pixels []byte, w, h, step int, blocks []
 				continue
 			}
 			pixels[i*4] = 255
+			if cell := t.PlotAt(world.WorldToCell(wx), world.WorldToCell(wz)); cell != nil && cell.IsVoid() {
+				// Topological voids reject every surface movement class, regardless of
+				// unit selection. Retain their liquid motion, but never add shore foam.
+				pixels[i*4+2] = 128
+			}
 			distance[i] = 255
 			blocks[(int(py)/waterBlockSize)*bw+int(px)/waterBlockSize] = true
 		}
@@ -187,7 +202,7 @@ func roundShoreline(pixels []byte, distance []uint16, w, h, step int) {
 }
 
 // waterRingField writes the damp band's ring term (§32) into the mask's spare
-// alpha channel: how much ordinary water surrounds this texel, as the product
+// alpha channel: how much liquid surrounds this texel, as the product
 // of the two readings the band is gated on — a smooth step on the largest water
 // reading around a ring of eight taps eight world pixels out, times one on the
 // ring's mean. Both readings are bilinear, because the mask step varies with map
@@ -351,8 +366,17 @@ func (r *Renderer) drawWater(c drawlist.Terrain) {
 		effective *= r.sched.worldScale
 	}
 	time := (float32(c.Water.Tick) + float32(c.Water.Fraction16)/65536) / 30
+	shoreFoam, waterColour := float32(1), float32(1)
+	if c.Terrain != nil {
+		if c.Terrain.LavaWorld || (c.Terrain.WaterDoesDamage != 0 && c.Terrain.WaterDamage != 0) {
+			shoreFoam = 0
+		}
+		if c.Terrain.LavaWorld {
+			waterColour = 0
+		}
+	}
 	r.sched.quad(schedDest, 0, 0, float32(w), float32(h), float32(c.OriginX), float32(c.OriginY), float32(c.OriginX)+float32(w)/scale, float32(c.OriginY)+float32(h)/scale,
-		[4]float32{time, c.Water.DriftX, c.Water.DriftZ, c.Water.Energy}, [4]float32{float32(st.step), effective, 0, 0})
+		[4]float32{time, c.Water.TidalDriftX, c.Water.TidalDriftZ, c.Water.Energy}, [4]float32{float32(st.step), effective, shoreFoam, waterColour})
 }
 
 // SurfaceWakes shares the projected wet/dry mask with the water surface. The
@@ -369,6 +393,10 @@ func (r *Renderer) SurfaceWakes(batch drawlist.SurfaceWakes) {
 	ox, oy := r.sched.inverseOrigin(float32(st.record.OriginX), float32(st.record.OriginY), scale)
 	mapping := [4]float32{ox, oy, 1 / scale, float32(st.step)}
 	for _, m := range batch.Marks {
+		if m.Foam {
+			// The selected foam opacity is independent of surface opacity (§26).
+			m.Alpha *= 0.6
+		}
 		if m.Alpha <= 0 || (!m.Dust && !m.Foam) {
 			continue
 		}
@@ -397,6 +425,15 @@ func (r *Renderer) SurfaceWakes(batch drawlist.SurfaceWakes) {
 
 const waterShaderSource = `//kage:unit pixels
 package main
+
+// Selected presentation values (GPU design §26.3).
+const patternSize = 0.5
+const surfaceOpacity = 0.5
+const currentScale = 3.0
+const rippleDeformation = 5.0
+const shoreFoamOpacity = 0.6
+const edgeFadePixels = 11.2
+const surfaceEnergy = 0.5
 
 func noise(p vec2) float {
  f := fract(p)
@@ -429,8 +466,8 @@ func terrainLinear(p vec2) vec4 {
 func wetMask(p vec2) vec4 {
  // Coordinates are map pixels divided by the cached mask step, in source-0
  // space for source 1 even though the two images have different atlas origins.
- // Blue is the independent dry-ground channel; it is only ever read as a gate,
- // so bilinear mixing across the boundary cannot corrupt the wet-side terms.
+ // Blue is dry ground at 1, void liquid at 0.5, and ordinary liquid at 0.
+ // The void marker suppresses foam without removing animated surface coverage.
  // Alpha is the damp band's ring term, built per terrain identity by
  // waterRingField and continuous across the boundary, so it filters like the
  // rest.
@@ -449,8 +486,11 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  mask := wetMask(world/custom.x)
  coverage := smoothstep(0.8,1.0,mask.x)
  t := color.r
- drift := color.gb
- strength := color.a
+ drift := color.gb*currentScale
+ pattern := world/patternSize
+ shoreDistance := mask.y
+ original := base
+ strength := surfaceEnergy
  // Damp shoreline band (§32). Ground the water has just washed keeps a darker
  // tone, so dry pixels within about eight world pixels of water lose up to
  // twelve percent of their brightness, pulsing on the phase the shore foam
@@ -461,36 +501,34 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  // ground and excluded liquid carry no dry flag at all — so it stays well below
  // the boundary's own bilinear ramp, which is where the band belongs.
  dry := smoothstep(0.05,0.5,mask.z)*(1.0-coverage)
- damp := mask.w*dry
+ damp := mask.w*dry*custom.w
  if damp>0.0 {
-  lapDry := pow(max(0.0,sin(t*1.6+noise(world*0.025)*3.0)),2.0)
+  lapDry := pow(max(0.0,sin(t*1.6+noise(pattern*0.025)*3.0)),2.0)
   base = vec4(base.rgb*(1.0-0.12*damp*(0.5+0.5*lapDry)),base.a)
  }
- if coverage<=0 { return base }
- // Every layer travels only on the integrated wind drift, each at its own
- // multiple, so the direction of travel is always the wind and the differing
- // speeds give the surface parallax. Nothing scrolls on a fixed velocity: in
- // calm wind a fixed scroll dominates the drift and the whole sea slides in a
- // direction unrelated to the wind (§26.3). The field is never rotated by the
- // wind either — the retail heading re-rolls to a fresh random value every
- // 150 to 420 ticks
- // [05 "The wind phase, its draws, and the generator notification"], so an
- // oriented field would swing through a new angle on every re-roll.
- //
- // Gust patches ("cat's paws"): a very coarse layer gliding downwind fastest,
- // darkening and roughening the water it crosses.
- gust := smoothstep(0.30,0.80,noise((world-drift*22.0)*0.0055+vec2(3.0,7.0)))
- // A slow domain warp makes the broad ripple churn in place rather than only
- // translate: the warp lattice is the one thing that moves on time alone, and
- // it deforms the layers beneath it, so cells stretch, split and merge.
- p := (world-drift*6.0)*0.07
- warp := vec2(noise(p*0.23+vec2(t*0.076,5.0-t*0.052)),noise(p*0.23+vec2(9.0-t*0.064,t*0.084)))
+ // The height grid and painted shoreline can disagree. Fade the whole
+ // surface treatment in from the rounded coast instead of revealing the
+ // strict coverage cutoff. The selected 0.7 edge factor gives an 11.2-pixel
+ // fade, independent of pattern size, foam width and zoom. The shared strict
+ // mask stays unchanged for reflections and other readers.
+ coverage *= smoothstep(0.0,edgeFadePixels/32.0,mask.y)
+ if coverage<=0 { return vec4(clamp(mix(original.rgb,base.rgb,surfaceOpacity),vec3(0),vec3(base.a)),base.a) }
+ // Current translates a fixed world-space lattice; it never rotates the
+ // texture when wind changes. Three drift multiples give surface parallax.
+ // The current is integrated from tidal speed and eased wind direction (§26).
+ gust := smoothstep(0.30,0.80,noise((pattern-drift*22.0)*0.0055+vec2(3.0,7.0)))
+ // Bounded in-place deformation keeps zero-tidal surfaces alive without
+ // introducing a directional scroll unrelated to the current.
+ p := (pattern-drift*6.0)*0.07
+ a := noise(pattern*0.018+vec2(7.0,13.0))*6.283185
+ b := noise(pattern*0.023+vec2(31.0,3.0))*6.283185
+ warp := vec2(0.5)+vec2(sin(t*0.65+a),sin(t*0.83+b))*0.5*rippleDeformation
  p += (warp-vec2(0.5))*1.6
  broad := noise(p)
  // The fine lattice is rotated 37 degrees about the map origin — a fixed
  // rotation, applied once, not a wind-following one — so its cell rows never
  // line up with the broad lattice and the pair stops reading as a grid.
- q := (world-drift*11.0)*0.166
+ q := (pattern-drift*11.0)*0.166
  q = vec2(q.x*0.7986-q.y*0.6018,q.x*0.6018+q.y*0.7986)+(warp-vec2(0.5))*0.9
  fine := noise(q)
  ripple := broad*0.65+fine*0.35-0.5
@@ -499,24 +537,27 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  sample := clamp(screen+offset,vec2(0.5),imageSrc0Size()-vec2(0.5))
  // Subpixel filtering prevents nearest-neighbour displacement from snapping.
  warped := terrainLinear(sample)
- shade := 1.0+ripple*(0.112+strength*0.08)*(0.7+0.5*gust)*deep-0.05*strength*gust*deep
+ shade := 1.0+(ripple*(0.112+strength*0.08)*(0.7+0.5*gust)*deep-0.05*strength*gust*deep)
  // Moving highlights make the surface readable even when the painted detail
  // is too fine to reveal displacement. Their broken shape follows both fields.
  crest := smoothstep(0.10,0.32,ripple)
- result := mix(warped.rgb*shade,vec3(0.40,0.67,0.78),crest*(0.04+strength*0.04)*deep)
- // Wave fronts travel down the smoothed shore-distance field. Broad crests
- // dissolve before the wet/dry boundary, so they do not trace its texel steps.
- shore := (1.0-smoothstep(0.35,0.95,mask.y))*smoothstep(0.0,0.25,mask.y)
+ result := mix(warped.rgb*shade,vec3(0.40,0.67,0.78),clamp(custom.w*crest*(0.04+strength*0.04)*deep,0,1))
+ // Shore foam keeps the original world-space pattern and clock. Surface
+ // current, in-place deformation, size and opacity must not change its pace
+ // or base opacity. The common soft edge still fades it at the shoreline.
+ shore := (1.0-smoothstep(0.35,0.95,shoreDistance))*smoothstep(0.0,0.25,shoreDistance)
  shorePatch := noise(world*0.025)
- lap := pow(max(0.0,sin(mask.y*10.0+t*1.6+shorePatch*3.0)),2.0)
- foam := shore*lap*(0.09+strength*0.105)*(0.50+0.50*shorePatch)*coverage
- result = mix(result,vec3(0.72,0.84,0.87),foam)
+ lap := pow(max(0.0,sin(shoreDistance*10.0+color.r*1.6+shorePatch*3.0)),2.0)
+ foam := shore*lap*(0.09+color.a*0.105)*(0.50+0.50*shorePatch)*coverage*custom.z*(1.0-smoothstep(0.1,0.4,mask.z))
  // Shallow tint (§32): water lightens toward a pale cyan as the bottom rises.
  // It rises from nothing at the rounded coast the distance is measured from,
  // like every other term here, so the strict wet boundary — a staircase on a
  // steep beach — is never the edge of anything drawn.
- result = mix(result,vec3(0.62,0.80,0.84),0.08*smoothstep(0.0,0.10,mask.y)*(1.0-smoothstep(0.10,0.40,mask.y)))
- return vec4(mix(base.rgb,min(result,vec3(base.a)),coverage),base.a)
+ result = mix(result,vec3(0.62,0.80,0.84),clamp(custom.w*0.08*smoothstep(0.0,0.10,shoreDistance)*(1.0-smoothstep(0.10,0.40,shoreDistance)),0,1))
+ effect := mix(base.rgb,min(result,vec3(base.a)),coverage)
+ surface := clamp(mix(original.rgb,effect,surfaceOpacity),vec3(0),vec3(base.a))
+ surface = mix(surface,vec3(0.72,0.84,0.87)*base.a,clamp(foam*shoreFoamOpacity*coverage,0,1))
+ return vec4(surface,base.a)
 }
 `
 
@@ -560,3 +601,32 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  return vec4(tint*alpha,alpha)
 }
 `
+
+// prepareWaterBed borrows only this replay's already-admitted ground sprites.
+// Clear their frame pointers at replay end; keep just the reusable slice storage.
+func (r *Renderer) prepareWaterBed(list *drawlist.List) {
+	st := &r.water
+	st.bedDrawn = false
+	st.bedSprites = st.bedSprites[:0]
+	if st.disabled {
+		return
+	}
+	list.VisitSprites(func(sp drawlist.Sprite) {
+		if sp.SubmergedGround && sp.Frame != nil &&
+			(sp.Kind == drawlist.BlitFeatureNormal || sp.Kind == drawlist.BlitFeatureShadow) {
+			st.bedSprites = append(st.bedSprites, sp)
+		}
+	})
+}
+
+func (r *Renderer) drawWaterBed(c drawlist.Terrain) {
+	st := &r.water
+	if st.disabled || !c.Water.Enabled || st.shader == nil || st.mask == nil || !st.visibleWater(c) {
+		return
+	}
+	for _, sp := range st.bedSprites {
+		sp.SubmergedGround = false
+		r.Sprite(sp)
+	}
+	st.bedDrawn = true
+}

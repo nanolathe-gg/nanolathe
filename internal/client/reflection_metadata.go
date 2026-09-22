@@ -6,7 +6,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
-// reflectionWaterAt admits Enhanced reflections over valid ordinary water
+// reflectionWaterAt admits Enhanced reflections over valid water and acid pools
 // (GPU design §26). The body's origin may be submerged: the executor clips
 // physical corners, so an above-water piece still contributes.
 func (c *Client) reflectionWaterAt(x, z numeric.Fixed) bool {
@@ -16,7 +16,7 @@ func (c *Client) reflectionWaterAt(x, z numeric.Fixed) bool {
 		return false
 	}
 	t := c.terrain
-	if len(t.Plot) == 0 || t.CellW <= 0 || t.CellH <= 0 || t.LavaWorld || (t.WaterDoesDamage != 0 && t.WaterDamage != 0) {
+	if len(t.Plot) == 0 || t.CellW <= 0 || t.CellH <= 0 || t.LavaWorld {
 		return false
 	}
 	height := t.HeightAt(x, z)

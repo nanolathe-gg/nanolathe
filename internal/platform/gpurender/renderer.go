@@ -313,6 +313,12 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	r.prepareTreeHeat(list)
 	r.prepareModelDirect(list)
 	r.prepareProjectileReflections(list)
+	r.prepareWaterBed(list)
+	defer func() {
+		clear(r.water.bedSprites)
+		r.water.bedSprites = r.water.bedSprites[:0]
+		r.water.bedDrawn = false
+	}()
 	list.Replay(r)
 	if !r.arrival.packet.Active {
 		r.arrival.opts = ebiten.DrawTrianglesShaderOptions{}

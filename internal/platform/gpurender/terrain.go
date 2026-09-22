@@ -438,6 +438,7 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 			}
 		}
 	}
+	r.drawWaterBed(c)
 	r.drawWater(c)
 	r.drawWaterReflections(c)
 	// The battle lights reach the ground last in the terrain pass, so the copy

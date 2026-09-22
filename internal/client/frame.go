@@ -313,11 +313,14 @@ func (c *Client) waterSurfaceMetadata() drawlist.WaterSurface {
 	}
 	st := &c.waterMotion
 	water.DriftX, water.DriftZ, water.Energy = st.x, st.z, st.energy
+	water.TidalDriftX, water.TidalDriftZ = st.tidalX, st.tidalZ
 	if c.interpolation {
 		f := float32(water.Fraction16) / 65536
 		water.DriftX = st.prevX + (st.x-st.prevX)*f
 		water.DriftZ = st.prevZ + (st.z-st.prevZ)*f
 		water.Energy = st.prevEnergy + (st.energy-st.prevEnergy)*f
+		water.TidalDriftX = st.prevTidalX + (st.tidalX-st.prevTidalX)*f
+		water.TidalDriftZ = st.prevTidalZ + (st.tidalZ-st.prevTidalZ)*f
 	}
 	return water
 }

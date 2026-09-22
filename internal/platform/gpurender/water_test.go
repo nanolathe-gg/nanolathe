@@ -58,12 +58,10 @@ func TestWaterMaskProjectionAndLiquidGate(t *testing.T) {
 		}
 		p, _, _, _, _, _, _ = waterMaskPixels(ter)
 		if dry(48, 80) != 0 || dry(48, 252) != 0 || dry(180, 80) != 255 {
-			t.Fatal("excluded liquid or invalid terrain classified as dry")
+			t.Fatal("liquid or invalid terrain classified as dry")
 		}
-		for i := 0; i < len(p); i += 4 {
-			if p[i] != 0 {
-				t.Fatal("hot/damaging liquid got ocean foam")
-			}
+		if at(48, 80) != 255 || at(180, 80) != 0 || at(48, 252) != 0 {
+			t.Fatal("acid/lava surface lost liquid coverage or crossed dry/invalid terrain")
 		}
 	}
 }
@@ -422,7 +420,7 @@ func checkWaterSurfaceAdditions() error {
 		return err
 	}
 	defer full.Deallocate()
-	noGust, err := variant("smoothstep(0.30,0.80,noise((world-drift*22.0)*0.0055+vec2(3.0,7.0)))", "0.0*noise(world)")
+	noGust, err := variant("smoothstep(0.30,0.80,noise((pattern-drift*22.0)*0.0055+vec2(3.0,7.0)))", "0.0*noise(world)")
 	if err != nil {
 		return err
 	}
@@ -432,7 +430,7 @@ func checkWaterSurfaceAdditions() error {
 		return err
 	}
 	defer noDamp.Deallocate()
-	noTint, err := variant("0.08*smoothstep(0.0,0.10,mask.y)*(1.0-smoothstep(0.10,0.40,mask.y))", "0.0*mask.y")
+	noTint, err := variant("0.08*smoothstep(0.0,0.10,shoreDistance)*(1.0-smoothstep(0.10,0.40,shoreDistance))", "0.0*mask.y")
 	if err != nil {
 		return err
 	}
@@ -445,6 +443,7 @@ func checkWaterSurfaceAdditions() error {
 			// native effective scale — the uniforms drawWater supplies.
 			vertices[i].ColorR, vertices[i].ColorG, vertices[i].ColorB, vertices[i].ColorA = t, 0, 0, 1
 			vertices[i].Custom0, vertices[i].Custom1 = surfaceFixtureStep, 1
+			vertices[i].Custom2, vertices[i].Custom3 = 1, 1
 		}
 		target.Clear()
 		target.DrawTrianglesShader(vertices, []uint16{0, 1, 2, 0, 2, 3}, shader, &ebiten.DrawTrianglesShaderOptions{Images: [4]*ebiten.Image{terrain, mask}})
