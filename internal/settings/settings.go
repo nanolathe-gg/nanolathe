@@ -454,10 +454,14 @@ type Presentation struct {
 	Distortion int `json:"distortion"`
 	// Marks is the scorch marks and the trail layer of footprints and tracks.
 	Marks int `json:"marks"`
+	// TeamNanospray selects player-coloured nanospray in the modern renderer.
+	// Zero preserves green, including in older files; Classic always stays
+	// green (DESIGN_GPU_RENDERER §30).
+	TeamNanospray int `json:"teamNanospray"`
 }
 
 // DefaultPresentation selects the modern executor with a 60 FPS cap and every
-// Enhanced effect on.
+// Enhanced effect on, with the default green nanospray.
 func DefaultPresentation() Presentation {
 	return Presentation{
 		Renderer: "modern", FPS: 60, ExpandedSidebar: 1,
@@ -467,8 +471,8 @@ func DefaultPresentation() Presentation {
 }
 
 // Normalize repairs unsupported values while preserving the CLI's display
-// refresh choice (zero) and arbitrary positive presentation caps. The five
-// effect switches are booleans, so only a negative value is repaired.
+// refresh choice (zero) and arbitrary positive presentation caps. The effect
+// switches are booleans, so only a negative value is repaired.
 func (p *Presentation) Normalize() {
 	if p.Renderer != "classic" && p.Renderer != "modern" {
 		p.Renderer = DefaultPresentation().Renderer
@@ -478,6 +482,9 @@ func (p *Presentation) Normalize() {
 	}
 	if p.ExpandedSidebar < 0 {
 		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
+	}
+	if p.TeamNanospray < 0 {
+		p.TeamNanospray = 0
 	}
 	for _, value := range []*int{&p.Water, &p.Lighting, &p.Finish, &p.Distortion, &p.Marks} {
 		if *value < 0 {

@@ -373,6 +373,14 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 		// producer; the presentation emission above is separate [I6].
 		s.emitSFXStripProducers(ev)
 	case cob.PresentationNano:
+		// This bridge has no Team field upstream; carry the source unit's
+		// owner explicitly for optional team spray (GPU design §23.6).
+		e.Team = combat.NeutralSide
+		if s.session != nil && s.session.Units != nil {
+			if u := s.session.Units.Unit(s.source); u != nil {
+				e.Team = u.Owner
+			}
+		}
 		// Script-emitted nano events are beam-family strip-6 effects with the
 		// same geometry gate as construction/reclaim work [03 §5.5][R-P0-06 §5].
 		e.Producer = frame.ProducerBeam
@@ -448,15 +456,21 @@ func (s *Session) appendStripNanoForEvent(e frame.Event) {
 	}
 	src := [3]numeric.Fixed{e.X, e.Y, e.Z}
 	dst := [3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ}
+	var emitter *stripObject
 	switch {
 	case e.NanolatheBoxAtSource && e.NanolatheTargetBoxKnown:
-		s.appendStripNanoEmitterFromBox(e.NanolatheTargetMin, e.NanolatheTargetMax, dst)
+		emitter = s.appendStripNanoEmitterFromBox(e.NanolatheTargetMin, e.NanolatheTargetMax, dst)
 	case e.NanolatheTargetBoxKnown:
-		s.appendStripNanoEmitterBox(src, e.NanolatheTargetMin, e.NanolatheTargetMax)
+		emitter = s.appendStripNanoEmitterBox(src, e.NanolatheTargetMin, e.NanolatheTargetMax)
 	default:
 		// No box published: both ends are points. The CRT cost is the same
 		// either way — six draws per particle, five particles [03 §5.5].
-		s.appendStripNanoEmitter(src, dst)
+		emitter = s.appendStripNanoEmitter(src, dst)
+	}
+	if emitter != nil {
+		// Retain the builder colour even if the source is reclaimed, captured,
+		// destroyed or its slot reused before the particles expire (§23.6).
+		emitter.nanoOwnerColor, emitter.nanoOwnerColorKnown = radarOwnerPalette(s, e.Team, true)
 	}
 }
 

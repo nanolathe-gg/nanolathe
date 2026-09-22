@@ -1661,17 +1661,17 @@ No retail asset is copied into the repository or changed on disk.
 
 The page contains captioned Renderer (Classic / Modern) and Gameplay
 (Strict 3.1 / Modern) rows. Compact FPS (30 / 60 / 120), Sidebar (Off / On),
-Glow, Water, Lights, Metal, Heat and Marks controls carry their own names.
-The two captioned rows use a tight
-caption-plus-control pitch and the switches a
-narrower one, so the page fits the in-battle column as well as the front-end
-one without reaching Restore Defaults or Undo Changes.
+Glow, Water, Lights, Metal, Heat, Marks and Nano (Green / Team) controls carry
+their own names. The two captioned rows use a tight caption-plus-control
+pitch and the switches sit directly together at their authored height, so the
+page fits the in-battle column as well as the front-end one without reaching
+Restore Defaults or Undo Changes.
 
 Gameplay defaults to Modern, independently of the renderer, and follows
 DESIGN_WEAPONS_PROJECTILES §2.3.1. The remaining controls default to Modern,
-60 FPS and every switch on. These are presentation choices;
-simulation remains 30 Hz. The cap bounds modern presentation on the display's
-refresh grid; classic still presents at 30 Hz. Higher or refresh-following
+60 FPS, green nanospray and every effect switch on. These are presentation
+choices; simulation remains 30 Hz. The cap bounds modern presentation on the
+display's refresh grid; classic still presents at 30 Hz. Higher or refresh-following
 values remain available through `--fps`; a value outside the presets is
 displayed as stored.
 
@@ -1683,6 +1683,14 @@ block, which the host polls each update. Classic presents identically whatever
 they say. The same five toggle from the message line as `+water`, `+lights`,
 `+finish`, `+heat` and `+marks`, beside the existing `+glow`, each persisting
 its value the way the display-bit commands do.
+
+Nano stores `presentation.teamNanospray`: zero selects the default green;
+nonzero selects the player colour for modern nanospray. Missing and negative
+values select green. This is a renderer preference independent of gameplay:
+Classic preserves green, and the preference changes no particles, lifetimes,
+resources or RNG. It shares the live preview and settings transaction of the
+other presentation controls.
+
 Expanded sidebar selects the modern composition described in §3.3 and remains
 independent of the renderer choice; Classic always uses the authored page.
 
@@ -1690,7 +1698,7 @@ Edits preview immediately; gameplay changes enqueue a typed command for the
 next simulation boundary. OK saves gameplay and the presentation block with the existing
 settings transaction; Cancel restores the entry values, Undo restores this
 page — including its glow bit — and Restore Defaults chooses Modern / 60 with
-every effect on. F10 updates the shell and saves
+every effect on and Nano set to Green. F10 updates the shell and saves
 only the renderer field, preserving other pending preferences. The adapter polls
 the live shell preference and shares executor-swap cleanup with F10. A saved
 renderer also controls subsequent battle loading and detail-art preparation.

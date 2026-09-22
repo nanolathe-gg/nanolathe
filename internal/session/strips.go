@@ -198,7 +198,10 @@ type stripParticle struct {
 // a tag byte, a zeroed word, and begin/end pointers [R-CORE-01 §4.4.1]; the
 // per-family parameters below carry the researched init arguments.
 type stripObject struct {
-	family stripFamily
+	// Captured presentation metadata; never read by the strip sweep.
+	nanoOwnerColor      uint8
+	nanoOwnerColorKnown bool
+	family              stripFamily
 
 	// windowEnd bounds the object's spawn window; the spawn gate compares
 	// the next-spawn tick against both this value and the global tick
@@ -1052,40 +1055,40 @@ func divByTicks(delta numeric.Fixed, ticks int32) numeric.Fixed {
 // first five spawn immediately as part of construction, spending thirty CRT
 // draws at the producer [03 §5.5]. Eviction runs at insert; exhaustion is
 // not modelled (see the storage note above).
-func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) {
-	s.appendStripNanoEmitterBox(srcPoint, dstPoint, dstPoint)
+func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) *stripObject {
+	return s.appendStripNanoEmitterBox(srcPoint, dstPoint, dstPoint)
 }
 
 // appendStripNanoEmitterBox retains the authored target footprint for feature
 // reclaim/resurrection spray. Unit/build callers use the degenerate wrapper
 // above until their model-box adapter supplies extents [05 R-WORK-01 §8].
-func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed) {
-	s.appendStripNanoEmitterBoxes(srcPoint, srcPoint, dstMin, dstMax)
+func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed) *stripObject {
+	return s.appendStripNanoEmitterBoxes(srcPoint, srcPoint, dstMin, dstMax)
 }
 
 // appendStripNanoEmitterFromBox is the reversed direction of [05 R-WORK-01 §8]:
 // the six-word box is the SOURCE end and the builder's nano piece is the
 // degenerate destination. Feature reclaim, unit reclaim and capture spray this
 // way round; build, repair and resurrection use the wrapper above.
-func (s *Session) appendStripNanoEmitterFromBox(srcMin, srcMax, dstPoint [3]numeric.Fixed) {
-	s.appendStripNanoEmitterBoxes(srcMin, srcMax, dstPoint, dstPoint)
+func (s *Session) appendStripNanoEmitterFromBox(srcMin, srcMax, dstPoint [3]numeric.Fixed) *stripObject {
+	return s.appendStripNanoEmitterBoxes(srcMin, srcMax, dstPoint, dstPoint)
 }
 
 // appendStripNanoEmitterBoxes is the general form both wrappers share. The CRT
 // cost is identical either way — six draws per particle, five particles at
 // construction — so which end carries the extent never moves the stream [I4].
-func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]numeric.Fixed) {
+func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]numeric.Fixed) *stripObject {
 	if s == nil || s.strips == nil {
-		return
+		return nil
 	}
 	if s.strips.poolFull() {
 		// A full pool drops the object before the family init runs, so the
 		// emitter's thirty spawn draws are NOT spent [03 R-FX-02 §4].
-		return
+		return nil
 	}
 	crt := s.CrtRNG()
 	if crt == nil {
-		return
+		return nil
 	}
 	tick := uint32(0)
 	if s.Clock != nil {
@@ -1107,6 +1110,7 @@ func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]
 	// second spawn on the next tick.
 	o.spawnOnce(tick, crt)
 	s.strips.append(6, o)
+	return &s.strips.strips[6][len(s.strips.strips[6])-1]
 }
 
 // SmokePuffInit is the smoke emitter's researched init, exactly as
@@ -1421,14 +1425,16 @@ func (s *Session) appendStripViews(tick uint32, out []frame.StripView) []frame.S
 			for i := range o.particles {
 				p := &o.particles[i]
 				view := frame.StripView{
-					Strip:  int8(strip),
-					Family: family,
-					Bank:   bank,
-					Entry:  entry,
-					Frame:  p.frame,
-					X:      p.x,
-					Y:      p.y,
-					Z:      p.z,
+					Strip:               int8(strip),
+					NanoOwnerColor:      o.nanoOwnerColor,
+					NanoOwnerColorKnown: o.nanoOwnerColorKnown,
+					Family:              family,
+					Bank:                bank,
+					Entry:               entry,
+					Frame:               p.frame,
+					X:                   p.x,
+					Y:                   p.y,
+					Z:                   p.z,
 				}
 				// Ticks left before expireParticles removes this sub-record.
 				// Presentation metadata only; no phase reads it back [I6]. A

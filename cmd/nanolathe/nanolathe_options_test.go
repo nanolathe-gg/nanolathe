@@ -56,7 +56,7 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if optionsState.page != "nanolathe" {
 		t.Fatal("new category did not open")
 	}
-	for _, name := range []string{"NANOLATHE", "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR"} {
+	for _, name := range []string{"NANOLATHE", "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR", "NNANO"} {
 		gad := optionsPanel.Window.Gadgets[optionsPanel.Index(name)]
 		if gad.ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -87,6 +87,13 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	if got := host.Effects(); got != (drawlist.Effects{}) {
 		t.Fatalf("effect preview %+v", got)
 	}
+	g.activateRetailOptionsGadget("NNANO")
+	if !host.Effects().TeamNanospray {
+		t.Fatal("team nanospray did not preview immediately")
+	}
+	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "nanolathe-options-team.png"))
+	}
 	if g.display.Glow != 0 || cl.Glow() {
 		t.Fatalf("glow preview: stored %d live %v", g.display.Glow, cl.Glow())
 	}
@@ -106,6 +113,7 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	g.activateRetailOptionsGadget("NFPS")
 	g.activateRetailOptionsGadget("NWATER")
 	g.activateRetailOptionsGadget("NMARKS")
+	g.activateRetailOptionsGadget("NNANO")
 	g.activateRetailOptionsGadget("NGLOW")
 	g.activateRetailOptionsGadget("NSIDEBAR")
 	g.activateRetailOptionsGadget("PREV")
@@ -118,6 +126,9 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	}
 	if saved.Presentation.Water != 0 || saved.Presentation.Marks != 0 || saved.Presentation.Lighting != 1 {
 		t.Fatalf("saved effects %+v", saved.Presentation)
+	}
+	if saved.Presentation.TeamNanospray != 1 {
+		t.Fatal("saved preference lost team nanospray")
 	}
 	if saved.Display.Glow != 0 {
 		t.Fatalf("saved glow %d", saved.Display.Glow)
@@ -205,7 +216,7 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	// Every switch has button art and a hit rectangle inside the battle column,
 	// and one click cycles it to Off (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 	canvasW, canvasH := cl.Size()
-	for _, name := range append([]string{"NGAMEPLAY", "NRENDER", "NFPS", "NSIDEBAR"}, effectGadgets...) {
+	for _, name := range append([]string{"NGAMEPLAY", "NRENDER", "NFPS", "NSIDEBAR", "NNANO"}, effectGadgets...) {
 		index := optionsPanel.Index(name)
 		if optionsPanel.Window.Gadgets[index].ButtonArt == nil {
 			t.Fatalf("%s has no game-data button art", name)
@@ -230,6 +241,14 @@ func TestBattleNanolatheOptionsPointerAndLayout(t *testing.T) {
 	}
 	if got := presentationEffects(g.presentation); got != (drawlist.Effects{}) {
 		t.Fatalf("pointer left effects at %+v", got)
+	}
+	click("NNANO")
+	if !presentationEffects(g.presentation).TeamNanospray {
+		t.Fatal("pointer did not enable team nanospray")
+	}
+	click("NNANO")
+	if presentationEffects(g.presentation).TeamNanospray {
+		t.Fatal("pointer did not restore green nanospray")
 	}
 	if g.display.Glow != 0 {
 		t.Fatalf("pointer left glow at %d", g.display.Glow)

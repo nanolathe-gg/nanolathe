@@ -129,7 +129,10 @@ func checkNanoDevicePixels() error {
 	if err := checkNanoShimmerDevicePixels(); err != nil {
 		return err
 	}
-	return checkSubmergedNanoDevicePixels()
+	if err := checkSubmergedNanoDevicePixels(); err != nil {
+		return err
+	}
+	return checkTeamNanoDevicePixels()
 }
 
 // Enhanced emission must not turn the short looping particle ramp into a
@@ -362,6 +365,81 @@ func checkSubmergedNanoDevicePixels() error {
 				return closeErr
 			}
 		}
+	}
+	return nil
+}
+
+// Team illumination uses the entire selected ramp, independent of shimmer.
+func TestTeamNanoLightingUsesSelectedRamp(t *testing.T) {
+	r := &Renderer{w: 64, h: 64}
+	var ramp [7]uint8
+	for i := range ramp {
+		ramp[i] = byte(40 + i)
+		r.displayPalette[ramp[i]] = [4]byte{0, 0, byte(40 + i*30), 255}
+		r.displayPalette[0xa1+i] = [4]byte{0, 255, 0, 255}
+	}
+	var reference [3]float32
+	for i := range ramp {
+		var list drawlist.List
+		list.RecordFill(drawlist.Fill{Nano: true, NanoTeam: true, NanoRamp: ramp, Index: ramp[i], Rect: drawlist.Rect{X: 20, Y: 20, W: 2, H: 2}})
+		r.prepareBattleLighting(&list)
+		if len(r.lighting.lights) != 1 {
+			t.Fatal("missing team light")
+		}
+		color := r.lighting.lights[0].color
+		if color[0] != 0 || color[1] != 0 || color[2] <= 0 {
+			t.Fatalf("team light is not blue: %v", color)
+		}
+		if i == 0 {
+			reference = color
+		} else if color != reference {
+			t.Fatalf("shimmer changed broad light: %v != %v", color, reference)
+		}
+	}
+}
+
+func checkTeamNanoDevicePixels() error {
+	pal := fixturePalette()
+	var ramp [7]uint8
+	for i := range ramp {
+		ramp[i] = byte(40 + i)
+		pal.Base[ramp[i]] = [4]byte{0, 0, byte(60 + i*30), 255}
+		pal.Base[0xa1+i] = [4]byte{0, byte(60 + i*30), 0, 255}
+	}
+	const w, h = 240, 140
+	r, err := NewChecked(&pal, w, h)
+	if err != nil {
+		return err
+	}
+	r.SetGlow(true)
+	var list drawlist.List
+	list.RecordClear()
+	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: 25})
+	for i := 0; i < 35; i++ {
+		list.RecordFill(drawlist.Fill{Nano: true, NanoTeam: true, NanoRamp: ramp, Index: ramp[i%7], Rect: drawlist.Rect{X: 100 + int32(i%7)*3, Y: 60 + int32(i/7)*3, W: 2, H: 2}, WorldHeight: 12, LightingScale: 1})
+	}
+	list.RecordWorld(drawlist.WorldSpace{})
+	list.RecordExpand()
+	out := r.Execute(&list, w, h)
+	pixels := make([]byte, w*h*4)
+	out.ReadPixels(pixels)
+	at := func(x, y int) []byte { return pixels[(y*w+x)*4 : (y*w+x)*4+4] }
+	if p := at(100, 60); p[2] <= p[1] || p[2] <= p[0] {
+		return fmt.Errorf("team nano core lost blue tint: %v", p)
+	}
+	if p := at(107, 74); p[2] <= p[1] || p[2] <= p[0] {
+		return fmt.Errorf("team nano glow lost blue tint: %v", p)
+	}
+	if dir := os.Getenv("NANOLATHE_NANO_SHOTS"); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+		f, err := os.Create(filepath.Join(dir, "team-blue.png"))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return png.Encode(f, &image.RGBA{Pix: pixels, Stride: w * 4, Rect: image.Rect(0, 0, w, h)})
 	}
 	return nil
 }

@@ -68,11 +68,12 @@ func (g *gameShell) setPresentation(p settings.Presentation) {
 // to and from rather than one that knows about the draw list.
 func presentationEffects(p settings.Presentation) drawlist.Effects {
 	return drawlist.Effects{
-		Water:      p.Water != 0,
-		Lighting:   p.Lighting != 0,
-		Finish:     p.Finish != 0,
-		Distortion: p.Distortion != 0,
-		Marks:      p.Marks != 0,
+		Water:         p.Water != 0,
+		Lighting:      p.Lighting != 0,
+		Finish:        p.Finish != 0,
+		Distortion:    p.Distortion != 0,
+		Marks:         p.Marks != 0,
+		TeamNanospray: p.TeamNanospray != 0,
 	}
 }
 
@@ -149,7 +150,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 	// the two captioned rows use a tight caption-plus-control pitch and the
 	// presentation switches carry their own names in their stage text instead of
 	// spending a caption line each (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
-	const captionedPitch, switchPitch = 40, 22
+	const captionedPitch, switchPitch = 40, 20
 	y := label.Rect.Y
 	for _, row := range []struct {
 		name, title, text string
@@ -166,7 +167,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		kept = append(kept, caption, control)
 		y += captionedPitch
 	}
-	// Compact controls leave room for gameplay within the authored column.
+	// Compact controls leave room for every preference in the authored column.
 	for _, row := range []struct {
 		name, text string
 		stages     uint8
@@ -181,7 +182,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		y += switchPitch
 	}
 	// The Enhanced presentation switches (DESIGN_GPU_RENDERER §30). Glow keeps
-	// its home in the display block; the other five are presentation values.
+	// its home in the display block; the others are presentation values.
 	// Classic composes the same pixels whatever these switches say.
 	for i, row := range []struct{ name, text string }{
 		{"NGLOW", "Glow: Off|Glow: On"},
@@ -190,6 +191,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		{"NFINISH", "Metal: Off|Metal: On"},
 		{"NHEAT", "Heat: Off|Heat: On"},
 		{"NMARKS", "Marks: Off|Marks: On"},
+		{"NNANO", "Nano: Green|Nano: Team"},
 	} {
 		control := button
 		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, 2
@@ -205,17 +207,18 @@ type nanolatheEffectSwitch struct {
 	value *int
 }
 
-// nanolatheEffectSwitches is the page order of the five presentation switches,
+// nanolatheEffectSwitches is the page order of the presentation switches,
 // paired with the persisted field each one writes. `NGLOW` is not among them:
 // glow stays in the display block, where the chat command and the capture route
 // already read it (DESIGN_GPU_RENDERER §19.4).
-func nanolatheEffectSwitches(p *settings.Presentation) [5]nanolatheEffectSwitch {
-	return [5]nanolatheEffectSwitch{
+func nanolatheEffectSwitches(p *settings.Presentation) [6]nanolatheEffectSwitch {
+	return [6]nanolatheEffectSwitch{
 		{"NWATER", &p.Water},
 		{"NLIGHTS", &p.Lighting},
 		{"NFINISH", &p.Finish},
 		{"NHEAT", &p.Distortion},
 		{"NMARKS", &p.Marks},
+		{"NNANO", &p.TeamNanospray},
 	}
 }
 
@@ -231,7 +234,7 @@ func (g *gameShell) syncNanolatheOptions() {
 	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), boolInt(session.BaseModeOf(g.gameplay) == gameplay.Modern))
 	optionsPanel.SetStageAt(optionsPanel.Index("NRENDER"), boolInt(g.presentation.Renderer == "modern"))
 	g.syncNanolatheFPSStage()
-	// The six Enhanced switches. Glow reads the display block; the other five
+	// The Enhanced switches. Glow reads the display block; the others
 	// read the presentation block (DESIGN_GPU_RENDERER §30).
 	optionsPanel.SetStageAt(optionsPanel.Index("NGLOW"), boolInt(g.display.Glow != 0))
 	optionsPanel.SetStageAt(optionsPanel.Index("NSIDEBAR"), boolInt(g.presentation.ExpandedSidebar != 0))
@@ -297,7 +300,7 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 		g.applyRetailVisualOptions(clPtr)
 		return true
 	default:
-		// The five presentation switches. The host polls the shell's committed
+		// The presentation switches. The host polls the shell's committed
 		// preference each update, so writing it here is the live preview (§30).
 		for _, sw := range nanolatheEffectSwitches(&p) {
 			if sw.name != name {

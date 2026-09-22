@@ -251,6 +251,10 @@ type Fill struct {
 	// Nano marks a visibility-admitted construction particle for Enhanced glow
 	// and local lighting (GPU design §23.5). Classic ignores this metadata.
 	Nano bool
+	// NanoRamp is the optional team ramp; its mean colours broad lighting
+	// without following the particle shimmer (GPU design §23.6).
+	NanoRamp [7]uint8
+	NanoTeam bool
 	// NanoSubmerged suppresses Enhanced emission beneath the wet sea surface;
 	// the original particle core remains unchanged (GPU design §23.5).
 	NanoSubmerged bool

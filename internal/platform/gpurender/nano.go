@@ -69,11 +69,20 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 			l.nanoCount++
 			l.nano[at] = nanoLightCluster{light: battleLight{radius: nanoLightRadius * scale, kind: lightNano}}
 		}
+		particleColor := color
+		if f.NanoTeam {
+			particleColor = [3]float32{}
+			for _, index := range f.NanoRamp {
+				for j := range particleColor {
+					particleColor[j] += float32(r.displayPalette[index][j]) / (255 * 7)
+				}
+			}
+		}
 		group := &l.nano[at]
 		group.count++
 		for j := range pos {
 			group.light.position[j] += (pos[j] - group.light.position[j]) / float32(group.count)
-			group.light.color[j] += color[j] * nanoParticleEnergy
+			group.light.color[j] += particleColor[j] * nanoParticleEnergy
 		}
 	})
 	for i := 0; i < l.nanoCount; i++ {
