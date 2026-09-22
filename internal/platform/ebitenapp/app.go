@@ -66,10 +66,11 @@ type app struct {
 	scrollPointScale float64
 	// windowW/windowH are the last selected host size. Logical menu/battle
 	// transitions do not change them (DESIGN_PRESENTATION_CLIENT §2.1).
-	windowW, windowH    int
-	options             RunOptions
-	fullscreen          bool
-	fullscreenEnterHeld bool
+	windowW, windowH       int
+	options                RunOptions
+	fullscreen             bool
+	fullscreenEnterHeld    bool
+	fullscreenPresentation *nativeFullscreenPresentation
 	// presentPending is set by the 30 Hz update and consumed by Draw. Draw can
 	// still be called at the monitor's refresh rate, so the retained-screen
 	// mode configured by Run lets those extra calls leave the frame untouched.
@@ -206,6 +207,7 @@ func (a *app) updateBody() {
 		ebiten.SetFullscreen(!ebiten.IsFullscreen())
 	}
 	a.observeFullscreen(ebiten.IsFullscreen())
+	a.fullscreenPresentation.update(a.fullscreen, ebiten.IsFocused())
 	applyInput(a.c.Input(), sample)
 	a.c.SetFocused(ebiten.IsFocused())
 	a.stepClient()
@@ -601,6 +603,7 @@ func (a *app) observeFullscreen(fullscreen bool) {
 // Layout keeps the logical resolution fixed; Ebitengine letterboxes if the
 // window is resized.
 func (a *app) Layout(outsideWidth, outsideHeight int) (int, int) {
+	a.c.SetOutsideSize(outsideWidth, outsideHeight)
 	w, h := a.c.Size()
 	if outsideWidth > 0 && outsideHeight > 0 {
 		a.scrollPointScale = max(float64(w)/float64(outsideWidth), float64(h)/float64(outsideHeight))
@@ -711,5 +714,7 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 		return err
 	}
 	defer stopScrollMonitor()
+	game.fullscreenPresentation = startNativeFullscreenPresentation()
+	defer game.fullscreenPresentation.close()
 	return ebiten.RunGame(game)
 }

@@ -210,7 +210,11 @@ results. The logical front-end canvas remains the established 640×480
 [07 R-FE-02 §2]; battle uses the selected dimensions [07 R-FE-01 §11].
 Ebitengine scales the canvas proportionally into the host window or desktop,
 letterboxing where needed, and reports pointer coordinates in that logical
-canvas. Neither executor renders the world at desktop resolution merely
+canvas. `Layout` also publishes the actual outside dimensions to the client,
+so camera edge scrolling includes letterbox bars and bounded overshoot on every
+side (DESIGN_INTERFACE_HUD_INPUT §3.1). Only the camera uses that adapted
+position; the raw pointer remains the source for picking and widgets.
+Neither executor renders the world at desktop resolution merely
 because the window is fullscreen.
 
 `RunOptions.WindowSize` supplies the committed host size separately from
@@ -261,8 +265,23 @@ maximizing fills the desktop work area, while Alt+Enter enters fullscreen.
 Manual resizing scales the selected logical canvas with aspect preserved and
 does not change the saved resolution. The adapter only reapplies host size
 when the selected resolution changes.
-On macOS, fullscreen entered through the native green window button must be
-exited through the native control; Ebitengine cannot toggle that mode itself.
+On macOS, focused fullscreen hides the menu bar and Dock completely so moving
+the pointer to the top edge scrolls the camera without revealing the native
+window controls. The adapter reconciles AppKit's application presentation
+options during fullscreen because transitions and Space activation can reset
+them. It clears the incompatible auto-hide menu/Dock/toolbar flags, preserves
+unrelated options, and restores its original windowed flags on exit and shutdown.
+This is local to the application; system preferences are unchanged. Application
+switching, Space gestures and Force Quit remain enabled. Alt+Enter also exits
+fullscreen entered with the green window button in the current Ebitengine
+backend, providing a keyboard exit when the rollover controls are hidden.
+The native bridge is excluded from VM guests, whose host owns window policy.
+
+AppKit contract: [NSApplicationPresentationOptions](https://developer.apple.com/documentation/appkit/nsapplication/presentationoptions-swift.struct?language=objc).
+Manual macOS verification confirmed suppression at the top edge and continued
+three-finger switching to other windows. Validate startup fullscreen, repeated
+Alt+Enter entry/exit, green-button entry, and return from another Space; windowed
+controls must return after exit.
 
 Settings persistence also follows a host recovery policy: startup may use
 in-memory defaults after a corrupt or unsupported settings file is reported,

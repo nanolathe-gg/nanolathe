@@ -121,7 +121,8 @@ type Client struct {
 	presentationEpoch uint64
 	pre               preRecorder
 
-	width, height int
+	width, height               int
+	outsideWidth, outsideHeight int // Host dimensions, including letterboxing; presentation-only.
 	// recordW, recordH are the RECORD-SPACE extent every world emission site
 	// clips against (DESIGN_GPU_RENDERER §16.3). They equal width/height
 	// whenever the live zoom factor is on its record step — which is always, in

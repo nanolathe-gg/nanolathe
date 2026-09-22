@@ -27,7 +27,8 @@ import (
 // The same table covers the beyond-edge forced strip's joint gate: the pointer
 // must be less than 100 pixels beyond the right edge AND less than 100 pixels
 // beyond the bottom edge, with the window focused, before either axis is
-// forced onto its edge [07 §10].
+// forced onto its edge [07 §10]. Host overshoot and letterbox cases cover
+// the presentation adaptation in DESIGN_INTERFACE_HUD_INPUT §3.1.
 func TestScrollPassAxisExclusivityAndBeyondEdgeGate(t *testing.T) {
 	const (
 		screenW = 640
@@ -36,19 +37,37 @@ func TestScrollPassAxisExclusivityAndBeyondEdgeGate(t *testing.T) {
 		// so a direction that scrolls moves by the setting byte [07 §10] (C2).
 		frameMS = 34
 	)
-	setting := int32((&battleSession{}).scrollSetting())
-	if setting <= 0 || setting > 128 {
-		t.Skipf("scroll setting %d outside the range this contract can assert", setting)
-	}
+	setting := int32(32)
 	unit := setting
 
 	for _, tc := range []struct {
-		name           string
-		keys           []input.Key
-		mouseX, mouseY float32
-		focused        bool
-		wantX, wantZ   int32
+		name               string
+		keys               []input.Key
+		mouseX, mouseY     float32
+		focused            bool
+		outsideW, outsideH int
+		wantX, wantZ       int32
 	}{
+		// Host overshoot must reach the leading edges as well as the trailing ones.
+		{name: "beyond left edge", mouseX: -10, mouseY: 240, focused: true, wantX: -unit},
+		{name: "beyond top edge", mouseX: 320, mouseY: -10, focused: true, wantZ: -unit},
+		{name: "beyond top left", mouseX: -10, mouseY: -10, focused: true, wantX: -unit, wantZ: -unit},
+		{name: "left strip inner boundary", mouseX: -99, mouseY: 240, focused: true, wantX: -unit},
+		{name: "left strip outer boundary", mouseX: -100, mouseY: 240, focused: true},
+		{name: "right strip inner boundary", mouseX: screenW + 99, mouseY: 240, focused: true, wantX: unit},
+		{name: "right strip outer boundary", mouseX: screenW + 100, mouseY: 240, focused: true},
+		{name: "far outside left", mouseX: -101, mouseY: 240, focused: true},
+		{name: "far outside top", mouseX: 320, mouseY: -101, focused: true},
+		{name: "left overshoot without focus", mouseX: -10, mouseY: 240},
+		// A 640x480 canvas on a 1920x1080 host has 106 2/3 logical
+		// pixels of padding at either side. The physical edge is outside
+		// the old strip on both sides; the HUD sample must remain untouched.
+		{name: "wide host left edge", outsideW: 1920, outsideH: 1080, mouseX: -106, mouseY: 240, focused: true, wantX: -unit},
+		{name: "wide host right edge", outsideW: 1920, outsideH: 1080, mouseX: 746, mouseY: 240, focused: true, wantX: unit},
+		{name: "tall host top edge", outsideW: 640, outsideH: 960, mouseX: 320, mouseY: -240, focused: true, wantZ: -unit},
+		{name: "tall host bottom edge", outsideW: 640, outsideH: 960, mouseX: 320, mouseY: 719, focused: true, wantZ: unit},
+		{name: "letterbox without focus", outsideW: 1920, outsideH: 1080, mouseX: -106, mouseY: 240},
+		{name: "letterbox but far below host", outsideW: 1920, outsideH: 1080, mouseX: -106, mouseY: 800, focused: true},
 		// Opposing arrows: the Left/Up predicate wins outright.
 		{name: "left and right held", keys: []input.Key{input.KeyLeft, input.KeyRight},
 			mouseX: 320, mouseY: 240, wantX: -unit},
@@ -96,11 +115,13 @@ func TestScrollPassAxisExclusivityAndBeyondEdgeGate(t *testing.T) {
 			b := newTestBattle(testCatalogON05(), testWorldON05(300, 300))
 			millis := &fakeMillisSource{}
 			b.millisSource = millis
+			b.scrollSpeedPrimed, b.scrollSpeedByte = true, byte(setting)
 			cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: screenW, Height: screenH})
 			if err != nil {
 				t.Fatal(err)
 			}
 			cl.SetCamera(b.cam)
+			cl.SetOutsideSize(tc.outsideW, tc.outsideH)
 			cl.SetFocused(tc.focused)
 			b.cam.Zoom = camera.ZoomUnit
 			cl.Input().Mouse.SetPosition(tc.mouseX, tc.mouseY)
@@ -115,10 +136,38 @@ func TestScrollPassAxisExclusivityAndBeyondEdgeGate(t *testing.T) {
 			millis.ms += frameMS
 			b.viewerStep(float64(frameMS)/1000, cl)
 
+			if mouse := cl.Input().Mouse; mouse.X != tc.mouseX || mouse.Y != tc.mouseY {
+				t.Fatal("camera edge mapping changed the pointer used for picking")
+			}
 			gotX, gotZ := b.cam.X-1000, b.cam.Z-1000
 			if gotX != tc.wantX || gotZ != tc.wantZ {
 				t.Fatalf("one frame moved (%d,%d) map pixels, want (%d,%d)", gotX, gotZ, tc.wantX, tc.wantZ)
 			}
 		})
+	}
+}
+
+// Letterbox adaptation belongs only to edge panning. Wheel zoom must still
+// require the raw pointer to be inside the world viewport (DESIGN_GPU_RENDERER §16.6).
+func TestEdgeScrollLetterboxDoesNotAdmitWheelZoom(t *testing.T) {
+	for _, x := range []float32{320, 746} {
+		b := newTestBattle(testCatalogON05(), testWorldON05(300, 300))
+		b.millisSource = &fakeMillisSource{}
+		cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cl.SetCamera(b.cam)
+		cl.SetOutsideSize(1920, 1080)
+		cl.SetFocused(true)
+		cl.SetEnhanced(true)
+		b.cam.Zoom = camera.ZoomUnit
+		cl.Input().Mouse.SetPosition(x, 240)
+		cl.Input().Mouse.ZoomScrollY = -1
+		b.viewerStep(0, cl)
+		changed := b.zoom.Target(b.cam) != camera.ZoomUnit
+		if changed != (x == 320) {
+			t.Fatalf("wheel at x=%g changed zoom=%v", x, changed)
+		}
 	}
 }

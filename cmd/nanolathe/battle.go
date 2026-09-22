@@ -1073,7 +1073,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// Camera pan: exact predicates per [07 §10] C2/C3; presentation-only [I6].
 	// - delta = scrollSettingByte * rawTimeDelta capped at 128 [07 §10] (C2)
 	// - one exclusive test per axis, Left before Right and Up before Down [07 §10][07 R-CRD-006 §1]
-	// - direction predicates: exact-edge bands plus the jointly gated beyond-edge forced strip [07 §10]
+	// - exact-edge predicates [07 §10] after host-coordinate adaptation (DESIGN_INTERFACE_HUD_INPUT §3.1)
 	// - held-arrow gated on TALK.GUI suppression, edge never suppressed by TALK [07 §10]
 	// - the minimap does NOT suppress edge: retail's pass reads the cursor
 	//   position and the four arrows and nothing else — no minimap or GUI
@@ -1093,26 +1093,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		focused := cl.IsFocused()
 		w, h := cl.Size()
 		wi, hi := int32(w), int32(h)
+		// Adapt host overshoot and letterboxing without moving the pointer
+		// used for picking or HUD clicks (DESIGN_INTERFACE_HUD_INPUT §3.1).
 		mx, my := int32(mouse.X), int32(mouse.Y)
-		// Beyond-edge forced strip [07 §10]: the strip is gated jointly, not per
-		// axis. The pointer must be less than 100 pixels beyond the right edge
-		// AND less than 100 pixels beyond the bottom edge, with the window
-		// focused, before EITHER axis is forced onto its edge; a pointer ten
-		// pixels right of the window but three hundred below it forces nothing.
-		// Each axis is then forced only when the pointer is at or past that
-		// edge, so a pointer beyond one edge keeps its real coordinate on the
-		// other axis.
-		effX, effY := mx, my
-		if focused && mx < wi+100 && my < hi+100 {
-			if mx >= wi {
-				effX = wi - 1
-			}
-			if my >= hi {
-				effY = hi - 1
-			}
-		}
+		effX, effY := cl.EdgeScrollPosition()
 		talkActive := b.isTalkGUIActive()
-		overMinimap := b.isOverMinimap(effX, effY)
+		overMinimap := b.isOverMinimap(mx, my)
 		modalActive := state.Modal() != ui.BattleModalClosed
 		// Every scroll-pass write is a jump by delta, and a jump by the scroll
 		// pass cancels the follow triple [07 R-CAM-01 §12].
@@ -1178,8 +1164,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// over the world, only outside TALK, and only in the executor that can
 		// present a free factor.
 		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap &&
-			mouse.ZoomScrollY != 0 && b.overBattleViewport(effX, effY) {
-			b.wheelZoom(effX, effY, float64(mouse.ZoomScrollY))
+			mouse.ZoomScrollY != 0 && b.overBattleViewport(mx, my) {
+			b.wheelZoom(mx, my, float64(mouse.ZoomScrollY))
 		}
 		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned &&
 			!modalActive && !overMinimap && !b.palettePointerOwned && !unitInfoOpen() &&

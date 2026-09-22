@@ -223,9 +223,9 @@ movement, where `rawDelta` is thirtieths of a second and not milliseconds
 `[07 §10]`. The pass's *shape* — one exclusive direction test per axis (Left
 before Right, Up before Down), a single origin commit after both axes, and the
 jointly gated beyond-edge forced strip — lives at the caller in
-`cmd/nanolathe`, and is C2's contract `[07 §10]` `[07 R-CRD-006 §1]`; the
-caller's extra focus, modal and minimap gating of the edge disjuncts is host
-behaviour retail's pass does not have (C2). `Pan`, `Clamp`, `JumpTo`,
+`cmd/nanolathe` with host-coordinate adaptation in `internal/client`, and is C2's contract `[07 §10]` `[07 R-CRD-006 §1]`; the
+caller's extra focus/modal gating and host-coordinate adaptation of the edge
+disjuncts are presentation policy (C2). `Pan`, `Clamp`, `JumpTo`,
 `BattleViewCenterOrigin` and `JumpToBattleViewCenter` are the jump family; a
 jump writes the origin, clamps, and copies the clamped result into the desired
 origin so no glide survives it `[07 R-CAM-01 §12]`. `WorldToScreen` applies the
@@ -1097,13 +1097,28 @@ directions move the camera once toward Left/Up rather than twice or not at
 all; and it commits the origin **once**, after both axes
 `[07 §10]` `[07 R-CRD-006 §1]`. This build applies each axis as its own
 clamped pan, which lands on the same origin because the clamp is per axis.
-The beyond-edge forced strip that extends edge scrolling past the window is
-gated **jointly**, not per axis: the pointer must be inside both the
-horizontal and the vertical bound, with the window focused, before either axis
-is forced onto its edge `[07 §10]`.
+Retail's beyond-edge forced strip is jointly gated by focus and both
+coordinate bounds [07 §10]. Its trailing-edge-only clamp assumes the retail
+presentation surface: negative top/left coordinates never reach an edge, and
+a letterbox bar wider than 100 logical pixels can put even the host's right or
+bottom edge outside the strip.
+
+**Nanolathe host presentation policy:** `Client.EdgeScrollPosition` includes
+letterbox padding calculated from the adapter's actual outside dimensions and
+extends the same 100-logical-pixel overshoot strip to all four host edges. The
+pointer must be strictly inside both expanded bounds, and the window focused,
+before it is clamped to the logical canvas for the camera predicates. This lets
+a player reach an edge even when a sampled motion skips the exact boundary
+pixel, or when fullscreen aspect fitting adds bars. Picking, HUD hit tests and
+cursor rendering retain the original pointer coordinates. This is host policy
+in both gameplay modes and both renderers, independent of simulation rules.
+The adapter refreshes the outside dimensions from `Layout`; a client without
+that adapter uses its logical size. Regression cases drive the battle pass
+with overshoot, wide/tall hosts, focus loss and out-of-strip coordinates, and
+assert both camera displacement and unchanged picking coordinates.
 
 Retail's pass has no minimap-region test and no modal test, and it consults
-window focus only inside that forced strip `[07 R-CAM-01 §10]`. This build
+window focus only inside that forced strip [07 R-CAM-01 §10]. This build
 additionally suppresses the **edge** disjuncts when the window is unfocused and
 when a modal is open; that much is host behaviour, recorded here so the
 divergence is not mistaken for the traced pass.
