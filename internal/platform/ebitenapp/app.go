@@ -17,11 +17,11 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/platform/gpurender"
 )
 
-// presentationTPS is the window's Update rate. It stays at 30: every per-host-
+// presentationTPS is the host work rate. It stays at 30: every per-host-
 // frame step the battle takes — input edges, the follow-camera glide's per-frame
 // step [07 R-CAM-01 §12], the scroll pass [07 §10], the sub-tick budget
 // [01 §4.2] — keeps the cadence retail gives it. Draw is called at the display's
-// refresh rate regardless, which is what the Enhanced path presents on
+// refresh rate, alongside lightweight input polling, which is what Enhanced presents on
 // (docs/DESIGN_GPU_RENDERER.md §13.5).
 const presentationTPS = 30
 
@@ -84,8 +84,8 @@ type app struct {
 	// inputStarted anchors the platform-only host clock used to timestamp
 	// polled pointer records. It is deliberately outside the client and sim.
 	inputStarted time.Time
-	// updatedAt is when the last Update returned. It measures how far the
-	// window is through the current Update, which is the camera's blend
+	// updatedAt is when the last host body returned. It measures how far the
+	// window is through the current host step, which is the camera's blend
 	// fraction (§13.5) — the camera moves on this grid, not on the simulation's
 	// scaled units. Like inputStarted it is platform time and never reaches the
 	// client's clock or the sim [I6].
@@ -99,10 +99,17 @@ type app struct {
 	// (docs/DESIGN_GPU_RENDERER.md §13.10). It is modern-only: the classic path
 	// never launches a pre-record and never joins one it did not launch.
 	pipe pipeline
-	// ledger decides whether an Update call's body runs there or at the end of
-	// the modern Draw that follows it, and guarantees one body per call either
+	// ledger decides whether a scheduled host body runs in Update or at the end
+	// of the modern Draw that follows it, and guarantees one body per step either
 	// way (§13.10).
 	ledger updateLedger
+	// Input snapshots arrive at display refresh. Only the fixed host clock may
+	// issue a ledger call; its queued sample survives until the deferred body.
+	hostClock     hostClock
+	hostInput     hostInputBuffer
+	hostSamples   []sampledInput
+	inputPolls    int64
+	inputPollTime time.Duration // measured only with --stats; elapsed, not CPU time
 	// exitPending records an exit request seen from a Draw tail, where a
 	// Termination cannot be returned; the next Update call returns it.
 	exitPending bool
@@ -145,21 +152,33 @@ type RunOptions struct {
 	FullscreenChanged func(bool)
 }
 
-// Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
-// input pacing for menus and camera, and the session converts to sim ticks via
-// its own accumulator (wall-clock time never enters the sim, I6).
-//
-// The body of an update does not always run here. Under the modern executor it
-// is deferred to the end of the Draw this call precedes, so that the pipeline's
-// pre-record for the FOLLOWING frame is taken after the update's writes rather
-// than before them (updateBody, §13.10). Ebitengine takes this call's input
-// snapshot immediately before it, so the deferred body reads that snapshot and
-// each snapshot is still consumed exactly once. What the deferral costs is one
-// presented frame of latency for host-step-dependent content: a list recorded
-// during the previous frame's flush cannot contain input that arrived after
-// it. Cursor position alone is refreshed from the current platform snapshot
-// immediately before replay, without changing the client's command input.
+// Update refreshes input once per display frame. The separate host clock runs
+// camera/menu work at 30 Hz; the session still owns its authoritative sub-tick
+// accumulator. Input between host steps is retained instead of discarded.
+// Modern may defer a host body to the Draw tail, preserving the record/submit
+// pipeline (§13.10). Its sample is queued until that body actually runs.
 func (a *app) Update() error {
+	if err := a.gpu.FogContentError(); err != nil {
+		a.c.JoinPreRecord()
+		return err
+	}
+	if a.exitPending {
+		a.c.JoinPreRecord()
+		return a.terminate()
+	}
+	var pollStart time.Time
+	if a.options.Stats {
+		pollStart = time.Now()
+	}
+	a.hostInput.add(readInput(a.scaledInputNow()))
+	a.inputPolls++
+	if a.options.Stats {
+		a.inputPollTime += time.Since(pollStart)
+	}
+	steps := a.hostClock.advance(time.Now())
+	if steps == 0 {
+		return nil
+	}
 	// The pipeline's barrier. The body below writes client state — input, focus,
 	// the step and its publication, the pointer mode, the executor swap — and
 	// none of it may run while the pre-record is still reading
@@ -167,19 +186,19 @@ func (a *app) Update() error {
 	// the record it leaves running is still valid at the Draw that consumes it;
 	// the join costs nothing there because Draw would join immediately after.
 	a.c.JoinPreRecord()
-	if err := a.gpu.FogContentError(); err != nil {
-		return err
-	}
-	if a.exitPending {
-		return a.terminate()
-	}
 	// The ledger decides where this call's body runs. The modern executor with
 	// a live Draw tail defers it; everything else runs it here and now.
-	for range a.ledger.call(a.mode == RendererModern && a.gpu != nil) {
+	for range steps {
+		a.hostSamples = append(a.hostSamples, a.hostInput.take())
+		for range a.ledger.call(a.mode == RendererModern && a.gpu != nil) {
+			if a.exitPending {
+				break
+			}
+			a.updateBody()
+		}
 		if a.exitPending {
 			break
 		}
-		a.updateBody()
 	}
 	if a.exitPending {
 		return a.terminate()
@@ -198,7 +217,10 @@ func (a *app) updateBody() {
 	// them is stale (§13.10).
 	a.c.BumpPresentationEpoch()
 	a.syncWindowSize()
-	sample := readInput(a.scaledInputNow())
+	sample := a.hostSamples[0]
+	copy(a.hostSamples, a.hostSamples[1:])
+	a.hostSamples[len(a.hostSamples)-1] = sampledInput{}
+	a.hostSamples = a.hostSamples[:len(a.hostSamples)-1]
 	if a.scrollPointScale > 0 {
 		sample.panX *= a.scrollPointScale
 		sample.panY *= a.scrollPointScale
@@ -432,9 +454,8 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 		a.gpu.SetGlow(a.c.Glow())
 		a.gpu.SetEffects(a.c.Effects())
-		// Ebitengine has already sampled this Update's pointer even when its
-		// client input publication is deferred to the Draw tail. Place only the
-		// cursor from that newer sample after the recorder joins [07 §8].
+		// Place only the cursor from a fresh host sample after the recorder
+		// joins. Command input remains on the ordinary host step [07 §8].
 		x, y := ebiten.CursorPosition()
 		a.c.PositionPresentationCursor(list, x, y)
 		if img := a.gpu.Execute(list, width, height); img != nil {
@@ -450,13 +471,12 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	a.reportPipelinePeriodically()
 	sampledAt := now
 	if a.ledger.tail() {
-		// The update Ebitengine asked for before this Draw. Running it here,
+		// The host step scheduled before this Draw. Running it here,
 		// after Execute rather than before the Draw, is what lets the launch
 		// below happen after the last client write of the period instead of
 		// before it: a frame that crosses an update is otherwise the one frame
-		// a pre-record can never serve. The input snapshot it reads is the one
-		// Ebitengine took for that Update call, so no snapshot is consumed
-		// twice and none is dropped.
+		// a pre-record can never serve. It consumes the queued input sample
+		// for this host step exactly once.
 		a.updateBody()
 		sampledAt = time.Now()
 		// This frame has already been presented; the body may have released a
@@ -707,7 +727,7 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	// calls between updates can skip composition, upload, and drawing without
 	// clearing the last presented frame.
 	ebiten.SetScreenClearedEveryFrame(false)
-	ebiten.SetTPS(presentationTPS)
+	ebiten.SetTPS(ebiten.SyncWithFPS)
 	game.syncPresentationSettings()
 	stopScrollMonitor, err := startNativeScrollMonitor()
 	if err != nil {

@@ -62,19 +62,21 @@ type pipeline struct {
 	// cadence sanity check: update bodies and committed ticks per second must
 	// both stay at the update rate however the deferral of §13.10 moves the
 	// bodies inside a period.
-	reported       int64
-	reportedAt     time.Time
-	reportedBodies int64
-	reportedTick   uint32
+	reported         int64
+	reportedAt       time.Time
+	reportedBodies   int64
+	reportedTick     uint32
+	reportedPolls    int64
+	reportedPollTime time.Duration
 }
 
-// updateLedger places each Ebitengine Update call's body — at that call, or at
+// updateLedger places each scheduled 30 Hz host body — at its input poll, or at
 // the end of the modern Draw the call precedes (§13.10). Deferring is what lets
 // a frame that crosses an update be pre-recorded: the body runs before the
 // launch instead of after it, so nothing writes client state between a launch
 // and the Draw that consumes it.
 //
-// Its one invariant is arithmetic: every counted call is answered by exactly
+// Its one invariant is arithmetic: every scheduled host step is answered by exactly
 // one body. The simulation therefore cannot step twice for one update period,
 // and cannot skip one, whatever the window does with its Draws.
 type updateLedger struct {
@@ -89,7 +91,7 @@ type updateLedger struct {
 	tailAlive bool
 }
 
-// call counts one Update call and reports how many bodies to run in it.
+// call counts one scheduled host step and reports how many bodies to run now.
 // deferrable says the Draw that follows will reach a modern tail.
 func (l *updateLedger) call(deferrable bool) int {
 	l.owed++
@@ -313,9 +315,16 @@ func (a *app) reportCadence(frames int64) {
 		if elapsed := now.Sub(a.pipe.reportedAt).Seconds(); elapsed > 0 {
 			fmt.Fprintf(os.Stderr, "nanolathe: record pipeline: cadence over %.1fs: %.1f presented/s, %.2f update bodies/s, %.2f committed ticks/s\n",
 				elapsed, float64(frames)/elapsed, float64(a.bodies-a.pipe.reportedBodies)/elapsed, float64(tick-a.pipe.reportedTick)/elapsed)
+			polls := a.inputPolls - a.pipe.reportedPolls
+			if polls > 0 {
+				pollTime := a.inputPollTime - a.pipe.reportedPollTime
+				fmt.Fprintf(os.Stderr, "nanolathe: input polling: %.1f polls/s, %.2f us/poll elapsed, %.3f ms/s elapsed\n",
+					float64(polls)/elapsed, float64(pollTime.Nanoseconds())/float64(polls)/1000, float64(pollTime.Nanoseconds())/elapsed/1e6)
+			}
 		}
 	}
 	a.pipe.reportedAt, a.pipe.reportedBodies, a.pipe.reportedTick = now, a.bodies, tick
+	a.pipe.reportedPolls, a.pipe.reportedPollTime = a.inputPolls, a.inputPollTime
 }
 
 // reportPipelinePeriodically prints a readout every pipelineReportEvery

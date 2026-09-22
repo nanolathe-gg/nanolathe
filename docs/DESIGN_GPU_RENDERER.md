@@ -1260,12 +1260,17 @@ committed ticks and records it exactly as it records a committed tick.
 Everything below is an Enhanced presentation rule; Original keeps committed-tick
 sampling.
 
-**Cadence.** The window's Update stays at 30 per second. Everything the battle
-step does per host frame — input edges, the follow-camera glide's per-frame step
-[07 R-CAM-01 §12], the scroll pass [07 §10], the sub-tick budget [01 §4.2] —
-keeps the cadence retail gives it. Draw is called at the display's refresh rate
-regardless of TPS; Original presents only after an Update, and Enhanced presents
-on every Draw. `--fps N` caps how often Enhanced presents: a Draw that arrives
+**Cadence — Nanolathe host presentation policy.** Ebitengine runs Update once
+per display frame (`SyncWithFPS`), refreshing its portable input snapshot before
+Draw. Update only polls and buffers input until a separate 30 Hz host step is
+due. The follow-camera glide [07 R-CAM-01 §12], scroll pass [07 §10], client
+step and sub-tick budget [01 §4.2] retain their existing host cadence. The host
+accumulator initializes once before the first Draw, rounds elapsed time to the
+nearest 30 Hz step with a signed remainder, and limits catch-up to five steps
+per frame, retaining the previous window scheduler's jitter/stall policy. It
+does not select simulation ticks or consume RNG; the session still owns that
+budget. Original presents only after a host step; Enhanced may present on every
+Draw. `--fps N` caps how often Enhanced presents: a Draw that arrives
 sooner than the cap's interval (less an eighth of it, the vsync jitter
 allowance) returns without recording and the retained screen keeps the last
 frame. Draw still sits on the display's vsync grid, so the cap lands on the
@@ -1277,16 +1282,54 @@ Explicit `--fps` overrides the saved preference at window startup, with zero
 retaining display-refresh presentation. Captures and benchmarks use their
 command-line settings independently of saved window preferences.
 
-**Pointer latency.** Ebitengine's public cursor API reads its most recent Update
-snapshot, so the window still samples pointer motion at 30 Hz. Modern positions
-the recorded software cursor from that snapshot immediately before GPU replay,
-after joining the recorder (`PositionPresentationCursor`). This removes the
-additional presented frame of positional delay from deferred input publication;
-it does not make input polling refresh-rate-driven. The cursor's shape and
-animation, hover, orders, placement previews and camera continue using the
-ordinary host step. The GAF hotspot remains authored [07 §8]. Capture keeps the
-pointer hidden; the release frame preserves its saved restore point
-[07 R-CAM-01 §11]. F11 reads the submitted GPU image, cursor included.
+**Pointer latency — Nanolathe host presentation policy.** Modern positions the
+recorded software cursor immediately before GPU replay, after joining the
+recorder (`PositionPresentationCursor`), including the paused foreground path.
+The adapter reads Ebitengine's newest logical cursor position, now refreshed
+before every Draw on every platform. Ebitengine owns window coordinates,
+letterboxing, DPI, capture and VM input injection; no native cursor bridge is
+needed. Original retains its 30 Hz cursor. The cursor's shape and animation, hover, orders,
+placement previews and camera continue using the ordinary host step; the fresh
+position never publishes command input or consumes RNG. The GAF hotspot remains
+authored [07 §8]. Capture keeps the pointer hidden; the release frame preserves
+its saved restore point [07 R-CAM-01 §11]. F11 reads the submitted GPU image,
+cursor included. This removes the 30 Hz positional sampling limit;
+cursor presentation still shares the selected FPS cap and any rendering stalls.
+
+**Input buffering.** Refresh snapshots accumulate between host steps. A host
+step receives the latest pointer and held state plus press edges retained from
+the interval, so a brief click or key press cannot disappear between steps.
+Wheel and pan deltas sum; text and pinch events retain batch order and drain
+once. Catch-up steps receive held state without repeating these one-shot inputs.
+The sample is owned by its scheduled host step, including when the ledger
+defers that step to a Draw tail. This is host input policy; it does not claim
+native event chronology, and the existing T25 polling limitations remain.
+Multiple transitions of one key/button in a host interval still coalesce.
+Text batches are filtered using the modifiers accompanying each refresh sample,
+so later Alt/Cmd input cannot discard earlier plain text or leak a Ctrl+V
+companion character. Shortcut translation otherwise retains its existing host
+order and interval modifier state. One residual is explicit in `heldModifier`:
+the public API cannot distinguish a modifier release followed by a repress in
+one refresh snapshot. Catch-up holds conservatively treat that modifier as
+released until the next refresh, while the current interval retains its chord.
+
+Verification covers refresh-independent host cadence, bounded stall recovery,
+buffered input and deferred sample ownership, plus the existing client tests
+for hotspot placement, unchanged command input and capture/release. Performance
+checks compare matching renderer/FPS settings: input polling changes, but Draw
+frequency and the present cap do not increase. `--stats` reports polls/s and
+elapsed polling cost alongside presented frames and 30 Hz host bodies; polling
+elapsed time is not a process CPU measurement. Process CPU is measured separately
+in an ordinary window, since the live battle benchmark uses its own scheduler.
+
+Prototype check (2026-09-22, local macOS display): matched idle-menu windows,
+12-second warmup and 25-second process-CPU samples, showed 29.1% → 28.4% of one
+core at a 60 FPS cap and 31.8% → 30.7% at 120 FPS (native cursor baseline →
+portable polling). These short samples show no observed CPU increase, not a
+proven speedup. Both retained approximately 30 host bodies/s; portable polling
+ran near 120/s and took about 1.5 ms/s elapsed, with presentation near the
+selected cap. This is a local measurement, not a Windows/Linux performance
+guarantee; their window targets were cross-compiled but not run here.
 
 **Fraction.** Read at Draw time, when the modern path records. The scheduler's
 time source is the scaled timebase floor(milliseconds × 30 / 1000) [01 §4.1], so
@@ -1494,8 +1537,8 @@ several milliseconds every frame.
 
 **The shape.** At the end of a modern Draw, after `Execute` and the screen blit,
 the client records the **next** frame on one persistent goroutine. The game
-goroutine joins that record before it touches client state again — at the top of
-Update, before input, and at the common entry to the next Draw, for both
+goroutine joins that record before it touches client state again — in
+Update before scheduled host work, and at the common entry to the next Draw, for both
 executors. An executor switch cancels the pending speculative record, including
 its saved presentation-CRT state, before classic can advance presentation. The
 modern Draw tail rechecks the executor after its deferred Update before
@@ -1513,7 +1556,7 @@ the Draw that would consume it. The digest is deliberately not a field list of
 everything the recorder reads — that list is most of the client and would drift
 out of date behind it. It is:
 
-- **the host's mutation epoch**, bumped once per window Update and once per
+- **the host's mutation epoch**, bumped once per scheduled host body and once per
   benchmark step, which is every point where the host writes client state: input
   and its selection, hover, command page, minimap viewport, pointer capture and
   focus; the simulation step and its publication; the camera the scroll pass and
@@ -1594,31 +1637,25 @@ source, so at the nominal speed it moves in steps of about 1966 quanta, and a
 tolerance below a producer's own quantisation can never be met by a prediction
 of that producer.
 
-**The update body runs in the Draw's idle window.** A pre-record can only serve a
+**The host body runs in the Draw's idle window.** A pre-record can only serve a
 frame if every client write that frame reads happened before the launch, and the
-launch is at the end of the *previous* Draw. An Ebitengine Update is exactly such
-a write, so a frame with an Update in front of it used to be a frame no
-pre-record could serve. Ebitengine runs a frame as *(zero or more Updates) →
-Draw → flush and swap*, and takes a fresh input snapshot immediately before each
-Update it calls; a frame with no Update leaves the game-visible input state
-exactly as the last tick saw it. The body of an update therefore moves to **the
-end of the modern Draw that the Update call precedes**, after `Execute` and
-before the launch. An `updateLedger` counts every Update call and guarantees one
-body per call: the call defers when the modern executor's Draw tail is alive and
+launch is at the end of the *previous* Draw. Refresh-rate input polling writes
+only the adapter's buffer, so it may run while the recorder reads the client.
+When the host clock issues a 30 Hz step, the adapter joins the recorder and
+queues that step's input. The body normally runs at **the end of the modern
+Draw**, after `Execute` and before the next launch. An `updateLedger` counts
+scheduled host steps and guarantees one body per step: it defers when the modern executor's Draw tail is alive and
 nothing is owed already, and otherwise runs every owed body inline, so the
 simulation can neither step twice for one update period nor skip one however the
 window behaves. The classic executor never defers; a Draw skipped by `--fps`
-runs no tail, and the next Update call runs the body itself. An exit request
+runs no tail, and the next scheduled host step runs the owed bodies inline. An exit request
 seen from a tail cannot return a Termination, so it is recorded and the next
 Update call returns it.
 
-*What it costs is one presented frame of input latency, and that is the floor
-rather than an accident of this design.* A list recorded during the previous
-frame's flush cannot contain input that arrived after that flush began. Running
-the body *early* instead is strictly worse: Ebitengine refreshes the
-game-visible input snapshot per tick and not per frame, so an early body would
-read the previous tick's snapshot, costing a whole update period rather than a
-present. The blend absorbs the shift: the frame that used to present the new
+This deferral costs one presented frame of latency for host-dependent content.
+A list recorded during the previous frame's flush cannot contain later input.
+The cursor position alone is replaced immediately before replay using that
+frame's fresh snapshot. The blend absorbs the host-body shift: the frame that used to present the new
 tick at fraction 0 now presents the previous pair at a fraction clamped just
 under 1, and `prev + (cur − prev)·f` at `f` just under one is the same pose, so
 the sequence of presented positions is unchanged and only its labelling moves.

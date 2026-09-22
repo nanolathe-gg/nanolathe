@@ -4,6 +4,7 @@ import (
 	"runtime"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
@@ -24,6 +25,16 @@ type sampledInput struct {
 	command    bool
 	clipboard  func() input.ClipboardText
 	timestamp  uint32
+
+	// Refresh samples distinguish physical holds from Ebitengine's one-update
+	// press retention. The host buffer reconstructs that retention at 30 Hz.
+	pressedKeys    [input.KeyCount]bool
+	heldKeys       [input.KeyCount]bool
+	pressedButtons input.MouseButtons
+	heldButtons    input.MouseButtons
+	heldModifiers  input.Modifiers
+	heldCommand    bool
+	filteredText   bool
 }
 
 // readInput is the production device-polling path. Host shortcuts are consumed
@@ -47,6 +58,22 @@ func readInput(timestamp uint32) sampledInput {
 		command:    runtime.GOOS == "darwin" && (ebiten.IsKeyPressed(ebiten.KeyMetaLeft) || ebiten.IsKeyPressed(ebiten.KeyMetaRight)),
 		clipboard:  readHostClipboard,
 	}
+	sample.pressedButtons = input.MouseButtons{
+		Left:   inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft),
+		Middle: inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonMiddle),
+		Right:  inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonRight),
+	}
+	sample.heldButtons = input.MouseButtons{
+		Left:   inpututil.MouseButtonPressDuration(ebiten.MouseButtonLeft) > 0,
+		Middle: inpututil.MouseButtonPressDuration(ebiten.MouseButtonMiddle) > 0,
+		Right:  inpututil.MouseButtonPressDuration(ebiten.MouseButtonRight) > 0,
+	}
+	sample.heldModifiers = input.Modifiers{
+		Shift: heldModifier(ebiten.KeyShiftLeft) || heldModifier(ebiten.KeyShiftRight),
+		Ctrl:  heldModifier(ebiten.KeyControlLeft) || heldModifier(ebiten.KeyControlRight),
+		Alt:   heldModifier(ebiten.KeyAltLeft) || heldModifier(ebiten.KeyAltRight),
+	}
+	sample.heldCommand = runtime.GOOS == "darwin" && (heldModifier(ebiten.KeyMetaLeft) || heldModifier(ebiten.KeyMetaRight))
 	wx, wy := ebiten.Wheel()
 	scroll := nativeScroll.take(wx, wy)
 	sample.wheelX, sample.wheelY = float32(scroll.x), float32(scroll.y)
@@ -56,17 +83,32 @@ func readInput(timestamp uint32) sampledInput {
 		switch key {
 		case input.KeyShift:
 			sample.keys[key] = sample.modifiers.Shift
+			sample.heldKeys[key] = sample.heldModifiers.Shift
 		case input.KeyCtrl:
 			sample.keys[key] = sample.modifiers.Ctrl
+			sample.heldKeys[key] = sample.heldModifiers.Ctrl
 		case input.KeyAlt:
 			sample.keys[key] = sample.modifiers.Alt
+			sample.heldKeys[key] = sample.heldModifiers.Alt
 		default:
 			if ek, ok := ebitenKey(key); ok {
 				sample.keys[key] = ebiten.IsKeyPressed(ek)
+				sample.pressedKeys[key] = inpututil.IsKeyJustPressed(ek)
+				sample.heldKeys[key] = inpututil.KeyPressDuration(ek) > 0
 			}
 		}
 	}
 	return sample
+}
+
+// heldModifier removes Ebitengine's release-update modifier retention from the
+// state reused by a catch-up drain. Unlike ordinary key durations, modifier
+// durations also retain a just-released key in Ebitengine 2.10.1.
+func heldModifier(key ebiten.Key) bool {
+	// TODO(T25): public input queries cannot order a modifier release and
+	// repress inside one Update. Prefer released here until the next snapshot;
+	// the interval's modifier union still retains the chord for this service.
+	return ebiten.IsKeyPressed(key) && !inpututil.IsKeyJustReleased(key)
 }
 
 // applyInput establishes the one host service's live state and one published
@@ -158,13 +200,13 @@ func applyInputWith(in *input.State, sample sampledInput, clicks *doubleClickRec
 	// does not order that batch against the polled physical transitions above.
 	// Alt system-key translation supplies its own raw character token and
 	// has no character-message companion in retail [07 R-CAM-01 §14].
-	if sample.modifiers.Alt || sample.command {
+	if !sample.filteredText && (sample.modifiers.Alt || sample.command) {
 		return
 	}
 	for _, r := range sample.characters {
 		// Some hosts deliver a printable companion to Ctrl+V. The composed
 		// paste token already owns that input; never append a stray v.
-		if sample.modifiers.Ctrl && sample.keys[input.KeyV] && (r == 'v' || r == 'V' || r == '\x16') {
+		if !sample.filteredText && sample.modifiers.Ctrl && sample.keys[input.KeyV] && (r == 'v' || r == 'V' || r == '\x16') {
 			continue
 		}
 		in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
