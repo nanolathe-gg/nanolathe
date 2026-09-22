@@ -985,6 +985,13 @@ with the shell's `MSGBOX` above them `[07 R-FE-01 §6]` `[07 R-FE-01 §8]`.
 `unitinfo.go` is `UNITINFOx.GUI`, a child window that services a release before
 the command page does `[07 R-HUD-03 §8]`.
 
+**Build-product count labels.** Human world placement constructs ordinary
+mobile-build orders with a zero production count, for both ground and aircraft
+builders. Shift selects queue insertion without turning a site into counted
+production. The published count therefore leaves commander construction
+buttons blank; factory products and stockpile rounds keep their counted
+producer paths and labels [07 R-P0-11 §2].
+
 **Displayed resource stocks.** `Client` owns the two displayed singles and
 passes them by value in `UIFrame.Resources`. `BeginPresentationFrame` advances
 them once per host presented frame using `[05 R-ECO-01 §6]`; both stock bars

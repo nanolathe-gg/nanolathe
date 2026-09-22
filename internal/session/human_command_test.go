@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
@@ -338,6 +339,9 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 		t.Fatalf("no build node for %d", hf)
 	}
 	nf := qf.Head()
+	if nm.Param2 != 0 || nf.Param2 != 1 {
+		t.Fatalf("placement/factory counts = %d/%d, want 0/1 [07 R-P0-11 §2]", nm.Param2, nf.Param2)
+	}
 	if nf.Owner != hf || nf.CreationTick != 42 {
 		t.Fatalf("factory build metadata for %d: owner=%d tick=%d flags=%x", hf, nf.Owner, nf.CreationTick, nf.Flags)
 	}
@@ -567,5 +571,47 @@ func TestViewThenGiveUsesQueuedViewingOwner(t *testing.T) {
 	s.applyHumanCommand(give, 3)
 	if s.Econ.Players[1].Stock[economy.Metal] != 5 {
 		t.Fatal("Give accepted a non-player destination")
+	}
+}
+
+// Site orders remain individually queued but contribute no production count
+// to the HUD, for both mobile-build descriptors [07 R-P0-11 §2].
+func TestHumanPlacementQueueHasNoProductCountLabel(t *testing.T) {
+	for _, flying := range []bool{false, true} {
+		name := "ground"
+		if flying {
+			name = "aircraft"
+		}
+		t.Run(name, func(t *testing.T) {
+			product := &content.UnitDef{UnitName: "product", MaxDamage: 10}
+			product.CanonicalKey = "product"
+			builder := &content.UnitDef{UnitName: "builder", Builder: true, CanMove: true, CanFly: flying, MaxDamage: 10}
+			builder.CanonicalKey = "builder"
+			cat := &content.Catalog{Units: map[string]*content.UnitDef{"product": product, "builder": builder}}
+			w := newSessionFixtureWorld(8, cat)
+			h, err := w.Create(builder, 0, 0, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
+			for i := 0; i < 2; i++ {
+				s.applyHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{
+					Builder: h, Product: "product", WX: numeric.Fixed((64 + i*64) << 16), WZ: 64 << 16, Queued: i != 0,
+				}}, uint32(i+1))
+				q := orders.QueueForUnit(w.Unit(h))
+				if q.LenPrimary() != i+1 {
+					t.Fatalf("queued sites = %d, want %d", q.LenPrimary(), i+1)
+				}
+				views := appendOrderQueueView(nil, orders.SnapshotQueueOf(q, h, nil), cat)
+				for _, node := range views[0].Primary {
+					if node.BuildCount != 0 || node.DescriptorID != int32(mobileBuildKind(w.Unit(h))) {
+						t.Fatalf("placement publication = %+v", node)
+					}
+				}
+				if label := hud.QueueCountLabel(views, "product"); label != "" {
+					t.Fatalf("site queue label = %q, want empty", label)
+				}
+			}
+		})
 	}
 }

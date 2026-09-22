@@ -1026,12 +1026,25 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 				q.DropLeadingAutoOps()
 			}
 		}
-		// The segment as it stands before the producer runs is what identifies
-		// the record the producer creates; it is not the tail. See
-		// insertedBuildNode.
-		beforeMobile := orders.QueueForUnit(u).Primary()
-		if err := construction.QueueMobileBuild(u, c.MobileBuild.Product, c.MobileBuild.WX, c.MobileBuild.WZ, 1, s.Catalog); err == nil {
-			stampHumanBuild(u, beforeMobile, c.MobileBuild.Product, tick, c.MobileBuild.Queued, c.MobileBuild.WY)
+		// Site placement carries zero production count and uses ordinary
+		// insertion, not the counted factory producer [07 R-P0-11 §2].
+		// Otherwise each queued structure contributes a spurious +1 caption.
+		id := mobileBuildKind(u)
+		if id != 0 && content.CanonicalKey(c.MobileBuild.Product) != "" {
+			n := orders.NewMobileBuildNode(s.Catalog, c.MobileBuild.Product, c.MobileBuild.WX, c.MobileBuild.WZ, 0, 0, tick, u.Handle, c.MobileBuild.Queued)
+			n.GoalY = c.MobileBuild.WY
+			q := orders.QueueForUnit(u)
+			// Preserve the modern shortcut's existing same-site work without
+			// converting it into counted production. Mobile completion consumes
+			// the whole site order [04 R-ORD-01 §5].
+			if c.MobileBuild.AppendOnly && q.LenPrimary() != 0 {
+				tail := q.Primary()[q.LenPrimary()-1]
+				if tail.ID == id && tail.BuildDefKey == n.BuildDefKey && tail.GoalX == n.GoalX && tail.GoalZ == n.GoalZ {
+					tail.CreationTick, tail.GoalY = tick, n.GoalY
+					return
+				}
+			}
+			q.Push(id, n)
 		}
 	case HumanFactoryBuild:
 		u := s.humanUnit(c.FactoryBuild.Builder)

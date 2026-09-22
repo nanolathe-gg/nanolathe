@@ -6930,6 +6930,18 @@ the same count query run with id **0**, which is the pending build-weapon queue
 stockpile button reads "held +pending". The second number is not the secondary
 order list.
 
+**Established — ordinary site placement contributes zero.** The world-click
+placement producer supplies a production count of zero for both ground and
+flying mobile-build orders. Ordinary insertion and the record constructor
+preserve that zero. Thus a commander or construction unit placing one or
+several structures has no `+1`/`+2` product caption, including after reopening
+the build page. The query sums stored production counts, not the number of
+matching order records. The mobile-build descriptor itself carries the count
+query's admission flag; excluding all mobile-build descriptors would be wrong,
+because the counted product-click producer can also select that descriptor
+when the acting builder has a mover (§1). Factory product clicks and pending
+stockpile rounds retain their positive counts and their existing labels.
+
 *Whose queues.* The writer is handed the single selected builder the click
 handler resolved (§1), so only that unit's two lists are counted.
 

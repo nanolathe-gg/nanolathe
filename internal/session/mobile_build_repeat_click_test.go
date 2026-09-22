@@ -167,7 +167,7 @@ func TestAppendOnlyMobileBuildPreservesRepeatedSite(t *testing.T) {
 		Builder: hb, Product: "solar", WX: site, WZ: site, Queued: true, AppendOnly: true,
 	}}, 2)
 	q := orders.QueueForUnit(s.Units.Unit(hb))
-	if q.LenPrimary() != 1 || q.Head().Param2 != 2 {
+	if q.LenPrimary() != 1 || q.Head().Param2 != 0 {
 		t.Fatalf("append-only click canceled existing work: %+v", q.Primary())
 	}
 }
