@@ -11408,8 +11408,13 @@ unit-state field" that `[R-P28-ANG-01R §2]` already places in the RNG call
 order immediately after the `buildangle` draw. Every unit receives one,
 whether or not it can hover; no other writer exists (bounded census over the
 image). Hovercraft therefore rock out of phase with one another by a per-unit
-random offset fixed at creation, and a save that restores the unit record
-restores the phase.
+random offset fixed at creation. **Established — save reconstruction draws a
+new phase.** The unit writer does not serialize this word, and the complete
+unit reader invokes the ordinary allocator without replacing its phase. A
+load therefore retains the newly drawn phase, not the one before the save.
+The writer and reader census is [08 R-SAVE-UNIT-01]; feature ignition precedes
+these constructor draws [08 R-SAVE-02 §11]. This corrects the former claim
+that restoring a unit record also restores its phase.
 
 **Consequence for Nanolathe (the deliberate divergence).** With the
 rate known to be 30, the retail counter is a 30 Hz wall-clock count that

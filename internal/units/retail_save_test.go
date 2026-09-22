@@ -1,6 +1,7 @@
 package units
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -8,6 +9,31 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
+
+// The save replaces orientation but omits hover phase [08 R-SAVE-UNIT-01].
+func TestRetailUnitSaveOmitsHoverPhase(t *testing.T) {
+	u := pairFixtureUnit()
+	u.BobPhase = 1234
+	resolve := func(h pool.Handle) (uint16, bool) { return uint16(h), h != 0 }
+	first, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.BobPhase = -2345
+	second, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("changing hover phase changed save bytes")
+	}
+	if err := RetailUnitBase(u, first); err != nil {
+		t.Fatal(err)
+	}
+	if u.BobPhase != -2345 {
+		t.Fatalf("base restore changed constructor phase to %d", u.BobPhase)
+	}
+}
 
 func TestRetailUnitImageRoundTripEstablishedFieldsAndStableIDs(t *testing.T) {
 	u := &Unit{

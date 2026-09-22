@@ -809,6 +809,16 @@ persisted key, and the world rebuild's reset precedes the dispatcher, so a
 load resumes unarmed and the settlement gate stays open `[05 R-ECO-01 §12]`
 `[08 R-TRIG-01 §6]` `[08 R-ENTRY-01 §8]`.
 
+Detached staging restores Features, Metal and PlayerFeatures before reserving
+units through the ordinary forced-slot allocator. Burning features consume
+ignition RNG before unit initialization; the allocator's new hover phase is
+not a saved field and survives core restoration. Stage state retains the
+completed feature pass so core restoration cannot ignite it twice. Burn sounds
+remain buffered until core restoration has rebuilt visibility and succeeded;
+a discarded stage publishes none. This changes no stable unit identities or
+save bytes `[08 R-SAVE-UNIT-01]` `[08 R-SAVE-FEATURE-01]`
+`[08 R-SAVE-02 §11]` `[04 R-MOV-01 §5c]`.
+
 During core restoration, `HasMover` alone selects the 35-byte mover reader;
 an unfinished product therefore restores its saved mover fields and committed
 occupancy before the staged session is published. Route, follower and proposal

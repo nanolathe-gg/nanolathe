@@ -49,12 +49,15 @@ type RetailBattleStage struct {
 	Image      *save.BattleImage
 	Session    *Session
 	StableUnit map[uint16]pool.Handle
+
+	featuresRestored bool
+	burnSounds       [][3]numeric.Fixed
 }
 
 // StageRetailBattle validates and stages an in-battle retail save. It does
 // not run a tick and does not mutate the caller's Bank or any existing
-// session. Only the D1 identity/allocation pass is performed; body fixups are
-// owned by later persistence stages [08 R-SAVE-02 §11].
+// session. Feature/terrain restoration precedes D1 unit allocation; unit body
+// fixups are owned by later persistence stages [08 R-SAVE-02 §11].
 func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage, error) {
 	preflight, err := PreflightRetailLoad(bank)
 	if err != nil {
@@ -207,11 +210,57 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err := initializeRestoredBattleAI(s, deps.FS, m, sessionKind); err != nil {
 		return nil, fmt.Errorf("session: retail restore: computer player construction: %w", err)
 	}
+	stage := &RetailBattleStage{Image: image, Session: s}
+	// Ignition draws before the unit allocator, whose new bob phase is not
+	// overwritten by any save field [08 R-SAVE-02 §11][04 R-MOV-01 §5c].
+	if err := stage.restoreFeatures(); err != nil {
+		return nil, err
+	}
 	stable, err := reserveRetailUnits(s.Units, cat, image.Units.Records)
 	if err != nil {
 		return nil, err
 	}
-	return &RetailBattleStage{Image: image, Session: s, StableUnit: stable}, nil
+	stage.StableUnit = stable
+	return stage, nil
+}
+
+// restoreFeatures applies the accounts that precede unit construction exactly
+// once. Core-only callers can provide an already composed detached stage;
+// production staging calls this before its first forced allocation.
+func (stage *RetailBattleStage) restoreFeatures() error {
+	if stage.featuresRestored {
+		return nil
+	}
+	s, image := stage.Session, stage.Image
+	// Defer the visibility-dependent sound audience until core restoration.
+	// A failed detached stage never drains these cues [08 R-SAVE-FEATURE-01].
+	var burnSounds [][3]numeric.Fixed
+	if s.Features != nil {
+		emit := s.Features.BurnSound
+		if emit != nil {
+			s.Features.BurnSound = func(pos [3]numeric.Fixed) {
+				burnSounds = append(burnSounds, pos)
+			}
+			defer func() { s.Features.BurnSound = emit }()
+		}
+		s.Features.ResetForRestore()
+		if err := restoreRetailFeatures(s.Features, s.Catalog, image.Features); err != nil {
+			return err
+		}
+	}
+	// Features precede Metal and PlayerFeatures, all before Units. Exact-size
+	// validation belongs to each terrain reader [08 R-SAVE-02 §11, §12].
+	if s.World != nil {
+		if err := s.World.RestoreRetailMetal(image.Metal); err != nil {
+			return fmt.Errorf("session: retail restore: %w", err)
+		}
+		if err := s.World.RestoreRetailPlayerFeatures(image.PlayerFeatures); err != nil {
+			return fmt.Errorf("session: retail restore: %w", err)
+		}
+	}
+	stage.burnSounds = burnSounds
+	stage.featuresRestored = true
+	return nil
 }
 
 // retailStageUnitLimit selects the layout before any allocation or RNG draw.

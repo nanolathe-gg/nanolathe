@@ -29,6 +29,8 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	u.Move.Bank = binary.LittleEndian.Uint16(data[0x37:])
 	u.Move.Heading = binary.LittleEndian.Uint16(data[0x39:])
 	u.Move.Pitch = binary.LittleEndian.Uint16(data[0x3B:])
+	// BobPhase is absent from the save; keep the forced allocator's new draw
+	// even though its orientation is replaced [08 R-SAVE-UNIT-01].
 	u.Health = int32(int16(binary.LittleEndian.Uint16(data[0x3D:])))
 	u.Kills = int32(binary.LittleEndian.Uint16(data[0x3F:]))
 	u.SpotMetal = math.Float32frombits(binary.LittleEndian.Uint32(data[0x8F:]))

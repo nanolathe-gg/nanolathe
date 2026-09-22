@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/triggers"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
@@ -102,6 +101,13 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	// the box sits in [08 "Player records"] [05 R-SHARE-01 §1]. The self
 	// column is forced to 1 on the way in, and a slot whose account carried no
 	// box keeps the row battle entry built.
+
+	// Production staging restores these accounts before forced allocation.
+	// A caller-supplied detached shell takes the same pass here; completed
+	// stages do not ignite features or consume their random draw twice.
+	if err := stage.restoreFeatures(); err != nil {
+		return err
+	}
 
 	// Every standard body has already been forced-allocated by D1. Validate
 	// reservation before reference reconstruction; saved status is applied only
@@ -358,42 +364,6 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 	}
 
-	// Restored burns re-enter ignition [05 R-FEAT-01 §9][08 R-SAVE-FEATURE-01].
-	// Nanolathe derives visibility late, so this host publication adapter waits
-	// to test their audience against restored visibility below. Retail requests
-	// sound inside ignition itself. Keep raise order and preserve the ordinary
-	// callback on every exit; a failed detached load publishes none.
-	var burnSounds [][3]numeric.Fixed
-	var emitBurnSound func([3]numeric.Fixed)
-	if s.Features != nil {
-		emitBurnSound = s.Features.BurnSound
-		if emitBurnSound != nil {
-			s.Features.BurnSound = func(pos [3]numeric.Fixed) {
-				burnSounds = append(burnSounds, pos)
-			}
-			defer func() { s.Features.BurnSound = emitBurnSound }()
-		}
-		s.Features.ResetForRestore()
-		if err := restoreRetailFeatures(s.Features, s.Catalog, image.Features); err != nil {
-			return err
-		}
-	}
-	// Terrain follows the features it is stamped under, which is retail's own
-	// account order — Features, then Metal, then PlayerFeatures, then Mapping
-	// [08 R-SAVE-02 §11] [08 "Account inventory"]. Both boxes are exact-size
-	// gated by the world restorers themselves: `Metal`/`Plotmap` is one byte
-	// per plot cell and `PlayerFeatures`/`Plotmap` is half that, each byte
-	// packing two consecutive cells' placer nibbles [08 R-SAVE-02 §12]. A save
-	// whose map does not match the terrain this stage resolved therefore fails
-	// the load rather than half-applying a grid.
-	if s.World != nil {
-		if err := s.World.RestoreRetailMetal(image.Metal); err != nil {
-			return fmt.Errorf("session: retail restore: %w", err)
-		}
-		if err := s.World.RestoreRetailPlayerFeatures(image.PlayerFeatures); err != nil {
-			return fmt.Errorf("session: retail restore: %w", err)
-		}
-	}
 	// The AI group index is the one base-record word with a side effect beyond
 	// a field copy: the reader moves the unit out of whatever group it holds
 	// and into the saved one [08 R-SAVE-02 §6]. That is two writes — the unit's
@@ -450,9 +420,12 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		s.visStamps = make(map[int]visStamp)
 		publishVisibilityForAll(s)
 	}
-	for _, pos := range burnSounds {
-		emitBurnSound(pos)
+	if s.Features != nil && s.Features.BurnSound != nil {
+		for _, pos := range stage.burnSounds {
+			s.Features.BurnSound(pos)
+		}
 	}
+	stage.burnSounds = nil
 	return nil
 }
 

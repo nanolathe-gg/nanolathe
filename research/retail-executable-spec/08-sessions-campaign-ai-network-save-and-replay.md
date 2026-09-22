@@ -6272,6 +6272,16 @@ partially replace the live session. The latter is an implementation
 boundary, not a claim that retail itself was transactional. [Retail behavior
 Established; transactional consequence Supported inference]
 
+**Established — the hover phase is not persisted.** The complete base-record
+writer serializes the stable unit ID but omits hover phase; none of its other
+fields carries that phase. The complete reader calls the ordinary forced-slot
+allocator and leaves its phase draw untouched while restoring the saved
+orientation and remaining scalar fields. The mover and
+script boxes do not restore a unit phase either. Every reconstructed unit
+therefore receives a new phase from the load-entry simulation stream, even
+when its saved heading is restored exactly [04 R-MOV-01 §5c]. No additional
+save field belongs to this behavior.
+
 **References and later-owned state.** The two stable-ID fields at `0x89` and
 `0x8B` are logical references, never native pointers. Resolution is recursive
 and depth-first: resolve a referenced ID, then attach it to the already staged
@@ -7479,6 +7489,18 @@ scalars, alliances) → Camera → Features → Metal → PlayerFeatures → Map
 → Units (per unit: the §6 sequence) → Meteor → trigger records; then the
 battle-loading worker proceeds as for a fresh battle. Nanolathe's own
 staged/transactional order is the one under R-SAVE-UNIT-01.
+
+**Established — feature ignition precedes unit initialization draws.** The
+feature reader finishes all three families before the unit-account dispatcher
+can enter a forced-slot allocator. Each saved burn re-enters ignition and
+consumes its ordinary countdown draw before replacing the countdown with the
+saved value [R-SAVE-FEATURE-01]. Unit allocation then consumes the heading
+and hover-phase draws [04 R-P28-ANG-01R §2]. The phase is not saved and remains
+that newly drawn value [R-SAVE-UNIT-01]. Moving unit construction before feature
+restoration can therefore change the final phase even when both orders consume
+the same number of random values. Transactional staging must preserve this
+relative order; identity reservation through the ordinary allocator already
+performs initialization and is not a side-effect-free operation.
 
 **Established — restored head goal binding [S08].** After rebuilding both
 order queues and before reading the COB snapshot, the loader checks the front
