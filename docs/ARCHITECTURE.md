@@ -25,6 +25,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_DEVELOPER_TOOLS](DESIGN_DEVELOPER_TOOLS.md) | planned developer views, reconnected dormant probes, diagnostic publication and portable host tooling |
 | [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md) | the gameplay rule seams, how a Modern or Strict 3.1 rule set is bound, and what it may cost |
 | [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
+| [DESIGN_COMMUNITY_PATCH](DESIGN_COMMUNITY_PATCH.md) | the Community 3.9 gameplay profile: the third reserved rule set, the feature table a content set or player configures, the mapping of every community-patch contract onto a seam, and the decisions still open (design, not implemented) |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
 places where the reference install disproves the written contract are in
