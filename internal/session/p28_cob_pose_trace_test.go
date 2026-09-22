@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
@@ -35,11 +36,13 @@ func TestP28COB01RScenarioARMCKPublishesStrictCreateState(t *testing.T) {
 	s := &Session{
 		Catalog: cat,
 		Units:   w,
+		Econ:    &economy.Service{},
 		Snapshot: frame.NewBuffer(frame.Capacities{
 			Units: 2,
 		}),
 		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
 	}
+	s.Econ.Players[0] = economy.Player{Exists: true, ControllerState: 1}
 	s.rngSim = rng.NewSimulation(1)
 	s.rngCrt = rng.NewCRT(1)
 	s.rngInitialized = true

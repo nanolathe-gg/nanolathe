@@ -551,32 +551,29 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 	if s.Catalog == nil {
 		return fmt.Errorf("session: missing Catalog for mission battle entry [02 §5]")
 	}
-	// P0-04/P0-06: two-pass spawner with sparse created[] [P0-04][P0-06].
-	// Pass one walks records in order, applies the player check, then invokes
-	// the normal allocator; allocation failure leaves a sparse nil entry. No delayed CreationCountdown queue
-	// (bounded negative: no reader for CreationCountdown). [P0-04]
-	// Eligibility checks the occupied slot, participating control state, and
-	// non-newline placement terminator [P0-04] – diagnostic
-	// but still creates the unit. We preserve sparse
-	// mapping for P0-06 first-occurrence scan skipping NULL gaps (A27).
+	// The first pass validates each resolved definition's player before the
+	// allocator. Invalid players abort entry; definition misses and allocation
+	// refusals leave sparse placement entries [08 R-ENTRY-01 §6].
 	for idx, up := range m.Units {
 		def, ok := s.Catalog.Unit(up.UnitName)
 		if !ok || def == nil {
 			continue // Missing unit definition leaves this placement slot empty.
 		}
-		// Retail mapping: 0→1 then idx=byte-1, so 0 and 1 both map to 0 (human), 2→1, etc. [P0-04] I13.
-		// Production mapping collapses placement player values 0 and 1 to human
-		// owner 0, then maps subsequent values to their corresponding owner. [P0-04][I13]
+		// The loader normalizes zero to one; retain that normalization for
+		// callers supplying decoded placements directly [08 R-TRIG-01 §9].
 		p := up.Player
 		if p == 0 {
 			p = 1
 		}
 		ownerIdx := p - 1
-		if ownerIdx < 0 {
-			ownerIdx = 0
-		}
-		if ownerIdx > 9 {
-			ownerIdx = 9
+		if ownerIdx < 0 || ownerIdx >= pool.PlayerCount || s.Econ == nil ||
+			!s.Econ.Players[ownerIdx].Exists ||
+			s.Econ.Players[ownerIdx].ControllerState < 1 || s.Econ.Players[ownerIdx].ControllerState > 3 ||
+			s.Econ.Players[ownerIdx].Side == neutralSideIndex {
+			// Fatal retail entry diagnostics propagate through the host's
+			// battle-entry error boundary [08 R-ENTRY-01 §6][08 R-TRIG-01 §9].
+			//lint:ignore ST1005 retail text: reproduced verbatim [08 R-ENTRY-01 §6].
+			return fmt.Errorf("Player number %d invalid for unit %s", ownerIdx, up.UnitName)
 		}
 		owner := uint8(ownerIdx)
 		// The position fixup runs between the eligibility check and the
