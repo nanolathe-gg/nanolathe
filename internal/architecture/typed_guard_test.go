@@ -648,7 +648,7 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/movement/integrate.go func groundHypotRaw":  {2, "I2 ground follower route distance [04 R-MOV-01 §3]"},
 
 	"internal/combat/motion.go func InitOrdinary":            {2, "I2 ordinary creator stored planar distance [06 §6.3][06 §4.3]"},
-	"internal/combat/aim.go func BallisticSolve":             {24, "I2 ballistic discriminant, acos and sqrt [06 §3.3]"},
+	"internal/combat/aim.go func BallisticSolve":             {26, "I2 ballistic discriminant, acos, sqrt and two researched angle literals [06 §3.3]"},
 	"internal/combat/aim.go func distance3DRaw":              {6, "I2 pre-fire lead distance [06 §3.3]"},
 	"internal/combat/impact.go func DistanceToBox":           {6, "I2 area-damage range [06 §9.3]"},
 	"internal/combat/damage.go func Falloff":                 {4, "I2 area-damage falloff [06 §9.3]"},

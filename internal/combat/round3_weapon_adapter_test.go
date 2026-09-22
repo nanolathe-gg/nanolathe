@@ -125,7 +125,7 @@ func TestBallisticCreatorCopiesStoredPairAndFullPoolRetryKeepsIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w, terrain, shooter, target := newTestWorldAndUnits(t)
 			terrain.Gravity = numeric.Fixed(8155)
-			weapon := &content.WeaponDef{ID: 702, Range: 1000 << 16, Turret: true, Ballistic: true, WeaponVelocity: 500000, Accuracy: tc.accuracy, Tolerance: 4096}
+			weapon := &content.WeaponDef{ID: 702, Range: 1000, Turret: true, Ballistic: true, WeaponVelocity: 500000, Accuracy: tc.accuracy, Tolerance: 4096}
 			shooter.Move.Heading = tc.heading
 			shooter.Health, shooter.MaxHealth = 100, 100
 			shooter.InstallWeapon(0, weapon)
@@ -188,7 +188,7 @@ func TestBallisticCreatorDoesNotResolveAgainAfterAcceptedAim(t *testing.T) {
 		t.Helper()
 		w, terrain, shooter, target := newTestWorldAndUnits(t)
 		terrain.Gravity = numeric.Fixed(8155)
-		weapon := &content.WeaponDef{ID: 706, Range: 1000 << 16, Turret: true, Ballistic: true, WeaponVelocity: 500000, Tolerance: 4096}
+		weapon := &content.WeaponDef{ID: 706, Range: 1000, Turret: true, Ballistic: true, WeaponVelocity: 500000, Tolerance: 4096}
 		shooter.Move.Heading = 0
 		shooter.InstallWeapon(0, weapon)
 		slot := shooter.SlotAt(0)

@@ -187,9 +187,13 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 	// rejected by the quarter-turn gate below. That is retail's, which is also
 	// why the lower gate against a negative authored minbarrelangle is vacuous
 	// [06 §6.4] [I11]. Do not "fix" it by restoring the sign.
+	// The researched constants lie slightly below computed pi/2 and pi/4;
+	// deriving them from math.Pi admits a different upper boundary [06 §3.3].
+	const substituteAngle = 1.570796326794895
+	const maxAngle = 0.7853981633974475
 	var aPlus, aMinus float64
 	if rPlus <= 0.0 || math.IsNaN(rPlus) {
-		aPlus = math.Pi / 2
+		aPlus = substituteAngle
 	} else {
 		// sqrt(rPlus)/v may be >1 or NaN; Acos returns NaN which will be rejected by gate.
 		if v == 0 {
@@ -199,7 +203,7 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 		}
 	}
 	if rMinus <= 0.0 || math.IsNaN(rMinus) {
-		aMinus = math.Pi / 2
+		aMinus = substituteAngle
 	} else {
 		if v == 0 {
 			aMinus = math.NaN()
@@ -208,17 +212,15 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 		}
 	}
 
-	const pi4 = math.Pi / 4
-
 	// [06 §6.4] candidate selection in strict order — plus root first, then minus —
 	// each accepted only when minBarrel < a <= pi/4; over-45-degree arcs rejected.
 	// [GAP T5] same.
-	if !math.IsNaN(aPlus) && aPlus > minBarrel && aPlus <= pi4 {
+	if !math.IsNaN(aPlus) && aPlus > minBarrel && aPlus <= maxAngle {
 		// [06 §6.4] accepted angle serializes as trunc(angle*32768/pi) into 16-bit domain.
 		pitch := uint16(numeric.TruncateFloat64ToLow32(aPlus * 32768 / math.Pi))
 		return pitch, true
 	}
-	if !math.IsNaN(aMinus) && aMinus > minBarrel && aMinus <= pi4 {
+	if !math.IsNaN(aMinus) && aMinus > minBarrel && aMinus <= maxAngle {
 		pitch := uint16(numeric.TruncateFloat64ToLow32(aMinus * 32768 / math.Pi))
 		return pitch, true
 	}

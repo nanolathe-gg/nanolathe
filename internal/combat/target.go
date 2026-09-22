@@ -174,15 +174,12 @@ func PreFireLeadPoint(shooter, target *units.Unit, slot *units.Slot, w *content.
 
 // WithinRange reports whether planar distance from shooter to candidate is within weapon Range [06 §3.3] P0-10 [06 §2.1].
 // Ordinary fire range uses horizontal distance against the weapon range [06 §3.3] P0-10.
-// Tests dist² vs range² via 64-bit __allmul then >>? inclusive JLE; range0 only self-cell admits [06 §3.3] P0-10.
+// Each signed 32-bit delta is squared wide and shifted before a signed 32-bit inclusive comparison [06 §3.3].
 // Coverage is a separate scalar for projectile-target/interceptor behavior and is NOT the ordinary ground-target fire radius [06 §3.3] P0-10 (coverage drives overlay only).
 // This helper intentionally uses Range, not Coverage (I10).
 func WithinRange(shooterX, shooterZ, candX, candZ numeric.Fixed, weaponRange int32) bool {
-	if weaponRange < 0 {
-		return false // negative range admits none [06 §2.1] P0-10
-	}
-	dx := int64(candX.Sub(shooterX).Raw()) // [06 §3.3] planar delta, raw 16.16
-	dz := int64(candZ.Sub(shooterZ).Raw())
+	dx := int32(candX.Raw()) - int32(shooterX.Raw()) // [06 §3.3] planar delta, raw signed 32-bit 16.16
+	dz := int32(candZ.Raw()) - int32(shooterZ.Raw())
 	// [06 §3.3]: `a = (int32)(((int64)dx * dx) >> 32)`, and the same for dz —
 	// the raw deltas are squared FIRST in 64 bits and the product is then
 	// shifted down by a whole 32, which is the squared distance in whole world
@@ -195,9 +192,11 @@ func WithinRange(shooterX, shooterZ, candX, candZ numeric.Fixed, weaponRange int
 	// up to a world unit per axis and disagreed with the order-side
 	// shot-admission gate of [04 R-ORD-01 §7], which squares before shifting —
 	// so a chase could bind a slot the firing step then refused.
-	dist2 := ((dx * dx) >> 32) + ((dz * dz) >> 32)
-	r2 := int64(weaponRange) * int64(weaponRange)
-	return dist2 <= r2 // inclusive JLE [06 §3.3]
+	a := int32((int64(dx) * int64(dx)) >> 32)
+	b := int32((int64(dz) * int64(dz)) >> 32)
+	dist2 := a + b
+	r2 := weaponRange * weaponRange
+	return dist2 <= r2 // inclusive signed comparison [06 §3.3]
 }
 
 // ---------------------------------------------------------------------------

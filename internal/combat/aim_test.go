@@ -61,30 +61,28 @@ func TestBallisticElevated(t *testing.T) {
 	}
 }
 
-// TestDiscriminantExactZero verifies discriminant exactly 0.0 is accepted (no epsilon).
+// Zero discriminant passes its own gate, but the resulting angle must still
+// satisfy the researched upper literal [06 §3.3].
 func TestDiscriminantExactZero(t *testing.T) {
 	minBarrel := deg(-11.25)
-	// h = v^2 / g gives disc 0 and pitch 45 deg [probe].
-	// v=65536 g=8192 h=524288 => disc 0 => pitch 8192.
-	pitch, ok := BallisticSolve(fixRaw(524288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel)
-	if !ok {
-		t.Fatalf("disc zero expected ok")
+	// A flat shot at h=v²/g has zero discriminant and an angle just above
+	// the researched upper bound, even though it is within a computed pi/4.
+	if pitch, ok := BallisticSolve(fixRaw(524288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel); ok {
+		t.Fatalf("upper-bound shot accepted with pitch %d", pitch)
 	}
-	if pitch != 8192 {
-		t.Fatalf("disc zero pitch got %d want 8192", pitch)
+	// A lower target gives an exact-zero discriminant at an admissible angle:
+	// h=3v²/(2g), source-minus-target height=5v²/(8g), angle=atan(2/3).
+	if pitch, ok := BallisticSolve(fixRaw(786432), fixRaw(-327680), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel); !ok || pitch != 6133 {
+		t.Fatalf("admissible zero-discriminant shot got pitch %d ok %v, want 6133 true", pitch, ok)
 	}
-	// Just beyond max range: h=524288+1000 => disc negative => no solution.
+	// Just beyond the flat maximum has a negative discriminant.
 	if _, ok := BallisticSolve(fixRaw(525288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel); ok {
-		t.Fatalf("beyond max range expected no solution")
+		t.Fatal("beyond max range expected no solution")
 	}
-	// Just inside: h=523288 => pitch 7869.
-	if p, ok := BallisticSolve(fixRaw(523288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel); !ok || p != 7869 {
-		t.Fatalf("inside range got pitch %d ok %v want 7869 true", p, ok)
+	// Just inside stays valid: tightening the angle literal adds no epsilon band.
+	if pitch, ok := BallisticSolve(fixRaw(523288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel); !ok || pitch != 7869 {
+		t.Fatalf("inside range got pitch %d ok %v, want 7869 true", pitch, ok)
 	}
-	// No epsilon band at exactly zero. The plan's literal ±1e-12 vectors are
-	// float64-domain values unreachable through integer Fixed arguments; the
-	// strictly-negative case above (beyond max range) locks the same contract:
-	// any negative discriminant rejects.
 }
 
 // TestDiscriminantNegativeRejected verifies negative discriminant is rejected.
@@ -209,22 +207,14 @@ func TestZeroVelocity(t *testing.T) {
 	_, _ = TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: fixRaw(6553600)}, 0, FirePorts{ShooterHealth: 100, ShooterMaxHealth: 100})
 }
 
-// TestMinBarrelEdge verifies exact gate: angle must be > minBarrel and <= pi/4.
+// The lower angle gate is strict, independently of the inclusive upper gate
+// [06 §3.3]. With zero gravity this flat shot's candidate angle is exactly zero.
 func TestMinBarrelEdge(t *testing.T) {
-	// Pi/4 edge: 45 deg pitch 8192 should be accepted (<= pi/4) [06 §6.4]
-	minBarrel := deg(-11.25)
-	pitch, ok := BallisticSolve(fixRaw(524288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(8192), minBarrel)
-	if !ok || pitch != 8192 {
-		t.Fatalf("45 deg should be accepted, got pitch %d ok %v", pitch, ok)
+	if _, ok := BallisticSolve(fixRaw(524288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(0), 0); ok {
+		t.Fatal("angle equal to minBarrel was accepted")
 	}
-	// Over 45 deg should be rejected: h small, vel small => angle would exceed 45.
-	// Use h=10000, v=50000, g=8155 => far beyond max range already no solution.
-	// Instead verify flat 6 deg with minBarrel 10 rejected already in other test;
-	// here just check that aPlus exactly at pi/4+epsilon is rejected.
-	// Generate a case where angle would be >45 if it existed: use y large positive up
-	// at short range requiring >45.
-	if _, ok := BallisticSolve(fixRaw(655360), fixRaw(32768000), fixRaw(0), fixRaw(200000), fixRaw(8155), minBarrel); ok {
-		t.Fatalf("angle >45 should be rejected")
+	if pitch, ok := BallisticSolve(fixRaw(524288), fixRaw(0), fixRaw(0), fixRaw(65536), fixRaw(0), math.Nextafter(0, -1)); !ok || pitch != 0 {
+		t.Fatalf("angle just above minBarrel got pitch %d ok %v, want 0 true", pitch, ok)
 	}
 }
 
