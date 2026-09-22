@@ -340,6 +340,7 @@ func TestCommandDragAltMoveOverFeature(t *testing.T) {
 				if pos == nil || !pos.HasFeature {
 					t.Fatal("fixture must start on a reclaimable feature")
 				}
+				b.showRanges = true
 				b.tacticalRangesHeld = true
 				if !b.tacticalRangesActive(cl) {
 					t.Fatal("held Shift must show ranges before a drag")

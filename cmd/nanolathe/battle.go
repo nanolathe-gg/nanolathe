@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
@@ -173,7 +174,9 @@ type battleSession struct {
 	// shell across battles and never written to settings [07 R-CAM-01 §6].
 	showRanges bool
 	// Shift tactical guides are presentation input only (GPU design §20).
-	tacticalRangesHeld bool
+	tacticalRangesHeld      bool
+	tacticalRangesUnfocused bool
+	rangePreferences        contentprofiles.Presentation
 
 	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
 	// frontend-backed battle reads the shell's live copy instead, so an
@@ -438,6 +441,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	}
 	b := &battleSession{
 		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
+		showRanges: cs.presentation.ShowRanges, rangePreferences: cs.presentation,
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 	}
 	if savedCamera != nil {

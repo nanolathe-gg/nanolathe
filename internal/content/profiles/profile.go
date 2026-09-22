@@ -55,6 +55,13 @@ type Limits struct {
 	SearchEntries int   `json:"search_entries"`
 }
 
+// Presentation carries optional mod-authored UI defaults, never simulation rules.
+// Omitted placement_weapon_ranges keeps the Modern placement guide enabled.
+type Presentation struct {
+	ShowRanges            bool  `json:"show_ranges"`
+	PlacementWeaponRanges *bool `json:"placement_weapon_ranges,omitempty"`
+}
+
 // Profile is one content set's load-time description.
 type Profile struct {
 	// Name is the profile's selector: the word `--content-profile` takes and
@@ -68,8 +75,9 @@ type Profile struct {
 	// directory this content set ships. Keys are the retail names in lower
 	// case; values are spelled as the content set spells them, though every
 	// lookup is case-insensitive anyway [02 §2].
-	Directories map[string]string `json:"layout"`
-	Limits      Limits            `json:"limits"`
+	Directories  map[string]string `json:"layout"`
+	Limits       Limits            `json:"limits"`
+	Presentation Presentation      `json:"presentation"`
 }
 
 // Layout returns the first-segment redirection this profile applies. The

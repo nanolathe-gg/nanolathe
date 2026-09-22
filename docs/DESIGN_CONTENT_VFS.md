@@ -769,9 +769,26 @@ path selecting a user-authored profile JSON file; the settings key
 saved preference, detection. Detection does not save its result as a preference,
 so switching mounted roots does not retain an automatically selected preset.
 An intentionally saved selector continues to override detection. The presets
-only describe loading; no named-mod check selects simulation behavior.
+describe loading and optional presentation defaults; no named-mod check selects
+simulation behavior.
 The displayless report, the simulation benchmark report, the windowed battle benchmark's scene metadata and the inventory probe
 carry the resolved name as `content_profile`.
+
+*Mod range-guide defaults (Nanolathe UI policy).* A profile may also include:
+
+```json
+"presentation": {
+  "show_ranges": false,
+  "placement_weapon_ranges": true
+}
+```
+
+Omitting these fields gives the values above. `show_ranges` seeds the existing
+process-only `+showranges` toggle; the player can toggle it thereafter without
+writing settings. `placement_weapon_ranges` controls the Modern renderer's
+automatic weapon guide during building placement. It does not disable explicit
+Shift + `+showranges` guides. These fields reach presentation only, never a tick
+or the catalog hash. See DESIGN_GPU_RENDERER §20 for the display contract.
 
 *Boundaries.* The layout rewrites the **first** segment only, matched
 case-insensitively like every other lookup (C7); a later segment of the same

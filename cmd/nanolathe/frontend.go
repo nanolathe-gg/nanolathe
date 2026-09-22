@@ -281,7 +281,7 @@ func (s battleHUDUIStage) DrawUI(c *client.Client, presented client.UIFrame) {
 // newGameShell builds the frontend state: the skirmish map list, the retail
 // resource set, and the opening panel used by the windowed entry.
 func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
-	shell := &gameShell{opts: opts, cs: cs, frontend: ui.NewFrontend(modeMenuMain)}
+	shell := &gameShell{opts: opts, cs: cs, frontend: ui.NewFrontend(modeMenuMain), showRanges: cs.presentation.ShowRanges}
 	// The map census and the TNT reader are typed on the concrete overlay,
 	// so they read `maps` unmapped; no content profile renames it, and a test
 	// in this package asserts that (DESIGN_CONTENT_VFS §5 "Content profiles").

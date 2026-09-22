@@ -98,11 +98,17 @@ func tacticalRanges(d *content.UnitDef, enabled [3]bool, preview, activated bool
 }
 
 func (b *battleSession) updateTacticalRangeInput(in *input.State, focused bool) {
+	b.tacticalRangesUnfocused = !focused
 	b.tacticalRangesHeld = focused && in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeyShift)
 }
 
 func (b *battleSession) tacticalRangesActive(c *client.Client) bool {
-	return b != nil && b.modernDrag == nil && c != nil && c.TacticalRangesAvailable() && b.tacticalRangesHeld && b.cat != nil && b.battleState().Modal() == ui.BattleModalClosed && !b.isResultVisible() && !b.isTalkGUIActive()
+	if b == nil || b.modernDrag != nil || c == nil || !c.TacticalRangesAvailable() || b.tacticalRangesUnfocused || b.cat == nil || b.battleState().Modal() != ui.BattleModalClosed || b.isResultVisible() || b.isTalkGUIActive() {
+		return false
+	}
+	state := b.battleState().Input
+	placement := state.BuildDef != "" && b.overWorld(state.PointerX, state.PointerY) && (b.rangePreferences.PlacementWeaponRanges == nil || *b.rangePreferences.PlacementWeaponRanges)
+	return b.tacticalRangesHeld && b.rangesShown() || placement
 }
 
 // Suppress capability differences that could identify a commander decoy. The
@@ -130,19 +136,22 @@ func (b *battleSession) visitTacticalRanges(c *client.Client, f *frame.Frame, vi
 	}
 	state := b.battleState().Input
 	overWorld := b.overWorld(state.PointerX, state.PointerY)
-	c.VisitTacticalUnits(f, func(v frame.UnitView) {
-		if !(v.Owner == f.ViewingPlayer && v.Flags&hud.SelectionFlag != 0) && !(overWorld && !state.DragActive && v.Slot == b.footerHoverUnit) {
-			return
-		}
-		d, ok := b.cat.Unit(v.DefName)
-		if !ok || d == nil || (v.Owner != f.ViewingPlayer && tacticalCommanderAppearance(d)) {
-			return
-		}
-		ranges := tacticalRanges(d, v.EnabledWeaponSlots, false, v.Activated)
-		for _, r := range ranges.values[:ranges.n] {
-			visit(v.X, v.Y, v.Z, r)
-		}
-	})
+	allRanges := b.tacticalRangesHeld && b.rangesShown()
+	if allRanges {
+		c.VisitTacticalUnits(f, func(v frame.UnitView) {
+			if !(v.Owner == f.ViewingPlayer && v.Flags&hud.SelectionFlag != 0) && !(overWorld && !state.DragActive && v.Slot == b.footerHoverUnit) {
+				return
+			}
+			d, ok := b.cat.Unit(v.DefName)
+			if !ok || d == nil || (v.Owner != f.ViewingPlayer && tacticalCommanderAppearance(d)) {
+				return
+			}
+			ranges := tacticalRanges(d, v.EnabledWeaponSlots, false, v.Activated)
+			for _, r := range ranges.values[:ranges.n] {
+				visit(v.X, v.Y, v.Z, r)
+			}
+		})
+	}
 	if state.BuildDef == "" || !overWorld {
 		return
 	}
@@ -154,6 +163,11 @@ func (b *battleSession) visitTacticalRanges(c *client.Client, f *frame.Frame, vi
 	y := numeric.Fixed(int64(state.BuildSiteH) << 16)
 	ranges := tacticalRanges(d, [3]bool{}, true, true)
 	for _, r := range ranges.values[:ranges.n] {
+		// Without +showranges, placement keeps only weapon planning guides.
+		// Interceptors use their authored coverage rather than ordinary range (§20).
+		if !allRanges && r.kind != tacticalWeapon && r.kind != tacticalIntercept {
+			continue
+		}
 		visit(x, y, z, r)
 	}
 }

@@ -37,7 +37,8 @@ type contentSet struct {
 	// without a catalog, takes them, so the window admits exactly the content
 	// the displayless command does (docs/DESIGN_CONTENT_VFS.md §5 "Content
 	// profiles"). A retail content set resolves to the retail baseline.
-	limits content.Limits
+	limits       content.Limits
+	presentation contentprofiles.Presentation
 
 	root         string
 	roots        []string
@@ -125,6 +126,7 @@ func openContent(opts Options) (*contentSet, error) {
 		unmappedMount: fileSystem,
 		profile:       profile.Name,
 		limits:        content.LimitsFromProfile(profile.Limits),
+		presentation:  profile.Presentation,
 		root:          roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes(),
 	}
 

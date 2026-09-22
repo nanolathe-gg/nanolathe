@@ -1973,7 +1973,7 @@ as local chat. The implemented handlers are:
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
 | `Gamma n` | apply the command factor to the shared output palette and persist the signed integer; startup and slider callbacks use their distinct factor conversion |
 | `Clock` | toggle and persist the stand-alone battle-clock bit; draw the committed unsigned tick in the late HUD layer |
-| `ShowRanges` | toggle detailed terrain-following range rings and labels inside the existing Shift-held queue overlay; retained by the shell across battles, without settings or simulation writes |
+| `ShowRanges` | toggle detailed terrain-following range rings and labels inside the existing Shift-held queue overlay and the Modern tactical guides (DESIGN_GPU_RENDERER §20); initially off unless the content profile opts in, retained by the shell across battles, without settings or simulation writes |
 | `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `MusicMode n` | set the signed desired category through the existing music controller; fade/delay timers use the busy presentation pump and do not write settings |

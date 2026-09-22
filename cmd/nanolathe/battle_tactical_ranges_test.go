@@ -84,11 +84,11 @@ func TestTacticalPlacementGuideUsesProspectiveProductAndSnappedSite(t *testing.T
 		t.Fatal(err)
 	}
 	cam := &camera.Camera{Zoom: camera.ZoomUnit / 2, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
-	cat := &content.Catalog{Units: map[string]*content.UnitDef{"turret": {Weapon1Def: &content.WeaponDef{ID: 1, Range: 300}}}}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"turret": {RadarDistance: 600, Weapon1Def: &content.WeaponDef{ID: 1, Range: 300}}}}
 	cl.SetCamera(cam)
 	cl.SetEnhanced(true)
 	cl.SetStrategicIconCatalog(client.NewStrategicIconCatalog(cat))
-	b := &battleSession{cat: cat, cam: cam, battleUI: ui.NewProductionBattleState(), tacticalRangesHeld: true}
+	b := &battleSession{cat: cat, cam: cam, battleUI: ui.NewProductionBattleState()}
 	state := b.battleState()
 	state.ArmPlacement("turret", 2, 3)
 	state.Input.PointerX, state.Input.PointerY = 300, 200
@@ -113,12 +113,28 @@ func TestTacticalPlacementGuideUsesProspectiveProductAndSnappedSite(t *testing.T
 		t.Helper()
 		b.visitTacticalRanges(cl, &frame.Frame{}, func(_, _, _ numeric.Fixed, _ tacticalRange) { t.Fatal("inactive overlay emitted a guide") })
 	}
+	// The mod may hide the automatic weapon guide; the explicit command still
+	// exposes all categories while Shift is held.
+	disabled := false
+	b.rangePreferences.PlacementWeaponRanges = &disabled
+	noGuide()
+	b.dispatchLocalCommand("+showranges")
+	noGuide() // The command does not bypass Shift.
+	b.tacticalRangesHeld = true
+	var kinds []tacticalRangeKind
+	b.visitTacticalRanges(cl, &frame.Frame{}, func(_, _, _ numeric.Fixed, r tacticalRange) { kinds = append(kinds, r.kind) })
+	if !reflect.DeepEqual(kinds, []tacticalRangeKind{tacticalWeapon, tacticalRadar}) {
+		t.Fatalf("explicit placement guides = %v", kinds)
+	}
+	b.dispatchLocalCommand("+showranges")
+	noGuide()
+	b.rangePreferences.PlacementWeaponRanges = nil
 	state.Input.PointerX = 10
 	noGuide()
 	state.Input.PointerX = 300
-	b.tacticalRangesHeld = false
+	b.updateTacticalRangeInput(nil, false)
 	noGuide()
-	b.tacticalRangesHeld = true
+	b.updateTacticalRangeInput(nil, true)
 	cl.SetEnhanced(false)
 	noGuide()
 }
@@ -142,6 +158,10 @@ func TestTacticalHoverDoesNotStickThroughSelectionDrag(t *testing.T) {
 		b.visitTacticalRanges(cl, f, func(_, _, _ numeric.Fixed, _ tacticalRange) { n++ })
 		return n
 	}
+	if count() != 0 {
+		t.Fatal("default Shift hover exposed ranges before +showranges")
+	}
+	b.dispatchLocalCommand("+showranges")
 	if count() != 1 {
 		t.Fatal("hovered own unit has no range")
 	}
@@ -152,5 +172,20 @@ func TestTacticalHoverDoesNotStickThroughSelectionDrag(t *testing.T) {
 	f.Units[0].Flags |= hud.SelectionFlag
 	if count() != 1 {
 		t.Fatal("drag suppressed selected-unit range")
+	}
+}
+
+// The command remains process-only and survives entering the next battle.
+func TestShowRangesShellLifetime(t *testing.T) {
+	shell := &gameShell{}
+	first := &battleSession{shell: shell}
+	first.dispatchLocalCommand("+showranges")
+	next := &battleSession{shell: shell}
+	if !next.rangesShown() {
+		t.Fatal("battle transition lost +showranges")
+	}
+	next.dispatchLocalCommand("+showranges")
+	if first.rangesShown() {
+		t.Fatal("second command did not disable ranges")
 	}
 }

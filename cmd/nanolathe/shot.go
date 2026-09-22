@@ -274,6 +274,7 @@ func runShot(opts Options, cs *contentSet) error {
 	// Capture-only held input and a prospective product let reviewers inspect
 	// the same tactical guides and placement adapter as the window (§20).
 	// No construction order is submitted and no extra tick is needed.
+	b.tacticalRangesUnfocused = false // The windowless capture supplies focused input explicitly.
 	b.tacticalRangesHeld = opts.ShotShift
 	if opts.ShotBuild != "" {
 		def, ok := b.cat.Unit(opts.ShotBuild)

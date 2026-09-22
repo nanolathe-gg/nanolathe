@@ -217,3 +217,22 @@ func TestContentSelectorPrecedenceAndDetectionDoesNotPersist(t *testing.T) {
 		t.Fatalf("explicit profile = %q", cs.profile)
 	}
 }
+
+func TestContentProfileRangePreferences(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	path := filepath.Join(t.TempDir(), "profile.json")
+	// This authored install uses the Zero directory names; the custom profile
+	// carries UI policy through the same mount boundary as its layout.
+	err := os.WriteFile(path, []byte(`{"name":"custom","layout":{"gamedata":"ZGameDat"},"presentation":{"show_ranges":true,"placement_weapon_ranges":false}}`), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, err := openContent(Options{Roots: []string{authorRenamedInstall(t)}, ContentProfile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if !cs.presentation.ShowRanges || cs.presentation.PlacementWeaponRanges == nil || *cs.presentation.PlacementWeaponRanges {
+		t.Fatalf("profile lost UI defaults: %+v", cs.presentation)
+	}
+}

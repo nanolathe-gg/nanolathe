@@ -3190,16 +3190,35 @@ deliberately **not** one of the five `Effects` families of §30.
 
 ### 20.1 Presentation policy
 
-Holding Shift at any modern-renderer zoom, including 1× and 2×, draws ranges for
-selected own units and the hovered identified unit. An armed build product also
-shows its prospective ranges at the snapped site, including an invalid site while
-the player repositions it. This is an Enhanced UI choice, not a retail hotkey or
-an authoritative coverage calculation. It uses the product definition, footprint
-centre and validated preview height; arming or displaying a guide never submits a
-construction order. Releasing the key, losing focus, switching to classic,
-opening a modal or result screen, or entering chat hides the guides, and Shift
-retains its existing selection and command-queue handling. A single-line on-screen
-legend names only the categories present, in their guide colours.
+The general range guides start **off**. `+showranges` toggles the existing
+process-only switch; while enabled, holding Shift at any modern-renderer zoom,
+including 1× and 2×, draws ranges for selected own units and the hovered
+identified unit. The classic renderer retains the retail Shift queue overlay
+[07 R-P0-11 §3]. The command never bypasses Shift for general ranges.
+
+**Nanolathe Modern presentation policy:** an armed build product keeps its
+weapon range guide at the snapped site without requiring Shift or `+showranges`,
+including an invalid site while the player repositions it. Interceptor weapons
+use their authored coverage guide. Sensor, jammer and builder guides require
+`+showranges` and Shift, including during placement. This is a Modern renderer
+preference, independent of the Modern / Strict 3.1 simulation rule set; the
+classic renderer has no automatic placement guide.
+
+A content profile's optional `presentation` block configures `show_ranges`
+(default false) and `placement_weapon_ranges` (default true when omitted).
+The former seeds the shell or direct battle once; subsequent `+showranges`
+toggles survive battles in that shell without settings writes. The latter
+controls only the automatic placement exception: an explicit `+showranges`
+with Shift still shows the full set. Shipped profiles use these defaults.
+These are Nanolathe UI defaults, not historical mod or retail claims.
+
+The overlay uses the product definition, footprint centre and validated preview
+height; arming or displaying a guide never submits a construction order or
+changes RNG, resources or authoritative state. Losing focus, switching to
+classic, opening a modal or result screen, entering chat, or starting a modern
+drag hides the guides. Shift retains its selection and command-queue handling.
+A single-line on-screen legend names only the categories present, in their
+guide colours.
 
 | Guide | Ink | Radius source |
 |---|---|---|
@@ -3255,15 +3274,17 @@ clipped to the battle viewport before recording. Wide integer coordinates avoid
 long-range wrap; only clipping ratios use transient floating point.
 Screen-adaptive 32..512 chords per ring bound tessellation, including huge
 authored ranges. These bounds, the dash pattern and the colours are Enhanced
-presentation constants. The Shift-off path does not resolve colours, visit
-targets or record range lines.
+presentation constants. With general ranges disabled and no enabled placement
+preview, the overlay does not resolve colours, visit targets or record range lines.
 
-Focused tests cover inactive placeholder weapons, independent slot admission,
-interceptor versus stockpile data, deduplication, field narrowing, held-key
+Focused tests cover the default-off command gate, its shell lifetime, mod UI
+defaults, the weapon-only placement exception, inactive placeholder weapons,
+independent slot admission, interceptor versus stockpile data, deduplication, field narrowing, held-key
 release and focus loss, prospective product and site selection, invalid
 placement, classic fallback, all-zoom committed visibility, terrain projection,
 viewport clipping, bounded long-range geometry and pre-icon draw ordering.
-`--shot-shift --shot-select` captures selected ranges; `--shot-build <name>`
+`--shot-shift --shot-select` captures selected ranges when the content profile
+sets `presentation.show_ranges` to true; `--shot-build <name>`
 previews a named product beside the first selection, or at the world viewport
 centre without a selection, without an order. The capture switches apply after
 simulation and zoom setup, so matched scenes retain the same simulation state.

@@ -175,7 +175,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	})
 	set.BoolVar(&opts.AutoRemaster, "auto-remaster", true, "synthesize the detail view's 2x terrain and feature art at load time; off leaves every asset to nearest doubling")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --zoom (default the screen centre)")
-	set.BoolVar(&opts.ShotShift, "shot-shift", false, "hold Shift for tactical range guides in --shot")
+	set.BoolVar(&opts.ShotShift, "shot-shift", false, "hold Shift for queue overlays and enabled range guides in --shot")
 	set.StringVar(&opts.ShotBuild, "shot-build", "", "preview this unit beside the first selection or at viewport centre in --shot (no construction order)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
 	set.StringVar(&opts.BattleBenchmark, "battle-benchmark", "", "run the seeded live battle benchmark into a new output directory")
