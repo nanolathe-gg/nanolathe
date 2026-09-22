@@ -51,11 +51,13 @@ func (c *Client) emitDebrisTrails(v frame.DebrisView) (smoke, fire int) {
 	}
 	s := &c.debrisTrails
 	// The per-slot stamp holds the producers to one run per committed tick. A
-	// slot outside the fixed debris table is not stampable, so it is refused
-	// rather than emitted unstamped: an unstamped piece would produce a
-	// container on every rendered frame of the tick.
-	if v.Slot < 0 || v.Slot >= len(s.emitted) {
+	// published slot can exceed the retail capacity under CP-LIM-1. Grow the
+	// retained stamp table when such a slot first appears.
+	if v.Slot < 0 {
 		return 0, 0
+	}
+	if v.Slot >= len(s.emitted) {
+		s.emitted = append(s.emitted, make([]uint32, v.Slot+1-len(s.emitted))...)
 	}
 	if s.emitted[v.Slot] == c.frameTick+1 {
 		return 0, 0

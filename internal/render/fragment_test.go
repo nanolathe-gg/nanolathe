@@ -14,6 +14,30 @@ type fragmentImpactRecorder struct {
 	appendOK    bool
 }
 
+func TestConfiguredFragmentPoolUsesRoundRobinFirstFree(t *testing.T) {
+	community := NewFixedEffectPool(3)
+	for _, want := range []int{0, 1} {
+		got := community.firstFreeFragment()
+		if got != want {
+			t.Fatalf("round-robin slot = %d, want %d", got, want)
+		}
+		community.fragments[got].live = true
+	}
+	community.releaseFragment(1)
+	if got := community.firstFreeFragment(); got != 2 {
+		t.Fatalf("round-robin reused low hole at %d, want cursor slot 2", got)
+	}
+
+	var retail FixedEffectPool
+	retail.ensureStorage()
+	retail.fragments[0].live = true
+	retail.fragments[1].live = true
+	retail.releaseFragment(1)
+	if got := retail.firstFreeFragment(); got != 0 {
+		t.Fatalf("retail first-free slot = %d, want lowest hole 0", got)
+	}
+}
+
 func (r *fragmentImpactRecorder) GroundFragmentImpact(GroundFragmentImpact) {
 	r.groundCalls++
 	r.liveAtCall = r.pool.fragments[0].live && r.pool.records[FixedEffectCap-1].FragmentSlot == 1

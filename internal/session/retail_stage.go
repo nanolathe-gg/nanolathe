@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -24,11 +26,13 @@ import (
 // battle-entry random seeds. Retail saves omit both streams [08 "Scheduler
 // and random state in saves"] [01 R-CORE-02].
 type RetailLoadDeps struct {
-	Gameplay gameplay.Mode
-	FS       vfs.FSOps
-	Catalog  *content.Catalog
-	SimSeed  uint32
-	CRTSeed  uint32
+	BuilderOptions   *orders.BuilderOptions
+	CommunitySources CommunitySources
+	Gameplay         gameplay.Mode
+	FS               vfs.FSOps
+	Catalog          *content.Catalog
+	SimSeed          uint32
+	CRTSeed          uint32
 	// UnitLimit is the configured limit before loading. Strict 3.1 uses it
 	// for skirmish pool sizing [08 R-ENTRY-01 §6]. Modern prefers a present
 	// Summary.maxunits; see DESIGN_SESSIONS_AI_SAVE "Modern save unit limits".
@@ -59,6 +63,10 @@ type RetailBattleStage struct {
 // session. Feature/terrain restoration precedes D1 unit allocation; unit body
 // fixups are owned by later persistence stages [08 R-SAVE-02 §11].
 func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage, error) {
+	entryFeatures, err := ResolveCommunity(deps.Gameplay, deps.CommunitySources)
+	if err != nil {
+		return nil, err
+	}
 	preflight, err := PreflightRetailLoad(bank)
 	if err != nil {
 		return nil, err
@@ -81,6 +89,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// battle owns its copies before any forced unit allocation or fix-up
 	// [08 R-SAVE-WEAPON-01].
 	cat = cat.Clone()
+	cat = prepareCommunityWeapons(cat, deps.Gameplay, entryFeatures)
 	m, err := loadRetailStageMission(deps.FS, image.Summary)
 	if err != nil {
 		return nil, fmt.Errorf("session: retail mission resolution: %w", err)
@@ -99,6 +108,9 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	sessionKind := sessionKindCampaign
 	if image.Summary.Gametype == GametypeMultiplayer {
 		sessionKind = sessionKindSkirmish
+	}
+	if entryFeatures.UnitLimit != 0 {
+		deps.UnitLimit = entryFeatures.UnitLimit
 	}
 	poolRecords, err := retailStageUnitLimit(image.Summary, deps, m)
 	if err != nil {
@@ -140,17 +152,20 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// [08 "Scheduler and random state in saves"] [01 R-CORE-02].
 	clk := &clock.State{}
 	s := &Session{
-		Gameplay:     deps.Gameplay.Normalize(),
-		State:        StateBattle,
-		Catalog:      cat,
-		World:        terrain,
-		Mission:      m,
-		Clock:        clk,
-		Snapshot:     frame.NewBuffer(),
-		Units:        unitsWorld,
-		Econ:         &economy.Service{},
-		Latch:        NewEndLatch(),
-		CampaignSlot: m.CampaignIndex,
+		Gameplay:         deps.Gameplay.Normalize(),
+		CommunitySources: deps.CommunitySources,
+		Community:        entryFeatures,
+		EntryCommunity:   entryFeatures,
+		State:            StateBattle,
+		Catalog:          cat,
+		World:            terrain,
+		Mission:          m,
+		Clock:            clk,
+		Snapshot:         frame.NewBuffer(),
+		Units:            unitsWorld,
+		Econ:             &economy.Service{},
+		Latch:            NewEndLatch(),
+		CampaignSlot:     m.CampaignIndex,
 		Skirmish: SkirmishConfig{
 			MapName: image.Summary.MapName, NumPlayers: int(image.Summary.Players),
 			Difficulty: int(image.Summary.Difficulty), Mapping: int(image.Summary.Mapping),
@@ -201,6 +216,9 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err := createAndBindServices(s); err != nil {
 		return nil, fmt.Errorf("session: retail shell composition: %w", err)
 	}
+	if err := s.initializeBuilderOptions(deps.BuilderOptions); err != nil {
+		return nil, err
+	}
 	// The per-player reset that builds every AI record belongs to the world
 	// rebuild, which runs "for every kind and for loads alike" — before the
 	// restoration dispatcher, and before any unit exists [08 R-ENTRY-01 §3
@@ -216,7 +234,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err := stage.restoreFeatures(); err != nil {
 		return nil, err
 	}
-	stable, err := reserveRetailUnits(s.Units, cat, image.Units.Records)
+	stable, err := reserveRetailUnits(s.Units, cat, image.Units.Records, s.Build)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +333,7 @@ func loadRetailStageMission(fs vfs.FSOps, summary save.Summary) (*mission.Missio
 	return mission.LoadCampaignWithSink(fs, campaign.Path, idx, int(summary.Difficulty), int(summary.Players), nil)
 }
 
-func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.UnitRecord) (map[uint16]pool.Handle, error) {
+func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.UnitRecord, build ...*construction.Service) (map[uint16]pool.Handle, error) {
 	if w == nil || cat == nil {
 		return nil, fmt.Errorf("session: retail unit reservation has nil world/catalog")
 	}
@@ -363,7 +381,12 @@ func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.Uni
 		x := numeric.Fixed(int64(int32(binary.LittleEndian.Uint32(rec.Data[0x2b:]))))
 		y := numeric.Fixed(int64(int32(binary.LittleEndian.Uint32(rec.Data[0x2f:]))))
 		z := numeric.Fixed(int64(int32(binary.LittleEndian.Uint32(rec.Data[0x33:]))))
-		h, err := w.CreateWithForcedSlot(def, rec.Data[0x20], x, y, z, pool.Handle(rec.StableID))
+		facing := units.FacingSouth
+		if len(build) != 0 && build[0] != nil {
+			heading := binary.LittleEndian.Uint16(rec.Data[0x39:]) // Existing saved heading [08 R-SAVE-02 §6].
+			facing = build[0].ResolveStructureFacing(def, units.FacingFromHeading(heading))
+		}
+		h, err := w.CreateWithForcedSlotFacing(def, rec.Data[0x20], x, y, z, pool.Handle(rec.StableID), facing)
 		if err != nil {
 			return nil, fmt.Errorf("session: retail unit %d forced slot %d: %w", rec.Number, rec.StableID, err)
 		}

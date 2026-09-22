@@ -18,6 +18,7 @@
 package movement
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"math"
 	"math/bits"
 	"strconv"
@@ -40,7 +41,9 @@ import (
 // One System is created per authoritative session and is the sole writer
 // of per-unit movement state for that world.
 type System struct {
-	Terrain *world.Terrain
+	// Community holds only this owner's projected feature answers (DESIGN_COMMUNITY_PATCH §3.1).
+	Community community.Features
+	Terrain   *world.Terrain
 	// Damage delivers cargo-cascade packets through the session intake [06 §12.1].
 	Damage func(uint32, combat.DamageInput) combat.DamageResult
 
@@ -1712,8 +1715,12 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	footX := profile.FootPrintX
 	footZ := profile.FootPrintZ
 	if building {
-		footX = int16(u.Def.FootprintX)
-		footZ = int16(u.Def.FootprintZ)
+		footX = u.FootprintSizeX
+		footZ = u.FootprintSizeZ
+		if footX <= 0 || footZ <= 0 {
+			orientedX, orientedZ := units.OrientedFootprint(u.Def, u.StructureFacing)
+			footX, footZ = int16(orientedX), int16(orientedZ)
+		}
 		if footX <= 0 {
 			footX = 1
 		}
@@ -1721,12 +1728,12 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			footZ = 1
 		}
 		var err error
-		yard, err = world.ParseYardMap(u.Def.YardMap, int(footX), int(footZ))
+		yard, err = units.OrientedYardMap(u.Def, u.StructureFacing)
 		if err != nil {
-			// ParseYardMap accepts every normalized building extent, so this is
-			// unreachable after the local extent normalization. Keep the map
-			// empty only if a future parser adds a data error; never substitute
-			// a mobile whole-rectangle stamp for a building.
+			// The oriented parser accepts every normalized building extent, so
+			// this is unreachable after the local normalization. Keep the map
+			// empty only if a future parser adds a data error; never substitute a
+			// mobile whole-rectangle stamp for a building.
 			yard = nil
 		}
 	}

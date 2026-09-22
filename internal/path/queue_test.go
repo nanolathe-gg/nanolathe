@@ -373,6 +373,21 @@ func TestSchedulerDefaultAndSetBase(t *testing.T) {
 	}
 }
 
+func TestSchedulerBattleStepAllowance(t *testing.T) {
+	s := NewScheduler(nil, nil)
+	if s.stepAllowance != retailStepAllowance {
+		t.Fatalf("default allowance = %d, want retail %d", s.stepAllowance, retailStepAllowance)
+	}
+	s.SetStepAllowance(66650)
+	if s.stepAllowance != 66650 {
+		t.Fatalf("configured allowance = %d, want 66650", s.stepAllowance)
+	}
+	s.SetStepAllowance(0)
+	if s.stepAllowance != retailStepAllowance {
+		t.Fatalf("zero allowance = %d, want retail %d", s.stepAllowance, retailStepAllowance)
+	}
+}
+
 func TestSchedulerUnsetUnitLimitIsInert(t *testing.T) {
 	calls := 0
 	s := &testScheduler{NewScheduler(func(Request, int32, int) WorkResult {

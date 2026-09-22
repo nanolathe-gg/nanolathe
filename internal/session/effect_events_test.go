@@ -18,7 +18,7 @@ func TestCommittedEffectsPreserveOrderedVisualEvents(t *testing.T) {
 	if !c.EmitShake(frame.Event{Tick: 4, Magnitude: 5, Lifetime: 10}) {
 		t.Fatal("admit shake")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c, 0)}
 	s.publication.effects.Advance(4, c.StagingEvents())
 	s.publishSnapshot(4)
 	cur := s.Snapshot.Current()
@@ -67,7 +67,7 @@ func TestCommittedEffectsPreserveMissingArtwork(t *testing.T) {
 	if !c.EmitExplosion(frame.Event{Tick: 1, Graphic: ""}) {
 		t.Fatal("admit")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c, 0)}
 	s.publication.effects.Advance(1, c.StagingEvents())
 	s.publishSnapshot(1)
 	cur := s.Snapshot.Current()
@@ -86,7 +86,7 @@ func TestCommittedNanolatheEffectsPreserveProducerEndpoints(t *testing.T) {
 	if !c.EmitNanolathe(frame.Event{Tick: 2, Source: 3, Target: 9, X: numeric.Fixed(30 << 16), TargetX: numeric.Fixed(10 << 16), EffectID: 6, Mode: 2}) {
 		t.Fatal("admit reclaim nano")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c, 0)}
 	s.publication.effects.Advance(2, c.StagingEvents())
 	s.publishSnapshot(2)
 	cur := s.Snapshot.Current()

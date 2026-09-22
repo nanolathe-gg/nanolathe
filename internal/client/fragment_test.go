@@ -71,10 +71,11 @@ func TestFragmentFixedWalkAndBothPackets(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		c, v, _ := fragmentDrawFixture()
 		c.geometryOnlyModels = modern
+		v.Slot = 3000 // Community fragment beyond the retail pool [CP-LIM-1].
 		later := v
 		later.Slot = 1
 		later.FrameIndex = 0
-		effects := []frame.EffectView{{FragmentSlot: 2, Strip: -1}, {FragmentSlot: 1, Strip: -1}}
+		effects := []frame.EffectView{{FragmentSlot: v.Slot, Strip: -1}, {FragmentSlot: 1, Strip: -1}}
 		stats := c.DrawEffectViews(effects, EffectDrawOptions{Fragments: []frame.FragmentView{later, v}})
 		if stats.Models != 2 {
 			t.Fatalf("modern=%v stats=%+v", modern, stats)

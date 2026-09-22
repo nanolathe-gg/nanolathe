@@ -27,7 +27,12 @@ const (
 // belongs to the service or request, never a cached rule implementation.
 // Contracts: DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding" and
 // "Modern construction-site yielding".
-type ModernRules struct{}
+type ModernRules struct{ CommunityRules }
+
+// BlockedSiteLimit preserves Modern clearance's existing deadline. D3 adopts
+// Community placement admission only; its longer kickout wait does not replace
+// the Modern yielding policy (DESIGN_COMMUNITY_PATCH §11).
+func (*ModernRules) BlockedSiteLimit(*Service) uint32 { return 10 }
 
 // YieldObstruction asks idle same-owner movers standing in the clearance
 // rectangle to walk to a locally proven free footprint. Selection, the

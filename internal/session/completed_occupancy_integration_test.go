@@ -118,7 +118,7 @@ func TestStrictCreateYardTransactionRestampsBeforeAttachment(t *testing.T) {
 	s := &Session{
 		World: terrain, Catalog: cat, Units: unitWorld,
 		rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true,
-		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 	}
 	s.Build = construction.NewService(terrain, cat, unitWorld, nil)
 	unitWorld.SetCOBSource(fs, globalCobLoader)

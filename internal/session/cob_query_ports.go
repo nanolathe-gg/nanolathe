@@ -29,6 +29,7 @@ func (s *Session) bindQueryPorts(binding *cob.Binding, u *units.Unit) {
 		return
 	}
 	vm := binding.VM
+	s.bindScriptPorts(vm, u)
 
 	// Ports 7 and 8 — the piece world point. The locator returns the world
 	// OFFSET (x, y, −z) and every consumer adds it to the unit position with no

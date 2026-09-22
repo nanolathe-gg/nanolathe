@@ -208,6 +208,8 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		}
 	case "gamma":
 		b.setGammaCommand(localCommandInt(words, 1))
+	case "bps":
+		b.bpsVisible = !b.bpsVisible
 	case "clock":
 		value := !b.clockShown()
 		b.clockVisible = value

@@ -37,7 +37,7 @@ func TestStatusProducerGateHasThreeClauses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &Session{
 				Clock:       &clock.State{GlobalTick: 7},
-				publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+				publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 			}
 			s.LocalOwner = 0
 			if got := int(s.ViewingOwner); got != 0 {
@@ -83,7 +83,7 @@ func TestStatusProducerGateHasThreeClauses(t *testing.T) {
 func TestArrivedStatusIsNotAPlayedSoundAtTheProducer(t *testing.T) {
 	s := &Session{
 		Clock:       &clock.State{GlobalTick: 7},
-		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 	}
 	if s.Audio != nil {
 		t.Fatal("fixture bound an audio service; the producer must not need one")

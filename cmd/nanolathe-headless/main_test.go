@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -43,10 +45,12 @@ func TestParseRejectsDifficultyOutsideTheVocabulary(t *testing.T) {
 
 // TestHeadlessSkirmishTakesTheDefaultUnitLimit checks the one thing this
 // command can get wrong about the unit pool: it composes a skirmish with no
-// persisted preferences at all, so the pool must be sized from the established
-// missing-value limit — `limit × 10 + 1` records, `limit` per slot
-// [05 R-SHARE-01 §7][08 R-SKIR-01 §6] — and not from the catalog's definition
-// count. Skipped when the retail install is absent.
+// persisted preferences at all, so Modern must take the mainline Community
+// limit while Strict 3.1 retains the established missing-value limit. In both
+// cases the pool has `limit × 10 + 1` records, `limit` per slot
+// [05 R-SHARE-01 §7][08 R-SKIR-01 §6][DESIGN_COMMUNITY_PATCH §4.1], and is
+// not sized from the catalog's definition count. Skipped when the retail
+// install is absent.
 func TestHeadlessSkirmishTakesTheDefaultUnitLimit(t *testing.T) {
 	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
@@ -55,23 +59,37 @@ func TestHeadlessSkirmishTakesTheDefaultUnitLimit(t *testing.T) {
 	}
 	defer fs.Close()
 
-	battle, err := headless.ComposeFreshBattle(headless.FreshBattleRequest{
-		Kind: headless.ScenarioDirectOTA, Map: "ashap plateau",
-		LocalOwner: -1, SimulationSeed: 7, CRTSeed: 7, FS: fs,
-	})
+	mainline, err := community.Table(community.Mainline)
 	if err != nil {
-		t.Fatalf("ComposeFreshBattle: %v", err)
+		t.Fatal(err)
 	}
-	limit := session.SkirmishDefaultUnitLimit
-	if got := battle.Session.Units.TotalRecords(); got != limit*10+1 {
-		t.Fatalf("TotalRecords = %d, want %d", got, limit*10+1)
-	}
-	if defs := len(battle.Session.Catalog.Units); defs == limit {
-		t.Fatalf("catalog definition count %d equals the limit, so this test cannot tell the two apart", defs)
-	}
-	start, end, ok := battle.Session.Units.SliceForPlayer(1)
-	if !ok || start != limit+1 || end != 2*limit {
-		t.Fatalf("player 1 slice = %d..%d (ok=%v), want %d..%d", start, end, ok, limit+1, 2*limit)
+	for _, tc := range []struct {
+		name string
+		mode gameplay.Mode
+		want int
+	}{
+		{name: "DefaultModern", want: mainline.UnitLimit},
+		{name: "Strict31", mode: gameplay.Strict31, want: session.SkirmishDefaultUnitLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			battle, err := headless.ComposeFreshBattle(headless.FreshBattleRequest{
+				Kind: headless.ScenarioDirectOTA, Map: "ashap plateau", Gameplay: tc.mode,
+				LocalOwner: -1, SimulationSeed: 7, CRTSeed: 7, FS: fs,
+			})
+			if err != nil {
+				t.Fatalf("ComposeFreshBattle: %v", err)
+			}
+			if got := battle.Session.Units.TotalRecords(); got != tc.want*10+1 {
+				t.Fatalf("TotalRecords = %d, want %d", got, tc.want*10+1)
+			}
+			if defs := len(battle.Session.Catalog.Units); defs == tc.want {
+				t.Fatalf("catalog definition count %d equals the limit, so this test cannot tell the two apart", defs)
+			}
+			start, end, ok := battle.Session.Units.SliceForPlayer(1)
+			if !ok || start != tc.want+1 || end != 2*tc.want {
+				t.Fatalf("player 1 slice = %d..%d (ok=%v), want %d..%d", start, end, ok, tc.want+1, 2*tc.want)
+			}
+		})
 	}
 }
 

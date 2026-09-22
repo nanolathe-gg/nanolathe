@@ -7,7 +7,6 @@ package headless
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,8 +16,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/benchlock"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -51,9 +52,12 @@ const (
 
 // SimBenchOptions is the whole benchmark request.
 type SimBenchOptions struct {
-	Gameplay gameplay.Mode `json:"gameplay"`
-	Root     string
-	Roots    []string
+	GameplayFeatures  community.Overrides   `json:"gameplayFeatures,omitempty"`
+	GameplayOverrides []community.Overrides `json:"gameplayOverrides,omitempty"`
+	ProfileFeatures   []community.Overrides `json:"-"`
+	Gameplay          gameplay.Mode         `json:"gameplay"`
+	Root              string
+	Roots             []string
 	// ContentProfile selects the mounted content set's directory table by
 	// name or profile path; empty detects it from the mounted markers
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
@@ -174,6 +178,9 @@ type SimBenchGC struct {
 
 // SimBenchReport is the whole run: scene, timings, census and provenance.
 type SimBenchReport struct {
+	Community          community.Features  `json:"gameplay_features"`
+	CommunityDigest    string              `json:"gameplay_features_digest"`
+	EntryCommunity     community.Features  `json:"entry_gameplay_features"`
 	Gameplay           gameplay.Mode       `json:"gameplay"`
 	Rules              string              `json:"rules"` // bound rule set name; Gameplay is only its base word
 	ContentProfile     string              `json:"content_profile,omitempty"`
@@ -270,6 +277,7 @@ func RunSimBenchmark(opts SimBenchOptions) (SimBenchReport, error) {
 		return SimBenchReport{}, err
 	}
 	opts.ContentProfile = profile.Name
+	opts.ProfileFeatures = profile.GameplaySources()
 
 	catalog, err := content.CompileWithOptions(view, content.Options{Limits: content.LimitsFromProfile(profile.Limits)})
 	if err != nil {
@@ -285,10 +293,13 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 	}
 	sess := composed.Session
 	report := SimBenchReport{
-		Gameplay:       opts.Gameplay.Normalize(),
-		Rules:          sess.Rules.Name,
-		ContentProfile: opts.ContentProfile,
-		SceneVersion:   SimBenchSceneVersion, Map: opts.Map,
+		Gameplay:        sess.Gameplay.Normalize(),
+		Rules:           sess.Rules.Name,
+		Community:       sess.Community,
+		EntryCommunity:  sess.EntryCommunity,
+		CommunityDigest: sess.Community.Digest(),
+		ContentProfile:  opts.ContentProfile,
+		SceneVersion:    SimBenchSceneVersion, Map: opts.Map,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed, Difficulty: opts.Difficulty,
 		WarmupTicks: opts.WarmupTicks, MeasuredTicks: opts.MeasureTicks,
 		PhaseTiming: opts.PhaseTiming, Scene: scene,
@@ -400,8 +411,9 @@ func ComposeSimBenchBattle(opts SimBenchOptions, fs vfs.FSOps, catalog *content.
 	opts.applyDefaults()
 	cfg := simBenchConfig(opts.Map, opts.UnitLimit)
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
-		Gameplay: opts.Gameplay,
-		Kind:     ScenarioDirectOTA, Map: opts.Map, LocalOwner: -1,
+		Gameplay:         opts.Gameplay,
+		CommunitySources: session.CommunitySources{Content: opts.ProfileFeatures, Player: opts.GameplayFeatures, CommandLine: opts.GameplayOverrides},
+		Kind:             ScenarioDirectOTA, Map: opts.Map, LocalOwner: -1,
 		Difficulty: opts.Difficulty, Skirmish: cfg,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed,
 		FS: fs, Catalog: catalog,
@@ -409,7 +421,7 @@ func ComposeSimBenchBattle(opts SimBenchOptions, fs vfs.FSOps, catalog *content.
 	if err != nil {
 		return FreshBattle{}, nil, err
 	}
-	scene, err := buildSimBenchScene(composed.Session, opts.Map, opts.UnitLimit)
+	scene, err := buildSimBenchScene(composed.Session, opts.Map, composed.Session.Units.UnitLimit())
 	if err != nil {
 		return FreshBattle{}, nil, err
 	}

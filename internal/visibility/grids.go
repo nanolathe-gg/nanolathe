@@ -30,6 +30,11 @@ type PlayerID uint8
 // wordMask is []uint16 length W*H, ten usable player bits per cell, one per 32 pixels [03 §3.1] C1.
 // byteGrids is per-player refcount [03 §3.1] C1.
 type Service struct {
+	// Rules is the bound gameplay-policy seam. Community is the immutable
+	// feature projection and alliance reader owned by this service.
+	Rules     Rules
+	Community CommunityState
+
 	terrain   *world.Terrain
 	mode      Mode
 	W, H      int32

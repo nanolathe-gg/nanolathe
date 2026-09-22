@@ -54,7 +54,7 @@ func bitmapExplosionFixture(t *testing.T, flags uint32, y numeric.Fixed) (*Sessi
 		rngSim:         rng.NewSimulation(71),
 		rngCrt:         rng.NewCRT(19),
 		rngInitialized: true,
-		publication:    newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+		publication:    newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 		strips:         newStripTable(),
 	}
 	w := units.NewSliced(8, cat)
@@ -283,7 +283,7 @@ func TestCOBBitmapExplosionPoolAndSeaBoundary(t *testing.T) {
 		t.Cleanup(func() { fs.Close() })
 		def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "bitmapunit"}, UnitName: "bitmapunit", ObjectName: "fixture", BMCode: 1, MaxDamage: 10, Limit: -1}
 		cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
-		s := &Session{Catalog: cat, World: minimalTerrain(), Clock: &clock.State{GlobalTick: 17}, rngSim: rng.NewSimulation(71), rngCrt: rng.NewCRT(19), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})), strips: newStripTable()}
+		s := &Session{Catalog: cat, World: minimalTerrain(), Clock: &clock.State{GlobalTick: 17}, rngSim: rng.NewSimulation(71), rngCrt: rng.NewCRT(19), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0), strips: newStripTable()}
 		s.World.SeaLevel = 10
 		for i := 0; i < render.EffectCapacity; i++ {
 			if !s.publication.effects.Admit(0, frame.Event{Kind: frame.KindExplosion, Tick: 1}) {

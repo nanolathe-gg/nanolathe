@@ -36,6 +36,8 @@ Allowed floating point, exhaustively:
 | Economy working-precision intermediates (production contributions and difficulty discounts, pool, stage remainders/ratios, carry terms, and promoted excess) | `float64` transient; narrowed at the named `float32` stores | `[05 R-ECO-01 §1]`, `[05 R-ECO-01 §3]`, `[05 R-ECO-01 §5]`, `[05 R-ECO-01 §6]` |
 | Economy cumulative totals and waste counters — including the opt-in trace copy of the same totals in `internal/economy/p28_parity_trace.go` (P28-OBS-00C; mirrored by `internal/architecture`'s parity ratchet as this row) | `float64` | `[05 "Stocks, counters, and waste"]` |
 | Construction remaining fraction and its proportional cost/health intermediates | `float32` | `[05 "Construction target state"]`, `[05 "Construction arithmetic"]` |
+| Community repair energy calculation | `float64` transient, narrowed by the shared integer conversion | `community-patch-engine.md CP-DMG-4`; enabled only through `DESIGN_COMMUNITY_PATCH` |
+| Community construction kickout geometry and invested-energy test | `float64` transient for bearings, circle/ray intersection, trigonometric sweep and `buildcostenergy × (1 − remaining)`; destinations narrow to whole world units and then 16.16 | `community-patch-engine.md CP-CON-1`; enabled only through `DESIGN_COMMUNITY_PATCH` |
 | Meteor parameter installation (spacing, duration and interval) | `float64` transient after the source `float32` store; signed-64 truncation retains the low 32 bits, with no intervening float store | `[06 §6.5]`, `[01 R-DET-01 §1]` |
 | Map tidal scalar, stored once at map load without fixed-point conversion | `float32` | `[03 R-TERR-01 §6]`, `[05 R-PROD-01 §4]` |
 | Wind scalar published to consumers (clamped to 1.0) | `float32` | `[01 §7.3]` |
@@ -284,9 +286,11 @@ cannot be reviewed, only trusted.
 
 ## I11 — Retail baseline and Modern gameplay
 
-The central gameplay mode selects **Modern** by default or opt-in **Strict
-3.1**, independently of the renderer. Every new intentional gameplay departure
-must be gated by this setting so Strict 3.1 disables it. No scattered
+The central gameplay mode selects **Modern** by default, **Community 3.9** for
+the sourced compatibility profile, or **Strict 3.1** for the retail baseline,
+independently of the renderer. The reserved derivation order is Strict 3.1 →
+Community 3.9 → Modern. Every new intentional gameplay departure must enter
+through the owning rule interface at its approved layer. No scattered
 compatibility flags or unapproved alternate behavior paths.
 
 **Modern differences are intentional and user-authorized.** Do not remove a
@@ -305,22 +309,31 @@ DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction
 owning package's rule interface, bound once from the central session mode as
 one named rule set — not through independently configurable flags; new and
 restored queues inherit the same set, and an unbound seam answers as retail.
+Community contracts and feature-table precedence are owned by
+DESIGN_COMMUNITY_PATCH. Its closed feature-table value is the one approved
+exception to the ban on independently configurable gameplay flags: content
+declares one table, composition resolves it once as part of the selected rule
+set, reports its digest and projects immutable copies to the service owners.
+Strict 3.1 ignores every table override. Community applies the resolved table;
+Modern builds on that result and then applies its own documented policies.
+This exception is not a second registry or a general capability system.
 
 The mode word also selects a **registered** set by name: a third-party set is
 compiled in through `mods/`, which only a command may import, and it composes
 the shipped implementations rather than reimplementing a policy. Such a set
 declares the reserved set it derives from. `Session.Gameplay` carries that
-base for strict-versus-modern questions; `Session.Rules.Name` carries the
-selected name, which headless and simulation-cost reports expose as `rules`.
+three-valued base; `Session.Rules.Name` carries the selected name, which
+headless and simulation-cost reports expose as `rules`.
 The retail save does not store the selected name. Strict 3.1 remains the
-retail baseline and no registered name can shadow either reserved set. The
+retail baseline and no registered name can shadow any reserved set. The
 seam list, the registry, the allocation and granularity rules, the switch timing and what a save knows about a set are in
 [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md).
 
 Extend the existing owning interface for a new gameplay decision, implement
-both reserved defaults, and test the Modern contract and Strict bypass,
-including RNG and resources. Add an owning-package seam only with a documented
-boundary that existing interfaces cannot serve, and bind it through the same
+all three reserved defaults through the derivation chain, and test each changed
+contract plus its lower-layer bypass, including RNG and resources. Add an
+owning-package seam only with a documented boundary that existing interfaces
+cannot serve, and bind it through the same
 `session.RuleSet`; no second registry or capability-selection system. Cached
 implementations hold no state, including through pointers: mutable request or
 session state belongs to its existing owner. Stateful rule objects require an

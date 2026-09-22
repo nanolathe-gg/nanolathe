@@ -3,14 +3,15 @@ package headless
 import (
 	"errors"
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"os"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/install"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -46,22 +47,24 @@ const (
 // camera and HUD from the completed authoritative session [08 R-ENTRY-01
 // §2–§8][I6].
 type FreshBattleRequest struct {
-	Gameplay        gameplay.Mode
-	SelectedSide    int
-	SelectedSideSet bool
-	Kind            ScenarioKind
-	Map             string
-	Mission         string
-	CampaignIndex   int
-	CampaignSlot    int
-	Difficulty      int
-	Skirmish        session.SkirmishConfig
-	LocalOwner      int
-	Watching        bool
-	SimulationSeed  uint32
-	CRTSeed         uint32
-	FS              vfs.FSOps
-	Catalog         *content.Catalog
+	BuilderOptions   *orders.BuilderOptions
+	CommunitySources session.CommunitySources
+	Gameplay         gameplay.Mode
+	SelectedSide     int
+	SelectedSideSet  bool
+	Kind             ScenarioKind
+	Map              string
+	Mission          string
+	CampaignIndex    int
+	CampaignSlot     int
+	Difficulty       int
+	Skirmish         session.SkirmishConfig
+	LocalOwner       int
+	Watching         bool
+	SimulationSeed   uint32
+	CRTSeed          uint32
+	FS               vfs.FSOps
+	Catalog          *content.Catalog
 	// ContentLimits are the table sizes the session's own catalog compile runs
 	// under when Catalog is nil. An adapter resolves them from the mounted
 	// content set's profile (docs/DESIGN_CONTENT_VFS.md §5 "Content
@@ -96,16 +99,19 @@ type FreshBattle struct {
 // Request is the displayless battle boundary. Seeds and the tick limit are
 // explicit so equal requests can be compared without consulting host time.
 type Request struct {
-	Gameplay       gameplay.Mode
-	Root           string   // fallback for callers supplying one root
-	Roots          []string // load order; omitted roots enable installation discovery
-	Map            string
-	Mission        string
-	Difficulty     int
-	SimulationSeed uint32
-	CRTSeed        uint32
-	TickLimit      uint32
-	UnitLimit      int // zero uses the skirmish default; campaign keeps authored maxunits
+	GameplayFeatures  community.Overrides
+	GameplayOverrides []community.Overrides
+	ProfileFeatures   []community.Overrides
+	Gameplay          gameplay.Mode
+	Root              string   // fallback for callers supplying one root
+	Roots             []string // load order; omitted roots enable installation discovery
+	Map               string
+	Mission           string
+	Difficulty        int
+	SimulationSeed    uint32
+	CRTSeed           uint32
+	TickLimit         uint32
+	UnitLimit         int // zero uses the skirmish default; campaign keeps authored maxunits
 	// ContentProfile selects the mounted content set's directory table and
 	// limits by name or by the path of a profile JSON file. Empty detects the
 	// profile from the mounted markers. Run overwrites it with the resolved
@@ -132,6 +138,7 @@ func Run(request Request) (Report, error) {
 		return Report{}, err
 	}
 	request.ContentProfile = profile.Name
+	request.ProfileFeatures = profile.GameplaySources()
 
 	for _, required := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
 		if _, err := view.Stat(required); err != nil {
@@ -169,17 +176,18 @@ func RunWithContent(request Request, fs vfs.FSOps, catalog *content.Catalog) (Re
 		cfg.UnitLimit = request.UnitLimit
 	}
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
-		Kind:           freshKind,
-		Gameplay:       request.Gameplay,
-		Skirmish:       cfg,
-		Map:            request.Map,
-		Mission:        request.Mission,
-		Difficulty:     request.Difficulty,
-		LocalOwner:     -1,
-		SimulationSeed: request.SimulationSeed,
-		CRTSeed:        request.CRTSeed,
-		FS:             fs,
-		Catalog:        catalog,
+		CommunitySources: session.CommunitySources{Content: request.ProfileFeatures, Player: request.GameplayFeatures, CommandLine: request.GameplayOverrides},
+		Kind:             freshKind,
+		Gameplay:         request.Gameplay,
+		Skirmish:         cfg,
+		Map:              request.Map,
+		Mission:          request.Mission,
+		Difficulty:       request.Difficulty,
+		LocalOwner:       -1,
+		SimulationSeed:   request.SimulationSeed,
+		CRTSeed:          request.CRTSeed,
+		FS:               fs,
+		Catalog:          catalog,
 	})
 	if err != nil {
 		return Report{}, err
@@ -204,9 +212,9 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	var sess *session.Session
 	switch kind {
 	case ScenarioCampaign:
-		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits}, request.Progress)
+		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits}, request.Progress)
 	case ScenarioDirectOTA, ScenarioSkirmish:
-		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{Progress: request.Progress, ContentLimits: request.ContentLimits})
+		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Progress: request.Progress, ContentLimits: request.ContentLimits})
 	default:
 		err = fmt.Errorf("headless: unsupported fresh battle kind %q", kind)
 	}

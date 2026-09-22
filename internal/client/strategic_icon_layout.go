@@ -200,7 +200,21 @@ func (c *Client) layoutStrategicMarkers(f *frame.Frame, viewer uint8, dst *strat
 				}
 			}
 			x, y := presentationPoint(view, int64(u.X)>>16, (int64(u.Z)>>16)-(int64(u.Y)>>17))
-			appendMark(drawlist.Marker{X: int32(x), Y: int32(y), Size: strategicIconSize, Index: index, Outline: outline, Selected: selected || (u.InstanceID != 0 && u.InstanceID == c.strategicHover), Alpha: alpha, Clip: viewport, HasClip: true, IconAtlas: icon.Atlas, IconRect: icon.Rect}, i+1)
+			hovered := u.InstanceID != 0 && u.InstanceID == c.strategicHover
+			highlighted := selected || hovered
+			iconOutline := outline
+			iconRect := icon.Rect
+			if icon.communityConfigured {
+				if selected {
+					iconOutline = icon.communitySelected
+				} else if hovered {
+					iconOutline = icon.communityHover
+					if icon.communityCircle && icon.communityHoverRect.W > 0 && icon.communityHoverRect.H > 0 {
+						iconRect = icon.communityHoverRect
+					}
+				}
+			}
+			appendMark(drawlist.Marker{X: int32(x), Y: int32(y), Size: strategicIconSize, Index: index, Outline: iconOutline, Selected: highlighted, Alpha: alpha, Clip: viewport, HasClip: true, IconAtlas: icon.Atlas, IconRect: iconRect}, i+1)
 		}
 	}
 }

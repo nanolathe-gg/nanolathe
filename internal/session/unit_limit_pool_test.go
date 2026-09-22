@@ -3,6 +3,7 @@
 package session
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -86,6 +87,7 @@ func TestSkirmishPoolSizedByUnitLimit(t *testing.T) {
 	t.Cleanup(func() { _ = fs.Close() })
 
 	cfg := DirectSkirmishConfig("ashap plateau")
+	cfg.Gameplay = gameplay.Strict31
 	cfg.RNGSimSeed = aiE2ESeed
 	cfg.RNGCrtSeed = aiE2ESeed
 	sess, err := NewSkirmishWithProgress(fs, nil, cfg, nil)

@@ -19,8 +19,6 @@ const (
 	debrisMinimumCharge = debrisFixedCharge
 	debrisSplitMinimum  = 9
 	debrisStopVelocity  = numeric.Fixed(2 << 16)
-	debrisPointCapacity = WholeDebrisStorageCharge/12 + 1
-	debrisBlockCapacity = WholeDebrisStorageCharge/debrisSplitMinimum + 1
 )
 
 // DebrisRequest is one already-seeded, whole-piece physical explosion. Model
@@ -150,16 +148,44 @@ type debrisBlock struct {
 // DebrisPool owns both bounded admission state and effect-phase physics for
 // whole-piece debris. It consumes no random stream [04 R-COB-04 §1][I4].
 type DebrisPool struct {
-	slots  [WholeDebrisSlots]debrisSlot
-	blocks [debrisBlockCapacity]debrisBlock
-	points [debrisPointCapacity][3]numeric.Fixed
-	count  int
-	cursor int
-	serial uint64
+	slots         []debrisSlot
+	blocks        []debrisBlock
+	points        [][3]numeric.Fixed
+	storageCharge int
+	count         int
+	cursor        int
+	serial        uint64
 }
 
 // NewDebrisPool creates an empty fixed whole-piece debris arena.
-func NewDebrisPool() *DebrisPool { return &DebrisPool{} }
+func NewDebrisPool() *DebrisPool { return NewDebrisPoolWithCapacity(0) }
+
+// NewDebrisPoolWithCapacity creates an empty debris arena sized at battle
+// entry. Zero selects retail's 100 slots. The backing store scales in the
+// same ratio as CP-LIM-1: stock bytes × slots ÷ stock slots.
+func NewDebrisPoolWithCapacity(slots int) *DebrisPool {
+	if slots <= 0 {
+		slots = WholeDebrisSlots
+	}
+	storageCharge := WholeDebrisStorageCharge * slots / WholeDebrisSlots
+	return &DebrisPool{
+		slots:         make([]debrisSlot, slots),
+		blocks:        make([]debrisBlock, storageCharge/debrisSplitMinimum+1),
+		points:        make([][3]numeric.Fixed, storageCharge/12+1),
+		storageCharge: storageCharge,
+	}
+}
+
+func (p *DebrisPool) ensureStorage() {
+	if p == nil || p.storageCharge > 0 {
+		return
+	}
+	retail := NewDebrisPool()
+	p.slots = retail.slots
+	p.blocks = retail.blocks
+	p.points = retail.points
+	p.storageCharge = retail.storageCharge
+}
 
 // Admit copies req into the first empty debris slot, then allocates its
 // bounded storage block. An oversized request has no representable arena block
@@ -168,11 +194,12 @@ func (p *DebrisPool) Admit(req DebrisRequest) bool {
 	if p == nil {
 		return false
 	}
+	p.ensureStorage()
 	slotIndex := p.firstEmptySlot()
 	if slotIndex < 0 {
 		return false
 	}
-	if len(req.Points) > (WholeDebrisStorageCharge-debrisMinimumCharge)/12 {
+	if len(req.Points) > (p.storageCharge-debrisMinimumCharge)/12 {
 		return false
 	}
 	charge := len(req.Points)*12 + debrisFixedCharge
@@ -358,11 +385,11 @@ func (p *DebrisPool) firstEmptySlot() int {
 }
 
 func (p *DebrisPool) allocateBlock(charge, slot int) (blockIndex, start int, ok bool) {
-	if charge < debrisMinimumCharge || charge > WholeDebrisStorageCharge {
+	if charge < debrisMinimumCharge || charge > p.storageCharge {
 		return 0, 0, false
 	}
 	p.ensurePartition()
-	if p.blocks[p.cursor].start+charge > WholeDebrisStorageCharge {
+	if p.blocks[p.cursor].start+charge > p.storageCharge {
 		// Clearing the tail preserves every free/occupied boundary. A later
 		// allocation may absorb a sub-nine-charge free partition [04 R-COB-04 §2].
 		for i := p.cursor; i < p.count; i++ {
@@ -420,7 +447,7 @@ func (p *DebrisPool) ensurePartition() {
 	if p.count != 0 {
 		return
 	}
-	p.blocks[0] = debrisBlock{start: 0, charge: WholeDebrisStorageCharge}
+	p.blocks[0] = debrisBlock{start: 0, charge: p.storageCharge}
 	p.count = 1
 	p.cursor = 0
 }

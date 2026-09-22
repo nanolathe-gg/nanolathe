@@ -67,6 +67,9 @@ const (
 	HumanShiftState
 	HumanCancelQueuedMove
 	HumanSpawn
+	HumanBuilderOptions
+	HumanCommunityOrderDrag
+	HumanCommunityKickout
 )
 
 // HumanSpawnCommand is the Modern testing command's captured world point.
@@ -116,11 +119,30 @@ type HumanCancelQueuedMoveCommand struct {
 	Sequence uint64
 	Handles  []pool.Handle
 }
+
+// HumanCommunityOrderDragCommand carries a committed queue receipt and the
+// final cursor point. InstanceID prevents a recycled unit slot from accepting
+// a delayed host gesture [community patch engine behavior §5.11].
+type HumanCommunityOrderDragCommand struct {
+	InstanceID uint64
+	Receipt    orders.CommunityOrderDragReceipt
+	Position   orders.CommunityOrderDragDestination
+}
+
+// HumanCommunityKickoutCommand is CP-CON-1's manual override gesture. The
+// destination deliberately has no placement-validation bit: the sourced path
+// rewrites the unit's orders directly.
+type HumanCommunityKickoutCommand struct {
+	Unit       pool.Handle
+	InstanceID uint64
+	X, Y, Z    numeric.Fixed
+}
 type HumanActivationCommand struct {
 	Unit             pool.Handle
 	Activate, Queued bool
 }
 type HumanMobileBuildCommand struct {
+	Facing  units.StructureFacing // CP-CON-5, clamped through the construction rule at issue.
 	Builder pool.Handle
 	Product string
 	WX, WZ  numeric.Fixed
@@ -219,34 +241,37 @@ type HumanGroupCommand struct {
 // HumanCommand is an immutable-at-boundary command value. EnqueueHumanCommand
 // copies handle slices and strings so callers may reuse their input buffers.
 type HumanCommand struct {
-	Gameplay gameplay.Mode
-	Spawn    HumanSpawnCommand
+	BuilderOptions HumanBuilderOptionsCommand
+	Gameplay       gameplay.Mode
+	Spawn          HumanSpawnCommand
 	// Sequence and DueTick are session-owned metadata. Callers leave both zero;
 	// EnqueueHumanCommand assigns them when the value enters the session queue.
-	Sequence         uint64
-	DueTick          uint32
-	Kind             HumanCommandKind
-	Selection        HumanSelectionCommand
-	Order            HumanOrderCommand
-	Stop             HumanStopCommand
-	CancelQueuedMove HumanCancelQueuedMoveCommand
-	Activation       HumanActivationCommand
-	MobileBuild      HumanMobileBuildCommand
-	FactoryBuild     HumanFactoryBuildCommand
-	CancelProduction HumanCancelProductionCommand
-	Stockpile        HumanStockpileCommand
-	BuildPage        HumanBuildPageCommand
-	Group            HumanGroupCommand
-	Stance           HumanStanceCommand
-	Cloak            HumanCloakCommand
-	SelfDestruct     HumanSelfDestructCommand
-	SetResource      HumanSetResourceCommand
-	SetLogo          HumanSetLogoCommand
-	View             HumanViewCommand
-	Give             HumanGiveCommand
-	Visibility       HumanVisibilityCommand
-	Meteor           HumanMeteorCommand
-	ShiftHeld        bool
+	Sequence           uint64
+	DueTick            uint32
+	Kind               HumanCommandKind
+	Selection          HumanSelectionCommand
+	Order              HumanOrderCommand
+	Stop               HumanStopCommand
+	CancelQueuedMove   HumanCancelQueuedMoveCommand
+	CommunityOrderDrag HumanCommunityOrderDragCommand
+	CommunityKickout   HumanCommunityKickoutCommand
+	Activation         HumanActivationCommand
+	MobileBuild        HumanMobileBuildCommand
+	FactoryBuild       HumanFactoryBuildCommand
+	CancelProduction   HumanCancelProductionCommand
+	Stockpile          HumanStockpileCommand
+	BuildPage          HumanBuildPageCommand
+	Group              HumanGroupCommand
+	Stance             HumanStanceCommand
+	Cloak              HumanCloakCommand
+	SelfDestruct       HumanSelfDestructCommand
+	SetResource        HumanSetResourceCommand
+	SetLogo            HumanSetLogoCommand
+	View               HumanViewCommand
+	Give               HumanGiveCommand
+	Visibility         HumanVisibilityCommand
+	Meteor             HumanMeteorCommand
+	ShiftHeld          bool
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -281,6 +306,16 @@ func (s *Session) EnqueueHumanCommand(c HumanCommand) error {
 func (s *Session) EnqueueHumanCommandWithSequence(c HumanCommand) (uint64, error) {
 	if s == nil {
 		return 0, fmt.Errorf("session: nil human-command owner")
+	}
+	if c.Kind == HumanBuilderOptions {
+		if err := s.validateBuilderOptions(c.BuilderOptions); err != nil {
+			return 0, err
+		}
+	}
+	if c.Kind == HumanGameplay {
+		if _, err := ResolveCommunity(c.Gameplay.Normalize(), s.CommunitySources); err != nil {
+			return 0, err
+		}
 	}
 	s.humanMu.Lock()
 	defer s.humanMu.Unlock()
@@ -602,7 +637,7 @@ func insertedBuildNode(before, after []*orders.Node) *orders.Node {
 	return nil
 }
 
-func stampHumanBuild(u *units.Unit, before []*orders.Node, product string, tick uint32, queued bool, goalY numeric.Fixed) {
+func stampHumanBuild(u *units.Unit, before []*orders.Node, product string, tick uint32, queued bool, goalY numeric.Fixed, facing ...units.StructureFacing) {
 	if u == nil {
 		return
 	}
@@ -621,6 +656,9 @@ func stampHumanBuild(u *units.Unit, before []*orders.Node, product string, tick 
 	node.Owner = u.Handle
 	node.CreationTick = tick
 	node.GoalY = goalY
+	if len(facing) != 0 {
+		node.BuildFacing = facing[0]
+	}
 	// The queue modifier is applied by the caller (purge or not before the
 	// insert); it is not stamped onto the record. Purge survivorship is the
 	// descriptor's static gate bit 2 and the insertion path already wrote it
@@ -732,6 +770,11 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		return
 	}
 	switch c.Kind {
+	case HumanBuilderOptions:
+		if s.validateBuilderOptions(c.BuilderOptions) == nil {
+			s.playerBuilderOptions[c.BuilderOptions.Owner] = c.BuilderOptions.Options
+		}
+		return
 	case HumanGameplay:
 		s.SetGameplay(c.Gameplay)
 		return
@@ -1017,6 +1060,11 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if u == nil || s.Catalog == nil {
 			return
 		}
+		def, ok := s.Catalog.Unit(c.MobileBuild.Product)
+		if !ok {
+			return
+		}
+		facing := s.Build.ResolveStructureFacing(def, c.MobileBuild.Facing)
 		s.bindOrderQueue(u)
 		if c.MobileBuild.Queued {
 			// A queued click on a point that already carries a queued order of
@@ -1038,14 +1086,14 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		id := mobileBuildKind(u)
 		if id != 0 && content.CanonicalKey(c.MobileBuild.Product) != "" {
 			n := orders.NewMobileBuildNode(s.Catalog, c.MobileBuild.Product, c.MobileBuild.WX, c.MobileBuild.WZ, 0, 0, tick, u.Handle, c.MobileBuild.Queued)
-			n.GoalY = c.MobileBuild.WY
+			n.GoalY, n.BuildFacing = c.MobileBuild.WY, facing
 			q := orders.QueueForUnit(u)
 			// Preserve the modern shortcut's existing same-site work without
 			// converting it into counted production. Mobile completion consumes
 			// the whole site order [04 R-ORD-01 §5].
 			if c.MobileBuild.AppendOnly && q.LenPrimary() != 0 {
 				tail := q.Primary()[q.LenPrimary()-1]
-				if tail.ID == id && tail.BuildDefKey == n.BuildDefKey && tail.GoalX == n.GoalX && tail.GoalZ == n.GoalZ {
+				if tail.ID == id && tail.BuildDefKey == n.BuildDefKey && tail.GoalX == n.GoalX && tail.GoalZ == n.GoalZ && tail.BuildFacing == n.BuildFacing {
 					tail.CreationTick, tail.GoalY = tick, n.GoalY
 					return
 				}
@@ -1210,6 +1258,10 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		}
 	case HumanCancelQueuedMove:
 		s.applyHumanCancelQueuedMove(c.CancelQueuedMove)
+	case HumanCommunityOrderDrag:
+		s.applyCommunityOrderDrag(c.CommunityOrderDrag)
+	case HumanCommunityKickout:
+		s.applyCommunityKickout(c.CommunityKickout, tick)
 	case HumanOrder:
 		if len(c.Order.Targets) != 0 {
 			s.applyHumanOrderBatch(c.Order, tick)

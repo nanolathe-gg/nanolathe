@@ -84,17 +84,16 @@ func PointTargetHeight(terrain *world.Terrain, x, z numeric.Fixed) numeric.Fixed
 //     with no mover [04 R-COLL-01 §1], and this build's mover records are
 //     created for the non-building units, i.e. the ones whose definition
 //     authors `bmcode` [04 R-PATH-01 §14];
-//   - the shooter's credited-kill count is STRICTLY GREATER THAN FIVE. The
-//     count is an unsigned 16-bit field and the lead gate is the only
-//     `>`-form consumer of it in the whole engine; every other one divides
-//     [06 R-DMG-01 §8]. A unit therefore starts leading on its sixth kill,
-//     one kill after the panel stops printing a number;
+//   - the selected veterancy rule admits the shooter's unsigned credited-kill
+//     word. Strict 3.1 requires it to be STRICTLY GREATER THAN FIVE; Community
+//     CP-UD-1 keeps the strict comparison but substitutes the first authored
+//     threshold. This remains the only `>`-form consumer [06 R-DMG-01 §8];
 //   - `weaponvelocity` is nonzero — it is the divisor of the flight time.
 //
 // The target's motion enters the firing solution here and nowhere else: no
 // spread term, no drift gate and no in-flight guidance reads it
 // [06 R-WPN-03 §3][06 §6.7].
-func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.WeaponDef) bool {
+func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.WeaponDef, services ...*Service) bool {
 	if shooter == nil || target == nil || slot == nil || w == nil {
 		return false
 	}
@@ -110,7 +109,11 @@ func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.W
 	// Unsigned, strict [06 §3.3][06 R-DMG-01 §8]. The field is a 16-bit
 	// unsigned counter that wraps at 65,536, so the comparison is made on the
 	// low sixteen bits and a wrapped count is small again.
-	if uint16(shooter.Kills) <= 5 {
+	var service *Service
+	if len(services) != 0 {
+		service = services[0]
+	}
+	if !service.veteranLeadAdmitted(shooter.Def, shooter.Kills) {
 		return false
 	}
 	return w.WeaponVelocity != 0
@@ -130,8 +133,8 @@ func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.W
 //	T2 = (int64(T) * 0xcccc) >> 16               ; 52,428/65,536 = 0.79998779…
 //	point.axis += int32((int64(velocity.axis) * T2) >> 16)
 //
-// The 0.8 factor and the six-kill threshold are read from the image, not
-// chosen [06 §3.3]. Note that this distance is THREE-dimensional while the
+// The 0.8 factor and Strict 3.1's six-kill threshold are read from the image,
+// not chosen [06 §3.3]. Note that this distance is THREE-dimensional while the
 // range test of the same section is planar — the two are different quantities
 // and neither may be substituted for the other.
 //
@@ -140,8 +143,8 @@ func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.W
 // 16.16, and the per-axis product converts it back against a per-tick
 // velocity. The addend is narrowed to a signed 32-bit word before it is added,
 // which is retail's store width for a coordinate.
-func PreFireLeadPoint(shooter, target *units.Unit, slot *units.Slot, w *content.WeaponDef, point Vec3) Vec3 {
-	if !PreFireLeadGate(shooter, target, slot, w) {
+func PreFireLeadPoint(shooter, target *units.Unit, slot *units.Slot, w *content.WeaponDef, point Vec3, services ...*Service) Vec3 {
+	if !PreFireLeadGate(shooter, target, slot, w, services...) {
 		return point
 	}
 	// Raw 16.16 deltas, wrapping as signed 32-bit before the conversion —
@@ -243,6 +246,8 @@ type Candidate struct {
 	// operand as the one inference of `toairweapon`'s reader census until
 	// [06 R-WPN-05 §1] closed it on the mover mode.
 	MoverMode uint8
+	// UnitMode is the position-committed unit-side mode for Community nottoair.
+	UnitMode uint8
 	// Floater and CanHover are the candidate definition's capability-word A
 	// bits 19 and 12, read only by the water branch [04 R-SPEC-01 §0][06 §3.1].
 	Floater, CanHover bool
@@ -298,6 +303,11 @@ func rngBoundForCandidate(dx, dz numeric.Fixed) uint32 {
 // Acquisition carries query and physical-gate operands plus the shared stream
 // for one slot acquisition [06 §3.1][06 §3.2].
 type Acquisition struct {
+	// Service and Weapon select the gameplay target gate. Fixtures that leave
+	// Service nil retain Strict 3.1; the authoritative slot builder supplies
+	// both without adding another mode or feature lookup to this hot path.
+	Service            *Service
+	Weapon             *content.WeaponDef
 	ShooterX, ShooterZ numeric.Fixed
 	// ShooterY is the shooter's world Y. The non-water branch tests its
 	// whole-unit word plus ShooterModelTop against the sea-level byte, strictly
@@ -522,10 +532,19 @@ func (a *Acquisition) admits(c Candidate) bool {
 		Y:         wholeYWord(c.Y),
 		ModelTop:  c.ModelTop,
 		MoverMode: c.MoverMode,
+		UnitMode:  c.UnitMode,
 		Floater:   c.Floater,
 		CanHover:  c.CanHover,
 	}
-	if !unitToUnitAdmitsBeforeRange(shooter, target, wholeYWord(a.SeaLevel), a.WaterWeapon, a.ToAir) {
+	if !a.Service.rules().AdmitTarget(TargetAdmission{
+		Service:     a.Service,
+		Weapon:      a.Weapon,
+		Shooter:     shooter,
+		Target:      target,
+		Sea:         wholeYWord(a.SeaLevel),
+		WaterWeapon: a.WaterWeapon,
+		ToAir:       a.ToAir,
+	}) {
 		return false
 	}
 	if !a.WaterWeapon && a.Ballistic {

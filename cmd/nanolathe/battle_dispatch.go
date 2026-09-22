@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 func snapshotUnitByHandle(f *frame.Frame, h pool.Handle) (frame.UnitView, bool) {
@@ -96,7 +97,15 @@ func (b *battleSession) DispatchMobileBuild(product string, wx, wy, wz numeric.F
 	return b.dispatchMobileBuild(product, wx, wy, wz, queued, false)
 }
 
+func (b *battleSession) DispatchMobileBuildFacing(product string, wx, wy, wz numeric.Fixed, queued bool, facing units.StructureFacing) error {
+	return b.dispatchMobileBuildFacing(product, wx, wy, wz, queued, false, facing)
+}
+
 func (b *battleSession) dispatchMobileBuild(product string, wx, wy, wz numeric.Fixed, queued, appendOnly bool) error {
+	return b.dispatchMobileBuildFacing(product, wx, wy, wz, queued, appendOnly, units.FacingSouth)
+}
+
+func (b *battleSession) dispatchMobileBuildFacing(product string, wx, wy, wz numeric.Fixed, queued, appendOnly bool, facing units.StructureFacing) error {
 	f, ok := b.currentSnapshot()
 	if !ok {
 		return fmt.Errorf("nanolathe: mobile build not dispatched: no committed frame")
@@ -109,7 +118,7 @@ func (b *battleSession) dispatchMobileBuild(product string, wx, wy, wz numeric.F
 		return fmt.Errorf("nanolathe: mobile build not dispatched: the committed command page names no builder the local player owns")
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanMobileBuild, MobileBuild: session.HumanMobileBuildCommand{
-		Builder: builder, Product: product, WX: wx, WY: wy, WZ: wz, Queued: queued, AppendOnly: appendOnly,
+		Facing: facing, Builder: builder, Product: product, WX: wx, WY: wy, WZ: wz, Queued: queued, AppendOnly: appendOnly,
 	}})
 }
 

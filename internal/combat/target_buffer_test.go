@@ -80,7 +80,7 @@ func referenceTargetBufferAcquisition(s *Service, shooter *units.Unit, w *units.
 			primary = append(primary, acquisitionCandidate(shooter, cand, 0, 0, catalog))
 		}
 	}
-	acq := slotAcquisition(shooter, shooter.SlotAt(0), 0, w, nil, nil, sim, catalog, 0, -1)
+	acq := slotAcquisition(nil, shooter, shooter.SlotAt(0), 0, w, nil, nil, sim, catalog, 0, -1)
 	acq.HasUpgrade = s.targets.gate[shooter.Owner]
 	if acq.HasUpgrade {
 		secondary := make([]Candidate, 0, len(s.targets.secondary[shooter.Owner]))

@@ -132,7 +132,7 @@ func TestMissionTriggerDeadlineLatchAndCue(t *testing.T) {
 	s.Mission.Units = []mission.UnitPlacement{{}}
 	s.Mission.Victory = []*triggers.Trigger{triggers.New(triggers.KindDestroyAllUnits, "")}
 	s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindDeathTimerRunsOut, "", triggers.SecondsToTicks(1000))}
-	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
+	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0)
 	s.Latch = NewEndLatch()
 	s.LocalOwner = 9 // prove the session table, not this adapter field, owns local identity.
 	for _, u := range s.Units.IterSliced() {
@@ -285,7 +285,7 @@ func TestCampaignCommanderDeathLatchesDefeatAtSixthDue(t *testing.T) {
 	// false while slot 1 has a live unit [08 R-TRIG-01 §6].
 	s.Mission.Victory = nil
 	s.Mission.Defeat = []*triggers.Trigger{triggers.New(triggers.KindCommanderKilled, "")}
-	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
+	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0)
 	s.Latch = NewEndLatch()
 	s.Econ.Players[0].WinLoseTime = 0
 

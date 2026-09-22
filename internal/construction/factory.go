@@ -9,6 +9,7 @@ import (
 	"math"
 
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -141,17 +142,23 @@ const (
 
 // Service holds the factory lifecycle dependencies [PLAN_08].
 type Service struct {
+	// Community holds only this owner's projected feature answers (DESIGN_COMMUNITY_PATCH §3.1).
+	Community community.Features
 	// Rules is the gameplay seam the session binds once per rule set; a nil
 	// field is the Strict 3.1 baseline. See rules.go for the decision and its
 	// contracts: DESIGN_ECONOMY_CONSTRUCTION, "Modern factory-exit yielding"
 	// and "Modern construction-site yielding".
 	Rules Rules
 
-	Terrain *world.Terrain
-	Catalog *content.Catalog
-	World   *units.World
-	Economy *economy.Service
-	Combat  *combat.Service
+	Terrain     *world.Terrain
+	Catalog     *content.Catalog
+	World       *units.World
+	Economy     *economy.Service
+	Combat      *combat.Service
+	repairBanks [][2]repairBank
+	repairWorld *units.World
+	// RepairBankFallbacks counts malformed or uncomposed Community repair calls.
+	RepairBankFallbacks uint64
 	// OrderBinding is the owning session context copied to every product and
 	// reconstructed/replaced queue [04 §3.3][06 §11.1].
 	OrderBinding *orders.QueueBinding
@@ -209,6 +216,10 @@ type Service struct {
 	// yard and are unaffected. When no movement driver is bound, callers must
 	// already be within nanolathe range.
 	Movement *movement.System
+	// CRTRandom is the session-owned CRT stream projection. CP-CON-1 consumes
+	// one bound-360 draw for every considered occupant, before choosing whether
+	// that occupant may move [community patch engine behavior §5.6].
+	CRTRandom func(bound uint32) uint32
 
 	// Per-session derived index for progress publication and the construction
 	// removal helper. Saved producer order targets rebuild it; retail's carrier
@@ -228,9 +239,13 @@ type Service struct {
 	// does carry for this service is the order record itself (phase, count,
 	// target), which internal/orders owns. There is no alternate Nanolathe save
 	// codec [I13]; do not invent a factory-only format.
-	placements      map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
-	messages        []string                        // verbatim diagnostics [05 C18][05 C21][05 C22]
-	admissions      []AdmissionDiagnostic           // bounded ring of state-2 outcomes, diagnostic only
+	placements map[pool.Handle]placementRecord // product -> occupancy footprint and immutable definition
+	// rotationCache owns derived yard maps for this session. Entries survive
+	// rule rebinding so live buildings retain their creation geometry.
+	rotationCache   map[rotationCacheKey]StructureGeometry
+	kickRecords     []kickRecord
+	messages        []string              // verbatim diagnostics [05 C18][05 C21][05 C22]
+	admissions      []AdmissionDiagnostic // bounded ring of state-2 outcomes, diagnostic only
 	admissionsStart int
 	admissionsTotal uint64
 	// DebugBuilderIdentity may read the session's existing publication identity
@@ -309,12 +324,13 @@ func (s *Service) registerGetBuilt(q *orders.Queue) {
 	q.SetOwnedHandler(s.getBuiltRow, s.boundGetBuilt)
 }
 
-// placementRecord is the occupancy rectangle and definition retained for a
-// stamped product. It holds no yard state: the clear pass reads none
-// [04 R-COLL-01 §4 "clear, in order"].
+// placementRecord retains the occupancy rectangle, definition and derived
+// yard orientation for a stamped product. The clear pass reads no yard state
+// [04 R-COLL-01 §4 "clear, in order"], while live restamps use the same yard.
 type placementRecord struct {
 	rect world.FootprintRect
 	def  *content.UnitDef
+	yard []world.YardCell // creation-derived orientation; nil for mobile units
 }
 
 // queueForUnit is the construction-owned queue admission point. Factory

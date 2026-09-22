@@ -4,6 +4,7 @@ package content
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -24,6 +25,35 @@ const (
 	MobilityAircraft
 )
 
+// FacingMask is the authored cardinal-facing set used by structure rotation.
+// The bit order follows the extension's rotation indices: S, E, N, W
+// research/extensions/community-patch-engine.md, CP-CON-5.
+type FacingMask uint8
+
+const (
+	FacingSouth FacingMask = 1 << iota
+	FacingEast
+	FacingNorth
+	FacingWest
+)
+
+const (
+	unitExtRotations uint16 = 1 << iota
+	unitExtVeterancyThresholds
+	unitExtVeterancyAccuracyBuffRate
+	unitExtTransportedExplodeAs
+	unitExtTransportedSelfDestructAs
+	unitExtPreviewPieces
+	unitExtPreviewPiecesS
+	unitExtPreviewPiecesE
+	unitExtPreviewPiecesN
+	unitExtPreviewPiecesW
+	unitExtPreviewFaceOpponent
+	unitExtPreviewObject3D
+)
+
+var defaultVeterancyThresholds = [...]uint32{5, 10, 15, 20, 25}
+
 // String returns the stable diagnostic spelling for a mobility domain.
 func (d MobilityDomain) String() string {
 	switch d {
@@ -42,6 +72,10 @@ func (d MobilityDomain) String() string {
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type UnitDef struct {
 	DefinitionHeader
+	// extensionKeys records source presence separately from the compiled value.
+	// Extension fields contribute to identity only when authored, preserving the
+	// retail catalog digest when every key is absent [DESIGN_COMMUNITY_PATCH §5].
+	extensionKeys uint16
 	// DiscoveryProvenance identifies the source of admission and the fields
 	// retained across secondary parsing; Provenance identifies the active FBI
 	// source for runtime fields [02 R-CAT-01 §§4–5].
@@ -78,6 +112,23 @@ type UnitDef struct {
 	BadTargetCategoryWSPE string // wspe_badTargetCategory string 100 default none [02 "Unit record"]
 	NoChaseCategory       string // noChaseCategory string 100 default none [02 "Unit record"]
 	AIWeight              string // ai_weight string 64, default empty; parsed by the AI profile grammar [02 "Unit record"][08 "Established AI-facing data and rooted planner"]
+
+	// Community-authored metadata is parsed in every gameplay mode and remains
+	// inert until a rule or presentation consumer uses it
+	// research/extensions/community-patch-engine.md, CP-UD-1/2, CP-CON-5 and
+	// CP-DMG-3.
+	Rotations                 FacingMask // south is always present; authored letters add E/N/W
+	VeterancyThresholds       []uint32   // invalid tokens dropped; empty/all-invalid uses 5,10,15,20,25
+	VeterancyAccuracyBuffRate int32      // absent defaults to 12; authored values <= 0 compile to off (0)
+	TransportedExplodeAs      string
+	TransportedSelfDestructAs string
+	PreviewPieces             string
+	PreviewPiecesS            string
+	PreviewPiecesE            string
+	PreviewPiecesN            string
+	PreviewPiecesW            string
+	PreviewFaceOpponent       bool
+	PreviewObject3D           string
 	// ai_limit remains in Unknown because research found no semantic reader for
 	// this definition field. Embedded limit directives in ai_weight are instead
 	// registered by the AI profile application boundary [08 "Established
@@ -282,6 +333,12 @@ type UnitDef struct {
 	Weapon3Def        *WeaponDef // resolved weapon3
 	ExplodeAsDef      *WeaponDef // resolved explodeas
 	SelfDestructAsDef *WeaponDef // resolved selfdestructas
+	// Transported overrides use a separate miss policy: an empty or unresolved
+	// authored name leaves a nil override so the consumer falls back to the
+	// ordinary death weapon (research/extensions/community-patch-engine.md,
+	// CP-DMG-3).
+	TransportedExplodeAsDef      *WeaponDef
+	TransportedSelfDestructAsDef *WeaponDef
 
 	// Script is the required compiled COB program resolved at catalog link time
 	// from scripts/<unitname>.cob. Missing, unreadable, malformed, nil, or empty
@@ -387,6 +444,68 @@ var knownUnitKeys = map[string]struct{}{
 	"maxdamage": {}, "sightdistance": {}, "radardistance": {}, "sonardistance": {}, "radardistancejam": {}, "sonardistancejam": {}, "mincloakdistance": {},
 	"standingmoveorder": {}, "standingfireorder": {}, "init_cloaked": {}, "downloadable": {}, "builder": {}, "stealth": {}, "bmcode": {}, "zbuffer": {}, "isairbase": {}, "istargetingupgrade": {}, "teleporter": {}, "hidedamage": {}, "shootme": {}, "armoredstate": {}, "activatewhenbuilt": {}, "canfly": {}, "canhover": {}, "upright": {}, "floater": {}, "amphibious": {}, "isfeature": {}, "noshadow": {}, "immunetoparalyzer": {}, "hoverattack": {}, "antiweapons": {}, "digger": {}, "onoffable": {}, "mobilestandorders": {}, "firestandorders": {}, "canstop": {}, "canattack": {}, "canguard": {}, "canpatrol": {}, "canmove": {}, "canload": {}, "canreclamate": {}, "canresurrect": {}, "cancapture": {}, "candgun": {}, "kamikaze": {}, "norestrict": {}, "showplayername": {}, "commander": {}, "cantbetransported": {}, "wacky": {},
 	"selfdestructcountdown": {}, "version": {}, "copyright": {},
+	// Non-retail keys with typed readers; they no longer reach Unknown.
+	"rotations": {}, "veterancythresholds": {}, "veterancyaccuracybuffrate": {},
+	"transportedexplodeas": {}, "transportedselfdestructas": {},
+	"previewpieces": {}, "previewpiecess": {}, "previewpiecese": {}, "previewpiecesn": {}, "previewpiecesw": {},
+	"previewfaceopponent": {}, "previewobject3d": {},
+}
+
+func authoredUnitExtension(section *formats.Section, key string, bit uint16, bits *uint16) (string, bool) {
+	raw, ok := section.RawValue(key)
+	if ok {
+		*bits |= bit
+	}
+	return raw, ok
+}
+
+func compileFacingMask(raw string) FacingMask {
+	mask := FacingSouth
+	for _, r := range raw {
+		switch r {
+		case 'e', 'E':
+			mask |= FacingEast
+		case 'n', 'N':
+			mask |= FacingNorth
+		case 'w', 'W':
+			mask |= FacingWest
+		}
+	}
+	return mask
+}
+
+func parseUnsignedThreshold(token string) (uint32, bool) {
+	if token == "" {
+		return 0, false
+	}
+	negative := token[0] == '-'
+	if negative || token[0] == '+' {
+		token = token[1:]
+	}
+	if token == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(token, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	if negative {
+		return uint32(0) - uint32(n), true
+	}
+	return uint32(n), true
+}
+
+func compileVeterancyThresholds(raw string) []uint32 {
+	values := make([]uint32, 0, len(defaultVeterancyThresholds))
+	for _, token := range strings.Fields(raw) {
+		if value, ok := parseUnsignedThreshold(token); ok {
+			values = append(values, value)
+		}
+	}
+	if len(values) == 0 {
+		return append([]uint32(nil), defaultVeterancyThresholds[:]...)
+	}
+	return values
 }
 
 // compileUnitSection compiles a single UNITINFO section into a UnitDef.
@@ -394,6 +513,7 @@ var knownUnitKeys = map[string]struct{}{
 // Language-prefixed name trial <Language>name then name is applied for name/description [02 §3] C7.
 // Translate.tdf identity fallback (byte-exact when missing) is handled by loadTranslateTable [02 §3] C7.
 func compileUnitSection(section *formats.Section, logicalPath string, language string, prov Provenance) *UnitDef {
+	var extensionKeys uint16
 	unitName, _ := section.StringValue("unitname", "")
 	// C7 language-prefixed trial: <Language>name then name [02 §3]. Missing Translate.tdf yields identity (handled by caller).
 	displayName, _ := section.LanguageString(language, "name", "")
@@ -419,6 +539,27 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	wspe, _ := section.StringValue("wspe_badtargetcategory", "none")
 	noChase, _ := section.StringValue("nochasecategory", "none")
 	aiWeight, _ := section.StringValue("ai_weight", "")
+	rotationsRaw, _ := authoredUnitExtension(section, "rotations", unitExtRotations, &extensionKeys)
+	thresholdsRaw, thresholdsAuthored := authoredUnitExtension(section, "veterancythresholds", unitExtVeterancyThresholds, &extensionKeys)
+	if !thresholdsAuthored {
+		thresholdsRaw = "5 10 15 20 25"
+	}
+	veterancyThresholds := compileVeterancyThresholds(thresholdsRaw)
+	_, _ = authoredUnitExtension(section, "veterancyaccuracybuffrate", unitExtVeterancyAccuracyBuffRate, &extensionKeys)
+	veterancyAccuracyBuffRate := section.IntValue("veterancyaccuracybuffrate", 12)
+	if veterancyAccuracyBuffRate <= 0 {
+		veterancyAccuracyBuffRate = 0
+	}
+	transportedExplodeAs, _ := authoredUnitExtension(section, "transportedexplodeas", unitExtTransportedExplodeAs, &extensionKeys)
+	transportedSelfDestructAs, _ := authoredUnitExtension(section, "transportedselfdestructas", unitExtTransportedSelfDestructAs, &extensionKeys)
+	previewPieces, _ := authoredUnitExtension(section, "previewpieces", unitExtPreviewPieces, &extensionKeys)
+	previewPiecesS, _ := authoredUnitExtension(section, "previewpiecess", unitExtPreviewPiecesS, &extensionKeys)
+	previewPiecesE, _ := authoredUnitExtension(section, "previewpiecese", unitExtPreviewPiecesE, &extensionKeys)
+	previewPiecesN, _ := authoredUnitExtension(section, "previewpiecesn", unitExtPreviewPiecesN, &extensionKeys)
+	previewPiecesW, _ := authoredUnitExtension(section, "previewpiecesw", unitExtPreviewPiecesW, &extensionKeys)
+	_, _ = authoredUnitExtension(section, "previewfaceopponent", unitExtPreviewFaceOpponent, &extensionKeys)
+	previewFaceOpponent := section.IntValue("previewfaceopponent", 0) != 0
+	previewObject3D, _ := authoredUnitExtension(section, "previewobject3d", unitExtPreviewObject3D, &extensionKeys)
 	// FBI string fields are fixed-size NUL-terminated buffers [02 "Unit record"].
 	unitName = boundedString(unitName, 31)
 	displayName = boundedString(displayName, 31)
@@ -619,28 +760,41 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 			CanonicalKey: canonical,
 			Provenance:   prov,
 		},
-		UnitName:              unitName,
-		Name:                  displayName,
-		Description:           description,
-		Side:                  side,
-		ObjectName:            objectName,
-		Category:              category,
-		SoundCategory:         soundCategory,
-		Corpse:                corpse,
-		MovementClass:         movementClass,
-		MobilityDomain:        mobilityDomain,
-		Weapon1:               weapon1,
-		Weapon2:               weapon2,
-		Weapon3:               weapon3,
-		ExplodeAs:             explodeAs,
-		SelfDestructAs:        selfDestructAs,
-		YardMap:               yardMap,
-		DefaultMissionType:    defaultMissionType,
-		BadTargetCategoryWPRI: wpri,
-		BadTargetCategoryWSEC: wsec,
-		BadTargetCategoryWSPE: wspe,
-		NoChaseCategory:       noChase,
-		AIWeight:              aiWeight,
+		extensionKeys:             extensionKeys,
+		UnitName:                  unitName,
+		Name:                      displayName,
+		Description:               description,
+		Side:                      side,
+		ObjectName:                objectName,
+		Category:                  category,
+		SoundCategory:             soundCategory,
+		Corpse:                    corpse,
+		MovementClass:             movementClass,
+		MobilityDomain:            mobilityDomain,
+		Weapon1:                   weapon1,
+		Weapon2:                   weapon2,
+		Weapon3:                   weapon3,
+		ExplodeAs:                 explodeAs,
+		SelfDestructAs:            selfDestructAs,
+		YardMap:                   yardMap,
+		DefaultMissionType:        defaultMissionType,
+		BadTargetCategoryWPRI:     wpri,
+		BadTargetCategoryWSEC:     wsec,
+		BadTargetCategoryWSPE:     wspe,
+		NoChaseCategory:           noChase,
+		AIWeight:                  aiWeight,
+		Rotations:                 compileFacingMask(rotationsRaw),
+		VeterancyThresholds:       veterancyThresholds,
+		VeterancyAccuracyBuffRate: veterancyAccuracyBuffRate,
+		TransportedExplodeAs:      transportedExplodeAs,
+		TransportedSelfDestructAs: transportedSelfDestructAs,
+		PreviewPieces:             previewPieces,
+		PreviewPiecesS:            previewPiecesS,
+		PreviewPiecesE:            previewPiecesE,
+		PreviewPiecesN:            previewPiecesN,
+		PreviewPiecesW:            previewPiecesW,
+		PreviewFaceOpponent:       previewFaceOpponent,
+		PreviewObject3D:           previewObject3D,
 		// The definition parser stores -1 (unlimited) into the per-definition
 		// limit field of every definition it parses; in every single-player
 		// session that stays the final value, and a 0 can only come from the
@@ -834,6 +988,42 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	for _, k := range u.UnknownKeysSorted() {
 		fmt.Fprintf(&b, "%s=%s|", k, u.Unknown[k])
 	}
+	// Authored extension keys append typed canonical values in a fixed order.
+	// With every key absent this block emits no bytes, preserving retail hashes.
+	if u.extensionKeys&unitExtRotations != 0 {
+		fmt.Fprintf(&b, "rotations=%d|", u.Rotations)
+	}
+	if u.extensionKeys&unitExtVeterancyThresholds != 0 {
+		b.WriteString("veterancythresholds=")
+		for _, threshold := range u.VeterancyThresholds {
+			fmt.Fprintf(&b, "%d,", threshold)
+		}
+		b.WriteByte('|')
+	}
+	if u.extensionKeys&unitExtVeterancyAccuracyBuffRate != 0 {
+		fmt.Fprintf(&b, "veterancyaccuracybuffrate=%d|", u.VeterancyAccuracyBuffRate)
+	}
+	for _, ext := range [...]struct {
+		bit   uint16
+		key   string
+		value string
+	}{
+		{unitExtTransportedExplodeAs, "transportedexplodeas", u.TransportedExplodeAs},
+		{unitExtTransportedSelfDestructAs, "transportedselfdestructas", u.TransportedSelfDestructAs},
+		{unitExtPreviewPieces, "previewpieces", u.PreviewPieces},
+		{unitExtPreviewPiecesS, "previewpiecess", u.PreviewPiecesS},
+		{unitExtPreviewPiecesE, "previewpiecese", u.PreviewPiecesE},
+		{unitExtPreviewPiecesN, "previewpiecesn", u.PreviewPiecesN},
+		{unitExtPreviewPiecesW, "previewpiecesw", u.PreviewPiecesW},
+		{unitExtPreviewObject3D, "previewobject3d", u.PreviewObject3D},
+	} {
+		if u.extensionKeys&ext.bit != 0 {
+			fmt.Fprintf(&b, "%s=%s|", ext.key, ext.value)
+		}
+	}
+	if u.extensionKeys&unitExtPreviewFaceOpponent != 0 {
+		fmt.Fprintf(&b, "previewfaceopponent=%t|", u.PreviewFaceOpponent)
+	}
 	return []byte(b.String())
 }
 
@@ -971,15 +1161,16 @@ func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult,
 // null for any definition that went through the loader" [06 R-DMG-01 §5].
 // Established. An unarmed definition's weapon links resolve to record 0 like
 // any other miss, never to nil, for a family that carries the sentinel.
-func linkUnitWeaponRecords(records []*UnitDef, weapons map[string]*WeaponDef) {
-	if records == nil || weapons == nil {
-		return
+func linkUnitWeaponRecords(records []*UnitDef, weapons map[string]*WeaponDef) []string {
+	if records == nil {
+		return nil
 	}
 	// Deterministic iteration follows retained record order (I1).
 	// The miss policy lives in one place, Catalog.WeaponLink [02 §5
 	// R-CONTENT-02]; a read-only view over the map is enough — the method
 	// derives its slot-order scan and the record-0 lookup from Weapons alone.
 	view := &Catalog{Weapons: weapons}
+	var warnings []string
 	for _, u := range records {
 		if u.DiscoveryOnly {
 			continue
@@ -989,7 +1180,30 @@ func linkUnitWeaponRecords(records []*UnitDef, weapons map[string]*WeaponDef) {
 		u.Weapon3Def, _ = view.WeaponLink(u.Weapon3)
 		u.ExplodeAsDef, _ = view.WeaponLink(u.ExplodeAs)
 		u.SelfDestructAsDef, _ = view.WeaponLink(u.SelfDestructAs)
+		for _, override := range []struct {
+			key  string
+			name *string
+			def  **WeaponDef
+		}{
+			{"TransportedExplodeAs", &u.TransportedExplodeAs, &u.TransportedExplodeAsDef},
+			{"TransportedSelfDestructAs", &u.TransportedSelfDestructAs, &u.TransportedSelfDestructAsDef},
+		} {
+			*override.def = nil
+			if *override.name == "" {
+				continue
+			}
+			if weapon, ok := view.WeaponByName(*override.name); ok {
+				*override.def = weapon
+				continue
+			}
+			warnings = append(warnings, fmt.Sprintf(
+				"nanolathe: transported explosion link failed: logical path %s, providers searched [%s], expected weapon %q for unit %q key %s",
+				u.Provenance.LogicalPath, u.Provenance.ProviderID, *override.name, u.UnitName, override.key))
+			*override.name = ""
+			u.Hash = HashDefinition(writeUnitCanonical(u))
+		}
 	}
+	return warnings
 }
 
 // ApplyMovementFootprints copies the resolved movement record fields retained

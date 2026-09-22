@@ -43,7 +43,7 @@ func (p *Panel) serviceKeyboardToken(token input.Token, frame WidgetFrame, hooks
 // stays outside the navigation and token-mode matrix gates: an accepted
 // accelerator can claim a token which a peek-mode battle child otherwise
 // leaves for battle hotkeys [07 R-WGT-01 §§1-3,7].
-func (p *Panel) keyboardQuickKeyAt(index int, token input.Token, alt bool, result *ServiceResult) bool {
+func (p *Panel) keyboardQuickKeyAt(index int, token input.Token, alt bool, hooks WidgetHooks, result *ServiceResult) bool {
 	if p == nil || p.Window == nil {
 		return false
 	}
@@ -66,7 +66,7 @@ func (p *Panel) keyboardQuickKeyAt(index int, token input.Token, alt bool, resul
 	}
 	action := p.ButtonQuickKeyAction(index, capture, alt)
 	if action.Kind == ActionActivate {
-		p.quickKeyMutation(action.Index)
+		p.quickKeyMutation(action.Index, hooks)
 		p.SetFocus(action.Index)
 		p.fire(action.Index, 0, result)
 		return true
@@ -99,7 +99,7 @@ func (p *Panel) keyboardQuickKeyAt(index int, token input.Token, alt bool, resul
 // quickKeyMutation is the accelerator-specific subset of a button gesture.
 // It has no press/release capture, but toggle and radio controls change state
 // before their ordinary fired callback observes them [07 R-WGT-01 §3].
-func (p *Panel) quickKeyMutation(index int) {
+func (p *Panel) quickKeyMutation(index int, hooks WidgetHooks) {
 	g := p.Window.Gadgets[index]
 	switch {
 	case g.Attribs&0x10 != 0:
@@ -107,7 +107,9 @@ func (p *Panel) quickKeyMutation(index int) {
 		p.clearGroup(index)
 		p.markDirty()
 	case g.Attribs&0x40 != 0:
-		p.SetStatusAt(index, boolToInt(p.StatusAt(index) == 0))
+		if hooks.PreserveActiveToggle == nil || !hooks.PreserveActiveToggle(index, p.StatusAt(index)) {
+			p.SetStatusAt(index, boolToInt(p.StatusAt(index) == 0))
+		}
 		p.clearGroup(index)
 		p.markDirty()
 	case g.Attribs&8 != 0:

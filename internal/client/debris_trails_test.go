@@ -70,6 +70,7 @@ func TestDebrisTrailEmissionRunsOncePerCommittedTick(t *testing.T) {
 	crt := rng.NewCRT(7)
 	c.SetPresentationCRT(&crt)
 	v := debrisTrailView(true, true)
+	v.Slot = 999 // CP-LIM-1 enlarged whole-piece pool.
 
 	c.frameTick = 12
 	for i := 0; i < 3; i++ {

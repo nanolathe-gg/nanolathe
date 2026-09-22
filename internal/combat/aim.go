@@ -73,13 +73,13 @@ func DriftGatePass(w *content.WeaponDef, stationary bool, storedYaw, wantYaw, st
 	return AngleError(storedPitch, wantPitch) <= pitchGate
 }
 
-// AccuracySpreadBound computes the turret executor's spread bound
+// accuracySpreadBoundWithDivisor computes the turret executor's spread bound
 // [06 §4.4] [06 R-WPN-03 §4]. The bound is computed, never authored:
 //
 //	healthTerm = uint32(int32(int16(health)) << 11) / uint32(maxHealth)  ; unsigned divide, 2048 at full health
 //	raw        = uint16(accuracy) - uint16(healthTerm)                   ; 16-bit subtraction, wraps
 //	bound      = uint16(raw + 0x800)                                     ; carry out of bit 15 discarded
-//	div        = uint16(kills) / 12                                      ; exact integer quotient
+//	div        = selected veterancy divisor                              ; Strict is uint16(kills) / 12
 //	if div > 1 { bound = uint16(int32(bound) / int32(div)) }             ; signed 32-bit divide
 //
 // So the bound is `accuracy + 2048*(1 - health/maxHealth)` modulo 65,536: a
@@ -89,15 +89,14 @@ func DriftGatePass(w *content.WeaponDef, stationary bool, storedYaw, wantYaw, st
 // units is about half a degree — `accuracy` is neither degrees nor a percent.
 //
 // Zero or negative maxHealth raises the processor divide fault in retail, the
-// same malformed-only case ComputeStoredReload reproduces; stock MaxDamage is
-// always positive.
-func AccuracySpreadBound(accuracy, health, maxHealth, kills int32) uint16 {
+// same malformed-only case the reload computation reproduces; stock
+// MaxDamage is always positive.
+func accuracySpreadBoundWithDivisor(accuracy, health, maxHealth int32, div uint32) uint16 {
 	if maxHealth <= 0 {
 		panic("combat: zero or negative maxHealth divide fault in accuracy spread [06 R-WPN-03 §4]")
 	}
 	healthTerm := uint32(int32(int16(health))<<11) / uint32(maxHealth)
 	bound := uint16(accuracy) - uint16(healthTerm) + 0x800
-	div := uint32(uint16(kills)) / 12
 	if div > 1 {
 		bound = uint16(int32(bound) / int32(div))
 	}

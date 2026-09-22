@@ -29,7 +29,8 @@ func (h *retailBattleHUD) drawFooter(c *client.Client, b *battleSession, f *fram
 		b.drawDeveloperFooter(c, f, h.primaryFont)
 		return
 	}
-	footer := hud.BuildFooter(f, h.cat, f.ViewingPlayer, b.footerHover(f), false)
+	footer := hud.BuildFooter(f, h.cat, f.ViewingPlayer, b.footerHover(f), false,
+		communityFooterOptions(c))
 	if footer.Empty() {
 		return
 	}

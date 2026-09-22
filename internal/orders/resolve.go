@@ -986,7 +986,7 @@ func resolveAttackAt(actor *units.Unit, target *units.Unit, pos *ResolvePos) str
 		if !water {
 			return ""
 		}
-	} else if actor.Def.CanHover && water {
+	} else if actor.Def.CanHover && water && !b.rules().ScriptAttackSurfaceFire(ScriptAttackSurfaceFireRequest{Binding: b, Actor: actor}) {
 		return ""
 	}
 	// The four air variants, exactly as [04 R-ORD-02 §1] gives them for code 3:

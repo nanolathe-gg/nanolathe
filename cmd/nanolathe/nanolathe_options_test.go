@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
@@ -26,6 +28,7 @@ func TestPresentationStartupOverrides(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		tc.want.Normalize()
 		if got := startupPresentation(opts, settings.Presentation{Renderer: "classic", FPS: 120}); got != tc.want {
 			t.Fatalf("args %v: got %+v, want %+v", tc.args, got, tc.want)
 		}
@@ -69,6 +72,21 @@ func TestNanolatheOptionsPreviewCancelAndPersistence(t *testing.T) {
 	g.activateRetailOptionsGadget("NGAMEPLAY")
 	if g.gameplay != gameplay.Strict31 {
 		t.Fatal("gameplay did not switch to strict")
+	}
+	g.activateRetailOptionsGadget("NGAMEPLAY")
+	if g.gameplay != gameplay.Community39 {
+		t.Fatal("gameplay did not advance from strict to Community 3.9")
+	}
+	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "nanolathe-options-community.png"))
+	}
+	g.activateRetailOptionsGadget("NGAMEPLAY")
+	if g.gameplay != gameplay.Modern {
+		t.Fatal("gameplay did not advance from Community 3.9 to Modern")
+	}
+	g.activateRetailOptionsGadget("NGAMEPLAY")
+	if g.gameplay != gameplay.Strict31 {
+		t.Fatal("gameplay did not wrap from Modern to strict")
 	}
 	g.activateRetailOptionsGadget("NRENDER")
 	g.activateRetailOptionsGadget("NFPS")
@@ -299,5 +317,15 @@ func TestGameplayStartupOverrides(t *testing.T) {
 	}
 	if _, err = parseFlags([]string{"--gameplay=guess"}, io.Discard); err == nil {
 		t.Fatal("invalid mode accepted")
+	}
+}
+
+func TestGameplaySwitchRetainsHostSelectionOnInvalidFeatures(t *testing.T) {
+	sess := &session.Session{CommunitySources: session.CommunitySources{Player: community.Overrides{Table: "unknown-table"}}}
+	sess.SetGameplay(gameplay.Strict31)
+	g := &gameShell{gameplay: gameplay.Strict31, opts: Options{Gameplay: gameplay.Strict31}, battle: &battleSession{sess: sess}}
+	g.setGameplay(gameplay.Community39)
+	if g.gameplay != gameplay.Strict31 || g.opts.Gameplay != gameplay.Strict31 || sess.Gameplay != gameplay.Strict31 || len(sess.PendingHumanCommands()) != 0 {
+		t.Fatal("rejected switch changed host or session")
 	}
 }

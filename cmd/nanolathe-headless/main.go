@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io"
 	"os"
 	"runtime"
@@ -16,7 +15,9 @@ import (
 
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 
@@ -163,7 +164,15 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		}
 		return nil
 	})
-	flags.Func("gameplay", "gameplay rule set: modern (default), strict-3.1, or a registered set's name (see mods/)", func(text string) error {
+	flags.Func("gameplay-feature", "community feature override name=value (repeatable; Strict ignores overrides)", func(text string) error {
+		v, err := community.ParseOverride(text)
+		if err == nil {
+			request.GameplayOverrides = append(request.GameplayOverrides, v)
+			bench.GameplayOverrides = append(bench.GameplayOverrides, v)
+		}
+		return err
+	})
+	flags.Func("gameplay", "gameplay rule set: modern (default), community-3.9, strict-3.1, or a registered set's name (see mods/)", func(text string) error {
 		mode, err := gameplay.Parse(text)
 		request.Gameplay = mode
 		bench.Gameplay = mode
@@ -182,7 +191,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.StringVar(&bench.Map, "sim-benchmark-map", headless.SimBenchDefaultMap, "map for the simulation-cost benchmark scene")
 	flags.Int64Var(&warmup, "warmup-ticks", int64(headless.SimBenchDefaultWarmupTicks), "unmeasured ticks run before the benchmark window opens")
 	flags.Int64Var(&measured, "benchmark-ticks", int64(headless.SimBenchDefaultMeasureTicks), "measured authoritative ticks in the benchmark window")
-	flags.IntVar(&unitLimit, "unit-limit", 0, "per-player skirmish unit limit (20..3276); omitted uses saved unitLimit, otherwise 1000 (benchmark default 400)")
+	flags.IntVar(&unitLimit, "unit-limit", 0, "per-player skirmish unit setting (20..3276); gameplay feature table may override it (benchmark setting 400)")
 	flags.IntVar(&bench.CensusCount, "census-samples", headless.SimBenchDefaultCensusCount, "census samples taken across the benchmark window")
 	flags.BoolVar(&bench.PhaseTiming, "phase-timing", true, "attribute measured time to the twelve authoritative phases")
 	flags.BoolVar(&bench.Profiles, "benchmark-profiles", true, "write cpu.pprof and the allocation profile pair for the measured window")
@@ -205,6 +214,9 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		stored, _ := settings.Load()
 		contentProfile = stored.ContentProfile
 	}
+	storedFeatures, _ := settings.Load()
+	request.GameplayFeatures = storedFeatures.GameplayFeatures
+	bench.GameplayFeatures = storedFeatures.GameplayFeatures
 	request.ContentProfile = contentProfile
 	bench.ContentProfile = contentProfile
 	bench.UnitLimit = headless.SimBenchDefaultUnitLimit

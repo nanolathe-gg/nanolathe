@@ -142,10 +142,9 @@ type FirePorts struct {
 	// [01 §7.1] I4.
 	RNG *rng.Simulation
 
-	// ShooterHealth, ShooterMaxHealth and ShooterKills are the three shooter
-	// terms of the turret executor's accuracy spread [06 §4.4]
-	// [06 R-WPN-03 §4]. They are the shooter's own current and maximum health
-	// and its credited-kill count; nothing about the target enters the bound.
+	// These are the shooter terms of the turret executor's accuracy spread
+	// [06 §4.4] [06 R-WPN-03 §4]. Shooter carries the definition whose authored
+	// Community rate the bound service consults; nil retains Strict 3.1.
 	ShooterHealth    int32
 	ShooterMaxHealth int32
 	ShooterKills     int32
@@ -316,7 +315,12 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// wrong bound and double-counted the field.
 	var yawSpread, pitchSpread int32
 	if w.Turret {
-		bound := AccuracySpreadBound(w.Accuracy, ports.ShooterHealth, ports.ShooterMaxHealth, ports.ShooterKills)
+		var shooterDef *content.UnitDef
+		if ports.Shooter != nil {
+			shooterDef = ports.Shooter.Def
+		}
+		divisor := svc.veteranSpreadDivisor(shooterDef, ports.ShooterKills)
+		bound := accuracySpreadBoundWithDivisor(w.Accuracy, ports.ShooterHealth, ports.ShooterMaxHealth, divisor)
 		if bound != 0 && ports.RNG != nil {
 			yawSpread = recentred(ports.RNG.Uint32n(uint32(bound)), int32(bound))
 			pitchSpread = recentred(ports.RNG.Uint32n(uint32(bound)), int32(bound))

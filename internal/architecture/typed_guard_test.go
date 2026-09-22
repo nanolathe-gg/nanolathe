@@ -612,8 +612,15 @@ var float64FieldAllowances = map[string]string{
 // names the precise retail operation that needs binary64; all other float64
 // occurrences still use the shrink-only per-file baseline.
 var float64ScopeAllowances = map[string]float64Allowance{
-	"internal/model/model.go func *xformNode.evaluateRotation": {3, "I2 per-axis model rotation trigonometry [03 §2.4]"},
-	"internal/model/model.go func applyChain":                  {18, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
+	"internal/construction/community_kickout.go const kickoutPi,kickoutQuarterPi":     {2, "I2 sourced Community kickout angle constants [CP-CON-1]"},
+	"internal/construction/community_kickout.go func CommunityRules.YieldObstruction": {2, "I2 sourced Community kickout random bearing [CP-CON-1]"},
+	"internal/construction/community_kickout.go func *Service.shouldKickout":          {4, "I2 sourced Community kickout invested-energy test [CP-CON-1]"},
+	"internal/construction/community_kickout.go func *Service.findKickoutDestination": {29, "I2 sourced Community kickout bearing and sweep geometry [CP-CON-1]"},
+	"internal/construction/community_kickout.go func forwardCircleIntersection":       {39, "I2 sourced Community kickout tangent-branch circle/line geometry [CP-CON-1]"},
+	"internal/construction/community_kickout.go func kickoutQuadratic":                {10, "I2 sourced Community kickout quadratic root operation order [CP-CON-1]"},
+	"internal/construction/community_repair.go func communityRepairEnergy":            {4, "I2 Community repair energy helper working precision [CP-DMG-4]"},
+	"internal/model/model.go func *xformNode.evaluateRotation":                        {3, "I2 per-axis model rotation trigonometry [03 §2.4]"},
+	"internal/model/model.go func applyChain":                                         {18, "I2 model vertex working precision; round after each axis then narrow geometry [03 §2.4]"},
 
 	"internal/combat/meteor.go func MeteorDelay":               {2, "I2 meteor source float32, working quotient and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorDurationTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},

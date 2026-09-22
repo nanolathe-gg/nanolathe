@@ -184,7 +184,7 @@ var float64Baseline = map[string]int{
 	// reverse.go [05 R-ECO-01 §3][05 R-ECO-01 §11].
 	"internal/construction/arithmetic.go":   18,
 	"internal/construction/inheritance.go":  0,
-	"internal/construction/resurrection.go": 3,
+	"internal/construction/resurrection.go": 0,
 	"internal/construction/reverse.go":      8, // shared refund final-store precision [05 R-ECO-01 §3][05 R-ECO-01 §11]
 	"internal/economy/tick.go":              2,
 	"internal/mission/initial_mission.go":   2,

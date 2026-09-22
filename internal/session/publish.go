@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
@@ -53,7 +54,7 @@ func (s *Session) PlayArea() (int32, int32, bool) {
 // local player's record and runs the known-site gate; PreviewPlacementForCursor
 // below is that form.
 func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle) (world.PlacementResult, error) {
-	return s.previewPlacement(cx, cz, def, footX, footZ, self, nil)
+	return s.previewPlacement(cx, cz, def, footX, footZ, self, nil, units.FacingSouth)
 }
 
 // PreviewPlacementForCursor is PreviewPlacement with the blocker's fourth
@@ -65,11 +66,15 @@ func (s *Session) PreviewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 // mapping option then decides whether the occupancy rejections apply.
 //
 // The battle adapter's build ghost is the caller.
-func (s *Session) PreviewPlacementForCursor(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle) (world.PlacementResult, error) {
+func (s *Session) PreviewPlacementForCursor(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle, facing ...units.StructureFacing) (world.PlacementResult, error) {
 	if s == nil || s.Vis == nil {
 		return world.PlacementResult{}, fmt.Errorf("session: placement visibility unavailable")
 	}
-	return s.previewPlacement(cx, cz, def, footX, footZ, self, &sessionPlacementViewer{vis: s.Vis, local: s.ViewingOwner, player: s.LocalOwner})
+	selected := units.FacingSouth
+	if len(facing) != 0 {
+		selected = facing[0]
+	}
+	return s.previewPlacement(cx, cz, def, footX, footZ, self, &sessionPlacementViewer{vis: s.Vis, local: s.ViewingOwner, player: s.LocalOwner}, selected)
 }
 
 // sessionPlacementViewer is the world package's PlacementViewer over the
@@ -105,7 +110,7 @@ func (v *sessionPlacementViewer) Explored(vx, vz int32) bool {
 // MappingOption is the LOS-mode word's bit 1 [03 §3.1].
 func (v *sessionPlacementViewer) MappingOption() bool { return v.vis.CurrentEnabled() }
 
-func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle, viewer world.PlacementViewer) (world.PlacementResult, error) {
+func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, footZ int32, self pool.Handle, viewer world.PlacementViewer, facing units.StructureFacing) (world.PlacementResult, error) {
 	if s == nil || s.World == nil {
 		return world.PlacementResult{}, fmt.Errorf("session: placement world unavailable")
 	}
@@ -126,12 +131,27 @@ func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 	}
 	var yard []world.YardCell
 	if def.BMCode == 0 {
-		yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
+		if s.Build != nil {
+			var geometry construction.StructureGeometry
+			geometry, err = s.Build.StructureGeometry(def, facing)
+			yard = geometry.Yard
+		} else {
+			yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
+		}
 		if err != nil {
 			return world.PlacementResult{}, err
 		}
 	}
-	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode != 0, Viewer: viewer})
+	var admit func(uint16) bool
+	if viewer != nil && s.Build != nil && s.Units != nil {
+		builder := s.humanUnit(self)
+		if builder != nil {
+			admit = func(occupant uint16) bool {
+				return s.Build.AdmitSiteOccupant(builder, s.Units.Unit(pool.Handle(occupant)))
+			}
+		}
+	}
+	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode != 0, Viewer: viewer, AdmitOccupant: admit})
 	if err != nil {
 		result = world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}
 	}
@@ -208,21 +228,22 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			vp := &views[len(views)-1]
 			pieces, cargo := vp.Pieces, vp.Cargo
 			*vp = frame.UnitView{
-				InstanceID:     publication.unitIdentity(u),
-				Slot:           u.Handle,
-				Owner:          u.Owner,
-				X:              u.X,
-				Y:              u.Y,
-				Z:              u.Z,
-				Health:         u.Health,
-				MaxHealth:      u.MaxHealth,
-				BuildRemaining: u.Remaining,
-				Flags:          u.Flags,
-				Heading:        u.Move.Heading,
-				Pitch:          u.Move.Pitch,
-				Bank:           u.Move.Bank,
-				Activated:      u.Activated,
-				Kills:          u.Kills,
+				InstanceID:        publication.unitIdentity(u),
+				Slot:              u.Handle,
+				Owner:             u.Owner,
+				X:                 u.X,
+				Y:                 u.Y,
+				Z:                 u.Z,
+				Health:            u.Health,
+				PriorHealthSample: u.PriorSample,
+				MaxHealth:         u.MaxHealth,
+				BuildRemaining:    u.Remaining,
+				Flags:             u.Flags,
+				Heading:           u.Move.Heading,
+				Pitch:             u.Move.Pitch,
+				Bank:              u.Move.Bank,
+				Activated:         u.Activated,
+				Kills:             u.Kills,
 				// The unit painter's pass selector is the committed low two
 				// bits of the mover mode word, never a screen coordinate
 				// [03 R-RAST-01 §7][04 R-MOV-01 §8].
@@ -243,6 +264,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				// whose group number is nonzero [03 R-FX-01 §6][07 §9].
 				Group: u.Group,
 			}
+			vp.CommunityHUD = s.publishCommunityHUD(u)
 			vp.Pieces = pieces[:0]
 			vp.Cargo = cargo[:0]
 			// The footer's four rate fields read the archived production and
@@ -279,6 +301,9 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				vp.Model = u.Def.ObjectName
 				vp.FootX = int8(u.Def.FootprintX)
 				vp.FootZ = int8(u.Def.FootprintZ)
+				if u.StructureFacing&1 != 0 {
+					vp.FootX, vp.FootZ = vp.FootZ, vp.FootX
+				}
 				// Structure-builder classification follows the factory arm, never
 				// authored CanMove (stock factories author CanMove) [04 R-FAC-02 §1].
 				vp.IsFactory = u.Def.Builder && u.Def.BMCode == 0
@@ -316,6 +341,10 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			// The hull extents and the underwater-exemption bit of the
 			// four-point visibility gate [03 §3.2] steps 3 and 5.
 			publishHullGateInputs(vp, u)
+			if s.Vis != nil {
+				vp.DirectVisibilityKnown = true
+				vp.DirectlyVisible = s.Vis.IsVisible(visibility.PlayerID(s.ViewingOwner), unitVisibilityTarget(u, u.Flags))
+			}
 			if vm := u.GetScript(); vm != nil {
 				// CacheRevision is copied at the publication boundary; consuming or
 				// clearing it here would make presentation cadence authoritative.
@@ -638,6 +667,8 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 					// [03 §3.9] layer 6 [06 §11.3]. Resolving it once here is
 					// what keeps presentation off the compiled catalog [I6].
 					switch {
+					case !s.Combat.MapWeaponMarker(&p, w):
+						pv.RadarArt = frame.RadarProjectileHidden
 					case w.Targetable || w.Interceptor:
 						pv.RadarArt = frame.RadarProjectileMarker
 					case w.NoRadar:
@@ -764,11 +795,11 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 						continue
 					}
 					contact.Rings = append(contact.Rings, frame.RadarRingView{
-						// The compiled unit flag sequence places CanGuard at bit
-						// 29, the ring-loop enable [02 "Unit record"][03 §3.9].
-						Enabled:   u.Def.CanGuard,
+						// antiweapons enables the unit loop; interceptor admits
+						// each weapon ring [02 R-KEYS-01 §1][03 §3.9].
+						Enabled:   u.Def.AntiWeapons && ws.Weapon.Interceptor,
 						Dashed:    ws.Weapon.Interceptor,
-						Range:     ws.Weapon.Range,
+						Range:     s.Combat.InterceptorRingRadius(ws.Weapon),
 						Intercept: ws.Weapon.Interceptor,
 					})
 				}
@@ -1026,6 +1057,11 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 		}
 		if s.Units != nil {
 			row.LiveUnits = s.Units.LiveCountForPlayer(i)
+			if p.Exists {
+				if first, _, ok := s.Units.SliceForPlayer(i); ok {
+					row.UnitSlotStart = pool.Handle(first)
+				}
+			}
 		}
 		// The name and the logo byte are the lobby record's, and this build
 		// writes both at registration [08 R-SKIR-01 §2]. The setup-row

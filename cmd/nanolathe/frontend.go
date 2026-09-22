@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"os"
 	"sort"
 	"strings"
@@ -14,8 +13,10 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
@@ -142,9 +143,11 @@ type gameShell struct {
 	// page's option values. The load transition reads the pair for the logical
 	// battle canvas [07 R-FE-01 §6][07 R-FE-01 §11]; windowOptions also uses it
 	// for Nanolathe's stable host window (DESIGN_PRESENTATION_CLIENT §2.1).
-	display      settings.Display
-	presentation settings.Presentation
-	gameplay     gameplay.Mode
+	display          settings.Display
+	presentation     settings.Presentation
+	gameplay         gameplay.Mode
+	gameplayFeatures community.Overrides
+	builderOptions   settings.BuilderOptions
 	// messages is the message-column ring configuration (`textlines`,
 	// `textscroll`, `screenchat`, `unitchattext`). The options family's
 	// interface page writes `textscroll`, `textlines` and `unitchattext`;

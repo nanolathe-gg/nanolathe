@@ -73,6 +73,13 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 // ---------------------------------------------------------------------------
 
 func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, rect world.FootprintRect, position world.ModelWorldPosition) (*units.Unit, error) {
+	return s.allocateNanoframeFacing(factory, def, rect, position, units.FacingSouth)
+}
+
+// allocateNanoframeFacing selects geometry before unit creation, so COB Create
+// and both occupancy layers see the same orientation [community patch engine
+// behavior, CP-CON-5].
+func (s *Service) allocateNanoframeFacing(factory *units.Unit, def *content.UnitDef, rect world.FootprintRect, position world.ModelWorldPosition, facing units.StructureFacing) (*units.Unit, error) {
 	if def == nil {
 		return nil, fmt.Errorf("construction: nil product def")
 	}
@@ -99,7 +106,24 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	if !s.CheckLimit(factory, def.UnitName) {
 		return nil, ExhaustionError() // verbatim [05 C18] via hook [P0-I16]
 	}
+	var geometry StructureGeometry
+	if facing != units.FacingSouth {
+		var err error
+		geometry, err = s.structureGeometryApplied(def, facing)
+		if err != nil {
+			return nil, err
+		}
+	}
+	reserve := func(product pool.Handle) error {
+		if facing == units.FacingSouth {
+			return s.reservePlacement(product, def, rect)
+		}
+		return s.reservePlacementOriented(product, def, rect, geometry.Yard)
+	}
 	if s.Allocator != nil {
+		if facing != units.FacingSouth {
+			return nil, fmt.Errorf("construction: oriented allocation requires facing allocator")
+		}
 		// Hook for tests: create at the authored model/world exit position.
 		prod, err := s.Allocator(factory.Owner, def, position.X(), position.Y(), position.Z())
 		if err != nil {
@@ -118,7 +142,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 		}
 		initializeNanoframe(prod, def)
 		if prod != nil {
-			if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
+			if err := reserve(prod.Handle); err != nil {
 				// Same never-existed unwind as the world path below
 				// [04 R-FAC-02 §3]. The bare `Alive = false` this replaces left
 				// the pool slot allocated and both counters bumped, so the
@@ -140,7 +164,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	// nanoframe, not an already-built unit, so it takes the creation service's
 	// unbuilt form and `activatewhenbuilt` does not raise its activation edge
 	// here — completion does [04 R-SPEC-01 §12].
-	h, err := s.World.CreateNanoframe(def, factory.Owner, position.X(), position.Y(), position.Z())
+	h, err := s.World.CreateNanoframeFacing(def, factory.Owner, position.X(), position.Y(), position.Z(), facing)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +172,7 @@ func (s *Service) allocateNanoframe(factory *units.Unit, def *content.UnitDef, r
 	if prod == nil {
 		return nil, fmt.Errorf("construction: failed to get product")
 	}
-	if err := s.reservePlacement(prod.Handle, def, rect); err != nil {
+	if err := reserve(prod.Handle); err != nil {
 		// The refused product never existed [04 R-FAC-02 §3]: it is freed, not
 		// killed. A Destroy here filed a death with no damage packet behind it —
 		// a kill record, a death cause and a decremented live count against a

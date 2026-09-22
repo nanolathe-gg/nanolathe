@@ -104,7 +104,7 @@ func TestCompositionModelCacheIncludesWinningProvider(t *testing.T) {
 }
 
 func TestCOBPresentationSinkMapsPieceIdentity(t *testing.T) {
-	s := &Session{publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
+	s := &Session{publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0)}
 	sink := &cobPresentationSink{publication: s.publication, clock: s.Clock, source: 1}
 	sink.SetCOBPieceMap([]int{1, 0})
 	sink.EmitCOBEvent(cob.PresentationEvent{Kind: cob.PresentationSFX, Piece: 0, SFXType: 1})
@@ -141,7 +141,7 @@ func TestGroundScriptedTransportRunsThroughPreCreateBinding(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"carrier": carrierDef, "cargo": cargoDef}}
 	terrain := minimalTerrain()
 	sim := rng.NewSimulation(77)
-	s := &Session{Catalog: cat, World: terrain, rngSim: sim, rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
+	s := &Session{Catalog: cat, World: terrain, rngSim: sim, rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0)}
 	w := units.NewSliced(4, cat)
 	s.Units = w
 	s.Movement = movement.NewSystem(terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 255}, movement.NewOccupancyGrid())
@@ -227,7 +227,7 @@ func TestCompositionBinderFutureAllocationIsStrictAndPreCreate(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	good := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1}
 	cat.Units[good.CanonicalKey] = good
-	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
+	s := &Session{rngSim: rng.NewSimulation(77), rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0)}
 	w := units.NewSliced(2, cat)
 	w.SetCOBSource(fs, globalCobLoader)
 	w.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })

@@ -192,15 +192,6 @@ func compareCaseInsensitive(a, b string) int {
 	return 0
 }
 
-// veteranTier computes tier = min(floor(unsigned kills/5),5) [06 §4.2], [06 §9.2].
-func veteranTier(kills int32) int32 {
-	tier := int32(uint16(kills) / 5) // unsigned stored-word reader [06 §9.2], [06 §4.2]
-	if tier > 5 {
-		tier = 5
-	}
-	return tier
-}
-
 // Blast radius helpers [06 §9.3].
 
 // StoredArea reads the weapon record's areaofeffect word the way every retail
@@ -228,6 +219,58 @@ func BroadPhaseRadiusCells(radius int32) int32 {
 		radius = 0
 	}
 	return radius/16 + 1 // [06 §9.3]
+}
+
+// communityOffMapDistance uses CP-ENV-1's saturating distance rather than
+// retail area damage's signed-word wrap. An exact integer comparison first
+// detects distances above the 32767-world-unit clamp; values inside that bound
+// then use the retail area helper's double-precision root and whole-unit
+// truncation [community patch engine behavior §5.7 CP-ENV-1].
+func communityOffMapDistance(impact Vec3, u *units.Unit) int32 {
+	if u == nil || u.Def == nil {
+		return 32767
+	}
+	min, max := u.Def.BoundingExtents()
+	// CP-ENV-1 adds each signed 32-bit stored position and extent at that same
+	// width before widening the separation for its double-precision square.
+	position := [3]int32{int32(u.X.Raw()), int32(u.Y.Raw()), int32(u.Z.Raw())}
+	p := [3]int32{int32(impact.X.Raw()), int32(impact.Y.Raw()), int32(impact.Z.Raw())}
+	lo := [3]int32{position[0] + min[0], position[1] + min[1], position[2] + min[2]}
+	hi := [3]int32{position[0] + max[0], position[1] + max[1], position[2] + max[2]}
+	const clampRaw = uint64(32767) * uint64(numeric.FractionOne)
+	const clampSquared = clampRaw * clampRaw
+	var sum uint64
+	for axis := 0; axis < 3; axis++ {
+		var delta uint64
+		if p[axis] < lo[axis] {
+			delta = uint64(int64(lo[axis]) - int64(p[axis]))
+		} else if p[axis] > hi[axis] {
+			delta = uint64(int64(p[axis]) - int64(hi[axis]))
+		}
+		if delta > clampRaw {
+			return 32767
+		}
+		squared := delta * delta
+		if sum > clampSquared-squared {
+			return 32767
+		}
+		sum += squared
+	}
+	wrappedImpact := Vec3{X: numeric.Fixed(int64(p[0])), Y: numeric.Fixed(int64(p[1])), Z: numeric.Fixed(int64(p[2]))}
+	return DistanceToBox(wrappedImpact, UnitForArea{
+		Handle: u.Handle,
+		Pos:    Vec3{X: numeric.Fixed(int64(position[0])), Y: numeric.Fixed(int64(position[1])), Z: numeric.Fixed(int64(position[2]))},
+		Min: Vec3{
+			X: numeric.Fixed(int64(lo[0])),
+			Y: numeric.Fixed(int64(lo[1])),
+			Z: numeric.Fixed(int64(lo[2])),
+		},
+		Max: Vec3{
+			X: numeric.Fixed(int64(hi[0])),
+			Y: numeric.Fixed(int64(hi[1])),
+			Z: numeric.Fixed(int64(hi[2])),
+		},
+	})
 }
 
 // Falloff computes area falloff for accepted nonzero distance d and radius R [06 §9.3] C26.
@@ -309,18 +352,20 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 // This standalone arithmetic entry models a present shooter; production passes
 // explicit shooter presence into weaponNominal before the shared receiver.
 func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32, defenderKills int32, isArmored bool, damageModifier int32, isHealing bool, globalDouble bool, globalHalf bool) uint16 {
-	amount := weaponNominal(baseDamage, falloff, attackerKills, true, globalDouble, globalHalf)
+	attackerLevel := int32(StrictRules{}.VeteranLevel(VeteranLevelRequest{Kills: uint16(attackerKills)}))
+	amount := weaponNominal(baseDamage, falloff, attackerLevel, true, globalDouble, globalHalf)
 	if isHealing {
 		// Healing bypasses steps 5 and 6 [06 §9.2] C20.
 		return uint16(amount) // pack low 16 bits modulo 65,536 [06 §9.2] step 7
 	}
-	return scaleAcceptedAmount(amount, defenderKills, isArmored, damageModifier)
+	defenderLevel := int32(StrictRules{}.VeteranLevel(VeteranLevelRequest{Kills: uint16(defenderKills)}))
+	return scaleAcceptedAmount(amount, defenderLevel, isArmored, damageModifier)
 }
 
 // weaponNominal is the weapon-side half of C20. It intentionally knows
 // nothing about the recipient: fixed producers have no weapon and enter the
 // receiver below with their established nominal directly [06 §9.2].
-func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, hasAttacker, globalDouble, globalHalf bool) int32 {
+func weaponNominal(baseDamage int32, falloff float32, attackerLevel int32, hasAttacker, globalDouble, globalHalf bool) int32 {
 	// Step 1 already applied: baseDamage is selected override or default [06 §9.2] C19.
 	// The base crosses the stored single-precision falloff boundary; only the
 	// signed-64 truncation retains its low 32 bits [06 §9.2][01 R-DET-01 §1].
@@ -329,8 +374,7 @@ func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, hasAt
 	// A null shooter skips this stage, including the tier-zero multiplication.
 	// Percentage products wrap before the signed division [06 §9.2].
 	if hasAttacker {
-		tierA := veteranTier(attackerKills)
-		amount = (amount * (100 + 6*tierA)) / 100
+		amount = (amount * (100 + 6*attackerLevel)) / 100
 	}
 
 	// Step 4: apply recovered global double/half gates [06 §9.2] step 4.
@@ -351,7 +395,7 @@ func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, hasAt
 // then the packet's low-word packing. It is shared by weapon and fixed packet
 // producers, which keeps a fixed nominal from acquiring a fictitious weapon
 // lookup [06 §9.2] [06 R-DMG-01 §8].
-func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, damageModifier int32) uint16 {
+func scaleAcceptedAmount(amount, defenderLevel int32, isArmored bool, damageModifier int32) uint16 {
 
 	// Step 5: if target is in armored state and incoming amount <30000, apply fixed-point damage modifier [06 §9.2] step 5.
 	// The modifier is definition's fixed-point scale >>16 (damageModifier is 16.16, 65536 =1.0) [02 "Unit record"].
@@ -362,8 +406,7 @@ func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, dama
 	}
 
 	// Step 6: apply defender veterancy ((25-tier)*4)/100, truncate [06 §9.2] step 6.
-	tierD := veteranTier(defenderKills)
-	defFactor := (25 - tierD) * 4
+	defFactor := (25 - defenderLevel) * 4
 	amount = (amount * defFactor) / 100 // wrap before signed division [06 §9.2]
 
 	// Step 7: pack low 16 bits into packet, modulo 65,536 [06 §9.2].

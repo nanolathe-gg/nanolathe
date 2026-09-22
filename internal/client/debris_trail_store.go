@@ -57,13 +57,14 @@ type debrisTrailStore struct {
 	// produced containers on; zero means never. The stamp is what keeps a
 	// re-rendered or interpolated frame from producing a second set of
 	// containers for a tick that already has them — see emitDebrisTrails.
-	emitted [presentationrender.WholeDebrisSlots]uint32
+	emitted []uint32
 	// evicted counts containers the steady cap destroyed, for diagnostics.
 	evicted int
 }
 
 func (s *debrisTrailStore) reset() {
-	*s = debrisTrailStore{live: s.live[:0], views: s.views[:0]}
+	clear(s.emitted)
+	*s = debrisTrailStore{live: s.live[:0], views: s.views[:0], emitted: s.emitted}
 }
 
 // append inserts one container at the vector end, destroying the oldest first

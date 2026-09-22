@@ -4,6 +4,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // NewNodeForOrder is the single canonical command payload constructor [04 §3.2][04 §3.4][P0-I03].
@@ -67,9 +68,10 @@ func NewMoveNode(id ID, goalX, goalZ numeric.Fixed, tick uint32, owner pool.Hand
 // Param3 is the blocked-area retry counter [04 §3.2][R-ORDER-02 §1] and starts
 // zeroed; the handler's setup path zeroes it on every (re)arm. ID is
 // MobileBuild or VTOL_MobileBuild chosen by caller [04 §3.1].
-// The orientation argument has no established home in the order record —
-// [04 §3.2] assigns the third parameter to the retry counter — so it is
-// accepted for signature stability and not stored.
+// BuildFacing is a Nanolathe extension field outside the retail parameter
+// words: [04 §3.2] keeps Param3 as the blocked-area retry counter. Only the
+// player-facing producer supplies it; zero leaves AI and restored untagged
+// orders facing south [community patch engine behavior, CP-CON-5].
 func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeric.Fixed, orientation uint16, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
 	ck := content.CanonicalKey(defKey)
 	idx, _ := catalogIndex(cat, ck)
@@ -77,6 +79,7 @@ func NewMobileBuildNode(cat *content.Catalog, defKey string, siteX, siteZ numeri
 	// Caller may override ID for VTOL; keep MobileBuild default if not VTOL.
 	n := NewNodeForOrder(id, 0, siteX, 0, siteZ, tick, owner, queued)
 	n.BuildDefKey = ck
+	n.BuildFacing = units.StructureFacing(orientation & 3)
 	n.Param1 = idx
 	n.Param2 = count
 	return n

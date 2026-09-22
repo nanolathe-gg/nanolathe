@@ -8,7 +8,7 @@ import (
 
 // Mode is independent of the presentation renderer. The zero value selects Modern.
 //
-// A mode word has three forms: the two reserved words below, and the name of
+// A mode word has two forms: one of the three reserved words below, or the name of
 // any rule set this build registered (docs/DESIGN_GAMEPLAY_RULES.md §1). The
 // reserved words are the vocabulary every persisted and reported value uses;
 // a registered name is a selection the host carries from its flag or its
@@ -17,8 +17,9 @@ import (
 type Mode string
 
 const (
-	Modern   Mode = "modern"
-	Strict31 Mode = "strict-3.1"
+	Modern      Mode = "modern"
+	Community39 Mode = "community-3.9"
+	Strict31    Mode = "strict-3.1"
 )
 
 // NameRegistry is how a build tells this package which rule-set names it can
@@ -47,7 +48,7 @@ func UseNameRegistry(r NameRegistry) { names = r }
 
 // selectable reports whether this build can select the word as it stands.
 func (m Mode) selectable() bool {
-	if m == Modern || m == Strict31 {
+	if m == Modern || m == Community39 || m == Strict31 {
 		return true
 	}
 	return names != nil && names.Known(string(m))
@@ -58,7 +59,7 @@ func selectableNames() []string {
 	if names != nil {
 		return names.Names()
 	}
-	return []string{string(Modern), string(Strict31)}
+	return []string{string(Modern), string(Community39), string(Strict31)}
 }
 
 // Normalize canonicalizes a stored or parsed selection: a reserved word and a
@@ -66,8 +67,8 @@ func selectableNames() []string {
 // becomes Modern, the default. It is what a settings loader, a host option and
 // a session constructor apply to a word of unknown provenance.
 //
-// Normalize answers the *selection* question, not the strict-versus-modern
-// one. A registered set declares which reserved set it derives from and the
+// Normalize answers the *selection* question, not the reserved-base one. A
+// registered set declares which reserved set it derives from and the
 // session's bound set answers that instead; see
 // docs/DESIGN_GAMEPLAY_RULES.md §1.
 func (m Mode) Normalize() Mode {

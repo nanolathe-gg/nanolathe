@@ -110,6 +110,10 @@ type Node struct {
 	// blocked-area retry counter [04 §3.2][R-ORDER-02 §1].
 	// Assist/repair/reclaim/capture/resurrection: Target + operation-specific progress in Param2/3 [05].
 	BuildDefKey string // canonical unit key for build products [P0-I05][02 §5]
+	// BuildFacing is the transient player-issued CP-CON-5 tag. It is not a
+	// retail parameter or save field; zero is south and therefore also the
+	// answer for AI, campaign and reconstructed untagged orders.
+	BuildFacing units.StructureFacing
 	// RetailSubtypeCode and RetailSubtype preserve the optional handler payload
 	// attached to a saved order.  The payload is deliberately opaque here: its
 	// owning handler performs any typed fix-up, while this node keeps every word

@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -75,9 +76,10 @@ type Profile struct {
 	// directory this content set ships. Keys are the retail names in lower
 	// case; values are spelled as the content set spells them, though every
 	// lookup is case-insensitive anyway [02 §2].
-	Directories  map[string]string `json:"layout"`
-	Limits       Limits            `json:"limits"`
-	Presentation Presentation      `json:"presentation"`
+	Directories  map[string]string   `json:"layout"`
+	Limits       Limits              `json:"limits"`
+	Presentation Presentation        `json:"presentation"`
+	Gameplay     community.Overrides `json:"gameplay,omitempty"`
 }
 
 // Layout returns the first-segment redirection this profile applies. The
@@ -196,4 +198,20 @@ func Resolve(mounted vfs.FSOps, selector string) (Profile, error) {
 		return Lookup(selector)
 	}
 	return Detect(mounted)
+}
+
+// GameplaySources carries the authored table and legacy parameter defaults.
+// Strict ignores these declarations (DESIGN_COMMUNITY_PATCH §3.2 and §5).
+func (p Profile) GameplaySources() []community.Overrides {
+	legacy := community.Overrides{}
+	if p.Name != RetailName && p.Limits.UnitLimit != 0 {
+		legacy.UnitLimit = &p.Limits.UnitLimit
+	}
+	if p.Name != RetailName && p.Limits.SearchEntries != 0 {
+		legacy.PathStepAllowance = &p.Limits.SearchEntries
+	}
+	table := community.Overrides{Table: p.Gameplay.Table}
+	explicit := p.Gameplay
+	explicit.Table = ""
+	return []community.Overrides{table, legacy, explicit}
 }

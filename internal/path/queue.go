@@ -8,8 +8,9 @@ import (
 const DefaultBase int32 = 0x18000
 
 const (
-	popsPerRequest    = 100 // [04 §7.3] C11 each active request limited to 100 heap pops per scheduler call
-	replenishInterval = 150 // [04 §7.3] C11 the global scheduler counter rebuilds the quanta every 150 scheduler calls
+	popsPerRequest      = 100  // [04 §7.3] C11 each active request limited to 100 heap pops per scheduler call
+	replenishInterval   = 150  // [04 §7.3] C11 the global scheduler counter rebuilds the quanta every 150 scheduler calls
+	retailStepAllowance = 1333 // [04 R-PATH-01 §10]
 )
 
 // Request is a pathfinding request [plan Public API].
@@ -252,7 +253,24 @@ func NewScheduler(search SearchFunc, publish PublishFunc) *Scheduler {
 	return &Scheduler{
 		search:        search,
 		publish:       publish,
-		stepAllowance: 1333, // [04 R-PATH-01 §10]
+		stepAllowance: retailStepAllowance,
+	}
+}
+
+// SetStepAllowance fixes the per-call path work allowance selected at battle
+// entry. Zero restores retail's 1333 steps; positive values through MaxInt32
+// are accepted. Invalid values leave the current allowance unchanged
+// [04 R-PATH-01 §10][CP-LIM-2].
+func (s *Scheduler) SetStepAllowance(allowance int) {
+	if s == nil {
+		return
+	}
+	if allowance == 0 {
+		s.stepAllowance = retailStepAllowance
+		return
+	}
+	if allowance > 0 && int64(allowance) <= int64(1<<31-1) {
+		s.stepAllowance = int32(allowance)
 	}
 }
 

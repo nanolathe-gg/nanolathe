@@ -3,6 +3,7 @@ package orders
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // SnapshotRoutePoint is a value-only copy of one authoritative route point.
@@ -40,6 +41,7 @@ type SnapshotNode struct {
 	Satisfied              uint32
 	PathStatus             uint32
 	Param1, Param2, Param3 uint32
+	BuildFacing            units.StructureFacing
 	BuildProduct           string
 	BuildCount             uint32
 	Route                  []SnapshotRoutePoint
@@ -132,7 +134,7 @@ func snapshotList(dst []SnapshotNode, src []*Node, list uint8, route RouteProvid
 			DynamicGate: node.DynamicGate, Deadline: node.Deadline,
 			Satisfied: node.Satisfied, PathStatus: node.PathStatus,
 			Param1: node.Param1, Param2: node.Param2, Param3: node.Param3,
-			BuildProduct: node.BuildDefKey, BuildCount: node.Param2,
+			BuildProduct: node.BuildDefKey, BuildCount: node.Param2, BuildFacing: node.BuildFacing,
 			Route: reusedRoute,
 		}
 		if route != nil {

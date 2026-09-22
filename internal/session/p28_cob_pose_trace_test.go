@@ -40,7 +40,7 @@ func TestP28COB01RScenarioARMCKPublishesStrictCreateState(t *testing.T) {
 		Snapshot: frame.NewBuffer(frame.Capacities{
 			Units: 2,
 		}),
-		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 	}
 	s.Econ.Players[0] = economy.Player{Exists: true, ControllerState: 1}
 	s.rngSim = rng.NewSimulation(1)

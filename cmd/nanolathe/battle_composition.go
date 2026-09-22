@@ -48,8 +48,10 @@ func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishCon
 	localOwner := session.LocalOwnerForConfig(cfg)
 	watching := localOwner >= 0 && localOwner < len(cfg.Players) && cfg.Players[localOwner].IsObserver()
 	return freshBattleRequest{value: headless.FreshBattleRequest{
-		Gameplay: opts.Gameplay,
-		Kind:     kind, Map: cfg.MapName, Difficulty: cfg.Difficulty, Skirmish: cfg,
+		Gameplay:         opts.Gameplay,
+		CommunitySources: communitySources(opts, cs),
+		BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
+		Kind:             kind, Map: cfg.MapName, Difficulty: cfg.Difficulty, Skirmish: cfg,
 		LocalOwner: localOwner, Watching: watching,
 		SimulationSeed: cfg.RNGSimSeed, CRTSeed: cfg.RNGCrtSeed,
 		FS: cs.fs, ContentLimits: cs.limits, Progress: progress,
@@ -66,8 +68,10 @@ func missionBattleRequest(opts Options, cs *contentSet, identity string, difficu
 		seeds = source.NextBattleSeeds()
 	}
 	return freshBattleRequest{value: headless.FreshBattleRequest{
-		Gameplay: opts.Gameplay,
-		Kind:     headless.ScenarioCampaign, Mission: identity,
+		Gameplay:         opts.Gameplay,
+		CommunitySources: communitySources(opts, cs),
+		BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
+		Kind:             headless.ScenarioCampaign, Mission: identity,
 		CampaignIndex: campaignIndex, CampaignSlot: campaignSlot,
 		Difficulty: difficulty, LocalOwner: -1,
 		SimulationSeed: uint32(seeds.Simulation), CRTSeed: seeds.CRT,

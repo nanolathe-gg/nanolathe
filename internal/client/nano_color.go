@@ -11,6 +11,18 @@ type nanoTeamRamp struct {
 }
 
 func (c *Client) nanoParticleColor(v frame.StripView) (uint8, [7]uint8, bool) {
+	// Explicit Community lists take precedence over the Enhanced logo ramp.
+	// Both remain host preferences, and disabling Community restores the
+	// existing renderer-specific policy (GPU design §37.1).
+	if v.Family == frame.StripFamilyNano && c.communityColors.options.TeamColorNanolathe {
+		if !v.NanoOwnerColorKnown || v.NanoOwnerColor >= communityPlayerColors {
+			return v.Fill, [7]uint8{}, false
+		}
+		index := c.communityStreamColor(v.NanoOwnerColor, true, v.Fill, v.ColorSample, v.ColorSequence)
+		// Community assignments stay fixed for the particle lifetime. Feed the
+		// same colour into Enhanced illumination instead of its stock green.
+		return index, [7]uint8{index, index, index, index, index, index, index}, true
+	}
 	if !c.enhanced || !c.effects.TeamNanospray || v.Family != frame.StripFamilyNano || !v.NanoOwnerColorKnown || c.pal == nil || v.Fill < 0xa1 || v.Fill > 0xa7 {
 		return v.Fill, [7]uint8{}, false
 	}

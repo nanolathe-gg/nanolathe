@@ -228,6 +228,16 @@ func (s *Service) sharedStep(builder, target *units.Unit, quantum float32, tick 
 // service boundary so repair shares combat's kind-10 early-heal path [05
 // R-WORK-01 §3][06 §9.1].
 func (s *Service) Repair(builder, target *units.Unit, worker int32) bool {
+	return s.rules().RepairContribution(s, builder, target, worker, false)
+}
+
+// RepairPassive distinguishes healtime from an explicit self-repair order.
+// Only the former uses the Community self-heal multiplier (CP-DMG-4).
+func (s *Service) RepairPassive(target *units.Unit, worker int32) bool {
+	return s.rules().RepairContribution(s, target, target, worker, true)
+}
+
+func (StrictRules) RepairContribution(s *Service, builder, target *units.Unit, worker int32, _ bool) bool {
 	if s == nil || builder == nil || target == nil || target.Def == nil {
 		return false
 	}

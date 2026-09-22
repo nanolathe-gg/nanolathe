@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
@@ -35,6 +36,10 @@ func TestHeadlessSkirmishStepsAndReports(t *testing.T) {
 	}
 	if report.SimulationSeed != 1 || report.CRTSeed != 1 || report.StateHash == "" || report.CatalogHash == "" || report.ManifestHash == "" {
 		t.Fatalf("seeds/hashes = %d/%d/%q/%q/%q", report.SimulationSeed, report.CRTSeed, report.StateHash, report.CatalogHash, report.ManifestHash)
+	}
+	expected, _ := community.Table(community.Mainline)
+	if report.Community != expected || report.EntryCommunity != expected || report.CommunityDigest != expected.Digest() {
+		t.Fatal("report lost resolved feature table or digest")
 	}
 	if !report.Players[1].AIManagerBound {
 		t.Fatal("computer player's AI manager was not reported as bound")

@@ -3,6 +3,7 @@ package combat
 import (
 	"sync/atomic"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -210,6 +211,8 @@ type pendingAim struct {
 // Records is the parallel named storage (107-byte retail identity, I13) moved
 // identically to the metadata on compaction.
 type Service struct {
+	// Community holds only this owner's projected feature answers (DESIGN_COMMUNITY_PATCH §3.1).
+	Community community.Features
 	// Rules is the gameplay rule set the firing pipeline consults, bound by the
 	// session from the central gameplay mode. StrictRules answers as retail
 	// [06 R-WPN-05 §1] [04 R-STANCE-01 §2]; ModernRules carries the terrain
@@ -217,8 +220,17 @@ type Service struct {
 	// docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1 and §2.6.1. A nil field is
 	// Strict 3.1, so a fixture built without rules keeps the retail path.
 	Rules Rules
+	// VisitOffMapFiled walks the movement owner's canonical off-map bucket in
+	// head-first (descending filing-sequence) order. It advances from the link
+	// observed after yield returns, stops when yield returns false, and allocates
+	// nothing per visit. IsOffMapFiled is the point query used by CP-DMG-1 to keep its
+	// clamped overflow index disjoint from that bucket [CP-DMG-1][CP-ENV-1].
+	VisitOffMapFiled func(yield func(pool.Handle, uint64) bool) `json:"-"`
+	IsOffMapFiled    func(pool.Handle) bool                     `json:"-"`
+	// TransportDeaths is CP-DMG-3's battle-local captured death context.
+	TransportDeaths TransportDeathState
 	// Modern transient predictions follow projectile compaction; saves omit them.
-	incoming                 [ProjectileCapacity]incomingShot
+	incoming                 []incomingShot
 	modernTick               uint32
 	modernNextProjectileTick uint32
 	targetQuery              TargetQuery
@@ -231,12 +243,13 @@ type Service struct {
 	// Its phase-8 deadline bounds future wind knowledge [01 §7.3].
 	ProjectileWind *world.Wind
 
-	Slots   pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
-	Records [ProjectileCapacity]Projectile // named records parallel to Slots
+	Slots   pool.Projectiles // sole count/dead authority (I5) [06 §5.1]
+	Records []Projectile     // named records parallel to Slots
 	// presentationIDs are non-retail publication identities. They move with
 	// their records during stable compaction but are not part of Records, so a
 	// burst's whole-record copy cannot inherit its parent's identity [I6].
-	presentationIDs [ProjectileCapacity]uint64
+	presentationIDs []uint64
+	compactScratch  []int16
 	doubleShot      bool
 	halfShot        bool
 	// shotQuery is the fire pipeline's reusable ShotQuery. It exists so a fire
@@ -318,6 +331,53 @@ type Service struct {
 	// within one impact and empty between them, so it is not session state and
 	// is never serialized.
 	impactStack []pool.Handle
+
+	// Community area state is battle-local transient indexing and
+	// per-explosion scratch. It is rebuilt from authoritative unit and movement
+	// state, never serialized [CP-DMG-1].
+	communityAreaCells       []communityAreaCell
+	communityAreaNodes       []communityAreaNode
+	communityAreaHitGen      []uint32
+	communityAreaUnits       []*units.Unit
+	communityAreaWidth       int32
+	communityAreaHeight      int32
+	communityAreaLimit       int32
+	communityAreaBuiltTick   uint32
+	communityAreaBuilt       bool
+	communityAreaStamp       uint32
+	communityAreaGenCounter  uint32
+	communityAreaCurrentGen  uint32
+	communityAreaSaturations uint64
+}
+
+// NewServiceWithProjectileCapacity creates a combat service whose projectile
+// capacity is fixed for the battle. Zero selects retail's 300 slots; Community
+// 3.9 supplies 3000 [CP-LIM-1]. A zero-value Service remains retail-compatible.
+func NewServiceWithProjectileCapacity(capacity int) *Service {
+	s := &Service{Slots: *pool.NewProjectiles(capacity)}
+	s.ensureProjectileStorage()
+	s.TransportDeaths = TransportDeathState{}
+	s.ResetCommunityAreaState()
+	return s
+}
+
+func (s *Service) ensureProjectileStorage() {
+	if s == nil {
+		return
+	}
+	capacity := s.Slots.Capacity()
+	if s.Records == nil {
+		s.Records = make([]Projectile, capacity)
+	}
+	if s.incoming == nil {
+		s.incoming = make([]incomingShot, capacity)
+	}
+	if s.presentationIDs == nil {
+		s.presentationIDs = make([]uint64, capacity)
+	}
+	if s.compactScratch == nil {
+		s.compactScratch = make([]int16, capacity)
+	}
 }
 
 // beginImpact marks one pooled record as having its central impact in progress,
@@ -389,6 +449,7 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 	if s == nil {
 		return 0, false
 	}
+	s.ensureProjectileStorage()
 	h, ok := s.Slots.Reserve()
 	if !ok {
 		return 0, false
@@ -494,6 +555,9 @@ func (s *Service) Count() int {
 	if s == nil {
 		return 0
 	}
+	if s.Slots.Count() != 0 {
+		s.ensureProjectileStorage()
+	}
 	return s.Slots.Count()
 }
 
@@ -571,11 +635,12 @@ func (s *Service) Compact(follow *pool.Handle) {
 	if s == nil {
 		return
 	}
+	s.ensureProjectileStorage()
 	oldCount := s.Slots.Count()
 	// Every survivor's marker is unique and equals its old index. This fixed
 	// table therefore answers the later marker search without scanning each
 	// target's live span. A negative entry means no surviving target.
-	var oldToNew [ProjectileCapacity]int16
+	oldToNew := s.compactScratch[:oldCount]
 	newCount := 0
 	for i := 0; i < oldCount; i++ {
 		s.Records[i].OldMarker = int16(i)

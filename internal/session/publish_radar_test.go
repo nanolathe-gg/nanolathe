@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
+
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -100,7 +102,7 @@ func TestPublishSnapshotRadarRingsShrinkWhenReusedSlotHadMore(t *testing.T) {
 	oneRing := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "one-ring"},
 		MaxDamage:        1, CanGuard: true,
-		Weapon1Def: &content.WeaponDef{ID: 4, Range: 42},
+		Weapon1Def: &content.WeaponDef{ID: 4, Coverage: 554},
 	}
 	w := newSessionFixtureWorld(4, nil)
 	h, err := w.Create(threeRings, 0, 0, 0, 0)
@@ -186,5 +188,29 @@ func TestPublishSnapshotRadarContactsImmutableAfterNextPublish(t *testing.T) {
 	}
 	if len(first.Radar.Contacts[0].Rings) != 1 || first.Radar.Contacts[0].Rings[0].Range != wantRange {
 		t.Fatalf("earlier committed frame's rings changed to %#v after a later publish", first.Radar.Contacts[0].Rings)
+	}
+}
+
+// The ring uses coverage and antiweapons, independently of canguard/range.
+// Community removes the retail inset at publication [03 §3.9]; DESIGN_COMMUNITY_PATCH §4.2, CP-FIX-5.
+func TestCommunityInterceptorRingPublication(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "interceptor"}, MaxDamage: 1, AntiWeapons: true,
+		Weapon1Def: &content.WeaponDef{ID: 1, Coverage: 1024, Range: 17, Interceptor: true},
+		Weapon2Def: &content.WeaponDef{ID: 2, Coverage: 1024, Range: 17}}
+	w := newSessionFixtureWorld(2, nil)
+	if _, err := w.Create(def, 0, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Units: w, Snapshot: frame.NewBuffer(), Combat: combat.NewServiceWithProjectileCapacity(0)}
+	s.publishSnapshot(1)
+	rings := s.Snapshot.Current().Radar.Contacts[0].Rings
+	if !rings[0].Enabled || rings[0].Range != 512 || rings[1].Enabled {
+		t.Fatalf("Strict rings = %+v", rings)
+	}
+	s.Combat.Rules = combat.CommunityRules{}
+	s.Combat.Community.AntinukeCircularCoverage = true
+	s.publishSnapshot(2)
+	if got := s.Snapshot.Current().Radar.Contacts[0].Rings[0].Range; got != 1024 {
+		t.Fatalf("Community ring = %d", got)
 	}
 }

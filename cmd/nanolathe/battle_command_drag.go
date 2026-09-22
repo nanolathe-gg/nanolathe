@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -30,6 +31,7 @@ type battleCommandDrag struct {
 	button         input.MouseButton
 	latch          input.Latch
 	product        string
+	facing         units.StructureFacing
 	builder        pool.Handle
 	selection      []pool.Handle
 	start, end     dragPoint
@@ -95,6 +97,9 @@ func (b *battleSession) beginCommandDrag(cl *client.Client, mouse input.MouseSta
 		selection: slices.Clone(f.Selection.Handles), start: p, end: p, pressX: mx, pressY: my, path: []dragPoint{p}, grid: modifiers.Alt}
 	if state.Latch == input.LatchMobileBuild {
 		b.updatePlacement(mx, my)
+		if def, ok := b.cat.Unit(d.product); ok {
+			d.facing = b.communityPlacementFacing(def)
+		}
 		d.start = dragPoint{state.BuildCellX, state.BuildCellZ}
 		d.end = d.start
 	}
@@ -188,7 +193,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 					continue
 				}
 				wx, wz := world.PlacementCenter(site.cell.x, site.cell.z, state.BuildFootX, state.BuildFootZ)
-				if b.dispatchMobileBuild(d.product, wx, numeric.FixedFromInt(int64(site.height)), wz, modifiers.Shift || accepted, true) == nil {
+				if b.dispatchMobileBuildFacing(d.product, wx, numeric.FixedFromInt(int64(site.height)), wz, modifiers.Shift || accepted, true, d.facing) == nil {
 					accepted = true
 				}
 			}
@@ -254,6 +259,7 @@ func (b *battleSession) updateCommandDrag(cl *client.Client, mx, my int32, modif
 		cells := dragBuildCells(d.start, end, state.BuildFootX, state.BuildFootZ, d.grid)
 		reserved, complete := b.resourceReservations()
 		def, _ := b.cat.Unit(d.product)
+		d.facing = b.communityPlacementFacing(def)
 		d.sites = d.sites[:0]
 		for _, cell := range cells {
 			result, err := b.checkProductPlacement(cell.x, cell.z, def, state.BuildFootX, state.BuildFootZ, uint16(d.builder))

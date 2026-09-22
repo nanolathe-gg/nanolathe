@@ -1,6 +1,7 @@
 package headless
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sort"
 
@@ -62,7 +63,10 @@ type PlayerReport struct {
 // Session.PartialStateFingerprint, whose intentionally partial coverage is listed
 // in docs/DESIGN_RUNTIME_DETERMINISM.md §4; it is not a whole-session parity gate.
 type Report struct {
-	Gameplay gameplay.Mode `json:"gameplay"`
+	Community       community.Features `json:"gameplay_features"`
+	CommunityDigest string             `json:"gameplay_features_digest"`
+	EntryCommunity  community.Features `json:"entry_gameplay_features"`
+	Gameplay        gameplay.Mode      `json:"gameplay"`
 	// Rules is the bound rule set's name. Gameplay reports only the reserved
 	// base word, so a registered third-party set is visible only here.
 	Rules string `json:"rules"`
@@ -179,6 +183,9 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 		ScenarioKind:     kind,
 		Gameplay:         sess.Gameplay.Normalize(),
 		Rules:            sess.Rules.Name,
+		Community:        sess.Community,
+		EntryCommunity:   sess.EntryCommunity,
+		CommunityDigest:  sess.Community.Digest(),
 		ContentProfile:   request.ContentProfile,
 		ScenarioIdentity: identity,
 		SimulationSeed:   request.SimulationSeed,

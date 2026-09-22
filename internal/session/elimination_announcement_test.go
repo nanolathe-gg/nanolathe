@@ -24,7 +24,7 @@ func eliminationAnnouncementSession(t *testing.T, missionType mission.Type) (*Se
 		Units:       w,
 		Econ:        &economy.Service{},
 		Mission:     &mission.Mission{Type: missionType},
-		publication: newPublicationState(nil),
+		publication: newPublicationState(nil, 0),
 	}
 	s.SeedSessionRNG(1, 1)
 	for i := 0; i < 2; i++ {

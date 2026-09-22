@@ -179,7 +179,19 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		}
 	}
 	// A missing current model is a production composition failure [R-P0-09].
-	footX, footZ := int(def.FootprintX), int(def.FootprintZ)
+	geometry := StructureGeometry{Facing: units.FacingSouth, FootprintX: def.FootprintX, FootprintZ: def.FootprintZ}
+	if node.BuildFacing != units.FacingSouth {
+		// The command boundary already clamped the transient tag through Rules.
+		// Rebinding does not reinterpret queued placement
+		// [DESIGN_GAMEPLAY_RULES §5].
+		var geometryErr error
+		geometry, geometryErr = s.structureGeometryApplied(def, node.BuildFacing)
+		if geometryErr != nil {
+			s.rejectPermanent(factory, node, tick, geometryErr)
+			return
+		}
+	}
+	footX, footZ := int(geometry.FootprintX), int(geometry.FootprintZ)
 	if footX <= 0 || footZ <= 0 {
 		s.rejectPermanent(factory, node, tick,
 			fmt.Errorf("%w: product %q has malformed footprint %dx%d", world.ErrMissingPlacementDefinition, def.UnitName, footX, footZ))
@@ -217,12 +229,16 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	// Load product definition and attempt silent blocked revalidation [05 C17].
 	var yard []world.YardCell
 	if def.YardMap != "" {
-		y, err := world.ParseYardMap(def.YardMap, footX, footZ)
-		if err != nil {
-			s.rejectPermanent(factory, node, tick, err)
-			return
+		if geometry.Facing == units.FacingSouth {
+			y, err := world.ParseYardMap(def.YardMap, footX, footZ)
+			if err != nil {
+				s.rejectPermanent(factory, node, tick, err)
+				return
+			}
+			yard = y
+		} else {
+			yard = geometry.Yard
 		}
-		yard = y
 	} else {
 		// No yardmap for mobile products => use nil yard (inline terrain loop) but factory mode still checks occupancy.
 		// For mobiles, the validator is inline terrain loop only when mode requests terrain checking; other modes accept immediately.
@@ -265,7 +281,12 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 	s.recordAdmission(tick, factory, def.UnitName, factoryPlacement.Rect(), AdmissionAdmitted, nil)
 
 	// On validation success, allocator creates unit AT exit spot [05 C18].
-	product, err := s.allocateNanoframe(factory, def, factoryPlacement.Rect(), factoryPlacement.ModelPosition())
+	var product *units.Unit
+	if geometry.Facing == units.FacingSouth {
+		product, err = s.allocateNanoframe(factory, def, factoryPlacement.Rect(), factoryPlacement.ModelPosition())
+	} else {
+		product, err = s.allocateNanoframeFacing(factory, def, factoryPlacement.Rect(), factoryPlacement.ModelPosition(), geometry.Facing)
+	}
 	if err != nil {
 		// Allocator refusal prints verbatim "Unable to create any more units", retries in exactly 300 ticks (not randomized), stays state2 [05 C18].
 		s.logMessage(fmt.Sprintf("construction: allocation refused (%v)", err))
@@ -354,7 +375,18 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 			fmt.Errorf("%w: product %q", world.ErrMissingPlacementDefinition, node.BuildDefKey))
 		return 2
 	}
-	footX, footZ := int(def.FootprintX), int(def.FootprintZ)
+	geometry := StructureGeometry{Facing: units.FacingSouth, FootprintX: def.FootprintX, FootprintZ: def.FootprintZ}
+	if node.BuildFacing != units.FacingSouth {
+		// BuildFacing is the rule-clamped answer captured when this request was
+		// issued. A later rule switch does not rewrite queued work.
+		var geometryErr error
+		geometry, geometryErr = s.structureGeometryApplied(def, node.BuildFacing)
+		if geometryErr != nil {
+			s.rejectPermanent(builder, node, tick, geometryErr)
+			return 2
+		}
+	}
+	footX, footZ := int(geometry.FootprintX), int(geometry.FootprintZ)
 	if footX <= 0 {
 		footX = 1
 	}
@@ -382,9 +414,13 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 	// Validation at snapped cell [05 C17] with null self identity (mobile builders place at site).
 	var yard []world.YardCell
 	if def.YardMap != "" {
-		y, err := world.ParseYardMap(def.YardMap, footX, footZ)
-		if err == nil {
-			yard = y
+		if geometry.Facing == units.FacingSouth {
+			y, err := world.ParseYardMap(def.YardMap, footX, footZ)
+			if err == nil {
+				yard = y
+			}
+		} else {
+			yard = geometry.Yard
 		}
 	} else {
 		yard = make([]world.YardCell, footX*footZ)
@@ -402,10 +438,11 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 		// first blocked visit with the counter above 10 notifies "Target
 		// area was blocked" and abandons the order (code 8, remove).
 		// Do not request another clearance move on the terminal give-up visit.
-		if node.Param3 <= 10 {
+		limit := s.rules().BlockedSiteLimit(s)
+		if node.Param3 <= limit {
 			s.yieldConstructionSite(builder, rect, tick)
 		}
-		text, code := orders.MobileBuildBlockedVisit(node, tick)
+		text, code := orders.MobileBuildBlockedVisitLimit(node, tick, limit)
 		// The same two captions are status kind 7 on the builder
 		// [04 R-ORD-01 §5][05 "the build-order caption census"]. Only the first
 		// blocked visit and the over-limit one carry text; a silent visit
@@ -426,7 +463,12 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 		node.DynamicGate, node.Deadline = WakeBit1|WakeBit2, int32(tick+15)
 		return 2
 	}
-	product, err := s.allocateNanoframe(builder, def, mobilePlacement.Rect(), mobilePlacement.ModelPosition())
+	var product *units.Unit
+	if geometry.Facing == units.FacingSouth {
+		product, err = s.allocateNanoframe(builder, def, mobilePlacement.Rect(), mobilePlacement.ModelPosition())
+	} else {
+		product, err = s.allocateNanoframeFacing(builder, def, mobilePlacement.Rect(), mobilePlacement.ModelPosition(), geometry.Facing)
+	}
 	if err != nil {
 		s.logMessage(ErrLimitMessage)
 		s.raiseStatus(builder, statusCant, ErrLimitMessage) // [04 R-ORD-01 §5]

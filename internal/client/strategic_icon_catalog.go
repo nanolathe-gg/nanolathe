@@ -23,6 +23,15 @@ type StrategicIconDescriptor struct {
 	CommanderAppearance                bool
 	Level                              int
 	Evidence, Capabilities, Unresolved []string
+
+	// Community icon configuration is host presentation state. The PCX mask
+	// keeps selected pixels in the atlas's halo lane; these fields choose the
+	// authored palette colour for that lane without changing unit content.
+	communityConfigured bool
+	communitySelected   uint8
+	communityHover      uint8
+	communityCircle     bool
+	communityHoverRect  drawlist.Rect
 }
 
 // StrategicIconAuditEntry retains winning-provider provenance and identity.

@@ -440,7 +440,7 @@ func cargoCascadeCause(carrier *units.Unit) combat.Cause {
 // this build's equivalent of the position [06 §12.1] gives the cascade inside
 // the central death handler: after the fixed teardown helpers and before the
 // death explosion and corpse placement.
-func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHandle pool.Handle, tick uint32) {
+func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHandle pool.Handle, tick uint32, beforePassengerDamage ...func(*units.Unit)) {
 	if s == nil || w == nil {
 		return
 	}
@@ -461,6 +461,9 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 		// surviving or rejected cargo packet.
 		cargos := append([]pool.Handle(nil), dying.Attachment.Cargo...)
 		for _, cargoHandle := range cargos {
+			if len(beforePassengerDamage) != 0 && beforePassengerDamage[0] != nil {
+				beforePassengerDamage[0](w.Unit(cargoHandle))
+			}
 			if s.Damage != nil {
 				s.Damage(tick, combat.DamageInput{Victim: cargoHandle, Attacker: killerHandle, Nominal: 30000, Kind: uint8(cascadeCause)})
 			}

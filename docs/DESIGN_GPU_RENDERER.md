@@ -3055,6 +3055,41 @@ stock-name override table exists; teleporters use the literal Teleporter
 capability. No aggregation, displacement or cluster counts: inspect dense overlap
 before designing any.
 
+### 18.7 Optional community icon configuration
+
+`settings.Presentation.StrategicIconConfig` is an optional host path to the
+community draw engine's
+[icon-configuration contract](../research/extensions/draw-engine-interface.md#megamap).
+Empty keeps the generated
+catalog above. `UseDefaultIcon=true`, including its source default when the key
+is absent, also keeps that catalog and does not open any PCX named by `[Icon]`.
+An unreadable INI, malformed PCX or atlas outside the host bound reports the
+config and art paths and falls back to the complete generated catalog; a partly
+loaded mapping is never published.
+
+With custom icons enabled, `[Icon]` rows retain authored order. Each ordinary
+name resolves through the final content catalog's category registry, and the
+first membership containing a definition ID supplies its PCX. `unknow` supplies
+the unmatched and stale-identity fallback. The reserved `nothing` and
+`nukeicon` rows are parsed as source-reserved art and never compete as unit
+categories: Nanolathe's identified strategic layer has no hidden-unit `NONE`
+image or projectile icon, while unidentified contacts retain §18.4's generic
+square. The draw engine's commander files are outside the INI row contract and
+are not imported by this host option; generated commander appearances therefore
+follow the same ordered category/`unknow` mapping as other identified units.
+
+The PCX is compiled once into the shared strategic-mask atlas. `FillColor`
+(default 0) becomes the live team lane, `TransparentColor` (9) becomes empty,
+and `SelectedColor` (89) becomes the conditional halo lane. Selection draws
+that lane with palette index 89 (or its configured replacement); hover draws it
+with `HoverColor` (84). Other fixed PCX colours retain luminance between the
+white and black lanes because the existing atlas deliberately carries masks,
+not fixed palette indices. `UseCircleHover=false` uses the authored highlight
+pixels. When true, a circle in the same fixed 24-pixel marker footprint replaces
+those pixels for hover, preserving §18.4 drawing and picking bounds. These are
+host presentation mappings, active only where generated strategic icons already
+apply; they do not change definition records, hashes, visibility or gameplay.
+
 ## 19. Glow: Enhanced bloom from the world's light sources
 
 ### 19.1 Decision
@@ -5167,3 +5202,92 @@ poses and slot identity, speculative-record invalidation, one world transform,
 shader compilation, unchanged fog/interface pixels, repeatable GPU replay, and
 inactive/completed pixel and draw-count identity. Real-map captures and the
 live battle benchmark remain required for visual/performance review (§6).
+
+## 37. Community placement-model preview
+
+The optional placement-model preview is a host presentation feature adopted
+from the Community patch's CP-UD-2 contract. `NanoframePreview` selects off,
+full or wireframe and defaults off. It is independent of gameplay mode: Strict,
+Modern and Community sessions see the same host choice, and changing it never
+changes placement admission, an order, simulation state or either RNG stream.
+The ordinary green/red build rectangle remains the placement verdict in every
+mode.
+
+While placement is armed and the pointer is over the world viewport, the host
+places the immutable catalog definition's model at the resolved build-cell
+centre and validated site height. Full records the production model-body draw;
+wireframe records the projected authored primitive rings as world-overlay
+lines. Both executors therefore consume the same model hierarchy and world
+transform as live units. Off records no model work. The preview has no shadow,
+construction state, animation or COB execution.
+
+`PreviewPiecesS/E/N/W`, when non-empty for the selected facing, takes precedence
+over non-empty `PreviewPieces`; a selected list is a case-folded whitelist split
+on whitespace, commas and semicolons. With no list, pieces whose names contain
+`flare`, `flash`, `muzzle`, `fire`, `flame` or `wake` are omitted. Omission
+removes only that piece's faces: children remain in the hierarchy and are still
+visited. `PreviewObject3D` names a substitute model in `objects3d`. The client
+loads it lazily and caches both success and failure per mounted VFS. A failure
+adds one bounded host art diagnostic and falls back to the definition's base
+model; the piece rules still apply to whichever model is drawn.
+
+`PreviewFaceOpponent` starts with the placement input's facing, then may snap to
+the nearest cardinal toward an opponent. The host applies it only when at least
+one handle in the committed selection resolves to a completed own unit with a
+positive authored build distance and the build-rectangle centre lies within
+that distance by an inclusive squared comparison. It scans player slots in
+ascending order, requiring an active, non-watcher, directionally hostile row,
+and considers exactly the start handle of that player's fixed unit-pool slice.
+An absent or dead first record rejects that player; the scan does not substitute
+a later survivor. Nanolathe additionally requires this first record to pass the
+committed-frame visibility predicate. It never reads the live visibility
+service. The nearest admitted unit wins by strict squared distance; ties retain
+the earlier player. X dominance chooses east/west and Z dominance, including
+ties, chooses south/north. No admitted opponent leaves the player's chosen
+facing unchanged. An opponent-derived facing deliberately bypasses the authored
+`Rotations` set, matching the key's script-owned-heading purpose.
+
+Focused tests lock facing-list precedence, child traversal under an omitted
+parent, substitute fallback and negative caching, the inclusive selected-builder
+gate, first-unit selection, committed fog exclusion, player filtering and the
+`Rotations` bypass. Visual review uses a software/headless capture with retail
+models; the preview remains within the existing world-overlay region described
+in §16.3.
+
+### 37.1 Team-coloured nanolathe and nanoframes
+
+The existing Enhanced `teamNanospray` option remains available. When both it
+and `teamColorNanolathe` are enabled, the explicit Community palette lists take
+precedence in both renderers; disabling Community restores the existing
+Enhanced logo-derived ramp and its lighting. Community particles feed their
+fixed configured colour into Enhanced illumination as well. Both paths share captured owner
+metadata, and neither changes simulation state.
+
+
+`TeamColorNanolathe` is an independent host presentation switch, off by
+default. Its ten stream-list and frame-list strings use the parser, bounds,
+per-list fallback and stock-palette defaults established in
+[community-patch-engine.md "Team-coloured nanolathe and nanoframe colours"](../research/extensions/community-patch-engine.md#512-team-coloured-nanolathe-and-nanoframe-colours).
+It is not a gameplay-rule choice and never consumes a simulation or CRT draw,
+changes an event count, or writes authoritative state [I6].
+
+The strip publisher freezes the nano particle's resolved owner-logo colour,
+creation sample and per-colour creation sequence beside its ordinary stock fill
+byte. The per-colour creation sequence advances for every eligible particle
+even while the host switch is off, so a later toggle observes the same sequence
+as a host that kept it on and cannot feed presentation cadence back into the
+simulation. Recording maps those operands to one configured stream byte. The
+stock fill remains the disabled and unresolved-owner result. Mapping therefore
+does not depend on how often a frame is recorded, submitted or replayed. Both
+executors receive that one physical palette index in the shared `Fill` command,
+so Classic and Enhanced cannot disagree.
+
+An unfinished `UnitView` already carries the owner-logo colour. The client maps
+only `0xa0..0xaf` reveal and outline bytes before either the classic composer or
+the geometry recorder sees them; completed model material and every colour
+outside that ramp remain unchanged. The §37 full placement preview keeps its
+production model body and adds the same model-ring outline when team colour is
+enabled; wireframe keeps its existing rings. Both use frame-list entry zero for
+that static host outline. With the switch off, full and wireframe record exactly
+their previous commands and colours. Unknown or out-of-range owner colours keep
+the corresponding stock colour in every path.

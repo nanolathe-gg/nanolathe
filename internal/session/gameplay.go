@@ -16,11 +16,8 @@ func (s *Session) SetGameplay(mode gameplay.Mode) {
 	if s == nil {
 		return
 	}
-	// Normalize answers with a word this build can select, so the error below
-	// cannot occur; binding the default rather than nothing keeps a session
-	// whole if a caller ever reaches this with an unselectable word.
-	if err := s.SetRules(string(mode.Normalize())); err != nil {
-		s.Gameplay = gameplay.Modern
-		s.BindRules(ModernRuleSet())
-	}
+	// Normalize preserves the vocabulary fallback. Invalid feature declarations
+	// leave the current binding intact; callers needing the diagnostic use
+	// SetRules, and human input validates declarations before enqueueing.
+	_ = s.SetRules(string(mode.Normalize()))
 }

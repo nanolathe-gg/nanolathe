@@ -35,11 +35,14 @@ type WidgetFrame struct {
 // state machine. Change is synchronous; Fired is returned for the screen to
 // consume only after the service pass has completed.
 type WidgetHooks struct {
-	Metric    func(index int) int
-	ArtFrames func(index int) int // resolved button entry, including fallback art
-	Measure   func(index int, text string) int
-	Change    func(index int)
-	Surface   func(index int)
+	// PreserveActiveToggle may retain a keyboard toggle; other gestures and
+	// group/callback service stay unchanged. Nil gives retail toggle behavior.
+	PreserveActiveToggle func(index int, status int) bool
+	Metric               func(index int) int
+	ArtFrames            func(index int) int // resolved button entry, including fallback art
+	Measure              func(index int, text string) int
+	Change               func(index int)
+	Surface              func(index int)
 }
 
 // ServiceResult reports the first fired gadget and the pass residue.
@@ -145,7 +148,7 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 				return finish()
 			}
 		}
-		if !frame.DisableQuickKeys && len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, &result) {
+		if !frame.DisableQuickKeys && len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, hooks, &result) {
 			result.ConsumedTokens = 1
 			matrixConsumed = true
 			if result.Fired {

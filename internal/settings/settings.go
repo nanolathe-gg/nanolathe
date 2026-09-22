@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 )
 
 // FileVersion is the schema tag. A file whose Version is unrecognised is
@@ -324,7 +326,9 @@ type Settings struct {
 	// that linked a set the running one does not — or a hand-edited typo —
 	// starts under the default instead of failing to load
 	// (docs/DESIGN_GAMEPLAY_RULES.md §8).
-	Gameplay gameplay.Mode `json:"gameplay"`
+	Gameplay         gameplay.Mode       `json:"gameplay"`
+	GameplayFeatures community.Overrides `json:"gameplayFeatures,omitempty"`
+	BuilderOptions   BuilderOptions      `json:"builderOptions"`
 	// ContentProfile is the selected content profile: a shipped profile's
 	// name, the path of a user-authored profile JSON file, or empty to detect
 	// the profile from the mounted content set's own markers. It is a
@@ -430,11 +434,38 @@ func (m *Messages) Normalize() {
 // (DESIGN_GPU_RENDERER §13.5, §14.6). FPS zero follows the display refresh;
 // positive values cap modern presentation without changing the simulation.
 type Presentation struct {
+	// Negative snap radii select the content table's default; zero disables.
+	MexSnapRadius        int        `json:"mexSnapRadius"`
+	WreckSnapRadius      int        `json:"wreckSnapRadius"`
+	BuildRotateKey       string     `json:"buildRotateKey"`
+	ClickSnapOverrideKey string     `json:"clickSnapOverrideKey"`
+	BuildRotationOverlay int        `json:"buildRotationOverlay"`
+	NanoframePreview     int        `json:"nanoframePreview"`
+	QueuedOrderDrag      int        `json:"queuedOrderDrag"`
+	StrategicIconConfig  string     `json:"strategicIconConfig"`
+	TeamColorNanolathe   int        `json:"teamColorNanolathe"`
+	PlayerStreamColors   [10]string `json:"playerStreamColors"`
+	PlayerFrameColors    [10]string `json:"playerFrameColors"`
+
+	CommunityCounters int `json:"communityCounters"`
+	ReloadBars        int `json:"reloadBars"`
+	VeteranLabels     int `json:"veteranLabels"`
+	GroupNumbers      int `json:"groupNumbers"`
+	AlliedResources   int `json:"alliedResources"`
+	WeatherReport     int `json:"weatherReport"`
+
 	Renderer string `json:"renderer"`
 	FPS      int    `json:"fps"`
 	// ExpandedSidebar uses spare modern UI height for more authored controls.
 	// This is a Nanolathe presentation preference (interface design §3.3).
 	ExpandedSidebar int `json:"expandedSidebar"`
+	// CommunitySelection enables the community patch's Ctrl+B/F idle-unit
+	// cycles and Ctrl+S on-screen mobile-weapon selection. It is host input
+	// policy, independent of gameplay and renderer selection.
+	CommunitySelection int `json:"communitySelection"`
+	// DoubleClickSelection enables the community patch's on-screen same-type
+	// selection for a native left-double-click record.
+	DoubleClickSelection int `json:"doubleClickSelection"`
 	// The five Enhanced effect switches (DESIGN_GPU_RENDERER §30). They are
 	// Nanolathe options with no retail bit, read only by the modern recorder
 	// and executor, and stored as integers for the same reason the display
@@ -464,7 +495,8 @@ type Presentation struct {
 // Enhanced effect on, with the default green nanospray.
 func DefaultPresentation() Presentation {
 	return Presentation{
-		Renderer: "modern", FPS: 60, ExpandedSidebar: 1,
+		Renderer: "modern", FPS: 60, ExpandedSidebar: 1, GroupNumbers: 1,
+		MexSnapRadius: -1, WreckSnapRadius: -1, BuildRotateKey: "/", ClickSnapOverrideKey: "alt", BuildRotationOverlay: 1,
 		Water: DefaultEffectSwitch, Lighting: DefaultEffectSwitch, Finish: DefaultEffectSwitch,
 		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
 	}
@@ -474,6 +506,22 @@ func DefaultPresentation() Presentation {
 // refresh choice (zero) and arbitrary positive presentation caps. The effect
 // switches are booleans, so only a negative value is repaired.
 func (p *Presentation) Normalize() {
+	if p.NanoframePreview < 0 || p.NanoframePreview > 2 {
+		p.NanoframePreview = 0
+	}
+	if p.MexSnapRadius < 0 {
+		p.MexSnapRadius = -1
+	}
+	if p.WreckSnapRadius < 0 {
+		p.WreckSnapRadius = -1
+	}
+	if p.BuildRotateKey == "" {
+		p.BuildRotateKey = "/"
+	}
+	if p.ClickSnapOverrideKey == "" {
+		p.ClickSnapOverrideKey = "alt"
+	}
+
 	if p.Renderer != "classic" && p.Renderer != "modern" {
 		p.Renderer = DefaultPresentation().Renderer
 	}
@@ -482,6 +530,13 @@ func (p *Presentation) Normalize() {
 	}
 	if p.ExpandedSidebar < 0 {
 		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
+	}
+	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe} {
+		if *value < 0 {
+			*value = 0
+		} else {
+			*value &= 1
+		}
 	}
 	if p.TeamNanospray < 0 {
 		p.TeamNanospray = 0
@@ -619,6 +674,7 @@ func Defaults() Settings {
 	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit,
 		GameSpeed: DefaultGameSpeed, InterfaceType: DefaultInterfaceType, SwitchAlt: DefaultSwitchAlt, Clock: DefaultClock}
 	s.Gameplay = gameplay.Modern
+	s.BuilderOptions = DefaultBuilderOptions()
 	s.Display = DefaultDisplay()
 	s.Presentation = DefaultPresentation()
 	s.Audio = DefaultAudio()
@@ -685,6 +741,7 @@ func (s *Skirmish) Normalize() {
 // Normalize applies Skirmish.Normalize and the top-level defaults.
 func (s *Settings) Normalize() {
 	s.Gameplay = s.Gameplay.Normalize()
+	s.BuilderOptions.Normalize()
 	// A stored profile selector is kept verbatim apart from surrounding
 	// space: it may be a shipped name or a host path, and this package owns
 	// neither vocabulary. An unknown selector is rejected where it is

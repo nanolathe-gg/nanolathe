@@ -241,6 +241,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload != 0 {
 			slot.Reload = int32(int16(slot.Reload - 1))
 		}
+		// Community CP-WPN-4 is asked at its source-defined position: reload
+		// already counted down, while target resolution, aim, RNG and resource
+		// work have not begun. A refused slot retains its target and aim state.
+		if !s.rules().SlotMayFire(s, u, slot.Weapon, terrain) {
+			continue
+		}
 		// Countdown recovery continues, but Hold Fire starts no aim or shot
 		// work for a slot the unit still owns itself. A slot an order holds
 		// takes the ordinary path below. Retain targets for stance/mode
@@ -295,7 +301,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			// scalar speed at every commit [04 R-MOV-01 §1][04 R-COLL-01 §1].
 			// This site used to carry an open-question marker saying the
 			// triple was not available; it is.
-			tgtPos = PreFireLeadPoint(u, tu, slot, weapon, s.unitTargetPoint(tu))
+			tgtPos = PreFireLeadPoint(u, tu, slot, weapon, s.unitTargetPoint(tu), s)
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}
@@ -397,7 +403,7 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 		return
 	}
 	weapon := pre.weapon
-	if !checkAdmission(u, weapon, pre.tgtPos, terrain) {
+	if !checkAdmission(s, u, weapon, pre.tgtPos, terrain) {
 		u.Pending |= units.PendingCouldNotFire
 		return
 	}
@@ -446,7 +452,7 @@ func (s *Service) firePreparedSlot(u *units.Unit, slot *units.Slot, idx int, pre
 			slot.Ammo--
 		}
 	} else {
-		slot.Reload = int32(int16(ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)))
+		slot.Reload = int32(int16(s.storedReload(u.Def, u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)))
 	}
 	// Every successful launch wakes its owning order after ammunition/reload
 	// storage and before any ordinary resource debit [06 §4.2][06 R-WPN-05 §6].
@@ -810,6 +816,10 @@ func visibilityTarget(cand *units.Unit, status uint32) visibility.Target {
 	}
 	min, max := cand.Def.BoundingExtents()
 	return visibility.TargetFromBounds(visibility.Target{
+		UnitID:  uint16(cand.Handle),
+		OriginX: cand.X, OriginY: cand.Y, OriginZ: cand.Z, Flying: cand.Move.ModeMirror == 2,
+		FootprintX: int32(cand.CachedOccupancyX), FootprintZ: int32(cand.CachedOccupancyZ),
+		FootprintSizeX: int32(cand.FootprintSizeX), FootprintSizeZ: int32(cand.FootprintSizeZ),
 		Owner: visibility.PlayerID(cand.Owner),
 		X:     cand.X, Y: cand.Y, Z: cand.Z,
 		Hidden: isCloakedUnit(cand), Status: status,
@@ -871,7 +881,7 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
-	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
+	acq := slotAcquisition(s, u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
 	// The filter radius is the caller's, the gate's range clause is the slot
 	// weapon's [06 §3.2][06 R-WPN-05 §1] clause 5.
 	candidates := s.primaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.FilterRange)
@@ -1022,6 +1032,7 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 		// aircraft an anti-air weapon cannot engage.
 		ModelTop:  candGate.ModelTop,
 		MoverMode: candGate.MoverMode,
+		UnitMode:  candGate.UnitMode,
 		Floater:   candGate.Floater,
 		CanHover:  candGate.CanHover,
 		// The stunned mark travels with the candidate; only a paralyzer slot
@@ -1047,7 +1058,7 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 // The bad-target mask is NOT one of them: it is the unit definition's own
 // per-slot bitset [06 §3.1], and the weaponless search buckets on it exactly
 // as an armed one does.
-func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, catalog *content.Catalog, seaLevel numeric.Fixed, rangeLimit int32) Acquisition {
+func slotAcquisition(s *Service, u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, catalog *content.Catalog, seaLevel numeric.Fixed, rangeLimit int32) Acquisition {
 	weapon := slot.Weapon
 	var (
 		gateRange                                  int32
@@ -1073,6 +1084,8 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 		filterRange = rangeLimit
 	}
 	acq := Acquisition{
+		Service:  s,
+		Weapon:   weapon,
 		ShooterX: u.X,
 		ShooterZ: u.Z,
 		ShooterY: u.Y,
@@ -1144,7 +1157,7 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 // visibility and ledger arguments remain on that seam's call shape but are not
 // read here. It draws no RNG: it is the physical gate alone, never registry
 // membership, visibility, alliance, or the scoring pass (I4).
-func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.World, _ *visibility.Service, terrain *world.Terrain, _ *economy.Service, catalog *content.Catalog) bool {
+func (s *Service) SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.World, _ *visibility.Service, terrain *world.Terrain, _ *economy.Service, catalog *content.Catalog) bool {
 	if u == nil || cand == nil || w == nil {
 		return false
 	}
@@ -1160,7 +1173,7 @@ func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.Wo
 		seaLevel = terrain.SeaLevelWorld()
 	}
 	c := acquisitionCandidate(u, cand, seaLevel, 0, catalog)
-	acq := slotAcquisition(u, slot, idx, w, nil, terrain, nil, catalog, seaLevel, -1)
+	acq := slotAcquisition(s, u, slot, idx, w, nil, terrain, nil, catalog, seaLevel, -1)
 	return acq.admits(c)
 }
 
@@ -1177,8 +1190,14 @@ func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.Wo
 // handlers and the autonomous scan's per-candidate test), never per shot. The
 // merged form refused every ground/point target for a non-water weapon,
 // because a point target carries no Y and 0 is never above sea level.
-func checkAdmission(u *units.Unit, weapon *content.WeaponDef, tgtPos Vec3, terrain *world.Terrain) bool {
-	return shotTimeAdmits(u, weapon, tgtPos.X, tgtPos.Y, tgtPos.Z, terrain)
+func checkAdmission(s *Service, u *units.Unit, weapon *content.WeaponDef, tgtPos Vec3, terrain *world.Terrain) bool {
+	return s.rules().ShotTimeAdmitted(ShotTimeAdmission{
+		Service: s,
+		Shooter: u,
+		Weapon:  weapon,
+		Target:  tgtPos,
+		Terrain: terrain,
+	})
 }
 
 func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
@@ -1581,6 +1600,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	// records on purpose: retail dereferences a projectile-to-projectile link
 	// with no liveness check at all [06 §5.2].
 	guidance := GuidanceEnv{
+		Service: s,
 		Projectile: func(h pool.Handle) *Projectile {
 			idx := int(h) - 1
 			if idx < 0 || idx >= len(s.Records) {
@@ -1677,7 +1697,17 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		// impact. Motion-triggered impacts above retain their earlier position
 		// in the family visit [06 §8.1][06 R-DMG-01 §14].
 		if projectileOffMap(p, terrain) {
-			s.MarkDead(h)
+			victim, keep := s.communityOffMapProjectile(p, w, terrain, tick)
+			if !keep {
+				s.MarkDead(h)
+			} else if victim != 0 {
+				impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, victim)
+				// The ordinary impact path intentionally leaves noexplode records
+				// live. CP-ENV-1 explicitly spends an off-map direct hit anyway.
+				if weapon.NoExplode {
+					s.MarkDead(h)
+				}
+			}
 			continue
 		}
 		// The linked-projectile test is the first contact-ladder operation.
@@ -1705,6 +1735,14 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		}
 		if needImpact {
 			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, directTarget)
+		}
+		// The engine's in-map ladder gets first refusal. Only a still-live,
+		// ordinary round gets the canonical off-map bucket second chance;
+		// noexplode has no reliable spent signal and is excluded [CP-ENV-1].
+		if !s.IsDead(h) && !weapon.NoExplode {
+			if victim := s.communityOnMapOffMapVictim(p, weapon, w, terrain); victim != 0 {
+				impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, victim)
+			}
 		}
 		// Trail puffs: the smoke-trail flag plus smoke delay, ALIVE records
 		// only, never burst parents, past the next-trail deadline. The
@@ -2057,7 +2095,10 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 		}
 	}
 	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: directUnit, Position: p.Pos})
-	feedback := applyProjectileDamage(s, p, weapon, w, terrain, tick, directUnit)
+	var feedback impactFeedback
+	if s.rules().DetonationBroadcast(s, p, weapon) {
+		feedback = applyProjectileDamage(s, p, weapon, w, terrain, tick, directUnit)
+	}
 	directFeedback := directUnit != 0 && weapon.AreaOfEffect <= 16
 	if directFeedback {
 		feedback.publish(w)
@@ -2085,6 +2126,14 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 		feedback.publish(w) // after nested interceptor impacts [06 §9.4]
 	}
 	_ = wind
+}
+
+// MapWeaponMarker reports whether presentation should draw this projectile's
+// minimap or strategic-map marker. CP-WPN-5 deliberately uses the exact same
+// damage-0, attacker-less and authored-tag predicate as detonation; true means
+// show the marker. A nil or unbound service answers Strict 3.1 and shows it.
+func (s *Service) MapWeaponMarker(p *Projectile, weapon *content.WeaponDef) bool {
+	return s.rules().DetonationBroadcast(s, p, weapon)
 }
 
 func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, tick uint32, directUnit pool.Handle) impactFeedback {
@@ -2207,6 +2256,13 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 	if radius <= 0 {
 		return feedback
 	}
+	// Community's generation bracket is saved and restored so a nested blast's
+	// higher generation cannot replace its caller's active generation. The
+	// off-map bucket pass is part of every blast and precedes the tile walk
+	// [CP-DMG-1][CP-ENV-1].
+	savedAreaGeneration := s.beginCommunityArea()
+	defer s.endCommunityArea(savedAreaGeneration)
+	s.communityOffMapSplash(&feedback, w, terrain, weapon, impact, shooter, shooterSide, tick, observedVelocity, radius)
 	var mapW, mapH int32
 	if terrain != nil {
 		mapW = terrain.CellW
@@ -2234,86 +2290,75 @@ func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		// inside a large unit's footprint but outside the rectangle its centre
 		// sits in did nothing at all, and the cell ordering, the ground-before-
 		// air ordering and the bounded deduplication were all unobservable.
-		if cell := terrain.PlotAt(cx, cz); cell != nil {
-			for slot := 0; slot < 2; slot++ {
-				// Read the second word after the first hit completes [06 §9.3].
-				word := cell.OccupantA()
-				if slot == 1 {
-					word = cell.OccupantB()
-				}
-				// A unit candidate must be nonzero and must NOT be the record's
-				// shooter: the shooter is unconditionally excluded from every
-				// blast, and that exclusion is the whole of retail's
-				// self-damage policy [06 §9.3][06 R-DMG-01 §9]. There is no
-				// `noselfdamage` key and no owner or alliance test here — a
-				// shooter's own OTHER units take full damage, and the shooter
-				// itself still takes full damage from a different record's
-				// blast.
-				//
-				// A null shooter matches nobody [06 R-DMG-01 §9], which is what
-				// makes a meteor or a death explosion damage every side alike.
-				//
-				// Before this reader existed the shooter enumerated itself,
-				// took its own splash, and had its last-damage provenance
-				// overwritten with its own owner below — so a commander that
-				// died inside its own blast credited the kill to itself instead
-				// of to the player whose shot actually killed it [06 §12.1].
-				if word <= 0 {
-					continue // the free sentinel; slot zero is never an occupant [I5]
-				}
-				h := pool.Handle(word)
-				if shooter != 0 && h == shooter {
-					continue
-				}
-				// "Unit deduplication happens BEFORE the radius test, against a
-				// memory of at most 20 unit pointers … a candidate encountered
-				// when the memory is full is still processed but not remembered,
-				// so a later occurrence is processed again. An out-of-radius
-				// first sighting therefore consumes a memory entry" [06 §9.3].
-				if unitDedup.SeenUnit(h) {
-					continue
-				}
-				u := w.Unit(h)
-				if u == nil || !u.Alive || u.Dying {
-					continue // a word naming a freed slot names no candidate
-				}
-				// "lo = unit.pos.axis + definition.boundsMin.axis; hi =
-				// unit.pos.axis + definition.boundsMax.axis" [06 §9.3]: the
-				// box is the definition's whole bounding record translated by
-				// the unit's own position, on all three axes. That record is
-				// footprint-derived in X and Z and the model-top walk in Y over
-				// a minimum Y of zero — the walk is the only bound retail takes
-				// from model geometry [02 R-CAT-01 §7] — and BoundingExtents is
-				// exactly that record.
-				//
-				// The Y bound used to be a flat sixteen world units above the
-				// unit's position, which is no retail quantity at all: a tall
-				// target took nothing from an impact inside its own body, and a
-				// flat one took damage from an impact above it.
-				boundsMin, boundsMax := u.Def.BoundingExtents()
-				min := Vec3{
-					X: u.X.Add(numeric.Fixed(boundsMin[0])),
-					Y: u.Y.Add(numeric.Fixed(boundsMin[1])),
-					Z: u.Z.Add(numeric.Fixed(boundsMin[2])),
-				}
-				max := Vec3{
-					X: u.X.Add(numeric.Fixed(boundsMax[0])),
-					Y: u.Y.Add(numeric.Fixed(boundsMax[1])),
-					Z: u.Z.Add(numeric.Fixed(boundsMax[2])),
-				}
-				uv := UnitForArea{Handle: u.Handle, Pos: Vec3{X: u.X, Y: u.Y, Z: u.Z}, Min: min, Max: max}
-				dist := DistanceToBox(impact, uv) // integer [06 §9.3]
-				if dist >= radius {
-					continue // strict < radius [06 §9.3]
-				}
-				falloff := float32(1)
-				if dist != 0 {
-					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
-				}
-				p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide, Velocity: observedVelocity}
-				feedback.add(applyDamageToUnit(s, u, p, weapon, falloff, dist, w, tick), shooterSide == u.Owner)
+		s.rules().AreaVictims(AreaVictimQuery{Service: s, World: w, Terrain: terrain, Tick: tick, CellX: cx, CellZ: cz}, func(h pool.Handle) {
+			// A unit candidate must be nonzero and must NOT be the record's
+			// shooter: the shooter is unconditionally excluded from every
+			// blast, and that exclusion is the whole of retail's
+			// self-damage policy [06 §9.3][06 R-DMG-01 §9]. There is no
+			// `noselfdamage` key and no owner or alliance test here — a
+			// shooter's own OTHER units take full damage, and the shooter
+			// itself still takes full damage from a different record's
+			// blast.
+			//
+			// A null shooter matches nobody [06 R-DMG-01 §9], which is what
+			// makes a meteor or a death explosion damage every side alike.
+			//
+			// Before this reader existed the shooter enumerated itself,
+			// took its own splash, and had its last-damage provenance
+			// overwritten with its own owner below — so a commander that
+			// died inside its own blast credited the kill to itself instead
+			// of to the player whose shot actually killed it [06 §12.1].
+			if shooter != 0 && h == shooter {
+				return
 			}
-		}
+			// "Unit deduplication happens BEFORE the radius test, against a
+			// memory of at most 20 unit pointers … a candidate encountered
+			// when the memory is full is still processed but not remembered,
+			// so a later occurrence is processed again. An out-of-radius
+			// first sighting therefore consumes a memory entry" [06 §9.3].
+			if unitDedup.SeenUnit(h) {
+				return
+			}
+			u := w.Unit(h)
+			if u == nil || !u.Alive || u.Dying {
+				return // a word naming a freed slot names no candidate
+			}
+			// "lo = unit.pos.axis + definition.boundsMin.axis; hi =
+			// unit.pos.axis + definition.boundsMax.axis" [06 §9.3]: the
+			// box is the definition's whole bounding record translated by
+			// the unit's own position, on all three axes. That record is
+			// footprint-derived in X and Z and the model-top walk in Y over
+			// a minimum Y of zero — the walk is the only bound retail takes
+			// from model geometry [02 R-CAT-01 §7] — and BoundingExtents is
+			// exactly that record.
+			//
+			// The Y bound used to be a flat sixteen world units above the
+			// unit's position, which is no retail quantity at all: a tall
+			// target took nothing from an impact inside its own body, and a
+			// flat one took damage from an impact above it.
+			boundsMin, boundsMax := u.Def.BoundingExtents()
+			min := Vec3{
+				X: u.X.Add(numeric.Fixed(boundsMin[0])),
+				Y: u.Y.Add(numeric.Fixed(boundsMin[1])),
+				Z: u.Z.Add(numeric.Fixed(boundsMin[2])),
+			}
+			max := Vec3{
+				X: u.X.Add(numeric.Fixed(boundsMax[0])),
+				Y: u.Y.Add(numeric.Fixed(boundsMax[1])),
+				Z: u.Z.Add(numeric.Fixed(boundsMax[2])),
+			}
+			uv := UnitForArea{Handle: u.Handle, Pos: Vec3{X: u.X, Y: u.Y, Z: u.Z}, Min: min, Max: max}
+			dist := DistanceToBox(impact, uv) // integer [06 §9.3]
+			if dist >= radius {
+				return // strict < radius [06 §9.3]
+			}
+			falloff := float32(1)
+			if dist != 0 {
+				falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
+			}
+			p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide, Velocity: observedVelocity}
+			feedback.add(applyDamageToUnit(s, u, p, weapon, falloff, dist, w, tick), shooterSide == u.Owner)
+		})
 		// Discover the feature after both unit hits have completed, before
 		// advancing to the next cell [06 §9.3].
 		if !featureWalk {
@@ -2422,7 +2467,11 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 	if victim.Def != nil {
 		damageModifier = victim.Def.DamageModifier
 	}
-	amount := scaleAcceptedAmount(in.Nominal, victim.Kills, UnitArmored(victim), damageModifier)
+	level := s.VeteranLevel(victim.Def, victim.Kills)
+	if level > 25 {
+		level = 25
+	}
+	amount := scaleAcceptedAmount(in.Nominal, int32(level), UnitArmored(victim), damageModifier)
 	result := DamageResult{Accepted: true, Amount: amount}
 
 	// These effects are deliberately before provenance rewriting: reaction
@@ -2497,11 +2546,11 @@ func (s *Service) weaponDamageNominal(weapon *content.WeaponDef, victim *units.U
 	if victim.Def != nil {
 		name = victim.Def.UnitName
 	}
-	attackerKills := int32(0)
+	level := uint32(0)
 	if rawAttacker != nil {
-		attackerKills = rawAttacker.Kills
+		level = s.VeteranLevel(rawAttacker.Def, rawAttacker.Kills)
 	}
-	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, rawAttacker != nil, s != nil && s.doubleShot, s != nil && s.halfShot)
+	return weaponNominal(SelectBaseDamage(weapon, name), falloff, int32(level), rawAttacker != nil, s != nil && s.doubleShot, s != nil && s.halfShot)
 }
 
 func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) int32 {

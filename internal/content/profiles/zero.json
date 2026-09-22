@@ -1,4 +1,5 @@
 {
+  "gameplay": {"table": "tazero"},
   "name": "zero",
   "detect": [
     "ZBuildMenu",

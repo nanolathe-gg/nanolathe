@@ -15,6 +15,7 @@ func TestRawUnitRecordRetainsFreedSlotUntilReuse(t *testing.T) {
 	}
 	stale := w.Unit(h)
 	stale.Kills = 7
+	stale.Remaining = 0.5
 	stale.Orders = []int{1}
 	stale.RenderPieceFlags = []uint8{7}
 	w.Destroy(h, DeathKilled)
@@ -24,8 +25,8 @@ func TestRawUnitRecordRetainsFreedSlotUntilReuse(t *testing.T) {
 	if got := w.Unit(h); got != nil {
 		t.Fatalf("live lookup after free = %#v, want nil", got)
 	}
-	if got := w.RawUnitRecord(h); got == stale || got == nil || got.Handle != h || got.Owner != 0 || got.Kills != 7 || got.Orders != nil || got.RenderPieceFlags != nil {
-		t.Fatalf("raw freed record = %#v, want only retained slot/owner/kill fields", got)
+	if got := w.RawUnitRecord(h); got == stale || got == nil || got.Handle != h || got.Owner != 0 || got.Kills != 7 || got.Remaining != 0.5 || got.Orders != nil || got.RenderPieceFlags != nil {
+		t.Fatalf("raw freed record = %#v, want only retained slot/owner/kill/remaining fields", got)
 	}
 	reused, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {

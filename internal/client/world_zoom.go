@@ -190,6 +190,10 @@ func (c *Client) liveZoom() camera.Zoom {
 // recorded and the marker layer replaces the units (§16.10). Terrain, fog,
 // features and the drag rectangle are not gated on it. Generated icons replace
 // ground selection quads when StrategicIconsActive (§18.4).
+// StrategicViewActive exposes the same model-cut decision to host input so
+// placement snapping cannot remain armed in the strategic view.
+func (c *Client) StrategicViewActive() bool { return c != nil && c.strategicView() }
+
 func (c *Client) strategicView() bool {
 	// The inclusive cut and the clamped tactical stop share one gate so models,
 	// icon picking and selection outlines switch together (§16.10).

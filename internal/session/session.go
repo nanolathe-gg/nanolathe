@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sync"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
@@ -10,11 +9,13 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -61,6 +62,7 @@ type MeteorState struct {
 // the public frame. Keeping these coupled prevents a second event/effect owner
 // from entering the authoritative graph [01 §4.4][03 §1].
 type publicationState struct {
+	communityHUD     communityHUDPublication
 	events           *frame.EventBuffer
 	effects          *render.EffectService
 	unitIdentities   []publishedUnitIdentity
@@ -97,13 +99,14 @@ type Phase7Service interface {
 	StepPhase7()
 }
 
-func newPublicationState(events *frame.EventBuffer) *publicationState {
+func newPublicationState(events *frame.EventBuffer, explosionCapacity int) *publicationState {
 	if events == nil {
 		events = frame.NewEventBuffer(frame.Limits{})
 	}
+	pool := render.NewFixedEffectPool(explosionCapacity)
 	return &publicationState{
 		events:  events,
-		effects: render.NewEffectServiceWithPool(render.EffectCapacity, &render.FixedEffectPool{}),
+		effects: render.NewEffectServiceWithPool(pool.Cap(), pool),
 	}
 }
 
@@ -116,7 +119,7 @@ func (s *Session) ensurePublicationState() *publicationState {
 		return nil
 	}
 	if s.publication == nil {
-		s.publication = newPublicationState(nil)
+		s.publication = newPublicationState(nil, s.EntryCommunity.ExplosionCapacity)
 	}
 	return s.publication
 }
@@ -128,11 +131,19 @@ func (s *Session) ensurePublicationState() *publicationState {
 // Go allows methods in any file, but the struct is defined once here.
 type Session struct {
 	Gameplay gameplay.Mode
+	// Community is the resolved, session-owned feature table (DESIGN_COMMUNITY_PATCH §3).
+	Community community.Features
+	// EntryCommunity preserves battle-entry parameters across live rule switches.
+	EntryCommunity       community.Features
+	CommunitySources     CommunitySources
+	playerBuilderOptions [10]orders.BuilderOptions
+	builderOptionsReady  bool
 	// Rules is the bound gameplay rule set, one implementation per seam.
 	// Gameplay stays the persisted vocabulary; this is what the phases
 	// actually ask (docs/DESIGN_GAMEPLAY_RULES.md, INVARIANTS I11).
 	Rules                    RuleSet
 	bigBrother               bigBrotherState
+	communitySchema          communitySchemaState
 	publicationObserver      func(*frame.Frame)
 	developerDiagnostics     bool
 	fragmentMaterialResolver func(uint16, int, int, uint8) render.FrozenFragmentMaterial
@@ -819,18 +830,7 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	// Unit.Hidden IS that instance bit; Unit.IsCloaked is the request, and a
 	// unit whose owner could not pay this pass requests cloak while being fully
 	// visible and targetable (WU-19-92).
-	hidden := target.Hidden
-	// Underwater exemption is stored as FriendlyMask 0x200 via sensor phase; we include it if present.
-	t := visibility.Target{
-		Owner:  visibility.PlayerID(target.Owner),
-		X:      target.X,
-		Y:      target.Y,
-		Z:      target.Z,
-		Hidden: hidden,
-		Status: status,
-	}
-	min, max := target.Def.BoundingExtents()
-	return s.Vis.IsVisible(vid, visibility.TargetFromBounds(t, min, max))
+	return s.Vis.IsVisible(vid, unitVisibilityTarget(target, status))
 }
 
 // handleTeardownA implements state 0 cleanup variant A, then state 2 [08 "Session states"].
@@ -1116,12 +1116,14 @@ func (s *Session) RegisterAll() {
 			//
 			// Each cargo is only MARKED here; its own finalizer runs on the
 			// next slot sweep, so this hook does not re-enter [04 §2.3].
+			s.captureTransportPreDeath(u)
+			defer s.clearTransportDeathDecision()
 			if s.Movement != nil && s.Units != nil && u != nil {
 				tick := uint32(0)
 				if s.Clock != nil {
 					tick = s.Clock.GlobalTick
 				}
-				s.Movement.HandleDeath(s.Units, h, u.EngagementTarget, tick)
+				s.Movement.HandleDeath(s.Units, h, u.EngagementTarget, tick, s.captureTransportPassenger)
 			}
 			s.finalizeReclaimRefund(u)
 			// Audio: death does not map to a queued voice directly, but an
@@ -1168,7 +1170,7 @@ func (s *Session) RegisterAll() {
 				// Death-explosion weapon trigger (DoExplosion) [06 §12.1] C22-C25
 				// Shared with projectile splash via ExplodeWeaponAt [06 §9.3] (I1, I2)
 				if res.DoExplosion {
-					weapon := combat.SelectDeathExplosionWeapon(u.Def, c) // [06 §12.1][02 "Unit record"]
+					weapon := s.deathExplosionWeapon(u, c) // [06 §12.1]; CP-DMG-3
 					if weapon != nil && s.Combat != nil {
 						impact := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
 						tick := uint32(0)
@@ -1190,6 +1192,7 @@ func (s *Session) RegisterAll() {
 						}, s.Units, s.World, s.Catalog, tick)
 					}
 				}
+				s.clearTransportDeathDecision()
 				// ORDER. The central handler runs the death explosion and only
 				// THEN the corpse: "the death explosion (§12.2) ... ; then the
 				// corpse (§12.2)" [06 §12.1 "the timeline of one weapon death, in
@@ -1278,6 +1281,7 @@ func (s *Session) RegisterAll() {
 							[3]numeric.Fixed{u.X, u.Y, u.Z},
 							features.Orientation{Bank: u.Move.Bank, Heading: u.Move.Heading, Pitch: u.Move.Pitch},
 							corpseDef, u.Def.IsFeature, u.Owner)
+						s.Combat.SeedCorpseVelocity(corpse, s.World)
 						// The notification flag the death dispatcher hands the
 						// finalizer is "the death cause is not the immediate
 						// feature-conversion cause" [03 R-LAYER §3] step 1 — a

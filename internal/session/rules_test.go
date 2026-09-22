@@ -18,14 +18,17 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// reservedRuleSets are the two sets the session ships. Every structural rule
-// below is checked against both, because the retail baseline and the Modern
-// default are held to the same allocation contract
+// reservedRuleSets are the three sets the session ships. Every structural rule
+// below is checked against all three, because every derivation layer is held
+// to the same allocation contract
 // (docs/DESIGN_GAMEPLAY_RULES.md "Allocation rules").
-func reservedRuleSets() []RuleSet { return []RuleSet{StrictRuleSet(), ModernRuleSet()} }
+func reservedRuleSets() []RuleSet {
+	return []RuleSet{StrictRuleSet(), CommunityRuleSet(), ModernRuleSet()}
+}
 
 // A bound implementation must be zero size or used by pointer, so projecting a
 // rule set onto a service never boxes a value and no call site can allocate by
@@ -70,6 +73,7 @@ func TestReservedRuleSetsMatchTheModeVocabulary(t *testing.T) {
 		unitLimited bool
 	}{
 		{gameplay.Strict31, StrictRuleSetName, false},
+		{gameplay.Community39, CommunityRuleSetName, false},
 		{gameplay.Modern, ModernRuleSetName, true},
 		{"", ModernRuleSetName, true},
 	} {
@@ -87,7 +91,7 @@ func TestReservedRuleSetsMatchTheModeVocabulary(t *testing.T) {
 // binding composed before the switch. An unbound session answers Strict at the
 // order seam, which is the fallback a reconstructed queue relies on.
 func TestBindRulesProjectsEverySeam(t *testing.T) {
-	s := &Session{Combat: &combat.Service{}, Build: &construction.Service{OrderBinding: &orders.QueueBinding{}}, Movement: &movement.System{}}
+	s := &Session{Combat: &combat.Service{}, Vis: &visibility.Service{}, Build: &construction.Service{OrderBinding: &orders.QueueBinding{}}, Movement: &movement.System{}}
 	if _, strict := s.orderRules().(orders.StrictRules); !strict {
 		t.Fatal("an unbound session must answer Strict at the order seam")
 	}
@@ -96,7 +100,7 @@ func TestBindRulesProjectsEverySeam(t *testing.T) {
 		if s.Rules.Name != set.Name {
 			t.Fatalf("session kept rule set %q after binding %q", s.Rules.Name, set.Name)
 		}
-		if s.Combat.Rules != set.Combat || s.Build.Rules != set.Construction || s.Build.OrderBinding.Rules != set.Orders {
+		if s.Vis.Rules != set.Visibility || s.Combat.Rules != set.Combat || s.Build.Rules != set.Construction || s.Build.OrderBinding.Rules != set.Orders {
 			t.Fatalf("%s did not reach every service", set.Name)
 		}
 		if s.Movement.Kernel != set.Path {
@@ -111,7 +115,7 @@ func TestBindRulesProjectsEverySeam(t *testing.T) {
 	}
 }
 
-// Both reserved sets bind the retail search kernel: no approved Modern policy
+// All reserved sets bind the retail search kernel: no approved gameplay policy
 // changes how a route is found, and the scheduler owns when one publishes
 // (docs/DESIGN_GAMEPLAY_RULES.md "The seams"). A Modern kernel would be a
 // behaviour change with its own contract, so this test is what makes adding
@@ -213,7 +217,7 @@ func TestBoundRuleDispatchDoesNotAllocate(t *testing.T) {
 }
 
 // The computer player's think step reaches every manager the session owns,
-// and both reserved sets bind the retail step: no Modern planner exists, and a
+// and all reserved sets bind the retail step: no alternate planner exists, and a
 // replacement would change the simulation stream's call order and therefore
 // the whole battle, so it needs its own approved policy first
 // (docs/DESIGN_GAMEPLAY_RULES.md "The computer player's think step").
@@ -226,7 +230,7 @@ func TestBindRulesProjectsThePlannerOntoEveryComputerPlayer(t *testing.T) {
 	s.AI[3] = &ai.Manager{Player: 3}
 	for _, set := range reservedRuleSets() {
 		if _, retail := set.Planner.(ai.RetailPlanner); !retail {
-			t.Fatalf("%s binds planner %T; both reserved sets run the retail step", set.Name, set.Planner)
+			t.Fatalf("%s binds planner %T; all reserved sets run the retail step", set.Name, set.Planner)
 		}
 		s.BindRules(set)
 		for player, mgr := range s.AI {
@@ -277,14 +281,14 @@ func buildTestRuleSet() RuleSet {
 func init() { RegisterRuleSet(testRuleSetName, buildTestRuleSet) }
 
 // The reserved sets come first and in the vocabulary's own order — the default
-// before the retail baseline — so a diagnostic and a host menu agree, and the
-// registered names follow sorted rather than in link order.
+// down through its derivation layers — so a diagnostic and a host menu agree,
+// and the registered names follow sorted rather than in link order.
 func TestRuleSetNamesListTheReservedSetsFirst(t *testing.T) {
 	names := RuleSetNames()
-	if len(names) < 3 || names[0] != ModernRuleSetName || names[1] != StrictRuleSetName {
-		t.Fatalf("rule set names = %v, want the two reserved names first", names)
+	if len(names) < 4 || names[0] != ModernRuleSetName || names[1] != CommunityRuleSetName || names[2] != StrictRuleSetName {
+		t.Fatalf("rule set names = %v, want the three reserved names first", names)
 	}
-	registered := names[2:]
+	registered := names[3:]
 	if !slices.Contains(registered, testRuleSetName) {
 		t.Fatalf("registered names %v do not include %q", registered, testRuleSetName)
 	}
@@ -300,6 +304,7 @@ func TestRuleSetNamesListTheReservedSetsFirst(t *testing.T) {
 func TestRegisterRuleSetRefusesReservedAndDuplicateNames(t *testing.T) {
 	for _, tc := range []struct{ what, name string }{
 		{"the Modern name", ModernRuleSetName},
+		{"the Community 3.9 name", CommunityRuleSetName},
 		{"the Strict 3.1 name", StrictRuleSetName},
 		{"an already registered name", testRuleSetName},
 		{"no name", ""},
@@ -315,6 +320,38 @@ func TestRegisterRuleSetRefusesReservedAndDuplicateNames(t *testing.T) {
 	}
 	if _, ok := LookupRuleSet(testRuleSetName); !ok {
 		t.Fatal("a refused registration disturbed the registry")
+	}
+}
+
+// A registered set may derive from the Community layer without taking any
+// Modern policy. Its unstated seams retain Community's concrete implementation
+// types, and unchanged questions continue to promote the Strict answers.
+func TestCompleteRuleSetFillsFromCommunityBase(t *testing.T) {
+	set := completeRuleSet("community-derived-test", RuleSet{Base: gameplay.Community39})
+	want := CommunityRuleSet()
+	if set.Base != gameplay.Community39 {
+		t.Fatalf("base = %q, want %q", set.Base, gameplay.Community39)
+	}
+	for _, seam := range []struct {
+		name      string
+		got, want any
+	}{
+		{name: "Combat", got: set.Combat, want: want.Combat},
+		{name: "Visibility", got: set.Visibility, want: want.Visibility},
+		{name: "Orders", got: set.Orders, want: want.Orders},
+		{name: "Construction", got: set.Construction, want: want.Construction},
+		{name: "UnitLimit", got: set.UnitLimit, want: want.UnitLimit},
+		{name: "ScriptPorts", got: set.ScriptPorts, want: want.ScriptPorts},
+		{name: "Movement", got: set.Movement, want: want.Movement},
+		{name: "Path", got: set.Path, want: want.Path},
+		{name: "Planner", got: set.Planner, want: want.Planner},
+	} {
+		if reflect.TypeOf(seam.got) != reflect.TypeOf(seam.want) {
+			t.Fatalf("%s is %T, want Community base %T", seam.name, seam.got, seam.want)
+		}
+	}
+	if set.Combat.HoldsFire(&units.Unit{}, false) || set.Orders.HoldsFire(&units.Unit{}) {
+		t.Fatal("the empty Community layer did not preserve Strict Hold Fire answers")
 	}
 }
 
@@ -348,8 +385,10 @@ func TestLookupRuleSetBuildsOnceAndCompletesFromItsBase(t *testing.T) {
 		overridden bool
 	}{
 		{name: "Combat", got: first.Combat, want: modern.Combat},
+		{name: "Visibility", got: first.Visibility, want: modern.Visibility},
 		{name: "Construction", got: first.Construction, want: modern.Construction},
 		{name: "UnitLimit", got: first.UnitLimit, want: modern.UnitLimit},
+		{name: "ScriptPorts", got: first.ScriptPorts, want: modern.ScriptPorts},
 		{name: "Movement", got: first.Movement, want: modern.Movement},
 		{name: "Path", got: first.Path, want: modern.Path},
 		{name: "Planner", got: first.Planner, want: modern.Planner},
@@ -394,7 +433,7 @@ func TestCachedRuleSetImplementationsHoldNoState(t *testing.T) {
 }
 
 // Selection by name binds the whole set and leaves the session carrying the
-// set's base as its mode word, which is the answer every strict-versus-modern
+// set's base as its mode word, which is the answer every non-seam gameplay
 // question needs. An unknown name is reported in the repository's diagnostic
 // shape and changes nothing.
 func TestSetRulesSelectsByNameAndReportsAnUnknownOne(t *testing.T) {
@@ -415,7 +454,7 @@ func TestSetRulesSelectsByNameAndReportsAnUnknownOne(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown name was accepted")
 	}
-	for _, want := range []string{"nanolathe: unknown gameplay rule set", "providers searched", ModernRuleSetName, StrictRuleSetName, testRuleSetName} {
+	for _, want := range []string{"nanolathe: unknown gameplay rule set", "providers searched", ModernRuleSetName, CommunityRuleSetName, StrictRuleSetName, testRuleSetName} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("diagnostic %q does not carry %q", err, want)
 		}
@@ -480,7 +519,7 @@ func TestRebindRulesSelectsOnlyWhenNothingIsBound(t *testing.T) {
 // gameplay package, so a host word is parsed and normalized against the sets
 // this build actually links.
 func TestGameplayVocabularyKnowsTheRegisteredNames(t *testing.T) {
-	for _, word := range []string{ModernRuleSetName, StrictRuleSetName, testRuleSetName} {
+	for _, word := range []string{ModernRuleSetName, CommunityRuleSetName, StrictRuleSetName, testRuleSetName} {
 		mode, err := gameplay.Parse(word)
 		if err != nil || string(mode) != word {
 			t.Fatalf("Parse(%q) = %q, %v; want the word itself", word, mode, err)
@@ -499,14 +538,15 @@ func TestGameplayVocabularyKnowsTheRegisteredNames(t *testing.T) {
 	}
 }
 
-// A host control that offers only the two reserved sets asks which one a
-// selection derives from; a registered set answers with its base.
+// A host control asks which reserved set a selection derives from; a
+// registered set answers with its base.
 func TestBaseModeOfReducesASelectionToAReservedWord(t *testing.T) {
 	for _, tc := range []struct {
 		mode gameplay.Mode
 		want gameplay.Mode
 	}{
 		{gameplay.Strict31, gameplay.Strict31},
+		{gameplay.Community39, gameplay.Community39},
 		{gameplay.Modern, gameplay.Modern},
 		{"", gameplay.Modern},
 		{testRuleSetName, gameplay.Modern},

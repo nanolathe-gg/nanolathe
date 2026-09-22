@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
@@ -37,8 +38,9 @@ type contentSet struct {
 	// without a catalog, takes them, so the window admits exactly the content
 	// the displayless command does (docs/DESIGN_CONTENT_VFS.md §5 "Content
 	// profiles"). A retail content set resolves to the retail baseline.
-	limits       content.Limits
-	presentation contentprofiles.Presentation
+	limits           content.Limits
+	presentation     contentprofiles.Presentation
+	gameplayFeatures []community.Overrides
 
 	root         string
 	roots        []string
@@ -122,12 +124,13 @@ func openContent(opts Options) (*contentSet, error) {
 		return nil, err
 	}
 	set := &contentSet{
-		fs:            profile.Layout().Apply(fileSystem),
-		unmappedMount: fileSystem,
-		profile:       profile.Name,
-		limits:        content.LimitsFromProfile(profile.Limits),
-		presentation:  profile.Presentation,
-		root:          roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes(),
+		fs:               profile.Layout().Apply(fileSystem),
+		unmappedMount:    fileSystem,
+		profile:          profile.Name,
+		limits:           content.LimitsFromProfile(profile.Limits),
+		presentation:     profile.Presentation,
+		gameplayFeatures: profile.GameplaySources(),
+		root:             roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes(),
 	}
 
 	// One required product proves the mount produced game data rather than an

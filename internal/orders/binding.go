@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -21,6 +22,13 @@ import (
 // reconstruction an explicit value transfer instead of a collection of
 // package-level fallbacks [04 §3.3][04 §3.4][06 §11.1].
 type QueueBinding struct {
+	// Community holds only this owner's projected feature answers (DESIGN_COMMUNITY_PATCH §3.1).
+	Community community.Features
+	// BuilderOptions returns one owner's live per-player selection for the
+	// three movement stances. Queues share this binding across players, so the
+	// owner remains an argument instead of being captured at composition. A nil
+	// callback uses DefaultBuilderOptions.
+	BuilderOptions func(owner uint8) BuilderOptions
 	// Rules answers the gameplay decisions this package defers rather than
 	// deciding itself — the Hold Fire join, the bomber pass leash and the three
 	// guard assistance legs. The session selects the set from the central

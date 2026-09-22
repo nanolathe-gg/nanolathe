@@ -185,14 +185,16 @@ type OccupancyGrid struct {
 	// what a mover may traverse.
 	plot *world.Terrain
 
-	// overlap and ownerState are the overlap protocol's two bindings
-	// [04 R-COLL-01 §4]. The grid arbitrates a contested cell from the
-	// occupant's owner player state and records the outcome on both units'
-	// flag words, neither of which it carries itself. With no binding the
-	// occupant keeps every contested cell, which is the branch retail takes
-	// for every owner that is not in the displacing state.
-	overlap    OverlapUnits
-	ownerState func(owner uint8) uint8
+	// overlap, ownerState and claimConflict are the overlap protocol's bindings.
+	// The rule arbitrates a contested cell from retail's occupant-owner state or
+	// Community's unit indices, and the grid records the outcome on both units'
+	// flag words; it carries none of those facts itself. With no binding the
+	// occupant keeps every contested cell, which is the branch retail takes for
+	// every owner that is not in the displacing state [04 R-COLL-01 §4]
+	// (community-patch-engine.md CP-DMG-2).
+	overlap       OverlapUnits
+	ownerState    func(owner uint8) uint8
+	claimConflict func(incumbent, claimant int) bool
 	// inOverlapScan guards the clear's overlap scan against re-entry. A
 	// restamp only stamps, so it cannot start a second clear; the flag keeps
 	// a future writer from turning the scan quadratic by accident.
@@ -214,7 +216,7 @@ type OccupancyGrid struct {
 	// sector, each holding the head of the list of units filed there, plus one
 	// extra record at the end of the array for every sector index the array
 	// does not address. That extra record is NOT retail's off-map record — an
-	// off-map unit is in no bucket at all — it is where a grid with no terrain
+	// off-map unit uses the separate offMapHead — it is where a grid with no terrain
 	// bound (fixtures only) keeps a unit whose position lands outside the
 	// dimensions the array has grown to, so that the sweep still finds it by
 	// comparing the record it recorded.
@@ -224,6 +226,7 @@ type OccupancyGrid struct {
 	// identity. The list is doubly linked, which retail's is not: retail walks
 	// from the head to find a predecessor, and the walk is the only thing the
 	// back link replaces.
+	offMapHead       int32 // canonical off-map record; excluded from overlap-sector scans
 	sectorHead       []int32
 	sectorW, sectorH int32
 	links            []sectorLink
@@ -235,6 +238,7 @@ type sectorLink struct {
 	next, prev int32 // identity plus one, 0 for none
 	sx, sz     int32 // the record this entry is linked under
 	linked     bool
+	offMap     bool
 }
 
 // overlapCandidate is one unit the clear's overlap scan reaches, tagged with
@@ -372,6 +376,16 @@ func (s *System) AttachOverlapBinding(ownerState func(owner uint8) uint8) {
 		return
 	}
 	s.Grid.AttachOverlap(s, ownerState)
+	// Bind the System method rather than the currently selected Rules value:
+	// RebindRules replaces System.Rules at a command boundary, and every later
+	// cell arbitration must observe that replacement without another grid bind.
+	s.Grid.claimConflict = s.claimConflict
+}
+
+// claimConflict projects the currently bound movement rule into the grid. The
+// method value installed above is stable; the policy it reads is not cached.
+func (s *System) claimConflict(incumbent, claimant int) bool {
+	return s.rules().ClaimConflict(s, incumbent, claimant)
 }
 
 // displaceable reports the overlap protocol's one branch condition: the
@@ -403,7 +417,9 @@ func (g *OccupancyGrid) raiseOverlap(id int, host, intruder bool) {
 }
 
 // ArbitrateOverlap applies the overlap protocol to one cell and reports
-// whether self takes it [04 R-COLL-01 §4]:
+// whether self takes it [04 R-COLL-01 §4]. Strict uses the owner-state branch
+// below; Community may replace its condition with the lower-index tie-break
+// (community-patch-engine.md CP-DMG-2):
 //
 //	occupant := unit at the cell's word
 //	if occupant's owner is active and in player state 3:
@@ -429,7 +445,13 @@ func (g *OccupancyGrid) ArbitrateOverlap(occupant, self int) bool {
 		// the displacing state.
 		return false
 	}
-	if g.displaceable(occupant) {
+	displace := false
+	if g.claimConflict != nil {
+		displace = g.claimConflict(occupant, self)
+	} else {
+		displace = g.displaceable(occupant)
+	}
+	if displace {
 		g.raiseOverlap(occupant, false, true)
 		g.raiseOverlap(self, true, false)
 		return true
@@ -924,12 +946,12 @@ func (g *OccupancyGrid) fileUnit(id int, anchor Cell, fx, fz int16) {
 	*f = SectorFiling{Filed: true, OffMap: !onMap, SX: sx, SZ: sz, Seq: g.linkSeq}
 	// Step 4 in the grid's own bucket index: unlink from the old record,
 	// head-insert into the new. The off-map record is not in the sector array,
-	// so a unit filed there is in no bucket and no sweep reaches it
+	// so its separate bucket remains outside the overlap sweep
 	// [04 R-COLL-01 §4A].
 	if onMap {
 		g.linkSector(id, sx, sz)
 	} else {
-		g.unlinkSector(id)
+		g.linkOffMap(id)
 	}
 }
 
@@ -1280,6 +1302,8 @@ func (g *OccupancyGrid) unlinkSector(id int) {
 	}
 	if l.prev != 0 {
 		g.links[l.prev-1].next = l.next
+	} else if l.offMap {
+		g.offMapHead = l.next
 	} else if slot := g.sectorRecord(l.sx, l.sz); slot >= 0 && slot < len(g.sectorHead) {
 		g.sectorHead[slot] = l.next
 	}
@@ -1287,6 +1311,47 @@ func (g *OccupancyGrid) unlinkSector(id int) {
 		g.links[l.next-1].prev = l.prev
 	}
 	g.links[id] = sectorLink{}
+}
+
+// linkOffMap projects the same canonical filing into the separate off-map
+// record. It does not make that record visible to retail overlap-sector scans
+// [04 R-COLL-01 §4A]; Community combat explicitly visits it (CP-ENV-1).
+func (g *OccupancyGrid) linkOffMap(id int) {
+	if g == nil || id < 0 {
+		return
+	}
+	g.unlinkSector(id)
+	if id >= len(g.links) {
+		g.links = append(g.links, make([]sectorLink, id+1-len(g.links))...)
+	}
+	head := g.offMapHead
+	g.links[id] = sectorLink{next: head, linked: true, offMap: true}
+	if head != 0 {
+		g.links[head-1].prev = int32(id) + 1
+	}
+	g.offMapHead = int32(id) + 1
+}
+
+// VisitOffMapFiled visits the canonical off-map record head first without a
+// scratch buffer. The consumer bounds its scan and checks unit liveness.
+// Advancing after yield preserves the source walk's visibility of synchronous
+// filing changes during damage (community-patch-engine.md CP-ENV-1).
+func (g *OccupancyGrid) VisitOffMapFiled(yield func(pool.Handle, uint64) bool) {
+	if g == nil || yield == nil {
+		return
+	}
+	filings, ok := g.overlap.(OverlapFilings)
+	if !ok {
+		return
+	}
+	for e := g.offMapHead; e != 0; {
+		id := int(e) - 1
+		f := filings.OverlapFiling(id)
+		if f != nil && f.Filed && f.OffMap && !yield(pool.Handle(id), f.Seq) {
+			return
+		}
+		e = g.links[id].next
+	}
 }
 
 // ForgetFiling drops an identity from the sector-bucket index and clears the

@@ -4838,16 +4838,19 @@ unbounded write.
 blink-suppress byte is nonzero (a per-tick-decremented countdown) show their
 blip only while the blink phase bit is set.
 
-**Weapon/interceptor rings.** A unit-definition flags dword bit 29 enables the
-ring loop, which walks the unit's three weapon slots; per slot, a
-weapon-definition flags dword bit 30 admits the ring. Radius:
+**Weapon/interceptor rings.** The unit definition's `antiweapons` flag enables
+the ring loop, which walks its three weapon slots; per slot, the weapon
+definition's `interceptor` flag admits the ring [02 R-KEYS-01 §1].
+**Established (2026-09-22 correction):** the ring operand is `coverage`, not
+`range`. The minimap reader consumes the same authored word as the interceptor
+target search; the earlier generic range name was misleading. Radius:
 
 ```
-ringRadius = RadarW * (weaponRange - 512) / PlayRight     truncating
+ringRadius = RadarW * (weaponCoverage - 512) / PlayRight  truncating
 ```
 
-with the authored per-slot range reduced by the constant 512 bias before
-scaling (short-range weapons can therefore produce a negative radius, which
+with the authored per-slot coverage reduced by the constant 512 bias before
+scaling (small coverage values can therefore produce a negative radius, which
 clipping drops). When the slot's interceptor flag byte is zero the ring is
 solid via the solid-circle rasterizer; otherwise it is dashed, and the
 dashed-circle routine receives the same radius, the ring palette index, a

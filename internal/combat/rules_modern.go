@@ -1,6 +1,9 @@
 package combat
 
-import "github.com/nanolathe-gg/nanolathe/internal/units"
+import (
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
+)
 
 // ModernRules is the approved Nanolathe Modern rule set of the combat service:
 // the terrain preflight of docs/DESIGN_WEAPONS_PROJECTILES.md §2.3.1 and the
@@ -11,7 +14,22 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 // It carries no state, so one value serves a whole session. It is used by
 // pointer so a rule set may embed it and override a single answer without
 // copying the policy.
-type ModernRules struct{}
+type ModernRules struct{ CommunityRules }
+
+// AreaVictims carries CP-DMG-1 but applies the approved Nanolathe Modern
+// policy that lifts only the six-overflow-entry capacity. All eligibility,
+// ordering and per-explosion de-duplication remain Community's contract.
+func (*ModernRules) AreaVictims(q AreaVictimQuery, visit func(pool.Handle)) {
+	communityAreaVictims(q, visit)
+}
+
+// AreaIndexTick prepares the unlimited Modern form at the same authoritative
+// boundary as Community's six-slot index.
+func (*ModernRules) AreaIndexTick(q AreaVictimQuery) {
+	if q.Service != nil && q.Service.Community.AreaDamageOverflow {
+		q.Service.ensureCommunityAreaIndex(q.World, q.Terrain, q.Tick, 0)
+	}
+}
 
 // AdmitShot runs the §2.3.1 preview and records the verdict on the query. The
 // preview uses the actual launch and motion kernels, so the answer is the one

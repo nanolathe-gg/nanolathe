@@ -340,8 +340,17 @@ func (p *FixedEffectPool) Len() int {
 	return len(p.records)
 }
 
-// Cap returns the fixed capacity 300 [03 §1] C5 (I5).
-func (p *FixedEffectPool) Cap() int { return FixedEffectCap }
+// Cap returns the battle-entry capacity. A zero-value pool reports retail's
+// 300-record limit [03 §1][CP-LIM-1].
+func (p *FixedEffectPool) Cap() int {
+	if p == nil {
+		return 0
+	}
+	if p.capacity <= 0 {
+		return FixedEffectCap
+	}
+	return p.capacity
+}
 
 // Records returns a snapshot slice of live records in stable insertion order [03 §1].
 // The returned slice aliases internal storage for tests; callers must not retain it
@@ -366,6 +375,7 @@ func (p *FixedEffectPool) Clear() {
 		p.fragments[i] = fragmentGeometry{}
 	}
 	p.records = p.records[:0]
+	p.fragmentCursor = 0
 }
 
 // SetGravity sets the pool default per-tick gravity [03 §2.2].
@@ -409,11 +419,9 @@ func (p *FixedEffectPool) Append(rec EffectRecord) bool {
 	if p == nil {
 		return false
 	}
-	if len(p.records) >= FixedEffectCap { // at or above the cap allocates nothing [03 §1] C5
+	p.ensureStorage()
+	if len(p.records) >= p.capacity { // at or above the battle-entry cap allocates nothing [03 §1][CP-LIM-1]
 		return false
-	}
-	if p.records == nil {
-		p.records = make([]EffectRecord, 0, FixedEffectCap)
 	}
 	p.records = append(p.records, rec)
 	return true

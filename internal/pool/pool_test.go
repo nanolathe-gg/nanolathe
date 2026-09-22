@@ -150,6 +150,39 @@ func TestProjectileAppendDeadCompaction(t *testing.T) {
 	}
 }
 
+func TestProjectileBattleCapacityAndStableCompaction(t *testing.T) {
+	p := NewProjectiles(ProjectileCapacity + 2)
+	if got := p.Capacity(); got != ProjectileCapacity+2 {
+		t.Fatalf("capacity = %d, want %d", got, ProjectileCapacity+2)
+	}
+	for i := 0; i < ProjectileCapacity+2; i++ {
+		h, ok := p.Reserve()
+		if !ok {
+			t.Fatalf("reserve %d failed above retail capacity", i+1)
+		}
+		p.SetPayload(h, i+1)
+	}
+	if h, ok := p.Reserve(); ok || h != 0 {
+		t.Fatalf("reserve above configured capacity = %d,%v", h, ok)
+	}
+	p.MarkDead(2)
+	p.MarkDead(ProjectileCapacity + 1)
+	follow := Handle(ProjectileCapacity + 2)
+	p.Compact(&follow)
+	if got := p.Count(); got != ProjectileCapacity {
+		t.Fatalf("count after compact = %d, want %d", got, ProjectileCapacity)
+	}
+	if follow != ProjectileCapacity {
+		t.Fatalf("follow after compact = %d, want %d", follow, ProjectileCapacity)
+	}
+	if got, ok := p.Payload(follow); !ok || got != ProjectileCapacity+2 {
+		t.Fatalf("tail payload after compact = %d,%v", got, ok)
+	}
+	if got := new(Projectiles).Capacity(); got != ProjectileCapacity {
+		t.Fatalf("zero-value capacity = %d, want retail %d", got, ProjectileCapacity)
+	}
+}
+
 // TestP016_CapacityFormula validates the physical cap = limit*10+1 for the
 // session per-player unit limit [05 R-SHARE-01 §7] [P0-16 §3.1]. Stock
 // capacity is roughly 2000–5000, not 500.

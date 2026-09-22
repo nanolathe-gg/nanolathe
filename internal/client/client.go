@@ -56,6 +56,8 @@ type Client struct {
 	presentationPaused  bool
 	pausedWorldRevision uint64
 	pausedLayer         pausedRecordLayer
+	communityHUD        CommunityHUDOptions
+	communityColors     communityColorState
 
 	// debugDeviceCapture is a host-owned, on-demand diagnostics bridge. It is
 	// invoked only after the frame recorder has joined, outside simulation.
@@ -217,6 +219,11 @@ type Client struct {
 	models    map[string]*unitModel
 	texIndex  map[string]texRef
 	logoIndex map[string]texRef
+
+	// communityPreviewModels is the lazy PreviewObject3D cache. A nil value is
+	// a negative cache entry; the ordinary art diagnostic list records the
+	// first failure once (DESIGN_COMMUNITY_PATCH §7, CP-UD-2).
+	communityPreviewModels map[communityPreviewModelKey]*unitModel
 	// texRefs is the per-model texture resolution table (model_texrefs.go),
 	// shared by pointer with the record workers; texGen changes whenever the
 	// indices above are replaced, so a table built against old indices is
@@ -288,6 +295,7 @@ type Client struct {
 	// buffer serves every strip and the fixed pool instead of allocating a list
 	// per pass (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
 	effectDraws     []presentationrender.EffectDraw
+	effectFragments []*frame.FragmentView
 	selectionChrome []selectionChrome
 	selectionDrag   SelectionDrag
 	// rendererTraceSink is nil for the normal presentation path. When enabled,

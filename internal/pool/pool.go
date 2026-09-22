@@ -17,6 +17,10 @@ const (
 	// [06 §5.1]: exactly 300 records of 107 bytes. Allocation appends at the
 	// tail and never fills holes until compaction [01 §6.1].
 	ProjectileCapacity = 300
+
+	// MaxProjectileCapacity bounds configured arenas by the signed 16-bit
+	// compaction-marker representation [06 §5.2].
+	MaxProjectileCapacity = 32767
 )
 
 // PlayerPermutation lists the logical player slots in the order used for
@@ -421,7 +425,8 @@ func (p *Units) TotalRecords() int {
 // Projectiles
 // ---------------------------------------------------------------------------
 
-// Projectiles is the 300-record projectile pool [01 §6.1], [06 §5.1].
+// Projectiles is the battle-sized projectile pool [01 §6.1], [06 §5.1],
+// [CP-LIM-1]. Its zero value has the retail 300-record capacity.
 // Each record is 107 bytes in the executable; here we model only the
 // allocation metadata that is authoritative for determinism: the packed
 // active span count, the dead flag, and stable order. Allocation appends at
@@ -431,23 +436,69 @@ func (p *Units) TotalRecords() int {
 // [01 §6.2], [06 §5.2], preserves survivor order, and repairs the follow-
 // camera link [01 §6.1], [06 §5.2].
 type Projectiles struct {
-	count int
-	dead  [ProjectileCapacity]bool
+	count          int
+	capacity       int
+	dead           []bool
+	compactScratch []int
 	// payload holds an optional cookie for order-preservation diagnostics
 	// (e.g., a shooter ID). It is not authoritative but is moved together with
 	// the dead flag during compaction so that external tests can verify stable
 	// order when they write via direct field access in the same package.
-	payload [ProjectileCapacity]int
+	payload []int
 }
+
+// NewProjectiles creates an empty projectile pool sized at battle entry.
+// Zero selects the retail capacity. Values above MaxProjectileCapacity are a
+// composition error: the compact marker cannot represent them [06 §5.2].
+func NewProjectiles(capacity int) *Projectiles {
+	p := &Projectiles{}
+	switch {
+	case capacity == 0:
+		p.capacity = ProjectileCapacity
+	case capacity < 0 || capacity > MaxProjectileCapacity:
+		panic("pool: projectile capacity outside signed compact-marker range")
+	default:
+		p.capacity = capacity
+	}
+	p.dead = make([]bool, p.capacity)
+	p.payload = make([]int, p.capacity)
+	p.compactScratch = make([]int, p.capacity)
+	return p
+}
+
+func (p *Projectiles) cap() int {
+	if p == nil {
+		return 0
+	}
+	if p.capacity <= 0 {
+		return ProjectileCapacity
+	}
+	return p.capacity
+}
+
+func (p *Projectiles) ensureStorage() {
+	if p == nil || p.dead != nil {
+		return
+	}
+	capacity := p.cap()
+	p.dead = make([]bool, capacity)
+	p.payload = make([]int, capacity)
+	p.compactScratch = make([]int, capacity)
+}
+
+// Capacity reports the battle-entry capacity. A zero-value pool reports the
+// retail limit.
+func (p *Projectiles) Capacity() int { return p.cap() }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1],
 // [01 §6.1]. It returns a non-zero handle (1..count) on success. When the
 // count is already at capacity (300) it fails even if earlier holes exist,
 // because dead records still consume capacity until compaction [06 §5.1].
 func (p *Projectiles) Reserve() (Handle, bool) {
-	if p == nil || p.count >= ProjectileCapacity {
+	if p == nil || p.count >= p.cap() {
 		return 0, false
 	}
+	p.ensureStorage()
 	h := Handle(p.count + 1) // 1-indexed; 0 is null
 	p.dead[p.count] = false
 	// payload at p.count is left as-is (zero) for the caller to fill;
@@ -570,9 +621,9 @@ func (p *Projectiles) Compact(follow *Handle) {
 	}
 	oldCount := p.count
 
-	// Capacity is fixed; stack scratch avoids allocating on every phase tail.
-	// Only the original span is read. A negative entry denotes a dead record.
-	var oldToNew [ProjectileCapacity]int
+	// Capacity is fixed; battle-entry scratch avoids allocating on every phase
+	// tail. Only the original span is read. A negative entry denotes a dead record.
+	oldToNew := p.compactScratch[:oldCount]
 	for i := 0; i < oldCount; i++ {
 		oldToNew[i] = -1
 	}

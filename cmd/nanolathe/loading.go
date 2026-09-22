@@ -238,7 +238,8 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	// Modern uses the saved limit when available (DESIGN_SESSIONS_AI_SAVE
 	// "Modern save unit limits").
 	loaded, err := session.LoadRetailSavePath(path, session.RetailLoadDeps{
-		FS: g.cs.fs, ContentLimits: g.cs.limits, SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit, Gameplay: g.gameplay,
+		BuilderOptions: sessionBuilderOptions(g.builderOptions),
+		FS:             g.cs.fs, ContentLimits: g.cs.limits, CommunitySources: communitySources(g.opts, g.cs), SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit, Gameplay: g.gameplay,
 	})
 	if err != nil {
 		return err

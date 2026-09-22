@@ -8,7 +8,7 @@ import (
 
 func (s *Session) ensureDebris() {
 	if s != nil && s.debris == nil {
-		s.debris = render.NewDebrisPool()
+		s.debris = render.NewDebrisPoolWithCapacity(s.EntryCommunity.DebrisCapacity)
 	}
 }
 

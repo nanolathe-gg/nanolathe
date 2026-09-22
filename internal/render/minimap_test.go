@@ -469,10 +469,10 @@ func TestMinimapWeaponRingIsGatedOnSelection(t *testing.T) {
 	blit := func(dst *RadarSurface, x, y int, color byte, hovered bool) { dst.Set(x, y, color) }
 	base := MinimapContact{
 		WorldX: 50, WorldZ: 50, Visible: true, Palette: 9,
-		RingEnabled: true, RingRange: 532,
+		RingEnabled: true, RingRange: 20,
 	}
 	centerX, centerY := RadarProjection(base.WorldX, base.WorldZ, 0, playW, playH, m)
-	ringX := centerX + RadarRadius(base.RingRange-512, m.W, playW)
+	ringX := centerX + RadarRadius(base.RingRange, m.W, playW)
 
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
 	final := rebuildFinalExactInto(nil, mapped, m, playW, playH, []MinimapContact{base}, BlinkState{Phase: 1}, blit, 7, 8, 9)

@@ -25,7 +25,7 @@ func TestCommittedAudioSurvivesAudienceChangeBeforeDrain(t *testing.T) {
 		Audio:       audio.NewService(nil),
 		Clock:       &clock.State{GlobalTick: 7},
 		Vis:         visibility.New(&world.Terrain{CellW: 2, CellH: 2}, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled),
-		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 	}
 	cache := s.Audio.Cache
 	if _, err := cache.Put("shot", []byte{128, 129}); err != nil {

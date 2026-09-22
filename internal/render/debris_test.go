@@ -71,6 +71,26 @@ func TestDebrisAdmissionStopsAtFixedSlotLimit(t *testing.T) {
 	}
 }
 
+func TestDebrisBattleCapacityScalesSlotsAndBackingStore(t *testing.T) {
+	const slots = WholeDebrisSlots + 1
+	p := NewDebrisPoolWithCapacity(slots)
+	if len(p.slots) != slots {
+		t.Fatalf("slot capacity = %d, want %d", len(p.slots), slots)
+	}
+	wantStorage := WholeDebrisStorageCharge * slots / WholeDebrisSlots
+	if p.storageCharge != wantStorage {
+		t.Fatalf("storage capacity = %d, want %d", p.storageCharge, wantStorage)
+	}
+	for i := 0; i < slots; i++ {
+		if !p.Admit(debrisRequest(0)) {
+			t.Fatalf("admission %d failed above retail slot capacity", i+1)
+		}
+	}
+	if p.Admit(debrisRequest(0)) {
+		t.Fatal("admission above configured slot capacity succeeded")
+	}
+}
+
 func TestDebrisRingEvictsCursorTailThenWraps(t *testing.T) {
 	p := NewDebrisPool()
 	for _, vertices := range []int{4000, 3000, 2000, 1000, 900} {

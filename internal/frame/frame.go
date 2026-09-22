@@ -93,6 +93,30 @@ type PieceView struct {
 	DontCache bool
 }
 
+// UnitWeaponHUDView is the immutable presentation copy needed by the optional
+// Community reload bar. Tagged includes either the authored slot definition or
+// the live slot weapon matching `reloadbar`; the publisher resolves the source
+// fallback before presentation sees it [CP-WPN-7].
+type UnitWeaponHUDView struct {
+	Reload     uint16
+	ReloadTime uint16
+	Tagged     bool
+	Stockpile  bool
+}
+
+// UnitHUDView is the immutable source for optional Community unit labels. The
+// simulation publisher computes the veteran level through the bound combat
+// rules; presentation never reconstructs it from kills [CP-UD-1].
+type UnitHUDView struct {
+	StockpileCount            uint32
+	StockpileQueued           uint32
+	TransportCount            uint32
+	TransportCapacity         uint32
+	SingleUnitFlyingTransport bool
+	VeteranLevel              uint32
+	Weapons                   [3]UnitWeaponHUDView
+}
+
 // UnitView is the committed presentation copy of one live unit. InstanceID
 // distinguishes successive unit objects in a reused pool slot for presentation
 // cache ownership. It is assigned only during publication and is never an
@@ -105,12 +129,15 @@ type UnitView struct {
 	X, Y, Z              numeric.Fixed
 	Heading, Pitch, Bank uint16
 	Health, MaxHealth    int32
-	BuildRemaining       float32
-	Flags                uint32
-	DefName              string
-	Model                string
-	FootX, FootZ         int8
-	Pieces               []PieceView
+	// PriorHealthSample is the previous 30-tick percentage sample used by
+	// host consumers that reproduce the source's sampled-health gates [04 §5.1].
+	PriorHealthSample uint8
+	BuildRemaining    float32
+	Flags             uint32
+	DefName           string
+	Model             string
+	FootX, FootZ      int8
+	Pieces            []PieceView
 	// CacheRevision is a copied VM presentation revision. It models image
 	// invalidation in Go and is not a persisted retail counter.
 	CacheRevision uint64
@@ -186,6 +213,9 @@ type UnitView struct {
 	// health-bar pass draws the digit '0'+Group beside the bar of a unit whose
 	// group number is nonzero [03 R-FX-01 §6].
 	Group uint8
+	// CommunityHUD carries optional host-presentation values only. It does not
+	// select gameplay and is never read back by the simulation [I6].
+	CommunityHUD UnitHUDView
 	// OwnerColor is the owning player's lobby colour index: the frame selector
 	// for the owner logo the footer blits at LOGO2 [07 R-HUD-03 §2].  It is
 	// carried per unit because the committed frame holds no player roster.
@@ -222,6 +252,9 @@ type UnitView struct {
 	// is: presentation must not reconstruct sensor state from the instance
 	// flag word [R-VIS-01 §4].
 	UnderwaterExempt bool
+	// Direct visibility is resolved for Frame.ViewingPlayer by the bound rules.
+	DirectVisibilityKnown bool
+	DirectlyVisible       bool
 }
 
 // ProjectileView is the committed copy of one projectile draw record
@@ -496,6 +529,7 @@ type OrderView struct {
 	Param1, Param2, Param3 uint32
 	BuildProduct           string
 	BuildCount             uint32
+	BuildFacing            uint8
 	FootX, FootZ           int8
 	Route                  []RoutePoint
 	RouteTruncated         bool
@@ -731,7 +765,7 @@ const (
 type RadarRingView struct {
 	Enabled   bool
 	Dashed    bool
-	Range     int32
+	Range     int32 // resolved unscaled radius, including the selected rule's bias
 	Intercept bool
 }
 
@@ -970,6 +1004,9 @@ const PlayerRowSlots = 10
 // exists on every tick of a live battle and carries only what the panel's scan
 // reads.
 type PlayerRow struct {
+	// UnitSlotStart is the first reserved pool record, even when empty. The
+	// optional opponent-facing preview probes this exact slot (CP-UD-2).
+	UnitSlotStart pool.Handle
 	// Present is the record-exists term of the row filter.
 	Present bool
 	// Name is the player name written at (x0+9, y+6).

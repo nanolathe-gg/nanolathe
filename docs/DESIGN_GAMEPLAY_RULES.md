@@ -1,29 +1,31 @@
 # Design — Gameplay rules
 
 `internal/gameplay` and `internal/session/rules.go`, plus one `rules.go` in
-each package that owns a gameplay decision. How Nanolathe's two gameplay
-policies — the retail baseline **Strict 3.1** and the default **Modern** —
-reach the algorithms that behave differently under them.
+each package that owns a gameplay decision. How Nanolathe's three reserved
+gameplay policies — the retail baseline **Strict 3.1**, the compatibility
+layer **Community 3.9**, and the default **Modern** — reach the algorithms
+that behave differently under them.
 
 This document owns the *mechanism*: the seam list, who may implement a seam,
 what an implementation may cost, when a set may be bound, and what a save
-knows about it. It owns no policy. Every Modern rule keeps its contract, its
-retail baseline, its boundaries and its own verification in the design
-document that owns the affected subsystem, and this document only says which
-seam carries it.
+knows about it. It owns no policy. Community contracts live in
+[DESIGN_COMMUNITY_PATCH](DESIGN_COMMUNITY_PATCH.md); every Modern rule keeps
+its contract, retail baseline, boundaries and verification in the design
+document that owns the affected subsystem. This document only says which seam
+carries each answer.
 
 This is one of the design documents listed by [ARCHITECTURE.md](ARCHITECTURE.md);
 [INVARIANTS.md](INVARIANTS.md) I11 is the rule every diff is reviewed against.
 
 ## 1. Shape
 
-`gameplay.Mode` is the vocabulary, and a word has three forms: `modern` (the
-default, and the zero value), `strict-3.1`, and the name of any rule set this
-build registered (§8). It is what the settings file stores and what
-`--gameplay` parses. `Session.Gameplay` is narrower: it always holds one of
-the two reserved words, because that is the answer everything asking
-strict-versus-modern needs, and the selected set's own name stays on the bound
-set.
+`gameplay.Mode` is the vocabulary, and a word has two forms: one of the three
+reserved words — `modern` (the default and zero value), `community-3.9`, or
+`strict-3.1` — or the name of any rule set this build registered (§8). It is
+what the settings file stores and what `--gameplay` parses.
+`Session.Gameplay` is narrower: it always holds one of the three reserved
+words, because that is the base answer for code outside a seam, and the
+selected set's own name stays on the bound set.
 
 What a word *selects* is a `session.RuleSet`: one implementation per seam,
 named, bound once. After binding, every decision site holds a concrete
@@ -34,19 +36,31 @@ type RuleSet struct {
     Name         string
     Base         gameplay.Mode // the reserved set this one derives from; zero is Modern
     Combat       combat.Rules
+    Visibility   visibility.Rules
     Orders       orders.Rules
     Construction construction.Rules
     UnitLimit    UnitLimitRules
+    ScriptPorts  ScriptPortRules
     Movement     movement.Rules
     Path         path.Kernel
     Planner      ai.Planner
 }
 ```
 
-`StrictRuleSet()` and `ModernRuleSet()` are the two reserved sets;
+The set also carries a `community.Overrides` declaration in `Features`.
+Composition resolves content, registered declarations, player settings and
+command-line overrides in that order. `Session.Community` holds the immutable
+result; service rebinding copies that result without resolving it again.
+Selection at a command boundary resolves the new set before changing the
+session, so an invalid declaration leaves the current selection intact.
+
+`StrictRuleSet()`, `CommunityRuleSet()` and `ModernRuleSet()` are the three
+reserved sets in derivation order. Each package's `CommunityRules` embeds its
+`StrictRules`, and `ModernRules` embeds `CommunityRules`; a layer overrides
+only the answers its policy changes.
 `RuleSetForMode` resolves a selection word to a set and `Session.BindRules`
 projects each field onto the service that asks it — `Combat.Rules`,
-`Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Rules`, `Movement.Kernel`, and every
+`Vis.Rules`, `Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Rules`, `Movement.Kernel`, and every
 computer player's `Planner` — and onto every queue binding composed
 afterwards. `Session.SetRules(name)` is the selection entry point
 that can report an unknown name; `SetGameplay` is the same selection for a
@@ -74,14 +88,17 @@ as a second way to select a policy: a composed session always binds.
 | `combat.Rules` | `internal/combat` | terrain admission ([DESIGN_WEAPONS_PROJECTILES §2.3.1](DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission)) the launch-gate half of Hold Fire (§2.6.1), and Modern threat targeting/incoming-fire coordination |
 | `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), the three guard-assistance legs, and Modern danger response/protected work |
 | `construction.Rules` | `internal/construction` | [factory-exit](DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding) and [construction-site](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding) clearance; [authored build membership](DESIGN_ECONOMY_CONSTRUCTION.md#modern-authored-build-membership) |
+| `visibility.Rules` | `internal/visibility` | Community allied-jammer suppression and aircraft border visibility (DESIGN_COMMUNITY_PATCH §4.4); no prior seam owned per-viewer sensor decisions |
+| `session.ScriptPortRules` | `internal/session` | Community recorder ports 32 and 69–75 (DESIGN_COMMUNITY_PATCH §4.5) |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
 | `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned |
-| `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); both reserved sets bind `path.RetailKernel` |
-| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); both reserved sets bind `ai.RetailPlanner` |
+| `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); all three reserved sets bind `path.RetailKernel` |
+| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); all three reserved sets bind `ai.RetailPlanner` |
 
 The last two rows are the **whole-subsystem** seams: each replaces an
 algorithm rather than answering a question inside one, and both now exist.
-Neither has a Modern implementation — both reserved sets bind the retail one —
+Neither has a Community or Modern implementation — all three reserved sets
+bind the retail one —
 because replacing either is a behaviour change with its own contract rather
 than a selection. Both are request-granularity replacements (§4), and the two
 sections below state each one's boundary: a kernel may not change *when* a
@@ -93,7 +110,7 @@ order, because that call order is the whole future of the battle.
 
 `path.Kernel` has one method: it opens one request's resumable search, and
 `path.Search` is that search behind an interface. `path.RetailKernel` is the
-retail ray-and-A\* search, it is zero size, and **both reserved sets bind
+retail ray-and-A\* search, it is zero size, and **all three reserved sets bind
 it** — there is no Modern kernel, because no approved Modern policy changes
 how a route is found. ([Modern learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain)
 changes one *input* the retail search reads, through `movement.Rules`; the
@@ -142,10 +159,10 @@ gates stay inside the step so no caller can skip them.
 A replacement answers the same step from the same manager. It may draw from the
 simulation stream only through the manager's own accessor and only in the order
 the retail step draws, because that call order is the whole future of the
-battle; a planner that draws differently is a Modern gameplay policy needing
-its own contract, so **both reserved sets bind `RetailPlanner`** — there is no
-Modern planner today, and Strict 3.1 could never bind one. A set assembled
-outside `internal/ai` composes the retail step by calling
+battle; a planner that draws differently is a gameplay policy needing its own
+contract, so **all three reserved sets bind `RetailPlanner`** — there is no
+Community or Modern planner today, and Strict 3.1 could never bind one. A set
+assembled outside `internal/ai` composes the retail step by calling
 `ai.RetailPlanner{}.Step`; the retail body itself stays unexported.
 
 The manager's field is the binding point: nil is the retail step, so a fixture
@@ -291,12 +308,12 @@ Two consequences are worth stating because they are observable:
 | Every bound implementation is zero size or a pointer, and no seam is left unbound | `session.TestRuleSetImplementationsAreZeroSizeOrPointers` |
 | The reserved sets carry the mode vocabulary and the unit-limit policy each mode's contract states | `session.TestReservedRuleSetsMatchTheModeVocabulary` |
 | Binding reaches the combat service, the construction service and an already composed queue binding | `session.TestBindRulesProjectsEverySeam` |
-| Dispatch through a bound set allocates nothing in either set | `session.TestBoundRuleDispatchDoesNotAllocate` |
+| Dispatch through a bound set allocates nothing in any reserved set | `session.TestBoundRuleDispatchDoesNotAllocate` |
 | A switch is honoured at the command boundary and not before | `session.TestGameplayChangesAtCommandBoundary` |
 | New and already composed queues observe the same set | `session.TestModernOrderPolicyComposition` |
 | Per-package dispatch allocates nothing, and the Strict answers are the retail ones | `combat.TestRulesDispatchDoesNotAllocate`, `combat.TestStrictRulesAnswerAsRetail`, `orders.TestRuleDispatchDoesNotAllocate`, `orders.TestAbsentRulesAnswerStrictWithoutDrawing`, `construction.TestStrictClearanceDispatchAllocatesNothing` |
 | The unit-limit seam's own policy, bounds and Strict bypass | `session.TestModernSaveUnitLimitSelection`, `session.TestModernSaveLoadsAcrossUnitLimits` |
-| The registry refuses a reserved or duplicate name, builds once, and completes a set from its base | `session.TestRegisterRuleSetRefusesReservedAndDuplicateNames`, `session.TestLookupRuleSetBuildsOnceAndCompletesFromItsBase` |
+| The registry refuses a reserved or duplicate name, builds once, and completes a set from any reserved base | `session.TestRegisterRuleSetRefusesReservedAndDuplicateNames`, `session.TestLookupRuleSetBuildsOnceAndCompletesFromItsBase`, `session.TestCompleteRuleSetFillsFromCommunityBase` |
 | A cached set is shared by every session, so no implementation holds state | `session.TestCachedRuleSetImplementationsHoldNoState` |
 | Selection by name binds the whole set, carries its base as the session's word, and reports an unknown name | `session.TestSetRulesSelectsByNameAndReportsAnUnknownOne`, `session.TestRuleSetNamesListTheReservedSetsFirst`, `session.TestBaseModeOfReducesASelectionToAReservedWord` |
 | Binding is idempotent and a per-allocation re-projection keeps a selected set | `session.TestUnitCreationKeepsTheSelectedRuleSet`, `session.TestRebindRulesSelectsOnlyWhenNothingIsBound`, `example.TestSelectingTheExampleSetSurvivesALiveComposition` |
@@ -304,10 +321,10 @@ Two consequences are worth stating because they are observable:
 | A set composed outside `internal/` registers, overrides one answer and inherits its base | `example.TestTheExampleSetIsRegisteredAndSelectable`, `example.TestTheExampleSetOverridesOneAnswerAndInheritsModern`, `example.TestSelectingTheExampleSetProjectsTheOverride` |
 | Only a command imports the mod list | `architecture.TestOnlyCommandsImportTheModList` |
 | The movement policy seam reaches the movement system, dispatches without allocating, and answers Strict when unbound | `session.TestBindRulesProjectsEverySeam`, `session.TestCompositionProjectsTheSearchKernelOntoMovement`, `movement.TestMovementRulesDispatchDoesNotAllocate`, `movement.TestStrictTerrainRejectionLearnsNothing` |
-| Both reserved sets bind the retail search kernel, and the composer projects it onto the movement system | `session.TestReservedRuleSetsBindTheRetailSearchKernel`, `session.TestCompositionProjectsTheSearchKernelOntoMovement` |
+| All reserved sets bind the retail search kernel, and the composer projects it onto the movement system | `session.TestReservedRuleSetsBindTheRetailSearchKernel`, `session.TestCompositionProjectsTheSearchKernelOntoMovement` |
 | The retail kernel opens the retail search, is asked once per request, and its dispatch adds no allocation | `path.TestRetailKernelOpensTheRetailSearch`, `path.TestAKernelIsAskedOncePerRequest`, `path.TestRetailKernelDispatchAddsNoAllocation`, `movement.TestSearchFuncOpensItsSearchThroughTheBoundKernel`, `movement.TestAnUnboundKernelIsRetailAndCostsNothing` |
-| Both rule sets' fingerprints are locked to constants | `headless.TestStrictFingerprintIsLocked`, `headless.TestModernFingerprintIsLocked` |
-| The think step reaches every computer player, both reserved sets bind the retail step, and the dispatch allocates nothing | `session.TestBindRulesProjectsThePlannerOntoEveryComputerPlayer` |
+| All three reserved sets' fingerprints are locked to constants | `headless.TestStrictFingerprintIsLocked`, `headless.TestCommunityFingerprintIsLocked`, `headless.TestModernFingerprintIsLocked` |
+| The think step reaches every computer player, all reserved sets bind the retail step, and the dispatch allocates nothing | `session.TestBindRulesProjectsThePlannerOntoEveryComputerPlayer` |
 | A nil planner is the retail step, a bound one answers in its place, and neither dispatch allocates | `ai.TestANilPlannerRunsTheRetailStep`, `ai.TestABoundPlannerAnswersTheStepInPlaceOfRetail`, `ai.TestPlannerDispatchDoesNotAllocate` |
 
 Each Modern policy keeps its own behaviour tests in the package that owns it;
@@ -315,18 +332,18 @@ those are listed by the owning design document, not here.
 
 Beyond the tests, a seam unit is gated on **identity**: the 6000-tick headless
 fingerprint and the simulation-cost benchmark's initial, warm and final
-fingerprints must be unchanged in *both* modes, because introducing a seam is
-supposed to move no logic (§3 rule 3). A unit that changes a fingerprint is
-either a policy change — which belongs in the owning design document with its
-own contract — or a defect.
+fingerprints must be unchanged in every reserved mode, because introducing a
+seam is supposed to move no logic (§3 rule 3). A unit that changes a
+fingerprint is either a policy change — which belongs in the owning design
+document with its own contract — or a defect.
 
 ## 8. Selection by name, the registry and `mods/`
 
-A build can select more than the two reserved sets. `session.RegisterRuleSet`
+A build can select more than the three reserved sets. `session.RegisterRuleSet`
 adds a named set, `session.LookupRuleSet` resolves one, and
-`session.RuleSetNames` lists what this build can select — the two reserved
-names first, the default before the retail baseline, then the registered names
-sorted, so a diagnostic and a host menu agree on one order.
+`session.RuleSetNames` lists what this build can select — the three reserved
+names first from the default down through its derivation layers, then the
+registered names sorted, so a diagnostic and a host menu agree on one order.
 
 **The registry is a map consulted when a set is selected, and never in a
 tick.** Selection happens at composition and at the phase-1 command boundary;
@@ -338,8 +355,8 @@ than trusted. These cached objects cannot own session scratch.
 
 Registration is a **build-time** act, so it panics rather than reporting:
 
-- a reserved name is refused, because every retail fingerprint and every
-  Modern contract is written against those two sets;
+- a reserved name is refused, because the fingerprints and policy contracts
+  are written against those three sets;
 - a duplicate name is refused, because selection would otherwise depend on
   link order.
 
@@ -349,13 +366,12 @@ and fills every unstated seam from that base set — not from the owning
 packages' own nil fallbacks, which answer Strict 3.1 and would silently
 contradict a Modern-based set.
 
-`Base` is the set's answer to strict-versus-modern questions outside the
-seams, such as the developer spawn gate and the headless report's `gameplay` field.
+`Base` is the set's answer to reserved-layer questions outside the seams, such
+as the options stage and the headless report's `gameplay` field.
 The save unit-limit decisions themselves use `UnitLimitRules`, so a named
 set may override those answers independently of its base. A session carries
-its bound set's base in `Session.Gameplay`, so logic that only knows the two reserved behaviors needs
-no knowledge of the registry, and the developer spawn gate keeps reading that
-word unchanged.
+its bound set's base in `Session.Gameplay`, so logic that only knows the three
+reserved behaviors needs no knowledge of the registry.
 
 ### The mod list
 
@@ -397,10 +413,11 @@ linked other sets still starts under the default instead of failing.
 
 Two consequences are worth stating because they are observable:
 
-- The retail-shaped options panel is a two-stage control. It shows the
-  reserved set a selection derives from (`session.BaseModeOf`), and toggling
-  it selects a reserved set — replacing a third-party selection. Selecting a
-  set by name is a command-line or settings-file choice.
+- The retail-shaped options panel is a three-stage control in derivation order:
+  Strict 3.1, Community 3.9, Modern. It shows the reserved set a selection
+  derives from (`session.BaseModeOf`), and cycling it selects a reserved set —
+  replacing a third-party selection. Selecting a set by name is a command-line
+  or settings-file choice.
 - Headless and simulation-cost reports include `rules` for the bound set
   name; session debug captures also include `rules`. The headless report
   exposes the session base separately as `gameplay`. A retail save still
@@ -426,14 +443,15 @@ to ask for the same approval again.
    already answers the question. Add a method to the owning `combat.Rules`,
    `orders.Rules`, `construction.Rules`, `movement.Rules` or
    `session.UnitLimitRules` when the
-   package needs a new decision. Implement both Strict and Modern defaults,
-   with Modern delegating to the strict answer where no departure is approved.
+   package needs a new decision. Implement Strict, Community and Modern
+   defaults in their derivation chain, with each layer promoting the lower
+   answer where no departure is approved.
    Keep unbound fixtures' retail behavior. For a replacement search or think
    step, use `path.Kernel` or `ai.Planner` within their existing boundaries.
 3. **Add a seam only for a missing owner or boundary.** Explain in the owning
    design why the existing interfaces cannot express the contract. Put the
    narrow interface in that algorithm's package and compose its field in the
-   same `session.RuleSet`: both reserved constructors, base completion,
+   same `session.RuleSet`: all reserved constructors, base completion,
    binding/rebinding and later-created/restored owners must agree. Do not
    introduce another registry, capability-selection system, per-unit policy
    selector or collection of compatibility booleans. Keep selection at
@@ -450,7 +468,7 @@ to ask for the same approval again.
    including RNG draws and resource effects; retain allocation, composition,
    restoration and registry guards. Test any added state across rebinding and
    switches, plus independent sessions when state isolation matters. A seam
-   refactor preserves both modes' fingerprints (§7); an approved behavior
+   refactor preserves all reserved modes' fingerprints (§7); an approved behavior
    change explains its expected differences in the owning design. Run the
    applicable verification and performance gates from
    [ARCHITECTURE](ARCHITECTURE.md#6-verification) and AGENTS.md.
@@ -459,11 +477,16 @@ to ask for the same approval again.
 
 `internal/content/profiles` selects load-time directory layout and content
 limits through `vfs.Layout`; see [DESIGN_CONTENT_VFS §5](DESIGN_CONTENT_VFS.md).
-It does not select `session.RuleSet`. A patch or content pack may require both
-a load-time profile and separately authorized gameplay support; record those
-two requirements independently. A detected marker, install name, file path or
-asset-provider identity must not become a hidden runtime gameplay selector.
-Keep renderer and host preferences under their existing controls as well.
+It does not select `session.RuleSet`. The bounded exception is the Community
+profile declaration of DESIGN_COMMUNITY_PATCH §3.2: content may name one
+closed feature table, which composition resolves only after the host has
+selected Community 3.9 or Modern. That declaration never selects the gameplay
+mode, and Strict 3.1 ignores all of its overrides. A patch or content pack may
+require both a load-time profile and separately authorized gameplay support;
+record those two requirements independently. A detected marker, install name,
+file path or asset-provider identity must not become a hidden runtime gameplay
+selector. Keep renderer and host preferences under their existing controls as
+well.
 
 ### Decisions still required for future extensions
 
@@ -474,7 +497,7 @@ requirements, an approved design and tests before dependent behavior can be
 implemented. Record unresolved behavior as `TODO(question)` at its code site
 and in its owning research contract; record Nanolathe design decisions in the
 owning design document. The existence of a seam or an extension reference does
-not authorize changing either reserved set's behavior.
+not authorize changing any reserved set's behavior.
 
 ### Modern combat prototype composition
 

@@ -90,6 +90,25 @@ false; `[Icon]` lines are `name=file.PCX`, where the name is a category name
 resolved by the engine's category lookup. The reserved names `nothing`,
 `unknow` and `nukeicon` map to `NONE`, `UNKNOWN` and `NUKEICON.PCX`.
 
+**Established — custom load and colour order.** With `UseDefaultIcon=false`,
+existing commander-specific PCX files from the configured directory are added
+before the `[Icon]` rows. The section rows retain authored order. At draw time
+the first non-reserved row whose category membership contains the unit
+definition wins; `unknow`, `nothing` and `nukeicon` never participate in that
+walk. Failure to match selects `unknow`, while the hidden-unit path selects
+`nothing`. `UseDefaultIcon=true` takes the built-in branch before enumerating
+the custom section or opening its PCX paths.
+
+For a selected unit, `FillColor` pixels become the player's colour and other
+pixels are retained. For an ordinary unselected unit, `SelectedColor` pixels
+first become `TransparentColor`, then `FillColor` becomes the player colour.
+Hover with `UseCircleHover=false` instead changes `SelectedColor` to
+`HoverColor`, followed by the same player-colour replacement. With
+`UseCircleHover=true`, hover keeps the unselected image and draws a separate
+`HoverColor` circle centred on the icon, with radius equal to the truncated
+distance from its centre to a corner. **Confidence: Established** from the MIT
+source at pinned commit `dcff5dd`, inspected 2026-09-22.
+
 **Established — current-source ring thresholds.** `MegamapRadarMinimum`,
 `MegamapSonarMinimum`, `MegamapRadarJamMinimum`, `MegamapSonarJamMinimum`
 and `MegamapAntiNukeMinimum` filter rings using a strict greater-than

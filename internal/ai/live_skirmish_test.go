@@ -3,6 +3,7 @@ package ai_test
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
@@ -18,8 +19,12 @@ func liveSkirmish(t *testing.T, mapName string, seed uint32) *session.Session {
 		t.Skipf("nanolathe: mounting install failed: logical path %s, providers searched [], expected a readable Total Annihilation install: %v", root, err)
 	}
 	t.Cleanup(func() { fs.Close() })
+	// The development floor below was measured against retail's path allowance
+	// and unit-limit divisor. Community and Modern intentionally replace both
+	// entry parameters [DESIGN_COMMUNITY_PATCH §4.1].
 	composed, err := headless.ComposeFreshBattle(headless.FreshBattleRequest{
 		Kind:           headless.ScenarioDirectOTA,
+		Gameplay:       gameplay.Strict31,
 		Map:            mapName,
 		LocalOwner:     -1,
 		SimulationSeed: seed,

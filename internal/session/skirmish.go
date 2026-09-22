@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
@@ -10,7 +9,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
@@ -531,7 +532,9 @@ const (
 // lobby setup a save round-trips [08 R-SKIR-01 §2], while these are host
 // load-time choices that never reach a tick.
 type SkirmishEntryOptions struct {
-	Progress content.Progress
+	BuilderOptions   *orders.BuilderOptions
+	CommunitySources CommunitySources
+	Progress         content.Progress
 	// ContentLimits come from the mounted content set's profile
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero value is
 	// the retail baseline.
@@ -553,6 +556,13 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 // constructor's own, so a caller painting the retail loading screen can drive
 // it from one stream. A nil observer reports nothing and changes nothing else.
 func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishConfig, options SkirmishEntryOptions) (*Session, error) {
+	entryFeatures, err := ResolveCommunity(cfg.Gameplay, options.CommunitySources)
+	if err != nil {
+		return nil, err
+	}
+	if entryFeatures.UnitLimit != 0 {
+		cfg.UnitLimit = entryFeatures.UnitLimit
+	}
 	report := options.Progress
 	if err := cfg.Normalize(); err != nil {
 		return nil, err
@@ -572,10 +582,11 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		return nil, fmt.Errorf("session: nil filesystem for skirmish battle [02 §5]")
 	}
 	// 1. mount/receive VFS and compile one immutable catalog [02 §5]
-	cat, err := strictCatalogWithProgress(fs, cat, options.ContentLimits, report)
+	cat, err = strictCatalogWithProgress(fs, cat, options.ContentLimits, report)
 	if err != nil {
 		return nil, err
 	}
+	cat = prepareCommunityWeapons(cat, cfg.Gameplay, entryFeatures)
 	// 2. select mission/schema [08 "Mission type dispatch"]
 	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, cfg.MapName, 0, cfg.NumPlayers, nil)
 	if err != nil {
@@ -607,20 +618,6 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		return nil, err
 	}
 	report.Report(FamilyUnitWorld, 100)
-	// Strict: ensure side commanders exist; do not invent armcom [P0-I01]
-	nPlayersCheck := cfg.NumPlayers
-	if nPlayersCheck < 0 {
-		nPlayersCheck = 0
-	}
-	if nPlayersCheck > 10 {
-		nPlayersCheck = 10
-	}
-	for i := 0; i < nPlayersCheck; i++ {
-		sideIdx := cfg.Players[i].Side
-		if _, err := skirmishCommander(cat, sideIdx, i); err != nil {
-			return nil, err
-		}
-	}
 	// Derive LocalOwner from configured human row, not zero default [08 "Skirmish configuration"].
 	localOwner := LocalOwnerForConfig(cfg)
 	enemyOwner := 0
@@ -642,19 +639,22 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		}
 	}
 	s := &Session{
-		Gameplay:     cfg.Gameplay.Normalize(),
-		Catalog:      cat,
-		World:        terrain,
-		Mission:      m,
-		Skirmish:     cfg,
-		Clock:        &clock.State{Requested: 10, Active: 10},
-		Snapshot:     frame.NewBuffer(),
-		Units:        unitsWorld,
-		Econ:         &economy.Service{},
-		Latch:        NewEndLatch(),
-		LocalOwner:   uint8(localOwner),
-		ViewingOwner: uint8(localOwner),
-		EnemyOwner:   uint8(enemyOwner),
+		Gameplay:         cfg.Gameplay.Normalize(),
+		CommunitySources: options.CommunitySources,
+		Community:        entryFeatures,
+		EntryCommunity:   entryFeatures,
+		Catalog:          cat,
+		World:            terrain,
+		Mission:          m,
+		Skirmish:         cfg,
+		Clock:            &clock.State{Requested: 10, Active: 10},
+		Snapshot:         frame.NewBuffer(),
+		Units:            unitsWorld,
+		Econ:             &economy.Service{},
+		Latch:            NewEndLatch(),
+		LocalOwner:       uint8(localOwner),
+		ViewingOwner:     uint8(localOwner),
+		EnemyOwner:       uint8(enemyOwner),
 	}
 	// Seed both streams fresh at battle bootstrap, before any battle setup
 	// draw [R-CORE-02] DET-01.
@@ -757,6 +757,9 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	s.InitAudio(fs)
 	// 5. create every required service non-nil and bind ports [08][04 §7.2]
 	if err := createAndBindServices(s); err != nil {
+		return nil, err
+	}
+	if err := s.initializeBuilderOptions(options.BuilderOptions); err != nil {
 		return nil, err
 	}
 	// Construct every manager in ascending slot order before commander and map
@@ -886,6 +889,55 @@ func skirmishCommander(cat *content.Catalog, sideIdx, playerIdx int) (*content.U
 		return nil, fmt.Errorf("session: commander %q for side %d not found [02]", sd.Commander, sideIdx)
 	}
 	return def, nil
+}
+
+// validateSkirmishCommanders preserves the production roster's side-index
+// validation while deferring the fallback-commander requirement until CP-UD-3
+// has identified players whose initial schema attempt suppresses that fallback.
+// Strict has no active schema state, so it validates every configured commander.
+func validateSkirmishCommanders(cat *content.Catalog, cfg SkirmishConfig, s *Session, assignment map[int]int) error {
+	n := cfg.NumPlayers
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	for player := 0; player < n; player++ {
+		side := cfg.Players[player].Side
+		if cat == nil || side < 0 || side >= len(cat.Sides) {
+			return fmt.Errorf("session: side %d out of range for player %d [02 §6]", side, player)
+		}
+		start, assigned := assignment[player]
+		if assigned && communitySchemaSuppressesCommander(s, player, start) {
+			continue
+		}
+		if _, err := skirmishCommander(cat, side, player); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func communitySchemaSuppressesCommander(s *Session, player, startPosition int) bool {
+	if s == nil || !s.Community.SchemaUnits || !s.communitySchema.active || s.communitySchema.mission == nil {
+		return false
+	}
+	for _, placement := range s.communitySchema.mission.Units {
+		if placement.CreationCountdown > 0 {
+			continue
+		}
+		if int8(player) == s.communitySchema.neutralOwner {
+			if placement.Player == 11 {
+				return true
+			}
+			continue
+		}
+		if placement.Player == int32(startPosition+1) {
+			return true
+		}
+	}
+	return false
 }
 
 // skirmishBattleEntry performs the single-player battle-entry order per [08
@@ -1075,6 +1127,18 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			permMap[logical] = local28[idx]
 		}
 	}
+	// Community schema units target authored START POSITIONS rather than player
+	// numbers. Snapshot the inverse table after the source's neutral-unit
+	// random-start correction, and prepare the deferred queue. Strict resets to
+	// an inactive state and leaves this retail commander path untouched
+	// (DESIGN_COMMUNITY_PATCH §4.5 CP-UD-3).
+	s.configureCommunitySchemaStarts(cfg, m, eligible, permMap)
+	// Validate the authored side for every configured row. A player with an
+	// initial CP-UD-3 attempt does not require the commander definition that the
+	// attempt suppresses; every other row keeps the strict fallback requirement.
+	if err := validateSkirmishCommanders(s.Catalog, cfg, s, permMap); err != nil {
+		return err
+	}
 	// Helper to find a StartPos special by its authored 1-based suffix, which
 	// is what this build's decode stores in Special.ID [GAP T14]. The scan is
 	// first-match in authored order and the comparison is exact
@@ -1103,12 +1167,6 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		}
 		if cfg.Players[playerIdx].Side == neutralSideIndex {
 			continue
-		}
-		// Side/commander lookup
-		sideIdx := cfg.Players[playerIdx].Side
-		def, commanderErr := skirmishCommander(s.Catalog, sideIdx, playerIdx)
-		if commanderErr != nil {
-			return commanderErr
 		}
 		// The stamp helper places the commander AT the slot's start position and
 		// draws nothing [08 R-ENTRY-01 §5] "Kind 2 (skirmish), no save file":
@@ -1147,6 +1205,19 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		sp := findSpecial(perm)
 		if sp == nil {
 			return errStartPositionMissing(perm)
+		}
+		// CP-UD-3 replaces this player's commander when any initial placement
+		// targets the assigned start position (or, for the designated neutral
+		// computer, Player 11). "Any" means an attempted spawn: definition or
+		// allocation failure still suppresses the commander.
+		if s.spawnInitialCommunitySchema(playerIdx, perm) {
+			continue
+		}
+		// Side/commander lookup remains the strict fallback.
+		sideIdx := cfg.Players[playerIdx].Side
+		def, commanderErr := skirmishCommander(s.Catalog, sideIdx, playerIdx)
+		if commanderErr != nil {
+			return commanderErr
 		}
 		x := numeric.Fixed(int32(sp.X) * 65536)
 		z := numeric.Fixed(int32(sp.Z) * 65536)

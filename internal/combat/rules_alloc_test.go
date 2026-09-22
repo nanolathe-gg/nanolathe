@@ -3,6 +3,7 @@ package combat
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
@@ -33,8 +34,19 @@ func TestRulesDispatchDoesNotAllocate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &Service{Rules: tc.rules}
+			weapon := &content.WeaponDef{WaterWeapon: true}
+			projectile := &Projectile{}
+			target := TargetAdmission{
+				Service: svc, Weapon: weapon,
+				Shooter: TargetAdmissionEnd{Y: 1}, Target: TargetAdmissionEnd{Y: 1},
+			}
 			if got := testing.AllocsPerRun(100, func() {
 				rulesDispatchSink = svc.rules().HoldsFire(&shooter, false)
+				rulesDispatchSink = svc.rules().AdmitTarget(target)
+				rulesDispatchSink = svc.rules().SlotMayFire(svc, &shooter, weapon, nil)
+				rulesDispatchSink = svc.rules().DetonationBroadcast(svc, projectile, weapon)
+				rulesDispatchSink = svc.rules().GuidanceAdmitted(svc, projectile, weapon, 0, 0)
+				rulesDispatchSink = svc.rules().ShotTimeAdmitted(ShotTimeAdmission{Service: svc, Shooter: &shooter, Weapon: weapon})
 			}); got != 0 {
 				t.Fatalf("HoldsFire dispatch allocated %v per call", got)
 			}

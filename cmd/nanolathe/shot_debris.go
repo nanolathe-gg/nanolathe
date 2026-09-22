@@ -111,6 +111,7 @@ func runDebrisShot(opts Options, cs *contentSet) error {
 	}
 	cl.SetModelFS(cs.unmappedMount)
 	applyVisualOptions(cl, loadedSettings().Display)
+	applyCommunityHUDOptions(cl, loadedSettings().Presentation)
 	// Every Enhanced switch on: the point of the capture is the lighting pass.
 	cl.SetEffects(drawlist.Effects{Water: true, Lighting: opts.ShotDebrisLighting, Finish: true, Distortion: true, Marks: true})
 	cl.SetGlow(opts.ShotDebrisGlow)

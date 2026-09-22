@@ -198,7 +198,15 @@ func (s *Service) CanEngageSlotTarget(u *units.Unit, target *units.Unit, idx int
 	if terrain != nil {
 		sea = int32(terrain.SeaLevel)
 	}
-	if !unitToUnitAdmitsBeforeRange(gateEndForUnit(u), gateEndForUnit(target), sea, w.WaterWeapon, w.ToAirWeapon) {
+	if !s.rules().AdmitTarget(TargetAdmission{
+		Service:     s,
+		Weapon:      w,
+		Shooter:     gateEndForUnit(u),
+		Target:      gateEndForUnit(target),
+		Sea:         sea,
+		WaterWeapon: w.WaterWeapon,
+		ToAir:       w.ToAirWeapon,
+	}) {
 		return false
 	}
 	if !w.WaterWeapon && w.Ballistic && !hasBallisticSolution(u, target, w, terrain) {
@@ -207,11 +215,11 @@ func (s *Service) CanEngageSlotTarget(u *units.Unit, target *units.Unit, idx int
 	return WithinRange(u.X, u.Z, target.X, target.Z, w.Range)
 }
 
-// unitGateEnd carries one end's operands for the unit-to-unit acquisition and
+// TargetAdmissionEnd carries one end's operands for the unit-to-unit acquisition and
 // order-installation gate [06 §3.1][06 R-WPN-05 §1]. Both ends contribute a
 // whole-unit Y word and a model top-height word; only the target end's medium
 // flags and committed mover mode are read.
-type unitGateEnd struct {
+type TargetAdmissionEnd struct {
 	// Y is the whole-unit height word `(int16)(Y >> 16)` both height clauses
 	// compare, sign-truncated exactly as retail's 16.16 position word is
 	// [06 §3.1][06 R-WPN-05 §9].
@@ -222,10 +230,18 @@ type unitGateEnd struct {
 	// MoverMode is the committed mover mode, the operand of the `toairweapon`
 	// clause [04 R-MOV-01 §8][06 R-WPN-05 §1] clause 3.
 	MoverMode uint8
+	// UnitMode is the last position-committed unit-side mode. Community
+	// nottoair reads this published word, not the live mover state
+	// (research/extensions/community-patch-engine.md, CP-WPN-1).
+	UnitMode uint8
 	// Floater and CanHover are the unit definition's capability-word A bits 19
 	// and 12, the water branch's pair [04 R-SPEC-01 §0][06 §3.1].
 	Floater, CanHover bool
 }
+
+// unitGateEnd keeps the retail gate's local name while the Rules request uses
+// the exported spelling available to registered rule-set implementations.
+type unitGateEnd = TargetAdmissionEnd
 
 // gateEndForUnit reads one end's operands off a live unit. A unit with no
 // resolved definition contributes a zero model top and no medium flags, which
@@ -234,7 +250,7 @@ func gateEndForUnit(u *units.Unit) unitGateEnd {
 	if u == nil {
 		return unitGateEnd{}
 	}
-	end := unitGateEnd{Y: wholeY(u), MoverMode: u.Move.Mode}
+	end := unitGateEnd{Y: wholeY(u), MoverMode: u.Move.Mode, UnitMode: u.Move.ModeMirror & 3}
 	if u.Def != nil {
 		end.ModelTop = u.Def.ModelTop
 		end.Floater = u.Def.Floater
@@ -308,10 +324,17 @@ func (s *Service) ShotTimeAdmitsPoint(u *units.Unit, idx int, x, y, z numeric.Fi
 	if slot == nil || slot.Weapon == nil || u == nil || u.Def == nil {
 		return false
 	}
-	return shotTimeAdmits(u, slot.Weapon, x, y, z, terrain)
+	return s.rules().ShotTimeAdmitted(ShotTimeAdmission{
+		Service: s,
+		Shooter: u,
+		Weapon:  slot.Weapon,
+		Target:  Vec3{X: x, Y: y, Z: z},
+		Terrain: terrain,
+	})
 }
 
-// shotTimeAdmits is the one body of the shot-time gate, shared by the point
+// strictShotTimeAdmits is the Strict body of the shot-time gate, shared through
+// Rules by the point
 // form above and by the slot pipeline's own admission site. [06 R-WPN-05 §9]
 // states the gate's clauses exhaustively and in evaluation order, and states
 // that it has NO target-side clause of any kind — no target height or model
@@ -330,24 +353,31 @@ func (s *Service) ShotTimeAdmitsPoint(u *units.Unit, idx int, x, y, z numeric.Fi
 // cost; the target-side clauses live in the acquisition/order-installation
 // gate alone (CanEngageSlotTarget, IsValidAcquisitionCandidate), which orders
 // its own range test LAST [06 §3.1][06 R-WPN-05 §1].
-func shotTimeAdmits(u *units.Unit, weapon *content.WeaponDef, x, y, z numeric.Fixed, terrain *world.Terrain) bool {
-	if u == nil || weapon == nil {
+func strictShotTimeAdmits(q ShotTimeAdmission) bool {
+	if q.Shooter == nil || q.Weapon == nil {
 		return false
 	}
-	if !WithinRange(u.X, u.Z, x, z, weapon.Range) {
+	if !WithinRange(q.Shooter.X, q.Shooter.Z, q.Target.X, q.Target.Z, q.Weapon.Range) {
 		return false
 	}
-	if weapon.WaterWeapon {
+	return strictShotTimeAdmitsAfterRange(q)
+}
+
+// strictShotTimeAdmitsAfterRange is clauses 2 and 3 of the retail gate. The
+// Community surfacefire router reaches success between clause 1 and this
+// suffix, so the split preserves the source hook's exact position.
+func strictShotTimeAdmitsAfterRange(q ShotTimeAdmission) bool {
+	if q.Weapon.WaterWeapon {
 		return true
 	}
 	sea := int32(0)
-	if terrain != nil {
-		sea = int32(terrain.SeaLevel)
+	if q.Terrain != nil {
+		sea = int32(q.Terrain.SeaLevel)
 	}
-	if wholeY(u)+modelTop(u) <= sea {
+	if wholeY(q.Shooter)+modelTop(q.Shooter) <= sea {
 		return false
 	}
-	if weapon.Ballistic && !hasBallisticSolutionToPoint(u, x, y, z, weapon, terrain) {
+	if q.Weapon.Ballistic && !hasBallisticSolutionToPoint(q.Shooter, q.Target.X, q.Target.Y, q.Target.Z, q.Weapon, q.Terrain) {
 		return false
 	}
 	return true

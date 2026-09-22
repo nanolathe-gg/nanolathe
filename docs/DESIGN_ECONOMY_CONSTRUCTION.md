@@ -856,6 +856,52 @@ route bends, ordinary replacement and stale-hint cleanup. The movement-side
 lifetime and save rules are in
 [Modern construction clearance priority](DESIGN_MOVEMENT_PATH.md#modern-construction-clearance-priority).
 
+### Community construction-site kickout
+
+**Community 3.9 policy, sourced extension behavior with a Nanolathe candidate
+restriction.** When the resolved feature table enables `ConstructionKickout`,
+Community placement preview and command admission may ignore an occupant only
+when it is a live unit of the ordering player whose definition is MOBILE
+(`BMCode != 0`). This mobile-only restriction is the settled Nanolathe Q2
+decision; the source accepts every own unit. Strict rejects the occupant.
+Modern inherits this admission half, while the allocator still requires a
+physically clear site in every mode [DESIGN_COMMUNITY_PATCH §4.3, §11]
+([community patch engine behavior §5.6](../research/extensions/community-patch-engine.md)).
+
+At the mobile and VTOL blocked-site branches, enabled Community waits while the
+visit counter is at most 20, increments once, and retries after exactly 30
+ticks; the next visit abandons. Strict, and Community/Modern with the feature
+disabled, retain the inclusive limit 10. Modern with the feature enabled keeps
+the 20-visit budget but uses the Modern construction-site yielding above for
+automatic evacuation, per D3.
+
+Enabled Community automatic evacuation de-duplicates occupants of the snapped
+footprint in slot order. It consumes one CRT modulo-360 draw before every
+candidate's later decisions, the approved Nanolathe cadence in
+DESIGN_COMMUNITY_PATCH §11 Q3; the source calls its random-bearing search only
+after its should-move predicate passes. A move already aimed inside the site is eligible.
+A unit working on an unfinished target with strictly less than 600 energy
+invested stays unless another live unit of the same owner has the same target
+at state 2 or later. Every other candidate is eligible. Destination search
+uses the sourced preferred bearing, full-circle angular sweep, radii from 24
+times the site's X footprint while strictly below twice that value, 16-unit
+radius steps, strict map-edge and cell-edge bounds, an empty single occupancy
+cell, no nonzero-height feature, and a 2×2 height spread strictly below the
+unit's maximum slope. It tests neither the unit footprint nor reachability.
+
+The queue rewrite preserves a fresh build behind the inserted move, drops the
+tail for a position-less order, preserves the tail when replacing an existing
+kick move, and otherwise inserts a substitute for the stopped order behind the
+move before restoring the tail. A service-owned slot-indexed destination table
+recognizes the existing kick move and deliberately retains stale records across
+non-move orders and death; only a move to a different position erases one,
+matching the source's recycled-index behavior. The exported manual move
+entry uses the same rewrite and table with no search, validation or random
+draw; Strict disables it. Rebinding stops new admissions, budget extensions and
+rewrites; already-issued ordinary moves remain in their queues. Tests lock the
+Strict bypass, feature-off answer, inclusive counter comparison, unconditional
+CRT cadence, protected-worker rule and fresh-build/tail branches.
+
 ### 3.4 Features — C25…C28
 
 **C25 — reproduction.** Phase six, after catalog rest cursors and before the
@@ -1229,3 +1275,71 @@ costs, activation, exit-clearance ordering and rally inheritance are unchanged.
 Strict 3.1 retains ordinary arrival and retry behavior. Captured crowd tests
 exercise terminal rally-shaped moves and normal cleanup; eligibility tests
 keep queued construction and repair intact and preserve Strict RNG/state.
+
+### Community repair contributions
+
+Community and Modern dispatch repair through `construction.Rules.RepairContribution`.
+The resolved `RepairRate` enables CP-DMG-4 only for its selected table; Strict
+and disabled tables keep the existing repair helper [05 R-WORK-01 §3]. Active
+repair and passive `healtime` have separate service entry points, so an explicit
+self-repair order uses the active multiplier. The rule follows
+[community patch engine behavior CP-DMG-4](../research/extensions/community-patch-engine.md)
+for guard order, energy, banked health and the raw healing packet.
+
+The service owns two target-tagged remainder banks per repairer slot. Composition
+sizes them from the unit world before repair can run. Tags identify array slots,
+including reuse, as the source's pointers do; changing the unit world resets the
+banks, while switching modes within a battle retains them. No repair visit
+allocates this storage or consumes RNG. An uncomposed/out-of-range repairer uses
+the source's rounding fallback and increments `RepairBankFallbacks`, exposed in
+debug captures. Retail saves contain no bank fields; loading starts new banks.
+
+Two focused tests lock resource rejection before bank changes, zero-work return,
+build-time rejection, shared self-target banking across the two multipliers,
+the other simultaneous target, and Strict/disabled identity. The existing
+healtime tests retain their cadence and no-RNG contract.
+
+### Community structure rotation
+
+**Nanolathe Community and Modern policy (user-authorized September 21, 2026).**
+CP-CON-5 applies the authored `Rotations` cardinal-facing mask to building
+placement. Strict 3.1 ignores that mask and keeps every structure south.
+Community and Modern expose the authored mask only when the resolved
+`StructureRotation` feature is enabled; south remains allowed in every case.
+The source contract is [community patch engine behavior
+CP-CON-5](../research/extensions/community-patch-engine.md#56-construction-and-builder-behavior).
+
+The human placement command resolves through `construction.Rules.AllowedFacings`
+and captures the clamped facing index in its mobile build order. Zero is south,
+so computer, campaign and reconstructed untagged orders retain the strict
+answer. A disallowed requested facing and a rotation whose authored extent is
+outside 1..32 clamp to south. There is no second selector and no catalog write.
+
+At creation the selected geometry is resolved before COB `Create`: east and
+west transpose the footprint, north retains its dimensions, and the yard map
+rotates with the heading convention. The allocator's existing build-angle draw
+and hover-phase draw remain in their original order; rotation adds a quarter
+turn to the resulting heading and spends no RNG or resources. An authored COB
+`Create` turn runs afterward and wins. The normal heading word is the persistent
+form. Its facing is `((heading - 32768 + 8192) mod 65536) / 16384`, reduced to
+four values, so save reconstruction and resurrection can select geometry before
+their creation call without adding a save field. The exact saved or wreck
+heading is restored by those owning paths after creation.
+
+Each unit retains its creation-derived facing, and each construction placement
+retains the corresponding derived yard. Live port-18 admission, yard open/close,
+clear and restamp therefore use one orientation. The movement collision record
+is initialized from that same unit geometry. Rule rebinding affects future
+orders and creations; it does not reinterpret a queued facing or restamp an
+existing building.
+The construction service caches derived yards by immutable definition identity
+and facing for the session. No shared `UnitDef` field or authored yard string is
+mutated.
+
+Capture resolves the victim heading through the same rule before replacement
+allocation, installs the victim's mover mode and derived geometry together, then
+copies the exact orientation triple through the existing transfer contract.
+Tests cover nearest-quarter heading arithmetic, quarter- and half-turn yard
+geometry, pre-COB instance creation without catalog mutation, the Strict and
+disabled bypasses, Modern inheritance, rule rebinding, unchanged RNG use, and a
+live rotated yard transition.

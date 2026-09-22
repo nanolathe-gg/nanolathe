@@ -50,6 +50,8 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.display = s.Display
 	g.setPresentation(startupPresentation(g.opts, s.Presentation))
 	g.setGameplay(startupGameplay(g.opts, s.Gameplay))
+	g.gameplayFeatures = s.GameplayFeatures
+	g.builderOptions = s.BuilderOptions
 	g.fullscreen = s.Fullscreen
 	// The message-column ring configuration is the interface page's
 	// `TXTSCROL`, `MAXLINES` and `UNITCHAT` controls plus `screenchat`, which
@@ -178,9 +180,11 @@ func (g *gameShell) captureSettings() settings.Settings {
 		// The options root's `PREV` ("OK") is one of the save points that
 		// rewrite the whole block; the value it saves is whatever the live
 		// display record holds [07 R-FE-01 §6][07 R-FE-01 §11].
-		Display:      g.display,
-		Presentation: g.presentation,
-		Gameplay:     g.gameplay.Normalize(),
+		Display:          g.display,
+		Presentation:     g.presentation,
+		Gameplay:         g.gameplay.Normalize(),
+		GameplayFeatures: g.gameplayFeatures,
+		BuilderOptions:   g.builderOptions,
 		// The interface page's three message controls write into this block;
 		// `screenchat` rides through unchanged [02 §3][07 R-CAM-01 §7].
 		Messages: g.messages,

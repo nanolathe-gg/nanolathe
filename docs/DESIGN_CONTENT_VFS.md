@@ -178,6 +178,26 @@ executable's own `[02 R-CAT-01 §5]`:
 | `BuildMenuPage`, `DownloadMenuPlacement` | The authored and generated build pages |
 | `AssetID`, `AssetSequence` | Typed presentation asset identities and frame-sequence metadata used by texture playback |
 
+Community-authored FBI and weapon keys are also compiled into typed metadata in
+every gameplay mode; this stage does not activate their behavior
+([DESIGN_COMMUNITY_PATCH §5](DESIGN_COMMUNITY_PATCH.md#5-content-interface)).
+`Rotations` becomes `FacingMask` bits in S/E/N/W index order with south always
+set. `VeterancyThresholds` is a `[]uint32`: whitespace tokens must be complete
+decimal unsigned parses, invalid tokens are dropped, a leading minus wraps in
+the unsigned domain, and an absent, empty or all-invalid list becomes
+`5 10 15 20 25`. `VeterancyAccuracyBuffRate` defaults to 12 and compiles any
+authored value at or below zero to 0 (off). Transported explosion names link to
+weapon definitions; an empty or unresolved name leaves a nil override, and an
+unresolved non-empty name is cleared with a catalog warning. The preview keys
+remain strings except `PreviewFaceOpponent`, which is an integer truth value.
+Weapon `notoverwater`, `notoverland`, `nomapweaponalert` and `reloadbar` join
+the four existing community target flags as stored-low-bit booleans: an
+authored value of 2 is false. Authored presence is tracked separately from
+the compiled value. No extension key emits canonical hash bytes when absent,
+while an authored key does so even when it compiles to false, empty or a
+default-equivalent value. These rules implement the independently recorded
+[community patch contracts](../research/extensions/community-patch-engine.md#5-behavior-contracts).
+
 Accessors: `Unit`, `Weapon`, `WeaponByName`, `WeaponByID`, `WeaponLink`,
 `WeaponRecordsByID`, `Category`, `ResolveCategoryMask`, `SortedUnitKeys`, `UnitRecords`,
 `UnitDefIndex`, `UnitDefByIndex`, `UnitIndexOf`, `SortedModels`, `ModelIndex`,

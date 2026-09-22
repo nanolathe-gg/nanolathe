@@ -64,6 +64,19 @@ func (s *Session) stepOneSubTick(tick uint32) {
 	// Result/mission evaluation remains a per-subtick session hook. It is not
 	// part of the once-per-pump executor tail [01 §4.4].
 	s.stepResultPhase(tick)
+	s.stepCommunityTickTail(tick)
+}
+
+// stepCommunityTickTail is the approved deterministic host-callback boundary.
+// It preserves extension registration order after every complete tick, before
+// publication, rather than depending on outer host batching (Community design
+// §11 Q13). It is outside the twelve retail phases and consumes no new RNG.
+func (s *Session) stepCommunityTickTail(tick uint32) {
+	s.stepCommunitySchema(tick)
+	s.tickTransportDeaths(tick)
+	if s.Combat != nil && s.Rules.Combat != nil {
+		s.Rules.Combat.AreaIndexTick(combat.AreaVictimQuery{Service: s.Combat, World: s.Units, Terrain: s.World, Tick: tick})
+	}
 }
 
 // Phase registry — one named method per phase 1..12 called in §4.4 order
@@ -422,7 +435,7 @@ func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
 	// Builder and target are the same unit. Repair owns the signed entry
 	// compare, the two clamped terms, the one-resource energy admission against
 	// the BUILDER's buckets and the kind-10 heal packet [05 R-WORK-01 §3].
-	s.Build.Repair(u, u, construction.HealQuantum(u.Def.HealTime))
+	s.Build.RepairPassive(u, construction.HealQuantum(u.Def.HealTime))
 }
 
 // stepWindGeneratorCallbacks is the wind-generator part of a unit visit's

@@ -1375,6 +1375,26 @@ a separate scaling path `[04 §9.2]`. The armored term reads the victim's
 runtime posture bit, never the definition's `armoredstate` flag
 `[06 R-DMG-01 §8]` `[06 R-DMG-01 §2]`.
 
+#### Community-authored veterancy
+
+Community 3.9 and Modern apply CP-UD-1 only when the projected Community table
+enables `Veterancy`. The unit definition's authored threshold list replaces
+the retail five-kill tier reader at every combat consumer through
+`combat.Rules.VeteranLevel`; Strict 3.1 ignores that metadata. The bounded
+level is the list's upper-bound position without sorting or validation. Damage
+dealt uses it directly, damage taken clamps it to 25, and reload clamps it to
+16. Capture uses the target's unbounded level through the orders rule seam.
+
+The pre-fire lead gate remains a strict comparison, now against the first
+authored threshold. Turret spread divides its existing bound by
+`kills / VeterancyAccuracyBuffRate` only when that quotient exceeds one; a
+nonpositive rate supplies zero. These substitutions preserve the surrounding
+integer widths, truncation, projectile-reservation estimate and random draw
+cadence. With absent keys, the compiled `5 10 15 20 25` thresholds and rate 12
+make every arithmetic answer identical to Strict 3.1
+([community patch engine behavior](../research/extensions/community-patch-engine.md#58-unit-definition-extensions-and-spawned-schema-units),
+CP-UD-1).
+
 **C21 — what the packet stores.** Target id, attacker id, the modulo amount, a
 one-byte relative direction, and a kind byte. The direction is a fresh bearing
 from the record's current point minus the victim's heading `[06 §9.1]`
@@ -1650,3 +1670,54 @@ In addition to the commander damage-purge and failed-target Aim regressions in
 
 These are retail corrections shared by Strict 3.1 and Modern, with no new
 gameplay policy.
+
+## 9. Community area and off-map aircraft
+
+`combat.Rules.AreaVictims` owns the per-cell unit-selector sequence inside the
+one shared area walk. Strict 3.1 reads the ground word, completes that hit, then
+reads the air word and retains retail's twenty-entry memory. With CP-DMG-1
+enabled, Community brackets each blast with a saved/restored generation and
+adds six per-cell overflow selectors from a tick-stamped index. The index is
+rebuilt eagerly through `combat.Rules.AreaIndexTick` at the session-owned
+authoritative boundary; cell enumeration never rebuilds it. It walks
+live unit slots in ascending order and admits alive, non-pending airborne units
+that are not cargo and are not in movement's canonical off-map filing; it
+inserts over the unit's stored claimed footprint clamped to the map. A full
+cell counts one saturation for each failed `(cell, unit)` insertion on that
+rebuild. Generation zero fails open, and a stamp at or above the active
+generation suppresses the candidate as specified by CP-DMG-1. The table's
+dedup-cap switch extends that suppression to the two stock selectors; without
+it, overflow selectors are still suppressed while stock retains its bounded
+memory behavior. [community patch engine behavior §5.4](../research/extensions/community-patch-engine.md#54-damage-and-claim-mechanics)
+
+**Nanolathe Modern policy — lifted area-overflow capacity.** When CP-DMG-1 is
+enabled, Modern retains the same eligibility, stable slot order, tick rebuild,
+generation bracket and selector placement, but does not stop after six
+overflow entries per cell. Community 3.9 retains the six-entry saturation and
+Strict 3.1 never builds or reads the overflow index. This is the approved Q1
+decision in DESIGN_COMMUNITY_PATCH §11; focused tests preserve all three
+answers.
+
+CP-ENV-1's combat half is parameterized by the projected off-map margin and
+reads membership only through movement's canonical filing. Its iterator is the
+off-map bucket's head-first, descending-link-sequence walk and is bounded at
+4096 visited records for each pass. An off-map projectile gets a second chance
+only while its age is at most 450 ticks, its point lies in the square margin,
+the live projectile count is below 270, and at least one live hostile aircraft
+in the margin is reachable. The engine collision ladder is skipped in that
+case; a footprint-and-inclusive-height hit takes the ordinary central impact,
+and a `noexplode` hit is explicitly spent. Over the map, the ordinary collision
+ladder runs first; only a still-unspent non-`noexplode` round scans canonically
+off-map aircraft whose footprint covers its on-map cell. [community patch
+engine behavior §5.7 CP-ENV-1](../research/extensions/community-patch-engine.md#57-environment-visibility-and-climate)
+
+Every area blast walks the canonical off-map bucket before the tile rectangle.
+That pass skips the attacker, requires alive/non-pending state and the margin,
+but deliberately has no air filter. It measures the three-axis distance to the
+unit definition's translated box, roots in double precision, truncates to
+whole world units, clamps to 32767, and admits only `distance < radius`; its
+falloff is evaluated through explicit single-precision stores. Canonical
+off-map membership also excludes a unit from CP-DMG-1, keeping the two victim
+sources disjoint. The pass feeds the ordinary damage receiver, feedback totals,
+effects and nested-damage order. Strict 3.1 selects margin zero and bypasses all
+three combat mechanisms. [community patch engine behavior §5.7 CP-ENV-1](../research/extensions/community-patch-engine.md#57-environment-visibility-and-climate)

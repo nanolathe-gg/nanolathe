@@ -77,9 +77,13 @@ func TestResurrectionRemovesFeatureAfterAllocation(t *testing.T) {
 	posX := world.CellToWorld(5)
 	posZ := world.CellToWorld(5)
 	sim2 := rng.NewSimulation(1)
-	prod, err := svc.Resurrect(builder, &terrain.Plot[5*10+5], def, posX, numeric.Fixed(0), posZ, &sim2)
+	result, err := svc.Resurrect(builder, &terrain.Plot[5*10+5], def, posX, numeric.Fixed(0), posZ, &sim2, ResurrectionRequest{})
 	if err != nil {
 		t.Fatalf("resurrect err %v", err)
+	}
+	prod := result.Unit
+	if !result.Finalized {
+		t.Fatal("resurrection with a valid post-allocation wreck reread was not finalized")
 	}
 	if prod == nil || prod.Remaining != 0 || prod.Health != 1 {
 		t.Fatalf("resurrect product remaining %v health %d want 0/1", prod.Remaining, prod.Health)
@@ -136,9 +140,18 @@ func TestResurrectionRefusalLeavesTheCorpseFootprintUntouched(t *testing.T) {
 	svc.Allocator = func(uint8, *content.UnitDef, numeric.Fixed, numeric.Fixed, numeric.Fixed) (*units.Unit, error) {
 		return nil, nil
 	}
-	product, err := svc.Resurrect(builder, terrain.PlotAt(1, 1), productDef, world.CellToWorld(1), 0, world.CellToWorld(1), nil)
-	if err != ErrLimit || product != nil {
-		t.Fatalf("refused resurrect = (%v, %v), want (nil, ErrLimit)", product, err)
+	bound := false
+	result, err := svc.Resurrect(builder, terrain.PlotAt(1, 1), productDef, world.CellToWorld(1), 0, world.CellToWorld(1), nil, ResurrectionRequest{
+		BindTarget: func(*units.Unit) pool.Handle {
+			bound = true
+			return 1
+		},
+	})
+	if err != ErrLimit || result.Unit != nil || result.Finalized {
+		t.Fatalf("refused resurrect = (%+v, %v), want (zero, ErrLimit)", result, err)
+	}
+	if bound {
+		t.Fatal("allocation refusal changed the order target")
 	}
 	for i := range terrain.Plot {
 		if terrain.Plot[i] != before[i] {

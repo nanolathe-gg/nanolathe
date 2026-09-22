@@ -82,11 +82,19 @@ func TestRetailAdvancedKbotAmbusherClick(t *testing.T) {
 			product, _ := cat.Unit(b.PlacementProduct())
 			state := &b.battleState().Input
 			cx, cz := world.WorldToCell(builder.X), world.WorldToCell(builder.Z)
-			placed := false
+			placed, admittedObstruction := false, false
 			for z := cz - 4; z <= cz+4 && !placed; z++ {
 				for x := cx - 4; x <= cx+4; x++ {
 					result, err := b.checkProductPlacement(x, z, product, state.BuildFootX, state.BuildFootZ, uint16(handle))
 					if err != nil {
+						continue
+					}
+					// Community and Modern deliberately admit a preview over another
+					// own mobile unit, while allocation still waits for a physically
+					// clear site. Record that contract, then use an unobstructed site
+					// so this test remains about the clicked product's real lifecycle.
+					if result.OccupantsAdmitted {
+						admittedObstruction = true
 						continue
 					}
 					state.BuildCellX, state.BuildCellZ, state.BuildSiteH = x, z, result.SiteHeight
@@ -99,6 +107,9 @@ func TestRetailAdvancedKbotAmbusherClick(t *testing.T) {
 			}
 			if !placed {
 				t.Fatal("no valid nearby Ambusher site")
+			}
+			if !admittedObstruction {
+				t.Fatal("fixture did not encounter the Community/Modern own-unit placement admission")
 			}
 			pending := sess.PendingHumanCommands()
 			if len(pending) != 1 || pending[0].Kind != session.HumanMobileBuild || pending[0].MobileBuild.Product != "armamb" {

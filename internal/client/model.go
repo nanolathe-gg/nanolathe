@@ -195,6 +195,8 @@ func (c *Client) unitNanoframeReveal(v frame.UnitView) (*presentationrender.Nano
 	// slot index is that number in this build — a stable per-unit value in the
 	// same range — so this is a naming difference, not an open question.
 	band, outline := presentationrender.NanoframePulse(uint16(v.Slot), c.frameTick)
+	band = c.communityFrameColor(v.OwnerColor, v.OwnerColorKnown, band)
+	outline = c.communityFrameColor(v.OwnerColor, v.OwnerColorKnown, outline)
 	reveal := presentationrender.BuildNanoframeReveal(v.BuildRemaining, band, outline)
 	return &reveal, outline
 }

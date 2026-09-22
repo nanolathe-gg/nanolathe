@@ -781,12 +781,15 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// costs the modern executor.
 	if b != nil {
 		queueFeedback := c.Enhanced() && b.resourceQueueFeedback != nil
-		overlay := b.worldOverlayArmed(cur) || (cur != nil && queueFeedback)
+		overlay := b.worldOverlayArmed(cur) || b.communityOrderDragPreviewActive() || (cur != nil && queueFeedback)
 		if overlay {
 			c.BeginWorldOverlay()
 		}
 		b.drawBuildGhost(c)
+		b.drawCommunityBuildPreview(c)
+		b.drawCommunityReclaimSnap(c)
 		b.drawCommandDrag(c)
+		b.drawCommunityOrderDrag(c)
 		if frameOK && cur != nil {
 			// The walker's four full-mask sources [R-P0-11 §3]: the follow
 			// camera's tracked unit, the unit whose command page is open, the
@@ -885,6 +888,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		h.drawFooter(c, b, cur)
 	}
 	h.drawSidePage(c, b, cur)
+	h.drawCommunityRotationMenu(c, b, cur)
 	// Stock ARMINT.GAF and CORINT.GAF inspection shows PANELSIDE's decoded
 	// 129×480 raster is opaque at every pixel, including the radar area; there
 	// is no authored transparent cutout to preserve by clipping [fmt gaf].
@@ -914,6 +918,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// from the Space-held LIGHTBAR readout above and remains below every linked
 	// battle window [07 R-CAM-01 §6][07 R-HUD-04 §4].
 	h.drawClock(c, b, cur)
+	h.drawCommunityBPS(c, b)
+	h.drawCommunityIncome(c, b, cur)
+	h.drawCommunityWeather(c, b, cur)
 	if b != nil {
 		b.developer.probes.Font = h.primaryFont
 		b.developer.probes.Layout = &b.developer.probeLayout

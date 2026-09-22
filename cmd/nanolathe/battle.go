@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -28,7 +29,9 @@ import (
 // the integrated session (all twelve kernel phases) and the interaction state:
 // selection, order latch, and build placement.
 type battleSession struct {
-	developer battleDeveloperState
+	hostPresentation                       *settings.Presentation
+	incomeMinimized, incomePointerCaptured bool
+	developer                              battleDeveloperState
 	// Host diagnostic request/result state; synchronous writes serialize captures.
 	debugCaptureBusy  bool
 	debugCaptureBase  string // empty uses the per-user diagnostics directory
@@ -87,6 +90,12 @@ type battleSession struct {
 	// in the classic executor, which has no free zoom.
 	zoom     camera.ZoomController
 	gestures battleGestures
+	// communityPlacement owns the host-only CP-CON-5/6 cursor choice. The
+	// selected facing deliberately survives disarming and product changes;
+	// each definition is clamped only when previewed or issued.
+	communityPlacement    communityPlacementState
+	communityRotationMenu communityRotationMenuState
+	communityOrderDrag    communityOrderDragState
 
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
@@ -166,6 +175,7 @@ type battleSession struct {
 	// mirrors the persisted process setting; a direct battle keeps its loaded
 	// copy here [07 R-CAM-01 §6][I6].
 	clockVisible bool
+	bpsVisible   bool
 	// clockUsePrimaryFont records the stateful FNT selection at the retail
 	// clock draw site for a direct battle. A shell-backed battle reads its live
 	// text-line setting because MAXLINES may change it while battle is running.
@@ -231,6 +241,11 @@ type battleSession struct {
 	deferFollowInput   bool
 	pendingFollowInput func()
 	currentUnit        pool.Handle
+	// communityBuilderCursor and communityFactoryCursor are the last selected
+	// slots for the optional host-side idle cycles. Zero means no previous hit;
+	// the committed-frame walk advances past the cursor and wraps once.
+	communityBuilderCursor pool.Handle
+	communityFactoryCursor pool.Handle
 }
 
 // countedClickDelta is the signed count the counted build-page producer takes
@@ -501,6 +516,9 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		return
 	}
 	b.cl = cl
+	p := loadedSettings().Presentation
+	b.hostPresentation = &p
+	applyCommunityHUDOptions(cl, b.hostPreferences())
 	b.placeEntryCamera(cl.Size())
 	// Every successful battle rebuild, including a load, empties the visible
 	// message span before old source handles can be reused [08 R-ENTRY-01 §3].
@@ -532,7 +550,11 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetMessageLogos(b.hud.logos)
 	// Strategic icons use the HUD team logos; generic contacts retain the radar
 	// art/options bindings (DESIGN_GPU_RENDERER §18.4).
-	cl.SetStrategicIconCatalog(client.NewStrategicIconCatalog(b.cat))
+	icons, iconErr := configuredStrategicIcons(b.cat, b.hostPreferences().StrategicIconConfig)
+	if iconErr != nil {
+		fmt.Fprintln(os.Stderr, iconErr)
+	}
+	cl.SetStrategicIconCatalog(icons)
 	cl.SetHoverScripts(b.cat)
 	cl.SetStrategicBlipArt(b.hud.radarBlipGAF)
 	if b.hud.logos != nil {
@@ -1164,7 +1186,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// over the world, only outside TALK, and only in the executor that can
 		// present a free factor.
 		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap &&
-			mouse.ZoomScrollY != 0 && b.overBattleViewport(mx, my) {
+			mouse.ZoomScrollY != 0 && !b.communityPlacementWheelOwned(in) && b.overBattleViewport(mx, my) {
 			b.wheelZoom(mx, my, float64(mouse.ZoomScrollY))
 		}
 		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned &&

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -18,7 +19,11 @@ import (
 // player's commander.
 func wu19107Battle(t *testing.T) (*Session, func(), *units.Unit) {
 	t.Helper()
-	sess := aiE2ESkirmish(t, "ashap plateau", aiE2ESeed)
+	// These fixtures lock the retail order and movement contracts, including
+	// the request-publication trajectory under retail's 1333-step allowance.
+	// Community and Modern intentionally use a different entry allowance
+	// [DESIGN_COMMUNITY_PATCH §4.1].
+	sess := aiE2ESkirmishAtMode(t, "ashap plateau", aiE2ESeed, SkirmishDefaultDifficulty, gameplay.Strict31)
 	driver := int32(1 << 20)
 	step := func() { sess.Step(driver); driver++ }
 	for i := 0; i < 60 && sess.State != StateBattle; i++ {

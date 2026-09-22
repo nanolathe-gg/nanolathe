@@ -257,7 +257,8 @@ through fog `[04 §6.1 R-DOC04-B]` `[04 R-PATH-01 §2]`.
 
 **The policy seam** (`rules.go`, `learned.go`). `Rules` is this package's
 gameplay seam, bound on `System.Rules` by the session's rule set; unbound it
-answers as Strict 3.1. It carries one policy,
+answers as Strict 3.1. It carries
+[Community contested-cell claims](#community-contested-cell-claims) and
 [Modern learned terrain](#modern-learned-terrain), and `LearnedTerrain` is the
 per-owner grid that policy keeps on the `System`.
 
@@ -695,6 +696,31 @@ age term the hover bob reads `[04 §8.2]` `[04 R-COLL-01 §1]` `[04 R-MOV-01 §5
 row-major, returns immediately on a rejecting per-cell predicate, and applies
 the aggregate height, depth and slope gates after the scan `[04 §8.2]`
 `[04 R-COLL-01 §2]`.
+
+#### Community contested-cell claims
+
+**Community 3.9 and Nanolathe Modern policy.** When the resolved Community
+feature table enables `GridClaimTieBreak`, the unit with the lower unsigned
+sixteen-bit unit index wins a contested occupancy cell. The comparison is
+strict: an identity re-claiming its own cell keeps it. This is the
+[CP-DMG-2 outcome-changing rule](../research/extensions/community-patch-engine.md).
+
+**Strict 3.1 behavior.** The incumbent yields only when its owner's player-row
+control byte is 3; otherwise the first claimant keeps the cell
+`[04 R-COLL-01 §4]`. A Community content profile that disables the feature also
+uses this answer.
+
+The same `Rules.ClaimConflict` answer is asked by `OccupancyGrid.ArbitrateOverlap`
+for the ground plane, air plane and building/yard-map ground stamp, both in the
+ordinary stamp and in the re-claim after a host vacates. Enabling the Community
+rule removes the owner-state read entirely, so a lower-index claimant may
+displace an inactive owner's lingering unit
+`[community-patch-engine.md CP-DMG-2]`. The grid still owns all existing
+host/intruder flag writes and the subsequent clear-and-restamp protocol; the
+rule changes only which side takes the cell. No path decision, RNG draw,
+resource effect or allocation is added. The grid binds a stable `System` method
+that reads the current `Rules` value, so a command-boundary rule rebind changes
+later claims without retaining a stale policy.
 
 ### 3.4 Flight and transports — C26…C31
 

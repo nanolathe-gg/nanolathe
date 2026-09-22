@@ -729,6 +729,9 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 // the helper answers the stored target point — which is exactly the
 // lost-target fallback of [06 §6.8], not a stand-in for it.
 type GuidanceEnv struct {
+	// Service supplies the bound gameplay rules for the water-medium guidance
+	// decision. Nil retains Strict 3.1 for pure motion fixtures and previews.
+	Service *Service
 	// Projectile answers the record a projectile-to-projectile link names, or
 	// nil for a handle outside the pool. It deliberately does NOT filter dead
 	// records: retail dereferences the link without any liveness check
@@ -957,7 +960,7 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 	// Fixed is wider than the map's zero-extended sea byte; retain only that
 	// byte before the signed-word comparison.
 	seaLevelByte := int32(uint8(seaLevel.Raw() >> 16))
-	eligible := !w.WaterWeapon || int32(preMotionYWord) < seaLevelByte
+	eligible := env.Service.rules().GuidanceAdmitted(env.Service, p, w, preMotionYWord, uint8(seaLevelByte))
 	if !eligible {
 		p.Pitch = 0 // [06 §6.9] forces pitch to zero above water
 		p.Velocity.Y = p.Velocity.Y.Sub(gravity)

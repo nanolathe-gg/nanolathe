@@ -479,6 +479,17 @@ controller kind is `1..3` and its side byte is not `10`.
 | `BPS` | toggle the bytes-per-second display dword |
 | `SFX` | toggle the sound-effects debug byte |
 
+**Established fact — `BPS` painter.** The optional overlay prints
+`Send - %1.1f K/s` and `Receive - %1.1f K/s`, scaling the sampled unsigned
+byte rates by 0.001. Each line is followed by a 64-pixel outlined bar whose
+fill percentage is the rate times 100 divided by 5600, capped at 100. The
+first line begins at horizontal coordinate 129 and screen height minus 95;
+subsequent rows advance by the font height and the bar height. This painter
+contains no game-time display: the separately controlled `Clock` painter owns
+that text. The rate sampler retains its previous result until more than 30
+clock ticks have elapsed, then divides each cumulative-byte difference times
+30 by elapsed ticks. These counters belong to transport, not the simulation.
+
 **Established fact — `Clock` persistence and stand-alone painter.** The
 command ignores extra words, flips only bit 6 of the session option word and
 immediately invokes the common settings writer. Startup reads the `clock`

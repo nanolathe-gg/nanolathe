@@ -24,9 +24,9 @@ and [mod engine-package compatibility](../research/extensions/mod-engine-compati
 Every claim those documents make was re-verified sentence by sentence
 against the pinned source on 2026-09-21, and the corrections were landed
 before this design was written, so the rows below cite the corrected text.
-Status: **design, not implemented.** The decisions and questions in §11 are
-open for the maintainer; nothing here is approved until they are answered,
-except where a section says the authorization already exists.
+The maintainer approved the decisions in §11 on 2026-09-21. That record
+owns the implementation policy, including the explicit differences from the
+patch source.
 
 ## 1. Purpose and boundary
 
@@ -254,6 +254,32 @@ them.
 | CP-LIM-2 `UnitType`, `SfxLimit`, composite buffer | content profile `limits` / renderer | already expressed by `limits.units`; effects and composite sizes are Nanolathe host sizing | — |
 | CP-LIM-3, CP-LIM-4, CP-LIM-5 | — | not applicable: Nanolathe's build-menu and download compilers have no fixed-size copy to overrun; display minimums are host policy | — |
 
+The auxiliary pool in CP-LIM-1 is the shatter geometry paired with the fixed
+effect owner ([04 R-COB-04 §3], CP-LIM-1 "Auxiliary owner mapping"). The
+explosion capacity sizes both existing stores; the Community geometry
+allocator uses the patch's cyclic first-free search, while Strict retains
+lowest-free allocation.
+
+Capacity overrides are rejected above their owner's representable bounds:
+32767 projectile records (signed compaction markers), 65535 effects (unsigned
+fragment identities), and 2147483647 scheduler steps. Zero retains the retail
+answer; accepted values are used without silent clamping.
+
+Pool capacities, the path allowance and the unit limit are battle-entry
+parameters. A live rule switch changes future policy decisions but retains
+these allocated owners and their entry parameters, as DESIGN_GAMEPLAY_RULES §5
+retains other already-created state. Starting a new battle under Strict is
+required for retail capacities. Reports include the entry table separately
+from the current table so this distinction remains reproducible. A Modern
+save restore still preserves an authored saved unit limit through its existing
+save rule; campaign limits remain the mission's in every mode.
+
+The stockpile reload-word clamp is likewise a battle-entry operation, matching
+the patch's weapon loader. It derives a private catalog only when a reload word
+changes, preserves the authored catalog and its identity, and survives a live
+rule switch. The corrupt-slot decision remains a live order rule. A fresh
+Strict battle always uses the authored reload word.
+
 The projectile cap is the one that matters: retail drops a shot when its pool
 is full, so a 3000-record pool is a visible gameplay change and the pool's
 array size becomes a battle-entry parameter rather than a compile-time
@@ -270,7 +296,7 @@ constant. Q3 asks what the retail save does with more than 300 records.
 | CP-WPN-5 `nomapweaponalert` (B/P) | `combat.Rules.DetonationBroadcast` (new) and the HUD's alert-dot producer | ignored | damage-0 attacker-less projectile skips the area-damage-and-broadcast call; no minimap alert | same |
 | CP-WPN-6 extended weapon IDs (B) | content profile `limits.weapons` (exists) | 256 | the profile's table size; Nanolathe admits IDs up to that size and refuses beyond it, where the patch loads ≥ 4096 into slot 0 (documented difference, T1 semantics preserved for all authored content) | same |
 | CP-WPN-7 `reloadbar` (P) | HUD (§7) | — | — | — |
-| CP-DMG-1 area-damage overflow (B) | `combat.Rules.AreaVictims` (new; replaces the two-word cell read of the sweep, [DESIGN_WEAPONS_PROJECTILES §2.9](DESIGN_WEAPONS_PROJECTILES.md#29-damage)) | two occupancy words per cell, the twenty-entry memory `[06 §9.3]` | the eight-pair enumeration with six per-cell overflow slots indexed per tick, per-explosion de-dup, saturation counted (Q1) | same; a Modern lift of the six-slot cap is a separate policy if wanted |
+| CP-DMG-1 area-damage overflow (B) | `combat.Rules.AreaVictims` (new; replaces the two-word cell read of the sweep, [DESIGN_WEAPONS_PROJECTILES §2.9](DESIGN_WEAPONS_PROJECTILES.md#29-damage)) | two occupancy words per cell, the twenty-entry memory `[06 §9.3]` | the eight-pair enumeration with six per-cell overflow slots indexed per tick, per-explosion de-dup, saturation counted (Q1) | same enumeration and de-duplication with no six-slot cap, per Q1 |
 | CP-DMG-2 grid claim tie-break (B) | `movement.Rules.ClaimConflict` (new; asked at the occupancy commit, [DESIGN_MOVEMENT_PATH §3.3 C22](DESIGN_MOVEMENT_PATH.md#33-ground-steering-and-collision--c20c25), and at the building/yardmap stamp) | first claimant keeps the cell `[04 R-COLL-01 §1]` | the lower unit index wins, unsigned strict less-than, self re-claim keeps; applied at the re-claim and per-move stamp paths for the ground slot, the air slot and the building stamp alike, so an inactive owner's lingering unit can be displaced | same |
 | CP-DMG-3 transported explosion keys (B) | `combat.Rules.DeathWeapon` (new; asked where the death explosion's weapon is chosen `[06 §12.1]`) | `explodeas`/`selfdestructas` | the transported override under the three conditions; unknown weapon name falls back | same |
 | CP-DMG-4 repair-rate fix (B, balance) | `construction.Rules.RepairContribution` (new; replaces the heal packet the repair and `healtime` executors form, [DESIGN_ECONOMY_CONSTRUCTION §2.2](DESIGN_ECONOMY_CONSTRUCTION.md#22-internalconstruction)) | the retail helper `[05 R-WORK-01 §3]` | the module's 64-bit owed-HP and banked-remainder algorithm (two target-tagged banks per repairer) with the table's multipliers, the ten-step guard order as stated; off in every table but `escalation` (Q4) | same |
@@ -282,10 +308,10 @@ constant. Q3 asks what the retail save does with more than 300 records.
 
 | Contract | Seam / owner | Strict | Community | Modern |
 |---|---|---|---|---|
-| CP-CON-1 build under own units + kickout (B) | placement admission: `construction.Rules.AdmitSiteOccupants` (new, asked by the placement validator's occupancy test, [DESIGN_WORLD_VISIBILITY §3.1](DESIGN_WORLD_VISIBILITY.md#31-terrain-and-placement--w1w13)); evacuation: the existing `construction.Rules.YieldObstruction` | own units block placement; the builder waits `[04 R-ORD-01 §5]` | a site over the ordering player's own units is admitted (the source has no mobility test; Q2 decides whether Nanolathe adds the author's "mobile" intent) with the yellow preview and the 20-visit wait; at the wait branch the contract's kick algorithm moves each occupant: the target-invested-energy rule, the unconditional random bearing per considered unit (Q3), the full-circle sweep, the order rewrite with its resumed build and its dropped queue | placement admission adopted; evacuation stays [Modern construction-site yielding](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding), which already owns the same moment and issues ordinary orders (D3) |
-| CP-CON-2 guarding builders hold (B, per-player option) | `orders.Rules.GuardHome` (new; the completed-build decision of a builder guarding a factory) | stock | the diagonal offset the option selects: stay-put or scatter | Modern guard assistance keeps its own guard legs; the option applies to the home position only (D5) |
+| CP-CON-1 build under own units + kickout (B) | placement admission: `construction.Rules.AdmitSiteOccupants` (new, asked by the placement validator's occupancy test, [DESIGN_WORLD_VISIBILITY §3.1](DESIGN_WORLD_VISIBILITY.md#31-terrain-and-placement--w1w13)); evacuation: the existing `construction.Rules.YieldObstruction` | own units block placement; the builder waits `[04 R-ORD-01 §5]` | a site over the ordering player's own units is admitted (the source has no mobility test; Q2 decides whether Nanolathe adds the author's "mobile" intent) with the yellow preview and the inclusive wait-counter limit of 20; at the wait branch the contract's kick algorithm moves each occupant: the target-invested-energy rule, the unconditional random bearing per considered unit (Q3), the full-circle sweep, the order rewrite with its resumed build and its dropped queue | placement admission adopted; the inclusive wait-counter limit stays 10 and evacuation stays [Modern construction-site yielding](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding), which already owns the same moment and issues ordinary orders (D3) |
+| CP-CON-2 guarding builders hold (B, per-player option) | `orders.Rules.GuardHome` (new; ground-guard follow maintenance) | stock | the diagonal offset the option selects: stay-put or scatter | Modern guard assistance keeps its own guard legs; the option applies to the home position only (D5) |
 | CP-CON-3 patrolling builder filters (B, per-player option) | `orders.Rules.PatrolWork` (new; the patrol's reclaim/build/repair branches) | both | reclaim-only or assist-only per movement option; the patch's defaults are **Reclaim Only for Hold Position** and Both for the other two, and Community takes those defaults | same as Community |
-| CP-CON-4 reclaim toggle keeps a prepared build (A) | `orders.Rules` at the reclaim-toggle handler | the toggle cancels the prepared build | not applied while a build is prepared | same |
+| CP-CON-4 prepared-build quickkey toggle (A) | `orders.Rules.PreserveBuildToggle` projected into the host widget accelerator | normal toggle mutation | retain a nonzero low status byte while BUILD is prepared; group clearing and firing continue, with no gadget-name test | same |
 | CP-CON-5 structure rotation (B, content-driven) | `construction.Rules.AllowedFacings` (new) plus the placement command carrying a facing; footprint and yardmap rotated at creation | `Rotations` parsed, ignored; every structure faces south | the authored facings; the heading word rounded to a quarter turn is the persistent form, so save/load and resurrection need no new state | same |
 
 The per-player builder options of CP-CON-2/3 are, in the patch, registry
@@ -301,7 +327,7 @@ stances, because the patch has no per-unit state for them either.
 | Contract | Seam / owner | Strict | Community | Modern |
 |---|---|---|---|---|
 | CP-ENV-1 off-map aircraft margin (B, compile-time) | a `visibility` decision and three `combat` decisions, parameterized by the table's margin: the flying-tier LOS substitute (which also repairs on-map aircraft near the upper edge whose sheared visibility row falls off the grid), the off-map second chance (the round survives whenever a reachable enemy aircraft is in the band, `noexplode` rounds included), the over-the-map second chance (engine first, `noexplode` excluded) and the splash pass that runs **on every blast** before the tile scan, with its own strict distance and single-precision falloff | off-map units are invisible and untargetable | the four mechanisms within the margin (1 tile mainline, 32 Escalation/Mayhem/Twilight) | same |
-| CP-ENV-2 aircraft wrecks fall (B) | `features` corpse placement: the existing sinking machinery's vertical velocity word `[05 R-FEAT-01 §13]`, seeded through a `combat.Rules.CorpseVelocity` answer at the death site `[06 §12.2]` | a corpse rests where it is created | a corpse created strictly above land terrain with zero velocity is seeded with the smallest downward unit so gravity takes it; only the `escalation` table enables it | Q5: whether Modern wants it everywhere |
+| CP-ENV-2 aircraft wrecks fall (B) | `features` corpse placement: the existing sinking machinery's vertical velocity word `[05 R-FEAT-01 §13]`, seeded through a `combat.Rules.CorpseVelocity` answer at the death site `[06 §12.2]` | a corpse rests where it is created | a corpse created strictly above land terrain with zero velocity is seeded with the smallest downward unit so gravity takes it; only the `escalation` table enables it | same per-table gate, per D6 |
 | CP-ENV-3 dragon's teeth visible (P) | fog presentation (§7) | — | inert in the patch itself at this revision; a Nanolathe host option if wanted | — |
 | CP-FIX-6 allied jamming ignored (P/S in the source, **B here**: it changes what a player's sensors report and therefore what the computer player and automatic acquisition see) | `visibility.Rules` — a **new seam** in `internal/visibility`, justified because no existing interface owns a per-viewer sensor decision (§9) | allied jammers suppress the viewer's contacts `[03 R-VIS-01 §5]` | jammers owned by allies do not suppress | same |
 | CP-FIX-4 deterministic wind (B) | — | retail chain | **not adopted** (§8) | — |
@@ -343,14 +369,18 @@ record authors one, so a retail catalog's hash is unchanged.
 | Unit FBI | `PreviewPieces`, `PreviewPiecesS/E/N/W`, `PreviewFaceOpponent`, `PreviewObject3D` | presentation metadata, read by the nanoframe preview (§7) |
 | Weapon TDF | `notoverwater`, `notoverland`, `nomapweaponalert`, `reloadbar` | flags beside the four existing non-retail flags; `& 1` semantics, so `=2` is off |
 | Map OTA | `[units]` under the selected schema | already parsed by the mission placement reader; skirmish entry gains a consumer |
-| Unit FBI categories | `CTRL_F`, `CTRL_B`, `CTRL_W`, `NOTAIR` | already compiled as ordinary categories; consumed by the host selection shortcuts (§7) with the patch's heuristic fallback |
+| Unit FBI categories | `CTRL_F`, `CTRL_B`, `CTRL_W` | already compiled as ordinary categories; consumed by the host selection shortcuts (§7) with the patch's heuristic fallback; pinned Ctrl-S filters by `canfly`, not a `NOTAIR`/`NAIR` lookup |
 | Animation | `anims/buildrotate.gaf`, `anims/buildrotateclick.gaf` | rotation overlay art; loaded by the placement input (§7) with a built-in fallback |
 
 The content profile's `limits` already carries the definition-table and
 weapon-table sizes the `UnitType` setting and the extended-ID module provide.
 `unit_limit` and `search_entries`, carried today but unconsumed, become the
 per-profile defaults for the table's `UnitLimit` and `PathStepAllowance`
-fields, which is what they were added for.
+fields, which is what they were added for. The retail profile retains its historical
+limit metadata for content diagnostics but does not project those words into
+the feature table: otherwise its old 1333-step value would replace the
+approved mainline default. Within a mod profile the named table applies first,
+legacy parameter defaults second, and explicit `gameplay` fields last.
 
 ## 6. Configuration, in one place
 
@@ -377,19 +407,18 @@ boundary is explicit and nothing is silently dropped:
 
 | Patch feature | Nanolathe home | Status |
 |---|---|---|
-| Megamap, wheel zoom, dither, icon config | the strategic view and smooth zoom (DESIGN_GPU_RENDERER §16) | exists; icon configuration is a candidate host option |
+| Megamap, wheel zoom, dither, icon config | the strategic view and smooth zoom (DESIGN_GPU_RENDERER §16) | existing view and zoom; optional ordered INI/PCX icon configuration in `presentation.strategicIconConfig` |
 | Whiteboard, chat drawer, fonts, Unicode | HUD messages | not planned |
-| Stockpile and transport counters, reload bars, `Vet<n>` label, group numbers | battle HUD | candidate host options |
-| Team-coloured nanolathe, stream/frame colours | Enhanced effect switches | candidate |
-| Nanoframe preview (full / wireframe / off), `PreviewPieces*`, face-opponent, `PreviewObject3D` | placement preview | candidate; the face-opponent rule's fog gate is a host rule and must not read authoritative visibility |
-| Map dragon's teeth always visible (CP-ENV-3) | fog presentation | candidate host option |
-| Double-click same-type selection, ctrl-Z | selection commands | check against the existing keyboard table (§3.6 there) |
-| ctrl-F / ctrl-B idle factory and builder cycling (category or heuristic membership), ctrl-S on-screen weapon units | selection commands | candidate; the idle test and the cursor wrap are specified in the research |
-| Queued build or move order drag, Shift+q/e snap alternation, the `v` movement-option key | placement and order input | with CP-CON-1/3/6 |
-| Allied resource bar with minimise control, weather report overlay, `+bps` readout | HUD | candidate |
+| Stockpile and transport counters, reload bars, `Vet<n>` label, group numbers | battle HUD | implemented as host HUD options |
+| Team-coloured nanolathe, stream/frame colours | shared effect presentation | implemented; optional team switch and per-player stream/frame lists |
+| Nanoframe preview (full / wireframe / off), `PreviewPieces*`, face-opponent, `PreviewObject3D` | placement preview | implemented; the face-opponent fog gate reads only the committed frame |
+| Map dragon's teeth always visible (CP-ENV-3) | fog presentation | excluded under §8; source feature is inert |
+| Double-click same-type selection, ctrl-Z | selection commands | implemented through the existing selection dispatcher; double-click extension is optional |
+| ctrl-F / ctrl-B idle factory and builder cycling (category or heuristic membership), ctrl-S on-screen weapon units | selection commands | implemented as the optional Orders-page selection controls |
+| Queued build or move order drag, Shift+q/e snap alternation, the `v` movement-option key | placement and order input | optional queued-order drag and CP-CON-1 manual drag implemented; authored Q/E/v examples retain ordinary gadget dispatch pending the evidence recorded under CP-CON-6 |
+| Allied resource bar with minimise control, weather report overlay, `+bps` readout | HUD | implemented as host options (`+bps` is a transient local toggle) |
 | `.mute`/`.unmute`, percentage share thresholds (CP-SES-9/10) | chat and share commands | not applicable without other humans; skip |
-| Rotation key, rotation overlay GAFs, build-menu edge clicks | placement input, once CP-CON-5 lands | with CP-CON-5 |
-| Weather report overlay | HUD | candidate |
+| Rotation key, rotation overlay GAFs, build-menu edge clicks | placement input | implemented with the Placement page and optional four-frame GAF overlays |
 | Sound instance limiter | audio | Nanolathe's mixer already bounds voices; not adopted |
 | Display-mode minimums, menu resolution, movie de-interlace, CD check | host | not applicable |
 
@@ -561,9 +590,11 @@ be state the simulation owns. Three ways to hold it:
   would change behaviour with the human's preference. (a) keeps the two
   apart.
 
-Under any of the three, and under Modern, the guard option changes only the
-home position a guarding builder returns to; the Modern guard-assistance legs
-are unchanged. Defaults follow the patch: Cavedog for all three guard values,
+Under any of the three, and under Modern, the guard option changes the
+home position of every ground guard reaching follow maintenance; the Modern
+guard-assistance legs are unchanged. This broader, source-verified scope was
+approved by the maintainer on 2026-09-22, replacing the original builder/factory
+restriction. Defaults follow the patch: Cavedog for all three guard values,
 Reclaim Only for Hold Position and Both for the other two patrol values.
 
 **D6 — Community-only features Modern might want everywhere.** Aircraft
@@ -588,14 +619,17 @@ then sent a move order — while the author's release note says "mobile".
 recorded as a deliberate difference from the source; a building that cannot
 move gains nothing from a move order.
 
-**Q3 — The kick direction's random draw.** The patch draws a random bearing
-from the C runtime generator on **every** considered unit, whether or not the
-random branch is taken. Nanolathe has one CRT stream with a deterministic call
-order. *Recommendation:* draw from the CRT stream at the same site and with
-the same unconditional cadence, so the stream position matches the patch's
-for a given kick sequence; document the draw. This is the only community
-feature that consumes randomness. (The retail save carries no in-flight
-projectiles, so the larger pool of CP-LIM-1 raises no save question.)
+**Q3 — The kick direction's random draw.** The approved Nanolathe contract
+consumes one CRT modulo-360 draw for every admitted occupant considered by
+Community automatic kickout, before the protected-worker decision. Modern's
+existing yielding remains draw-free (D3). Source verification during
+implementation corrected the original rationale: the patch draws
+unconditionally at destination-search entry, but calls that search only after
+its should-move predicate succeeds. Keeping the approved per-candidate cadence
+is therefore an explicit Nanolathe policy, not a claim of identical patch RNG
+position for protected occupants. The owning construction tests lock that
+cadence and Strict's bypass. (The retail save carries no in-flight projectiles,
+so the larger pool of CP-LIM-1 raises no save question.)
 
 **Q4 — Repair-rate baseline.** The module's own model of "vanilla" disagrees
 with the retail repair contract; the research records a supported inference
@@ -642,11 +676,22 @@ equal countdowns (deterministic, and what an author would expect) and run no
 script for them (what the patch does), both recorded as Nanolathe decisions
 with a `TODO(question)` pointing at the maintainer.
 
-**Q12 — Fixed-position builder options as seams.** CP-CON-2's trigger site
-is author-documented rather than code-commented, and its "spacing" operand
-is unnamed in the source. *Proposed:* implement from the author text with the
-arithmetic as stated, and mark the operand identification as a Supported
-inference in the owning design section.
+**Q12 — Fixed-position builder options as seams.** The spacing operand has
+now been verified against retail as the stored ground-follow radius; the
+extension contract records its identity and arithmetic. The hook applies to
+all ground guards reaching follow maintenance, not just builders guarding
+factories. **Settled 2026-09-22:** match that verified patch scope.
+
+**Q13 — Callback timing (settled 2026-09-22).** The source registers deferred
+schema spawns, transported-death pruning, and the area index refresh in that
+order after its outer game loop. The maintainer approves running the same
+ordered callbacks after **each completed authoritative tick**, before frame
+publication. This is a Nanolathe determinism policy for Community and Modern:
+the callbacks must not depend on whether the host advances one tick or several
+in a catch-up batch. They remain outside the twelve retail phases; Strict
+bypasses their feature work. The schema boundary and a batched-versus-single
+step test lock the placement of these callbacks. Their arithmetic and feature
+gates remain those of the extension contracts.
 
 ## 12. Work units
 
@@ -654,8 +699,8 @@ Ordered so each lands green on its own; fingerprints move only where a row
 says so.
 
 1. **Mechanism.** Third reserved set, three-valued `Base`, registry, options
-   control, fingerprint locks. Community's table zero at this point, so all
-   three fingerprints are identical. `DESIGN_GAMEPLAY_RULES` and I11 updated.
+   control, fingerprint locks. Community's table zero at this point, so its
+   fingerprints equal Strict's; existing Modern policy fingerprints remain unchanged. `DESIGN_GAMEPLAY_RULES` and I11 updated.
 2. **The table.** `internal/community`, the embedded tables, resolution and
    precedence, the reports' digest, the settings key and flag, the content
    profile `gameplay` block. Still no consumer.

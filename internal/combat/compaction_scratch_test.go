@@ -26,14 +26,12 @@ func BenchmarkCompactionScratch(b *testing.B) {
 	for _, count := range []int{0, 100, 300} {
 		for _, every := range []int{0, 10, 2, 1} {
 			b.Run(fmt.Sprintf("records%d/deadEvery%d", count, every), func(b *testing.B) {
-				base := compactionFixture(count, every)
 				var s Service
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					b.StopTimer()
-					s.Slots = base.Slots
-					copy(s.Records[:], base.Records[:])
+					s = compactionFixture(count, every)
 					follow := pool.Handle(count)
 					b.StartTimer()
 					s.Compact(&follow)
@@ -58,7 +56,7 @@ func TestCompactionAllDeadSubsetsAndTail(t *testing.T) {
 				}
 			}
 			s.Records[count].WeaponID = 999
-			expected := s.Records
+			expected := append([]Projectile(nil), s.Records...)
 			var survivors []int
 			for i := 0; i < count; i++ {
 				expected[i].OldMarker = int16(i)
@@ -66,7 +64,7 @@ func TestCompactionAllDeadSubsetsAndTail(t *testing.T) {
 					survivors = append(survivors, i)
 				}
 			}
-			marked := expected
+			marked := append([]Projectile(nil), expected...)
 			wantFollow := pool.Handle(0)
 			for dest, old := range survivors {
 				expected[dest] = marked[old]

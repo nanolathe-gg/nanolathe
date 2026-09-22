@@ -52,17 +52,23 @@ func (s *Service) PlacementForProduct(product pool.Handle) (world.FootprintRect,
 	return r.rect, ok
 }
 
-// recordPlacement files a product's occupancy rectangle and its immutable
-// definition. It carries no yard state: the clear pass releases every cell in
-// the rectangle whose ground word equals the leaving identity, reading no yard
-// state at all [04 R-COLL-01 §4 "clear, in order"]. Only the stamp and the
-// restamp select cells by yard byte, and both read the unit's live port-18
-// state rather than anything filed here.
+// recordPlacement files a product's occupancy rectangle, immutable definition
+// and creation-derived yard orientation. The clear still reads no yard state
+// [04 R-COLL-01 §4 "clear, in order"]; stamp, restamp and port-18 admission
+// share the retained orientation without changing UnitDef.
 func (s *Service) recordPlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) {
+	var yard []world.YardCell
+	if def != nil && def.BMCode == 0 {
+		yard, _ = buildingYard(def, rect)
+	}
+	s.recordPlacementOriented(product, def, rect, yard)
+}
+
+func (s *Service) recordPlacementOriented(product pool.Handle, def *content.UnitDef, rect world.FootprintRect, yard []world.YardCell) {
 	if s.placements == nil {
 		s.placements = make(map[pool.Handle]placementRecord)
 	}
-	s.placements[product] = placementRecord{rect: rect, def: def}
+	s.placements[product] = placementRecord{rect: rect, def: def, yard: yard}
 }
 
 // reservePlacement commits the product's footprint after the canonical
@@ -70,6 +76,18 @@ func (s *Service) recordPlacement(product pool.Handle, def *content.UnitDef, rec
 // footprint. Building-class products stamp exactly the yard cells selected by
 // their current port-18 state [04 R-COLL-01 §3–§4].
 func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, rect world.FootprintRect) error {
+	var yard []world.YardCell
+	if def != nil && def.BMCode == 0 {
+		var err error
+		yard, err = buildingYard(def, rect)
+		if err != nil {
+			return err
+		}
+	}
+	return s.reservePlacementOriented(product, def, rect, yard)
+}
+
+func (s *Service) reservePlacementOriented(product pool.Handle, def *content.UnitDef, rect world.FootprintRect, yard []world.YardCell) error {
 	if s == nil || s.Terrain == nil {
 		return fmt.Errorf("construction: placement terrain unavailable")
 	}
@@ -78,13 +96,8 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 	}
 	id := int16(product)
 	building := def != nil && def.BMCode == 0
-	var yard []world.YardCell
-	if building {
-		var err error
-		yard, err = buildingYard(def, rect)
-		if err != nil {
-			return err
-		}
+	if building && len(yard) != int(rect.Width()*rect.Depth()) {
+		return fmt.Errorf("construction: building yard length %d != footprint %d", len(yard), rect.Width()*rect.Depth())
 	}
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
@@ -120,8 +133,8 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 		// identity [04 R-COLL-01 §4 "clear, in order"]. The stamp below is the
 		// one pass that selects by yard byte, and it reads the unit's live
 		// port-18 state [04 §4.7].
-		s.recordPlacement(product, def, rect)
-		s.stampBuilding(product, placementRecord{rect: rect, def: def}, open)
+		s.recordPlacementOriented(product, def, rect, yard)
+		s.stampBuilding(product, placementRecord{rect: rect, def: def, yard: yard}, open)
 		return nil
 	}
 	s.recordPlacement(product, def, rect)
@@ -198,9 +211,13 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 	if s == nil || s.Terrain == nil || product == 0 || uint64(product) > uint64(^uint16(0)>>1) {
 		return
 	}
-	yard, err := buildingYard(record.def, record.rect)
-	if err != nil {
-		return
+	yard := record.yard
+	if len(yard) != int(record.rect.Width()*record.rect.Depth()) {
+		var err error
+		yard, err = buildingYard(record.def, record.rect)
+		if err != nil {
+			return
+		}
 	}
 	id := int16(product)
 	var grid *movement.OccupancyGrid
@@ -305,7 +322,11 @@ func (s *Service) RegisterBuildingPlacement(u *units.Unit) error {
 	if s == nil || u == nil || u.Def == nil || u.Def.BMCode != 0 {
 		return nil
 	}
-	extent, err := world.NewFootprintExtent(int32(u.Def.FootprintX), int32(u.Def.FootprintZ))
+	geometry, err := s.StructureGeometryForUnit(u)
+	if err != nil {
+		return err
+	}
+	extent, err := world.NewFootprintExtent(geometry.FootprintX, geometry.FootprintZ)
 	if err != nil {
 		return err
 	}
@@ -313,11 +334,8 @@ func (s *Service) RegisterBuildingPlacement(u *units.Unit) error {
 	if err != nil {
 		return err
 	}
-	record := placementRecord{rect: placement.Rect(), def: u.Def}
-	if _, err := buildingYard(record.def, record.rect); err != nil {
-		return err
-	}
-	s.recordPlacement(u.Handle, u.Def, record.rect)
+	record := placementRecord{rect: placement.Rect(), def: u.Def, yard: geometry.Yard}
+	s.recordPlacementOriented(u.Handle, u.Def, record.rect, geometry.Yard)
 	s.stampBuilding(u.Handle, record, u.YardOpen)
 	return nil
 }
@@ -331,7 +349,11 @@ func (s *Service) RestoreBuildingPlacement(u *units.Unit) error {
 	if s == nil || u == nil || u.Def == nil || u.Def.BMCode != 0 {
 		return nil
 	}
-	extent, err := world.NewFootprintExtent(int32(u.Def.FootprintX), int32(u.Def.FootprintZ))
+	geometry, err := s.StructureGeometryForUnit(u)
+	if err != nil {
+		return err
+	}
+	extent, err := world.NewFootprintExtent(geometry.FootprintX, geometry.FootprintZ)
 	if err != nil {
 		return err
 	}
@@ -340,12 +362,9 @@ func (s *Service) RestoreBuildingPlacement(u *units.Unit) error {
 	if err != nil {
 		return err
 	}
-	if _, err := buildingYard(u.Def, rect); err != nil {
-		return err
-	}
 	s.ReleasePlacement(u.Handle)
-	s.recordPlacement(u.Handle, u.Def, rect)
-	s.stampBuilding(u.Handle, placementRecord{rect: rect, def: u.Def}, u.YardOpen)
+	s.recordPlacementOriented(u.Handle, u.Def, rect, geometry.Yard)
+	s.stampBuilding(u.Handle, placementRecord{rect: rect, def: u.Def, yard: geometry.Yard}, u.YardOpen)
 	return nil
 }
 
@@ -405,9 +424,13 @@ func (s *Service) YardOpenTransactionAt(u *units.Unit, requested bool, tick uint
 		// cells, and it stays fail-closed.
 		return false
 	}
-	yard, err := buildingYard(record.def, record.rect)
-	if err != nil {
-		return false
+	yard := record.yard
+	if len(yard) != int(record.rect.Width()*record.rect.Depth()) {
+		var err error
+		yard, err = buildingYard(record.def, record.rect)
+		if err != nil {
+			return false
+		}
 	}
 	// The admission bounds are the mobile validator's exact building bounds:
 	// positive cached pair and the final map row/column excluded [04 R-COLL-01
@@ -480,7 +503,10 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 		gridID := int(product)
 		var yard []world.YardCell
 		if record.def != nil && record.def.BMCode == 0 {
-			yard, _ = buildingYard(record.def, record.rect)
+			yard = record.yard
+			if len(yard) != int(record.rect.Width()*record.rect.Depth()) {
+				yard, _ = buildingYard(record.def, record.rect)
+			}
 		}
 		for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {
 			for x := record.rect.MinX(); x < record.rect.MaxX(); x++ {

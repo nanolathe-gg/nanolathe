@@ -72,6 +72,24 @@ func TestFixedEffectCap(t *testing.T) {
 	}
 }
 
+func TestConfiguredFixedEffectCapacity(t *testing.T) {
+	p := NewFixedEffectPool(FixedEffectCap + 2)
+	if got := p.Cap(); got != FixedEffectCap+2 {
+		t.Fatalf("capacity = %d, want %d", got, FixedEffectCap+2)
+	}
+	for i := 0; i < FixedEffectCap+2; i++ {
+		if !p.Append(EffectRecord{ID: uint32(i + 1)}) {
+			t.Fatalf("append %d failed above retail capacity", i+1)
+		}
+	}
+	if p.Append(EffectRecord{ID: 999}) {
+		t.Fatal("append above configured capacity succeeded")
+	}
+	if got := new(FixedEffectPool).Cap(); got != FixedEffectCap {
+		t.Fatalf("zero-value capacity = %d, want retail %d", got, FixedEffectCap)
+	}
+}
+
 // TestFixedEffectOverCapDirect verifies over-cap when count is already above cap via manual injection.
 // This locks the "at or above the cap" wording [03 §1] C5 — both cases allocate nothing.
 func TestFixedEffectOverCapDirect(t *testing.T) {

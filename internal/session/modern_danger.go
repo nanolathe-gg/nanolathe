@@ -38,7 +38,7 @@ func (s *Session) dangerVisible(observer, target *units.Unit) bool {
 
 func (s *Session) dangerCanRespond(observer, target *units.Unit, slot int) bool {
 	return s.dangerVisible(observer, target) &&
-		combat.ModernResponseAdmits(observer, target, slot, s.World, s.Catalog)
+		combat.ModernResponseAdmits(observer, target, slot, s.World, s.Catalog, s.Combat)
 }
 
 func (s *Session) dangerStepFeasible(u *units.Unit, x, z numeric.Fixed) bool {

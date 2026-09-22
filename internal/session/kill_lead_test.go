@@ -20,7 +20,7 @@ func killLeadSession(t *testing.T, players int, missionType mission.Type) *Sessi
 	s := &Session{
 		Econ:        &economy.Service{},
 		Mission:     &mission.Mission{Type: missionType},
-		publication: newPublicationState(nil),
+		publication: newPublicationState(nil, 0),
 	}
 	for i := 0; i < players; i++ {
 		p := &s.Econ.Players[i]

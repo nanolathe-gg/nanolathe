@@ -127,6 +127,12 @@ type Footer struct {
 	Logos []FooterLogo
 }
 
+// CommunityFooterOptions controls the optional host-side replacement of the
+// retail kill line. Its zero value preserves the retail footer [CP-UD-1].
+type CommunityFooterOptions struct {
+	VeteranLabel bool
+}
+
 // Empty reports whether the footer draws nothing but its backdrop.
 func (f Footer) Empty() bool { return len(f.Texts) == 0 && len(f.Bars) == 0 && len(f.Logos) == 0 }
 
@@ -163,8 +169,12 @@ const NoGadget = -1
 // BuildFooter applies the three sources and their fixed priority. viewer is
 // the viewing player's slot; overlay is the F11 developer overlay, which
 // widens the own-unit block and the feature line [07 R-HUD-03 §1–§3].
-func BuildFooter(f *frame.Frame, cat *content.Catalog, viewer uint8, hover FooterHover, overlay bool) Footer {
+func BuildFooter(f *frame.Frame, cat *content.Catalog, viewer uint8, hover FooterHover, overlay bool, options ...CommunityFooterOptions) Footer {
 	var out Footer
+	var community CommunityFooterOptions
+	if len(options) != 0 {
+		community = options[0]
+	}
 	// 1 — hovered gadget. A gadget that is not a product button draws nothing,
 	// and that is still a win: the lower sources do not get a turn.
 	if hover.Gadget != NoGadget {
@@ -173,7 +183,7 @@ func BuildFooter(f *frame.Frame, cat *content.Catalog, viewer uint8, hover Foote
 	}
 	// 2 — hovered world unit.
 	if hover.Unit != 0 {
-		unitReadout(&out, f, cat, viewer, hover, overlay)
+		unitReadout(&out, f, cat, viewer, hover, overlay, community)
 		return out
 	}
 	// 3 — hovered feature.
@@ -258,7 +268,7 @@ func featureLine(out *Footer, cat *content.Catalog, key string, overlay bool) {
 // unitReadout draws the hovered unit's name, damage bar, owner logo and — for
 // an own unit — its rates, kills line, order caption and secondary field
 // [07 R-HUD-03 §2].
-func unitReadout(out *Footer, f *frame.Frame, cat *content.Catalog, viewer uint8, hover FooterHover, overlay bool) {
+func unitReadout(out *Footer, f *frame.Frame, cat *content.Catalog, viewer uint8, hover FooterHover, overlay bool, community CommunityFooterOptions) {
 	view := FooterUnit(f, hover.Unit)
 	if view == nil {
 		// Admission: the hovered unit must be alive. A stale pointer word whose
@@ -301,7 +311,7 @@ func unitReadout(out *Footer, f *frame.Frame, cat *content.Catalog, viewer uint8
 		FooterText{Anchor: AnchorUnitMetalUse, Text: fmt.Sprintf("-%.1f", float64(clampRate(view.ArchivedMetalUse))), Color: dcb(PaletteConsumption)},
 		FooterText{Anchor: AnchorUnitEnergyUse, Text: fmt.Sprintf("-%.0f", float64(clampRate(view.ArchivedEnergyUse))), Color: dcb(PaletteConsumption)},
 	)
-	if text := KillsLine(view.Flags, view.Kills); text != "" {
+	if text := CommunityKillsLine(view.Flags, view.Kills, view.CommunityHUD.VeteranLevel, community.VeteranLabel); text != "" {
 		out.Texts = append(out.Texts, FooterText{Anchor: AnchorDamageBar, Text: text, Color: dcb(PaletteNormal), FromY2: true, OffsetY: 2})
 	}
 	// The caption is the state label of the descriptor of the unit's
@@ -378,6 +388,18 @@ func KillsLine(statusFlags uint32, kills int32) string {
 		return fmt.Sprintf("%d %s - %s", kills, word, VeteranWord)
 	}
 	return fmt.Sprintf("%d %s", kills, word)
+}
+
+// CommunityKillsLine optionally replaces a nonempty retail kill line with the
+// source's bounded-level label. VeteranLevel is a committed answer from the
+// combat rules, so the HUD does not repeat authoritative threshold arithmetic
+// [CP-UD-1].
+func CommunityKillsLine(statusFlags uint32, kills int32, veteranLevel uint32, enabled bool) string {
+	line := KillsLine(statusFlags, kills)
+	if line == "" || !enabled || veteranLevel == 0 {
+		return line
+	}
+	return fmt.Sprintf("Vet%d", veteranLevel)
 }
 
 // FooterBarFill returns the inclusive last filled column of a footer bar:

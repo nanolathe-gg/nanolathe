@@ -353,7 +353,7 @@ func findInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide ui
 			continue // not targetable [06 §11.2]
 		}
 		// Stored aim point vs coverage square [06 §11.2]
-		if !WithinInterceptorCoverage(rec.TargetPos, interceptorPos, coverage) {
+		if !svc.rules().InterceptorCoverage(svc, rec.TargetPos, interceptorPos, coverage) {
 			continue
 		}
 		// Not already referenced by any reservation link [06 §11.2]

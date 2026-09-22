@@ -13,7 +13,7 @@ import (
 // ModernRules carries the approved Modern order policies. It holds no state:
 // every body reads the acting unit's own queue binding, so one value serves a
 // whole session and is used by pointer.
-type ModernRules struct{}
+type ModernRules struct{ CommunityRules }
 
 // Modern's Hold Fire keeps automatic combat off the weapon slots, because the
 // launch gate lets a slot an order holds fire through it. It closes the guard's

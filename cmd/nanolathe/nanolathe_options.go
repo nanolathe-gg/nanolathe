@@ -25,10 +25,13 @@ func startupGameplay(opts Options, saved gameplay.Mode) gameplay.Mode {
 func (g *gameShell) setGameplay(mode gameplay.Mode) {
 	mode = mode.Normalize()
 	changed := g.gameplay.Normalize() != mode
-	g.gameplay, g.opts.Gameplay = mode, mode
 	if changed && g.battle != nil && g.battle.sess != nil {
-		g.battle.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanGameplay, Gameplay: mode})
+		if err := g.battle.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanGameplay, Gameplay: mode}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
 	}
+	g.gameplay, g.opts.Gameplay = mode, mode
 }
 
 func startupPresentation(opts Options, saved settings.Presentation) settings.Presentation {
@@ -60,6 +63,7 @@ func (g *gameShell) setPresentation(p settings.Presentation) {
 	p.Normalize()
 	g.presentation = p
 	g.opts.Renderer, g.opts.FPS = p.Renderer, p.FPS
+	applyCommunityHUDOptions(clPtr, p)
 }
 
 // presentationEffects converts the persisted switches into the value both the
@@ -103,7 +107,7 @@ func (g *gameShell) rendererChanged(mode ebitenapp.RendererMode) {
 	}
 }
 
-// Add the fifth category one authored category spacing below VISUALS. Keeping
+// Extend the authored category column with Nanolathe's host pages. Keeping
 // its size and art selector reuses the same game-data button family.
 func addNanolatheOptionsCategory(window *gui.Window) {
 	visual, speeds := window.GadgetIndex("VISUALS"), window.GadgetIndex("SPEEDS")
@@ -111,10 +115,37 @@ func addNanolatheOptionsCategory(window *gui.Window) {
 		return
 	}
 	button := window.Gadgets[visual]
-	button.Rect.Y += button.Rect.Y - window.Gadgets[speeds].Rect.Y
-	button.Name, button.SourceName = "NANOLATHE", "NANOLATHE_CATEGORY"
-	button.Art, button.Text, button.QuickKey = "", "NANOLATHE", 0
-	window.Gadgets = append(window.Gadgets, button)
+	pitch := button.Rect.Y - window.Gadgets[speeds].Rect.Y
+	for _, name := range []string{"NANOLATHE", "BUILDERS", "COMMUNITYHUD", "PLACEMENT"} {
+		button.Rect.Y += pitch
+		button.Name, button.SourceName = name, name+"_CATEGORY"
+		button.Art, button.Text, button.QuickKey = "", name, 0
+		if name == "COMMUNITYHUD" {
+			button.Text = "HUD"
+		}
+		if name == "BUILDERS" {
+			button.Text = "ORDERS"
+		}
+		if name == "PLACEMENT" {
+			button.Text = "PLACEMENT"
+		}
+		window.Gadgets = append(window.Gadgets, button)
+	}
+	// The battle root puts OK beneath this same column. Compress category
+	// spacing only there; the front-end actions occupy another column.
+	first, last := window.GadgetIndex("SOUND"), window.GadgetIndex("PREV")
+	if first >= 0 && last >= 0 {
+		start, footer := window.Gadgets[first].Rect, window.Gadgets[last].Rect
+		if start.X < footer.X+footer.W && footer.X < start.X+start.W {
+			names := [...]string{"SOUND", "MUSIC", "SPEEDS", "VISUALS", "NANOLATHE", "BUILDERS", "COMMUNITYHUD", "PLACEMENT"}
+			pitch := (footer.Y - 4 - start.Y - start.H) / int32(len(names)-1)
+			for i, name := range names {
+				if index := window.GadgetIndex(name); index >= 0 {
+					window.Gadgets[index].Rect.Y = start.Y + int32(i)*pitch
+				}
+			}
+		}
+	}
 }
 
 // The authored VISUALS page supplies the canvas, label style, control dimensions
@@ -157,7 +188,7 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		stages            uint8
 	}{
 		{"NRENDER", "Renderer", "Classic|Modern", 2},
-		{"NGAMEPLAY", "Gameplay", "Strict 3.1|Modern", 2},
+		{"NGAMEPLAY", "Gameplay", "Strict 3.1|Community 3.9|Modern", 3},
 	} {
 		caption, control := label, button
 		caption.Name, caption.SourceName, caption.Text = row.name+"LABEL", row.name+"LABEL", row.title
@@ -228,10 +259,10 @@ func (g *gameShell) syncNanolatheOptions() {
 	if optionsState == nil || optionsState.page != "nanolathe" || optionsPanel == nil {
 		return
 	}
-	// The panel is a two-stage control, so a third-party rule set shows the
-	// reserved set it derives from; selecting a set by name is a command-line
-	// or settings-file choice (docs/DESIGN_GAMEPLAY_RULES.md §8).
-	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), boolInt(session.BaseModeOf(g.gameplay) == gameplay.Modern))
+	// A third-party rule set shows the reserved layer it derives from; selecting
+	// a set by name is a command-line or settings-file choice
+	// (docs/DESIGN_GAMEPLAY_RULES.md §8).
+	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), gameplayOptionStage(g.gameplay))
 	optionsPanel.SetStageAt(optionsPanel.Index("NRENDER"), boolInt(g.presentation.Renderer == "modern"))
 	g.syncNanolatheFPSStage()
 	// The Enhanced switches. Glow reads the display block; the others
@@ -265,13 +296,10 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 	p := g.presentation
 	switch name {
 	case "NGAMEPLAY":
-		// Toggling selects one of the two reserved sets, so it also replaces a
-		// third-party selection with the reserved set on the chosen side.
-		mode := gameplay.Strict31
-		if g.retailOptionsStage(name, 2, boolInt(session.BaseModeOf(g.gameplay) == gameplay.Modern)) == 1 {
-			mode = gameplay.Modern
-		}
-		g.setGameplay(mode)
+		// Cycling selects one of the three reserved sets, so it also replaces a
+		// third-party selection with the reserved set at the chosen layer.
+		stage := g.retailOptionsStage(name, len(gameplayOptionModes), gameplayOptionStage(g.gameplay))
+		g.setGameplay(gameplayOptionModes[stage])
 		g.syncNanolatheOptions()
 		return true
 	case "NSIDEBAR":
@@ -316,4 +344,26 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 	g.setPresentation(p)
 	g.syncNanolatheOptions()
 	return true
+}
+
+var gameplayOptionModes = [...]gameplay.Mode{gameplay.Strict31, gameplay.Community39, gameplay.Modern}
+
+func gameplayOptionStage(mode gameplay.Mode) int {
+	base := session.BaseModeOf(mode)
+	for stage, candidate := range gameplayOptionModes {
+		if base == candidate {
+			return stage
+		}
+	}
+	return len(gameplayOptionModes) - 1
+}
+
+// Each options page restores only fields it owns; host input preferences live
+// on the Orders page and share the ordinary options transaction.
+func (g *gameShell) setNanolathePreferences(p settings.Presentation) {
+	next := g.presentation
+	next.Renderer, next.FPS, next.ExpandedSidebar = p.Renderer, p.FPS, p.ExpandedSidebar
+	next.Water, next.Lighting, next.Finish, next.Distortion, next.Marks = p.Water, p.Lighting, p.Finish, p.Distortion, p.Marks
+	next.TeamNanospray = p.TeamNanospray
+	g.setPresentation(next)
 }

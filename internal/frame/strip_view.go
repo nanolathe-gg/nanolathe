@@ -76,6 +76,10 @@ type StripView struct {
 	// logical-to-physical remap [03 R-FX-01 §3]. Zero means the record blits
 	// instead, since zero is none of the authored fill colours.
 	Fill uint8
+	// Optional team-colour operands are immutable presentation metadata. They
+	// do not replace the stock aging byte or consume random draws.
+	ColorSequence uint32
+	ColorSample   uint8
 	// X, Y and Z are the sub-record's own 16.16 world position. The draw
 	// projects them with the ordinary half-height shear [03 R-FX-01 §3].
 	X, Y, Z numeric.Fixed

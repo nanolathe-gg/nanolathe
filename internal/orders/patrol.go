@@ -266,29 +266,35 @@ func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		installPointGoal(u, n, n.GoalX, n.GoalY, n.GoalZ, repairPatrolGoalRadius)
 		armDeadline(n, tick, 60)
 		n.DynamicGate |= gateMoveOutcomes // ORed: the 60-tick deadline survives
-		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
-			candidates := scanRepairCandidates(u, u.Def.SightDistance)
-			// Ground repair repeats the diplomacy check after the pick; when the
-			// candidate remains nonhostile it resolves command code 8 (assist
-			// or repair) against it and, only if that RESOLVES, puts it to the
-			// issue helper: acceptance *rotates*, refusal (stance 3,
-			// [04 R-STANCE-01 §4]) *waits* [04 R-ORD-01 §4].
-			//
-			// An unresolvable code 8 never reaches the helper. It frees the
-			// candidate vector and falls through to the 20 %-of-storage gates
-			// and the feature pairing in the SAME visit, so retail spends up to
-			// six more bounded picks there [01 §7.5] where a wait spends none;
-			// only the helper's refusal ends the visit early (I4).
-			if target := pickRepairCandidate(u, candidates); target != nil && !scanHostile(bindingFor(u), u, target) {
-				resolved, accepted := issuePatrolRepair(u, target, tick)
-				switch {
-				case accepted:
-					n.DynamicGate = 0
-					return 6 // rotate after the accepted repair issue
-				case resolved:
-					return 3 // *wait*: the issue helper refused
+		work := rulesOfUnit(u).PatrolWork(PatrolWorkRequest{Builder: u})
+		if work != PatrolReclaimOnly {
+			if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
+				candidates := scanRepairCandidates(u, u.Def.SightDistance)
+				// Ground repair repeats the diplomacy check after the pick; when the
+				// candidate remains nonhostile it resolves command code 8 (assist
+				// or repair) against it and, only if that RESOLVES, puts it to the
+				// issue helper: acceptance *rotates*, refusal (stance 3,
+				// [04 R-STANCE-01 §4]) *waits* [04 R-ORD-01 §4].
+				//
+				// An unresolvable code 8 never reaches the helper. It frees the
+				// candidate vector and falls through to the 20 %-of-storage gates
+				// and the feature pairing in the SAME visit, so retail spends up to
+				// six more bounded picks there [01 §7.5] where a wait spends none;
+				// only the helper's refusal ends the visit early (I4).
+				if target := pickRepairCandidate(u, candidates); target != nil && !scanHostile(bindingFor(u), u, target) {
+					resolved, accepted := issuePatrolRepair(u, target, tick)
+					switch {
+					case accepted:
+						n.DynamicGate = 0
+						return 6 // rotate after the accepted repair issue
+					case resolved:
+						return 3 // *wait*: the issue helper refused
+					}
 				}
 			}
+		}
+		if work == PatrolAssistOnly {
+			return 2 // the Community option exits at the feature-reclaim boundary
 		}
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && resourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
 			return 2 // both stores are healthy: keep patrolling

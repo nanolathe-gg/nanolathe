@@ -75,7 +75,7 @@ func (b *battleSession) armPlacement(def *content.UnitDef) {
 	if def == nil {
 		return
 	}
-	footX, footZ := footprintCellsForCatalog(b.cat, def)
+	_, footX, footZ := b.communityPlacementGeometry(def)
 	b.battleState().ArmPlacement(def.CanonicalKey, footX, footZ)
 	b.battleState().Input.Latch = input.LatchMobileBuild
 }
@@ -97,7 +97,6 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	}
 	b.battleState().Input.BuildMX, b.battleState().Input.BuildMY = mx, my
 	wx, _, wz := b.cursorWorld(mx, my)
-	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = world.PlacementAnchor(wx, wz, b.battleState().Input.BuildFootX, b.battleState().Input.BuildFootZ)
 	self := uint16(0)
 	if frame, ok := b.currentSnapshot(); ok {
 		self = uint16(frame.CommandPage.Builder)
@@ -107,8 +106,15 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	if b.cat != nil {
 		def, _ = b.cat.Unit(b.battleState().Input.BuildDef)
 	}
+	rawX, rawZ := world.PlacementAnchor(wx, wz, footX, footZ)
+	buildX, buildZ := rawX, rawZ
+	if b.communityClickSnapAllowed(mx) {
+		buildX, buildZ = b.communityBuildSnap(def, rawX, rawZ, footX, footZ, self, wx, wz)
+	}
+	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = buildX, buildZ
 	result, err := b.checkProductPlacement(b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ, def, footX, footZ, self)
 	b.battleState().Input.BuildOK = err == nil
+	b.battleState().Input.BuildNeedsClear = err == nil && result.OccupantsAdmitted
 	if err == nil {
 		b.battleState().Input.BuildSiteH = result.SiteHeight
 	} else {
@@ -135,7 +141,7 @@ func (b *battleSession) checkProductPlacement(cx, cz int32, def *content.UnitDef
 	if b == nil || b.sess == nil {
 		return world.PlacementResult{}, fmt.Errorf("nanolathe: build placement not previewed: the battle has no session")
 	}
-	return b.sess.PreviewPlacementForCursor(cx, cz, def, footX, footZ, pool.Handle(self))
+	return b.sess.PreviewPlacementForCursor(cx, cz, def, footX, footZ, pool.Handle(self), b.communityPlacementFacing(def))
 }
 
 // placementRect returns the armed site's footprint as a screen rectangle
@@ -186,6 +192,10 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	if b.cat != nil && !hud.BuildProductAllowed(b.cat, frame, b.battleState().Input.BuildDef) {
 		return false // GUI may not invent products absent from authored list [R-P0-03]
 	}
+	var def *content.UnitDef
+	if b.cat != nil {
+		def, _ = b.cat.Unit(b.battleState().Input.BuildDef)
+	}
 	if !b.battleState().Input.BuildOK {
 		return false // illegal placement queues nothing [R-P0-03]
 	}
@@ -208,7 +218,7 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	// Queue the typed command; the session applies it at the authoritative input
 	// phase [01 §4.4][07 §9].
 	wy := numeric.Fixed(int64(b.battleState().Input.BuildSiteH) << 16)
-	if err := b.DispatchMobileBuild(b.battleState().Input.BuildDef, wx, wy, wz, queued); err != nil {
+	if err := b.DispatchMobileBuildFacing(b.battleState().Input.BuildDef, wx, wy, wz, queued, b.communityPlacementFacing(def)); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: build %s: %v\n", b.battleState().Input.BuildDef, err)
 		return false
 	}
@@ -230,7 +240,7 @@ func (b *battleSession) worldOverlayArmed(cur *frame.Frame) bool {
 	if state == nil {
 		return false
 	}
-	return b.modernDrag != nil || state.PlacementArmed() || (cur != nil && state.Input.ShiftHeld)
+	return b.modernDrag != nil || state.PlacementArmed() || b.communityReclaimSnapOverlayArmed() || (cur != nil && state.Input.ShiftHeld)
 }
 
 // drawBuildGhost draws the armed build site the way retail does [07 §9].
@@ -255,6 +265,9 @@ func (b *battleSession) drawBuildGhost(c *client.Client) {
 	col := c.GUIColor(hud.GhostColorIllegal)
 	if b.battleState().Input.BuildOK {
 		col = c.GUIColor(hud.GhostColorLegal)
+		if b.sess != nil && b.sess.Community.ConstructionKickout && !b.battleState().Input.BuildNeedsClear {
+			col = c.GUIColor(6)
+		}
 	}
 	// Retail's adjacent strokes make one solid two-pixel border [07 §9].
 	// Scale that entire border, not just the separation between its strokes:

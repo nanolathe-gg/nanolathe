@@ -186,7 +186,9 @@ type stripParticle struct {
 
 	// color is the palette byte: the nano ramp 0xa1..0xa7 or the sprinkle
 	// pair 0x61/0x67 [R-STRIP-01 §2].
-	color uint8
+	color         uint8
+	colorSample   uint8
+	colorSequence uint32
 
 	// reservedWord is the unexplained word the nano particle carries,
 	// written 0x100 at spawn and read by nothing observed [03 §5.5]
@@ -198,10 +200,12 @@ type stripParticle struct {
 // a tag byte, a zeroed word, and begin/end pointers [R-CORE-01 §4.4.1]; the
 // per-family parameters below carry the researched init arguments.
 type stripObject struct {
-	// Captured presentation metadata; never read by the strip sweep.
+	family stripFamily
+	// Captured owner metadata is shared by both host colour policies.
 	nanoOwnerColor      uint8
 	nanoOwnerColorKnown bool
-	family              stripFamily
+	// Shared per-colour cursor freezes creation order, independent of redraws.
+	nanoColorCursor *uint32
 
 	// windowEnd bounds the object's spawn window; the spawn gate compares
 	// the next-spawn tick against both this value and the global tick
@@ -304,7 +308,8 @@ func (f stripFamily) isPuffFamily() bool {
 
 // stripTable is the ten-descriptor table [R-CORE-01 §4.4.1].
 type stripTable struct {
-	strips [stripCount][]stripObject
+	strips           [stripCount][]stripObject
+	nanoColorCursors [10]uint32
 
 	// particleFree is the sub-record storage of destroyed containers, kept for
 	// the next container of any family. A destroyed container's storage was
@@ -790,11 +795,16 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 				x: sx, y: sy, z: sz,
 				expiry:       tick + uint32(life),
 				color:        0xa0 | uint8(1+i%7),
+				colorSample:  uint8(i % 7),
 				reservedWord: 0x100,
 			}
 			// The particle travels from the source point to the landing
 			// point over its lifetime [03 §5.5 "The nanolathe spray"];
 			// Fixed.Div truncates toward zero [I3].
+			if o.nanoColorCursor != nil {
+				p.colorSequence = *o.nanoColorCursor
+				*o.nanoColorCursor++
+			}
 			p.vx = divByTicks(tx.Sub(sx), life)
 			p.vy = divByTicks(ty.Sub(sy), life)
 			p.vz = divByTicks(tz.Sub(sz), life)
@@ -1055,29 +1065,29 @@ func divByTicks(delta numeric.Fixed, ticks int32) numeric.Fixed {
 // first five spawn immediately as part of construction, spending thirty CRT
 // draws at the producer [03 §5.5]. Eviction runs at insert; exhaustion is
 // not modelled (see the storage note above).
-func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed) *stripObject {
-	return s.appendStripNanoEmitterBox(srcPoint, dstPoint, dstPoint)
+func (s *Session) appendStripNanoEmitter(srcPoint, dstPoint [3]numeric.Fixed, ownerColor ...uint8) *stripObject {
+	return s.appendStripNanoEmitterBox(srcPoint, dstPoint, dstPoint, ownerColor...)
 }
 
 // appendStripNanoEmitterBox retains the authored target footprint for feature
 // reclaim/resurrection spray. Unit/build callers use the degenerate wrapper
 // above until their model-box adapter supplies extents [05 R-WORK-01 §8].
-func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed) *stripObject {
-	return s.appendStripNanoEmitterBoxes(srcPoint, srcPoint, dstMin, dstMax)
+func (s *Session) appendStripNanoEmitterBox(srcPoint, dstMin, dstMax [3]numeric.Fixed, ownerColor ...uint8) *stripObject {
+	return s.appendStripNanoEmitterBoxes(srcPoint, srcPoint, dstMin, dstMax, ownerColor...)
 }
 
 // appendStripNanoEmitterFromBox is the reversed direction of [05 R-WORK-01 §8]:
 // the six-word box is the SOURCE end and the builder's nano piece is the
 // degenerate destination. Feature reclaim, unit reclaim and capture spray this
 // way round; build, repair and resurrection use the wrapper above.
-func (s *Session) appendStripNanoEmitterFromBox(srcMin, srcMax, dstPoint [3]numeric.Fixed) *stripObject {
-	return s.appendStripNanoEmitterBoxes(srcMin, srcMax, dstPoint, dstPoint)
+func (s *Session) appendStripNanoEmitterFromBox(srcMin, srcMax, dstPoint [3]numeric.Fixed, ownerColor ...uint8) *stripObject {
+	return s.appendStripNanoEmitterBoxes(srcMin, srcMax, dstPoint, dstPoint, ownerColor...)
 }
 
 // appendStripNanoEmitterBoxes is the general form both wrappers share. The CRT
 // cost is identical either way — six draws per particle, five particles at
 // construction — so which end carries the extent never moves the stream [I4].
-func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]numeric.Fixed) *stripObject {
+func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]numeric.Fixed, ownerColor ...uint8) *stripObject {
 	if s == nil || s.strips == nil {
 		return nil
 	}
@@ -1104,6 +1114,12 @@ func (s *Session) appendStripNanoEmitterBoxes(srcMin, srcMax, dstMin, dstMax [3]
 		spawnInterval: 1,
 		src:           srcOrigin, srcExtent: srcExtent,
 		dst: dstOrigin, dstExtent: dstExtent,
+	}
+	if len(ownerColor) != 0 {
+		o.nanoOwnerColor, o.nanoOwnerColorKnown = ownerColor[0], true
+		if int(ownerColor[0]) < len(s.strips.nanoColorCursors) {
+			o.nanoColorCursor = &s.strips.nanoColorCursors[ownerColor[0]]
+		}
 	}
 	// The family's constructor spawns the first five particles immediately
 	// [03 §5.5 "ten particles over two ticks"]; the phase-11 gate fires the
@@ -1425,9 +1441,11 @@ func (s *Session) appendStripViews(tick uint32, out []frame.StripView) []frame.S
 			for i := range o.particles {
 				p := &o.particles[i]
 				view := frame.StripView{
-					Strip:               int8(strip),
 					NanoOwnerColor:      o.nanoOwnerColor,
 					NanoOwnerColorKnown: o.nanoOwnerColorKnown,
+					ColorSequence:       p.colorSequence,
+					ColorSample:         p.colorSample,
+					Strip:               int8(strip),
 					Family:              family,
 					Bank:                bank,
 					Entry:               entry,

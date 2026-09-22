@@ -6,6 +6,7 @@
 package orders
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -21,6 +22,20 @@ import (
 // implementation is either zero-size or a pointer to session-lifetime state.
 // Strict 3.1 draws no randomness in any of them.
 type Rules interface {
+	// PreserveBuildToggle keeps an active quickkey toggle while a build is prepared.
+	PreserveBuildToggle(prepared bool, status uint8, enabled bool) bool
+	// RejectStockpileOrder selects the malformed-slot corrupt-order exit.
+	RejectStockpileOrder(u *units.Unit, n *Node) bool
+	// CaptureVeteranLevel resolves the target's unbounded level used by the
+	// capture timer. The target definition, not the captor's, owns the authored
+	// thresholds.
+	CaptureVeteranLevel(CaptureVeteranRequest) uint32
+	// GuardHome selects the stored horizontal home offset used by a ground
+	// guard's follow maintenance.
+	GuardHome(GuardHomeRequest) (numeric.Fixed, numeric.Fixed)
+	// PatrolWork selects which automatic work branches a repair patrol visits.
+	PatrolWork(PatrolWorkRequest) PatrolWorkOption
+
 	// CrowdedMoveArrival admits bounded Modern completion near a friendly crowd.
 	CrowdedMoveArrival(u *units.Unit, n *Node, tick uint32) bool
 	// MarkAutomaticAttack records producer provenance only for Modern.
@@ -47,6 +62,10 @@ type Rules interface {
 	ReactionResult(q *Queue, n *Node, code Code, tick uint32) Code
 	// BeforeCommand lets a new producer command supersede a Modern response.
 	BeforeCommand(q *Queue)
+	// ScriptAttackSurfaceFire answers CP-WPN-3 at the COB script-action ATTACK
+	// resolver. The request carries the binding whose Community table was
+	// selected and the actor whose weapon slot 0 the patch contract reads.
+	ScriptAttackSurfaceFire(q ScriptAttackSurfaceFireRequest) bool
 
 	// HoldsFire reports whether the shooter's standing Hold Fire keeps automatic
 	// combat off its weapon slots: it refuses a combat join, including the
@@ -77,12 +96,51 @@ type Rules interface {
 	GuardResumesFromPad(u *units.Unit) bool
 }
 
+// ScriptAttackSurfaceFireRequest is one COB script-action ATTACK decision.
+// Rules must not retain it. Keeping the table and actor in the request lets a
+// registered rule set replace this answer without the resolver reading
+// Community metadata itself [docs/DESIGN_GAMEPLAY_RULES.md §9].
+type ScriptAttackSurfaceFireRequest struct {
+	Binding *QueueBinding
+	Actor   *units.Unit
+}
+
+// CaptureVeteranRequest is one target-side capture-factor lookup. Kills is
+// already narrowed to the stored unsigned word; rules must not retain it.
+type CaptureVeteranRequest struct {
+	Binding    *QueueBinding
+	Definition *content.UnitDef
+	Kills      uint16
+}
+
 // StrictRules answers every decision the way retail 3.1 does: no Hold Fire
 // suppression of a join, no deferred leash, no guard pad or nearby-work
 // selection, and the carried-guard cancellation. It is zero-size, so placing
 // it in a Rules interface never allocates and the retail path never reaches a
 // Modern implementation.
 type StrictRules struct{}
+
+// CommunityRules is the reserved Community 3.9 layer. It embeds StrictRules so
+// every unchanged answer remains retail's; Community order contracts override
+// only the questions they own without changing Strict or Modern's overrides.
+type CommunityRules struct{ StrictRules }
+
+// CaptureVeteranLevel is retail's uncapped kills/5 factor [05 R-WORK-01 §6].
+func (StrictRules) CaptureVeteranLevel(q CaptureVeteranRequest) uint32 {
+	return uint32(q.Kills) / 5
+}
+
+// GuardHome is retail's answer: retain the random offset written at guard
+// admission [04 R-ORD-01 §8]. Strict ignores all Community metadata carried by
+// the request's unit binding.
+func (StrictRules) GuardHome(req GuardHomeRequest) (numeric.Fixed, numeric.Fixed) {
+	return req.OffsetX, req.OffsetZ
+}
+
+// PatrolWork is retail's answer: visit both the assistance and reclaim
+// branches in their established order [04 R-ORD-01 §4][04 R-ORD-01 §7].
+// Strict ignores all Community metadata carried by the request's unit binding.
+func (StrictRules) PatrolWork(PatrolWorkRequest) PatrolWorkOption { return PatrolBoth }
 
 // HoldsFire is retail's answer: the standing-order fields are read by the
 // caller's own gates, a forced join bypasses them, and the standing-fire
@@ -143,6 +201,10 @@ func (StrictRules) StepDangerResponse(*units.Unit, uint32)         {}
 func (StrictRules) ProtectWorkOnDamage(*units.Unit) bool           { return false }
 func (StrictRules) AllowAutomaticRepair(*units.Unit, uint32) bool  { return true }
 func (StrictRules) BeforeCommand(*Queue)                           {}
+
+// ScriptAttackSurfaceFire preserves retail's submersible gate. Parsed
+// surfacefire metadata is inert under Strict 3.1 [02 R-KEYS-01].
+func (StrictRules) ScriptAttackSurfaceFire(ScriptAttackSurfaceFireRequest) bool { return false }
 
 func (StrictRules) RetaliationOrder(victim, attacker *units.Unit) bool {
 	return strictRetaliationOrder(victim, attacker)

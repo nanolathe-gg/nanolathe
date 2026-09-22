@@ -2,7 +2,6 @@ package session
 
 import (
 	"fmt"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,7 +11,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -36,9 +37,11 @@ const (
 // MissionEntryOptions carries the frontend selection independently of its value:
 // zero is an explicitly selected Arm side [08 R-CAMP-01 §3].
 type MissionEntryOptions struct {
-	Gameplay        gameplay.Mode
-	SelectedSide    int
-	SelectedSideSet bool
+	BuilderOptions   *orders.BuilderOptions
+	CommunitySources CommunitySources
+	Gameplay         gameplay.Mode
+	SelectedSide     int
+	SelectedSideSet  bool
 	// ContentLimits are the table sizes a catalog compile runs under when the
 	// caller supplies no catalog. They come from the mounted content set's
 	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero
@@ -53,6 +56,10 @@ type MissionEntryOptions struct {
 // the tick-zero prime [08 R-ENTRY-01 §8]. Without a selection, named campaign
 // admission can resolve the side; ALL remains unknown.
 func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int, simSeed, crtSeed uint32, options MissionEntryOptions, report content.Progress) (*Session, error) {
+	entryFeatures, err := ResolveCommunity(options.Gameplay, options.CommunitySources)
+	if err != nil {
+		return nil, err
+	}
 	if options.SelectedSideSet && options.SelectedSide != 0 && options.SelectedSide != 1 {
 		return nil, fmt.Errorf("session: campaign selected side %d is outside the two frontend sides", options.SelectedSide)
 	}
@@ -63,7 +70,7 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	if fs == nil {
 		fs = vfs.New()
 	}
-	cat, err := strictCatalogWithProgress(fs, cat, options.ContentLimits, report)
+	cat, err = strictCatalogWithProgress(fs, cat, options.ContentLimits, report)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +124,7 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	if err != nil {
 		return nil, err
 	}
+	cat = prepareCommunityWeapons(cat, options.Gameplay, entryFeatures)
 	terrain, err := loadTerrainStrict(fs, cat, m)
 	if err != nil {
 		return nil, err
@@ -137,17 +145,20 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	}
 	report.Report(FamilyUnitWorld, 100)
 	s := &Session{
-		Gameplay:     options.Gameplay.Normalize(),
-		Catalog:      cat,
-		World:        terrain,
-		Mission:      m,
-		Clock:        &clock.State{Requested: 10, Active: 10},
-		Snapshot:     frame.NewBuffer(),
-		Units:        unitsWorld,
-		Econ:         &economy.Service{},
-		Latch:        NewEndLatch(),
-		CampaignSlot: m.CampaignIndex,
-		LocalOwner:   0, ViewingOwner: 0, EnemyOwner: 1,
+		Gameplay:         options.Gameplay.Normalize(),
+		CommunitySources: options.CommunitySources,
+		Community:        entryFeatures,
+		EntryCommunity:   entryFeatures,
+		Catalog:          cat,
+		World:            terrain,
+		Mission:          m,
+		Clock:            &clock.State{Requested: 10, Active: 10},
+		Snapshot:         frame.NewBuffer(),
+		Units:            unitsWorld,
+		Econ:             &economy.Service{},
+		Latch:            NewEndLatch(),
+		CampaignSlot:     m.CampaignIndex,
+		LocalOwner:       0, ViewingOwner: 0, EnemyOwner: 1,
 	}
 	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data and rooted planner"]
 	for i := 0; i < 2 && i < 10; i++ {
@@ -198,6 +209,9 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	}
 	s.InitAudio(fs)
 	if err := createAndBindServices(s); err != nil {
+		return nil, err
+	}
+	if err := s.initializeBuilderOptions(options.BuilderOptions); err != nil {
 		return nil, err
 	}
 	// Manager records and their eight-draw strategic constructors precede every

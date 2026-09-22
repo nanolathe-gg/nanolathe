@@ -1,4 +1,5 @@
 {
+  "gameplay": {"table": "prota"},
   "name": "prota",
   "detect": [
     "downloadP",

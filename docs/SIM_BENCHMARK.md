@@ -94,9 +94,13 @@ issued itself. The census records both, so a run says which is driving it.
 
 Per-player starting stock is 32000 metal and 32000 energy so production and the
 AI's own construction tasks proceed through the whole window instead of
-stalling on an empty ledger. The configured unit limit is 400, which sizes the
-unit pool at `limit × 10 + 1` records and leaves each army headroom above its
-250 placed units for everything it builds.
+stalling on an empty ledger. The configured unit setting is 400. Strict uses that setting; Community and
+Modern use the resolved feature table
+([DESIGN_COMMUNITY_PATCH §3](DESIGN_COMMUNITY_PATCH.md#3-the-feature-table)),
+whose mainline unit limit is 1500. The effective limit sizes the unit pool at
+`limit × 10 + 1` records and is recorded in the scene. Use the same effective
+limit when comparing revisions; `--gameplay-feature=unitLimit=400` selects the
+400-unit layout under Community or Modern.
 
 ## The window
 

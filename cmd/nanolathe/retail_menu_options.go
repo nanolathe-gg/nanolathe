@@ -69,11 +69,14 @@ type retailOptionsPage struct {
 // button opens `SOUNDS`, not the unopened `SOUND.GUI` beside it, and the
 // `SPEEDS` button is the one the file captions `INTERFACE` [07 R-FE-01 §6].
 var retailOptionsPages = map[string]retailOptionsPage{
-	"nanolathe": {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: retailOptionsBackdrop},
-	"sound":     {gui: "guis/sounds.gui", battle: "guis/soundsrt.gui", backdrop: "bitmaps/optsound4x.pcx"},
-	"music":     {gui: "guis/music.gui", battle: "guis/musicrt.gui", backdrop: "bitmaps/optmusic4x.pcx"},
-	"speeds":    {gui: "guis/speeds.gui", battle: "guis/speedsrt.gui", backdrop: "bitmaps/optinterface4x.pcx"},
-	"visuals":   {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: "bitmaps/optvisual4x.pcx"},
+	"communityhud": {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: retailOptionsBackdrop},
+	"builders":     {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: retailOptionsBackdrop},
+	"nanolathe":    {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: retailOptionsBackdrop},
+	"placement":    {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: retailOptionsBackdrop},
+	"sound":        {gui: "guis/sounds.gui", battle: "guis/soundsrt.gui", backdrop: "bitmaps/optsound4x.pcx"},
+	"music":        {gui: "guis/music.gui", battle: "guis/musicrt.gui", backdrop: "bitmaps/optmusic4x.pcx"},
+	"speeds":       {gui: "guis/speeds.gui", battle: "guis/speedsrt.gui", backdrop: "bitmaps/optinterface4x.pcx"},
+	"visuals":      {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: "bitmaps/optvisual4x.pcx"},
 }
 
 // source is the `.GUI` the named button merges: the front-end page, or the
@@ -129,15 +132,16 @@ var (
 // settle it: a writer of either bit reachable from the options family; until
 // one is found, copying them here would be two dead fields.
 type retailOptionsSnapshot struct {
-	display       settings.Display
-	presentation  settings.Presentation
-	gameplay      gameplay.Mode
-	audio         settings.Audio
-	messages      settings.Messages
-	scrollSpeed   int
-	gameSpeed     int
-	interfaceType int
-	categories    [retailMusicCategoryCount]int
+	builderOptions settings.BuilderOptions
+	display        settings.Display
+	presentation   settings.Presentation
+	gameplay       gameplay.Mode
+	audio          settings.Audio
+	messages       settings.Messages
+	scrollSpeed    int
+	gameSpeed      int
+	interfaceType  int
+	categories     [retailMusicCategoryCount]int
 }
 
 // retailMusicCategoryCount is the length of the per-track category array: one
@@ -532,15 +536,16 @@ func hideRetailBattleOptionsGadgets(window *gui.Window) {
 // snapshots on entry [07 R-FE-01 §6].
 func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 	s := retailOptionsSnapshot{
-		display:       g.display,
-		presentation:  g.presentation,
-		gameplay:      g.gameplay,
-		audio:         g.audioPrefs,
-		messages:      g.messages,
-		scrollSpeed:   g.scrollSpeed,
-		gameSpeed:     g.gameSpeed,
-		interfaceType: g.interfaceType,
-		categories:    retailDefaultCategories(),
+		builderOptions: g.builderOptions,
+		display:        g.display,
+		presentation:   g.presentation,
+		gameplay:       g.gameplay,
+		audio:          g.audioPrefs,
+		messages:       g.messages,
+		scrollSpeed:    g.scrollSpeed,
+		gameSpeed:      g.gameSpeed,
+		interfaceType:  g.interfaceType,
+		categories:     retailDefaultCategories(),
 	}
 	if optionsState != nil {
 		s.categories = optionsState.categories
@@ -555,6 +560,7 @@ func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.display = s.display
 	g.setPresentation(s.presentation)
 	g.setGameplay(s.gameplay)
+	g.setBuilderOptions(s.builderOptions)
 	g.audioPrefs = s.audio
 	g.messages = s.messages
 	g.scrollSpeed = s.scrollSpeed
@@ -671,8 +677,18 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	if page == "visuals" && !inBattle {
 		addDisplayAspectLabels(pageWindow)
 	}
-	if page == "nanolathe" {
-		if err := nanolatheOptionsPage(pageWindow); err != nil {
+	if page == "nanolathe" || page == "builders" || page == "communityhud" || page == "placement" {
+		buildPage := nanolatheOptionsPage
+		if page == "builders" {
+			buildPage = builderOptionsPage
+		}
+		if page == "communityhud" {
+			buildPage = communityHUDOptionsPage
+		}
+		if page == "placement" {
+			buildPage = g.communityPlacementOptionsPage
+		}
+		if err := buildPage(pageWindow); err != nil {
 			reportRetailMessageError(g.showRetailMessage(retailFrontendAssetError(g.cs, "Nanolathe options template unavailable", pageGUI, "a visual options button and label", err).Error()))
 			return
 		}
@@ -821,8 +837,14 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		order = append(order, i)
 	}
 	switch optionsState.page {
+	case "communityhud":
+		g.syncCommunityHUDOptions()
+	case "builders":
+		g.syncBuilderOptions()
 	case "nanolathe":
 		g.syncNanolatheOptions()
+	case "placement":
+		g.syncCommunityPlacementOptions()
 	case "visuals":
 		// Two-stage buttons: stage 1 is the "On" label of the authored `Off|On`
 		// pair. `ANTI`, `BSHADOWS` and `SHADING` are bits 1, 4 and 5 of the
@@ -1205,13 +1227,20 @@ func (g *gameShell) activateRetailMusicTransport(key string) {
 // [07 R-FE-01 §6][03 R-AUD-01 §2][03 R-AUD-01 §4][07 R-CAM-01 §7].
 func (g *gameShell) restoreRetailOptionsDefaults() {
 	switch optionsState.page {
+	case "communityhud":
+		g.setCommunityHUDPreferences(settings.DefaultPresentation())
+	case "builders":
+		g.setBuilderOptions(settings.DefaultBuilderOptions())
+		g.setSelectionPreferences(settings.DefaultPresentation())
 	case "nanolathe":
 		// The page also owns the glow bit, which lives in the display block
 		// (DESIGN_GPU_RENDERER §19.4, §30).
-		g.setPresentation(settings.DefaultPresentation())
+		g.setNanolathePreferences(settings.DefaultPresentation())
 		g.setGameplay(gameplay.Modern)
 		g.display.Glow = settings.DefaultGlow
 		g.applyRetailVisualOptions(clPtr)
+	case "placement":
+		g.setCommunityPlacementPreferences(settings.DefaultPresentation())
 	case "visuals":
 		// Bits 1-5 set, gamma 12 and — front end only — 640x480 with
 		// `DitheredFog` cleared [07 R-FE-01 §6]. The size pair is the front
@@ -1270,13 +1299,20 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 func (g *gameShell) undoRetailOptionsPage() {
 	s := optionsState.snapshot
 	switch optionsState.page {
+	case "communityhud":
+		g.setCommunityHUDPreferences(s.presentation)
+	case "builders":
+		g.setBuilderOptions(s.builderOptions)
+		g.setSelectionPreferences(s.presentation)
 	case "nanolathe":
-		g.setPresentation(s.presentation)
+		g.setNanolathePreferences(s.presentation)
 		g.setGameplay(s.gameplay)
 		// The glow bit is this page's too, so its UNDO takes it back from the
 		// entry snapshot's display block without disturbing the VISUALS bits.
 		g.display.Glow = s.display.Glow
 		g.applyRetailVisualOptions(clPtr)
+	case "placement":
+		g.setCommunityPlacementPreferences(s.presentation)
 	case "visuals":
 		// Bits 1-6, gamma and — front end only — the display size
 		// [07 R-FE-01 §6].
@@ -1324,6 +1360,7 @@ func (g *gameShell) applyRetailVisualOptions(cl *client.Client) {
 		return
 	}
 	applyVisualOptions(cl, g.display)
+	applyCommunityHUDOptions(cl, g.presentation)
 }
 
 // applyVisualOptions is the one place the display-option bits reach a
@@ -1374,7 +1411,10 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // handler that consumes the fired result [07 R-WGT-01 §3].
 func retailOptionsCue(key string) string {
 	switch key {
-	case "nanolathe", "ngameplay", "nrender", "nfps", "nsidebar",
+	case "communityhud", "ncounters", "nreload", "nveteran", "ngroups", "nallies", "nweather",
+		"builders", "bghold", "bgman", "bgroam", "bphold", "bpman", "bproam", "ncycle", "ndouble",
+		"placement", "npreview", "nroverlay", "norderdrag", "nteamnano", "nmexsnap", "nwrecksnap", "nsnapmod",
+		"nanolathe", "ngameplay", "nrender", "nfps", "nsidebar",
 		"nglow", "nwater", "nlights", "nfinish", "nheat", "nmarks", "nnano",
 		"sound", "music", "speeds", "visuals", "prev",
 		"restore", "undo",
@@ -1402,9 +1442,15 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	// precedes them all, as it does on the screens frontendCue serves.
 	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
 	switch name {
+	case "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
+		return g.activateCommunityHUDOption(name)
+	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE":
+		return g.activateBuilderOption(name)
 	case "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR", "NNANO":
 		return g.activateNanolatheOption(name)
-	case "NANOLATHE", "SOUND", "MUSIC", "SPEEDS", "VISUALS":
+	case "NPREVIEW", "NROVERLAY", "NORDERDRAG", "NTEAMNANO", "NMEXSNAP", "NWRECKSNAP", "NSNAPMOD":
+		return g.activateCommunityPlacementOption(name)
+	case "COMMUNITYHUD", "BUILDERS", "NANOLATHE", "PLACEMENT", "SOUND", "MUSIC", "SPEEDS", "VISUALS":
 		page, _ := retailOptionsPageKey(name)
 		g.openRetailOptionsPage(page)
 		return true
@@ -1666,8 +1712,14 @@ func (g *gameShell) moveRetailSliderAt(index int, s *retailSliderState, knob int
 
 func retailOptionsPageKey(name string) (string, bool) {
 	switch name {
+	case "COMMUNITYHUD":
+		return "communityhud", true
+	case "BUILDERS":
+		return "builders", true
 	case "NANOLATHE":
 		return "nanolathe", true
+	case "PLACEMENT":
+		return "placement", true
 	case "SOUND":
 		return "sound", true
 	case "MUSIC":
@@ -1682,8 +1734,14 @@ func retailOptionsPageKey(name string) (string, bool) {
 
 func retailOptionsCueKey(name string) string {
 	switch name {
+	case "COMMUNITYHUD", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
+		return strings.ToLower(name)
+	case "BUILDERS", "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM":
+		return strings.ToLower(name)
 	case "NANOLATHE":
 		return "nanolathe"
+	case "PLACEMENT", "NPREVIEW", "NROVERLAY", "NORDERDRAG", "NTEAMNANO", "NMEXSNAP", "NWRECKSNAP", "NSNAPMOD":
+		return strings.ToLower(name)
 	case "NGAMEPLAY":
 		return "ngameplay"
 	case "NRENDER":

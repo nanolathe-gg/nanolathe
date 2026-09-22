@@ -868,6 +868,10 @@ const (
 //	killsFactor  = (int32)(uint16)kills / 5                   // signed, truncating
 //	timer        = ((killsFactor + 10) · healthScaled · 10) / 100
 //
+// Strict supplies that killsFactor. Community and Modern may supply the
+// target definition's unbounded authored level through orders.Rules; every
+// surrounding multiply, wrap and divide remains this retail expression.
+//
 // This is the ONE implementation of the section. `internal/construction` used to
 // carry a second copy under the name `CaptureTimer` with no caller at all; the
 // two had drifted apart on the constant form, so the dead copy is gone and this
@@ -898,7 +902,7 @@ const (
 //
 // A zero `maxdamage` divides by zero here exactly as the executable does; §6
 // states no guard, and inventing one would be inventing behavior (I11).
-func captureBudget(energyCost, metalCost float32, health, maxDamage, kills int32) int32 {
+func captureBudget(energyCost, metalCost float32, health, maxDamage, kills int32, veteranLevels ...uint32) int32 {
 	// Each cost term is scaled twice, the metal term is carried negative and the
 	// bias is carried negative, so both fold in through subtractions.
 	// Each term's last multiply rounds before it enters the difference, as
@@ -916,6 +920,9 @@ func captureBudget(energyCost, metalCost float32, health, maxDamage, kills int32
 	// signed int32 arithmetic wraps, so int32 here IS the retail multiply.
 	healthScaled := uint32((int32(int16(health))+maxDamage)*base) / uint32(2*maxDamage)
 	killsFactor := int32(uint16(kills)) / 5
+	if len(veteranLevels) != 0 {
+		killsFactor = int32(veteranLevels[0])
+	}
 	return (killsFactor + 10) * int32(healthScaled) * 10 / 100
 }
 
@@ -959,7 +966,10 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 			return 8 // abandon
 		}
 		captionClearText(u, n, "Capturing") // caption clear with a state text
-		n.Param2 = uint32(captureBudget(target.Def.BuildCostEnergy, target.Def.BuildCostMetal, target.Health, target.Def.MaxDamage, target.Kills))
+		level := rulesOfUnit(u).CaptureVeteranLevel(CaptureVeteranRequest{
+			Binding: bindingOfUnit(u), Definition: target.Def, Kills: uint16(target.Kills),
+		})
+		n.Param2 = uint32(captureBudget(target.Def.BuildCostEnergy, target.Def.BuildCostMetal, target.Health, target.Def.MaxDamage, target.Kills, level))
 		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
 		if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
 			return 7

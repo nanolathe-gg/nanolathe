@@ -12,12 +12,14 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/path"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 // RuleSet bundles one implementation per gameplay seam. It is bound once at
@@ -37,17 +39,20 @@ import (
 // half of one policy and half of another.
 type RuleSet struct {
 	Name string
-	// Base names the reserved set this one derives its strict-versus-modern
-	// semantics from, and is the word the session persists and reports while
+	// Features declares composition-time overrides; cached rules hold no mutable session state.
+	Features community.Overrides
+	// Base names the reserved set this one derives its gameplay semantics
+	// from, and is the word the session persists and reports while
 	// the set is bound. The zero value is Modern, the default, so a
 	// third-party set that adds to Modern need not state it. Logic that only
-	// understands the two reserved behaviors — the save unit limit, the
-	// developer spawn gate — reads this, never the set's name.
+	// understands the reserved behaviors reads this, never the set's name.
 	Base         gameplay.Mode
 	Combat       combat.Rules
+	Visibility   visibility.Rules
 	Orders       orders.Rules
 	Construction construction.Rules
 	UnitLimit    UnitLimitRules
+	ScriptPorts  ScriptPortRules
 	// Movement is the movement system's policy seam: whether a ground mover
 	// rejected by static ground teaches its owner the blocks the route search
 	// had read as unexplored (DESIGN_MOVEMENT_PATH "Modern learned terrain").
@@ -114,11 +119,12 @@ func (ModernUnitLimit) RecordsLiveUnitLimit() bool { return true }
 // saved slot identities across a preference change.
 func (ModernUnitLimit) RestoresSavedUnitLimit() bool { return true }
 
-// The two reserved set names are the gameplay vocabulary, so a set's name and
-// the persisted mode word are the same string for the two shipped sets.
+// The three reserved set names are the gameplay vocabulary, so a set's name
+// and the persisted mode word are the same string for the shipped sets.
 const (
-	StrictRuleSetName = string(gameplay.Strict31)
-	ModernRuleSetName = string(gameplay.Modern)
+	StrictRuleSetName    = string(gameplay.Strict31)
+	CommunityRuleSetName = string(gameplay.Community39)
+	ModernRuleSetName    = string(gameplay.Modern)
 )
 
 // StrictRuleSet is the retail baseline: every seam answers as the executable
@@ -128,10 +134,31 @@ func StrictRuleSet() RuleSet {
 		Name:         StrictRuleSetName,
 		Base:         gameplay.Strict31,
 		Combat:       combat.StrictRules{},
+		Visibility:   visibility.StrictRules{},
 		Orders:       orders.StrictRules{},
 		Construction: construction.StrictRules{},
 		UnitLimit:    StrictUnitLimit{},
+		ScriptPorts:  StrictScriptPorts{},
 		Movement:     movement.StrictRules{},
+		Path:         path.RetailKernel{},
+		Planner:      ai.RetailPlanner{},
+	}
+}
+
+// CommunityRuleSet is the reserved Community 3.9 compatibility layer. Each
+// package implementation embeds its Strict layer and overrides only the
+// answers owned by an adopted Community contract.
+func CommunityRuleSet() RuleSet {
+	return RuleSet{
+		Name:         CommunityRuleSetName,
+		Base:         gameplay.Community39,
+		Combat:       &combat.CommunityRules{},
+		Visibility:   visibility.CommunityRules{},
+		Orders:       &orders.CommunityRules{},
+		Construction: &construction.CommunityRules{},
+		UnitLimit:    StrictUnitLimit{},
+		ScriptPorts:  CommunityScriptPorts{},
+		Movement:     &movement.CommunityRules{},
 		Path:         path.RetailKernel{},
 		Planner:      ai.RetailPlanner{},
 	}
@@ -146,9 +173,11 @@ func ModernRuleSet() RuleSet {
 		Name:         ModernRuleSetName,
 		Base:         gameplay.Modern,
 		Combat:       &combat.ModernRules{},
+		Visibility:   visibility.ModernRules{},
 		Orders:       &orders.ModernRules{},
 		Construction: &construction.ModernRules{},
 		UnitLimit:    ModernUnitLimit{},
+		ScriptPorts:  ModernScriptPorts{},
 		Movement:     &movement.ModernRules{},
 		// The retail search is what Modern means for pathfinding too: no
 		// approved Modern policy touches how a route is found.
@@ -173,15 +202,19 @@ type ruleSetEntry struct {
 }
 
 // The registry. Reserved entries are seeded here so a lookup is one code path;
-// RegisterRuleSet refuses those two names, so nothing can replace them.
+// RegisterRuleSet refuses those three names, so nothing can replace them.
 //
 // ruleSets is only ever keyed, never ranged: iteration order of a Go map is
 // unspecified, and this package is authoritative [docs/INVARIANTS.md I1].
 // ruleSetOrder carries the sorted registered names for the listings, so every
 // diagnostic and every host menu sees one order.
 var (
-	ruleSetsMu   sync.Mutex
-	ruleSets     = map[string]*ruleSetEntry{StrictRuleSetName: {build: StrictRuleSet}, ModernRuleSetName: {build: ModernRuleSet}}
+	ruleSetsMu sync.Mutex
+	ruleSets   = map[string]*ruleSetEntry{
+		StrictRuleSetName:    {build: StrictRuleSet},
+		CommunityRuleSetName: {build: CommunityRuleSet},
+		ModernRuleSetName:    {build: ModernRuleSet},
+	}
 	ruleSetOrder []string
 )
 
@@ -208,8 +241,8 @@ func init() { gameplay.UseNameRegistry(ruleSetNameView{}) }
 // reporting, because a duplicate or reserved name is a build mistake that must
 // not survive to a running session:
 //
-//   - a reserved name would shadow Strict 3.1 or Modern, and every retail
-//     fingerprint and every Modern contract is written against those two;
+//   - a reserved name would shadow Strict 3.1, Community 3.9 or Modern, and
+//     every fingerprint and policy contract is written against those sets;
 //   - a duplicate name would make selection depend on link order.
 //
 // build is called at most once, the first time the name is selected, and its
@@ -219,8 +252,8 @@ func RegisterRuleSet(name string, build func() RuleSet) {
 	if name == "" || build == nil {
 		panic("nanolathe: rule set registration needs a name and a constructor: logical path <mods>, providers searched [session rule sets], expected a nonempty name")
 	}
-	if name == StrictRuleSetName || name == ModernRuleSetName {
-		panic("nanolathe: reserved rule set name " + name + ": logical path <mods>, providers searched [session rule sets], expected a name other than " + StrictRuleSetName + " or " + ModernRuleSetName)
+	if name == StrictRuleSetName || name == CommunityRuleSetName || name == ModernRuleSetName {
+		panic("nanolathe: reserved rule set name " + name + ": logical path <mods>, providers searched [session rule sets], expected a non-reserved name")
 	}
 	ruleSetsMu.Lock()
 	defer ruleSetsMu.Unlock()
@@ -249,15 +282,15 @@ func LookupRuleSet(name string) (RuleSet, bool) {
 	return entry.set, true
 }
 
-// RuleSetNames lists every selectable name: the two reserved sets first,
-// Modern's default before the retail baseline, then the registered names in
-// sorted order. Selection is by exact name, so this exists for diagnostics and
-// for a host that offers a choice.
+// RuleSetNames lists every selectable name: the three reserved sets first,
+// from the default down through its derivation layers, then the registered
+// names in sorted order. Selection is by exact name, so this exists for
+// diagnostics and for a host that offers a choice.
 func RuleSetNames() []string {
 	ruleSetsMu.Lock()
 	defer ruleSetsMu.Unlock()
-	names := make([]string, 0, 2+len(ruleSetOrder))
-	names = append(names, ModernRuleSetName, StrictRuleSetName)
+	names := make([]string, 0, 3+len(ruleSetOrder))
+	names = append(names, ModernRuleSetName, CommunityRuleSetName, StrictRuleSetName)
 	return append(names, ruleSetOrder...)
 }
 
@@ -271,8 +304,14 @@ func completeRuleSet(name string, set RuleSet) RuleSet {
 	set.Name = name
 	set.Base = reservedBase(set.Base)
 	base := ModernRuleSet()
-	if set.Base == gameplay.Strict31 {
+	switch set.Base {
+	case gameplay.Strict31:
 		base = StrictRuleSet()
+	case gameplay.Community39:
+		base = CommunityRuleSet()
+	}
+	if set.Visibility == nil {
+		set.Visibility = base.Visibility
 	}
 	if set.Combat == nil {
 		set.Combat = base.Combat
@@ -286,6 +325,9 @@ func completeRuleSet(name string, set RuleSet) RuleSet {
 	if set.UnitLimit == nil {
 		set.UnitLimit = base.UnitLimit
 	}
+	if set.ScriptPorts == nil {
+		set.ScriptPorts = base.ScriptPorts
+	}
 	if set.Movement == nil {
 		set.Movement = base.Movement
 	}
@@ -298,37 +340,42 @@ func completeRuleSet(name string, set RuleSet) RuleSet {
 	return set
 }
 
-// reservedBase reduces a declared base to one of the two reserved words. Only
-// those two have a documented strict-versus-modern meaning, and the zero value
-// is Modern, the default.
+// reservedBase reduces a declared base to one of the three reserved words. The
+// zero value remains Modern, the default.
 func reservedBase(mode gameplay.Mode) gameplay.Mode {
-	if mode == gameplay.Strict31 {
-		return gameplay.Strict31
+	switch mode {
+	case gameplay.Strict31, gameplay.Community39:
+		return mode
+	default:
+		return gameplay.Modern
 	}
-	return gameplay.Modern
 }
 
 // RuleSetForMode answers with the set a selection word names: a registered
 // name selects its own set, and anything else falls back the way the
-// vocabulary does, to Strict 3.1 for the retail word and to Modern otherwise.
+// vocabulary does, to its reserved set when named and to Modern otherwise.
 func RuleSetForMode(mode gameplay.Mode) RuleSet {
 	if set, ok := LookupRuleSet(string(mode)); ok {
 		return set
 	}
-	if mode == gameplay.Strict31 {
+	switch mode {
+	case gameplay.Strict31:
 		return StrictRuleSet()
+	case gameplay.Community39:
+		return CommunityRuleSet()
+	default:
+		return ModernRuleSet()
 	}
-	return ModernRuleSet()
 }
 
-// BaseModeOf answers strict-versus-modern for a selection word, so a host
-// control that offers only the two reserved sets can show which one a
-// third-party selection derives from.
+// BaseModeOf answers the reserved base for a selection word, so a host control
+// can show which of the three shipped layers a third-party selection derives
+// from.
 func BaseModeOf(mode gameplay.Mode) gameplay.Mode { return RuleSetForMode(mode).Base }
 
 // SetRules selects a set by name and binds it, and is the one entry that can
 // report an unknown name. The session then carries the set's base as its mode
-// word, because that is the answer every strict-versus-modern question needs;
+// word, because that is the reserved base every non-seam question needs;
 // the selected name stays on the bound set.
 func (s *Session) SetRules(name string) error {
 	if s == nil {
@@ -338,8 +385,13 @@ func (s *Session) SetRules(name string) error {
 	if !ok {
 		return fmt.Errorf("nanolathe: unknown gameplay rule set %q: logical path <session>, providers searched [session rule sets, mods], expected one of %s", name, strings.Join(RuleSetNames(), ", "))
 	}
+	features, err := resolveCommunity(set, s.CommunitySources)
+	if err != nil {
+		return err
+	}
 	s.Gameplay = set.Base
-	s.BindRules(set)
+	s.Community = features
+	s.bindRuleServices(set)
 	return nil
 }
 
@@ -359,7 +411,7 @@ func (s *Session) RebindRules() {
 		s.SetGameplay(s.Gameplay)
 		return
 	}
-	s.BindRules(s.Rules)
+	s.bindRuleServices(s.Rules)
 }
 
 // BindRules stores the set and projects each seam onto the service that asks
@@ -371,7 +423,20 @@ func (s *Session) BindRules(set RuleSet) {
 	if s == nil {
 		return
 	}
+	features, err := resolveCommunity(set, s.CommunitySources)
+	if err != nil {
+		panic(err)
+	}
+	s.Community = features
+	s.bindRuleServices(set)
+}
+
+func (s *Session) bindRuleServices(set RuleSet) {
 	s.Rules = set
+	s.projectCommunity()
+	if s.Vis != nil {
+		s.Vis.Rules = set.Visibility
+	}
 	if s.Combat != nil {
 		s.Combat.Rules = set.Combat
 	}

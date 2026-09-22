@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -22,8 +23,9 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
-	Gameplay    gameplay.Mode
-	GameplaySet bool
+	Gameplay          gameplay.Mode
+	GameplaySet       bool
+	GameplayOverrides []community.Overrides
 	// ContentProfile selects the mounted content set's directory table. The
 	// flag takes a shipped profile's name or the path of a profile JSON file;
 	// an omitted flag falls back to the saved preference and then to
@@ -148,7 +150,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.BoolVar(&opts.CheckInstall, "check-install", false, "validate selected content roots without opening a game window")
 	set.StringVar(&opts.SaveDir, "save-dir", "", "exact save/load directory (omitted uses savegame beneath the installation)")
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
-	set.IntVar(&opts.UnitLimit, "unit-limit", 0, "per-player skirmish unit limit (20..3276); omitted uses saved unitLimit, otherwise 1000")
+	set.IntVar(&opts.UnitLimit, "unit-limit", 0, "per-player skirmish unit setting (20..3276); omitted uses saved unitLimit or 1000; gameplay feature table may override it")
 	set.Int64Var(&opts.Seed, "seed", -1, "battle RNG seed for both streams; negative derives a pair from the clock")
 	set.BoolVar(&opts.Headless, "headless", false, "run a skirmish or mission without opening a window")
 	set.IntVar(&opts.Ticks, "ticks", 0, "headless authoritative tick limit (0 = until result or 18000 ticks)")
@@ -211,7 +213,14 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		opts.ContentProfile = text
 		return nil
 	})
-	set.Func("gameplay", "gameplay rule set: modern (default), strict-3.1, or a registered set's name (see mods/); omitted uses saved preference", func(text string) error {
+	set.Func("gameplay-feature", "community feature override name=value (repeatable; Strict ignores overrides)", func(text string) error {
+		v, err := community.ParseOverride(text)
+		if err == nil {
+			opts.GameplayOverrides = append(opts.GameplayOverrides, v)
+		}
+		return err
+	})
+	set.Func("gameplay", "gameplay rule set: modern (default), community-3.9, strict-3.1, or a registered set's name (see mods/); omitted uses saved preference", func(text string) error {
 		mode, err := gameplay.Parse(text)
 		opts.Gameplay = mode
 		return err

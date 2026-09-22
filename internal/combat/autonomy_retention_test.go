@@ -26,18 +26,18 @@ func TestShotTimeGateHasNoTargetSideClause(t *testing.T) {
 	// operand of the ballistic clause, never a clause of its own.
 	drowned := Vec3{X: numeric.FixedFromInt(50), Y: numeric.FixedFromInt(20), Z: 0}
 	direct := &content.WeaponDef{Range: 100, LineOfSight: true}
-	if !checkAdmission(shooter, direct, drowned, terrain) {
+	if !checkAdmission(nil, shooter, direct, drowned, terrain) {
 		t.Fatal("the shot-time gate applied a target-side sea-level clause [06 R-WPN-05 §9]")
 	}
 	// A ground/point target carries no Y at all, which the old merged form
 	// read as "at sea level" and refused for every non-water weapon.
-	if !checkAdmission(shooter, direct, Vec3{X: numeric.FixedFromInt(50)}, terrain) {
+	if !checkAdmission(nil, shooter, direct, Vec3{X: numeric.FixedFromInt(50)}, terrain) {
 		t.Fatal("a point target was refused by a target-side clause [06 R-WPN-05 §9]")
 	}
 	// A `toairweapon` against a point admits too: the mover-mode test is the
 	// installation gate's [06 R-WPN-05 §1] clause 3.
 	toAir := &content.WeaponDef{Range: 100, LineOfSight: true, ToAirWeapon: true}
-	if !checkAdmission(shooter, toAir, drowned, terrain) {
+	if !checkAdmission(nil, shooter, toAir, drowned, terrain) {
 		t.Fatal("the shot-time gate applied the toairweapon mover-mode clause [06 R-WPN-05 §9]")
 	}
 
@@ -45,16 +45,16 @@ func TestShotTimeGateHasNoTargetSideClause(t *testing.T) {
 	// strictly greater than the sea-level byte. 35 + 20 = 55 > 50 admits;
 	// 30 + 20 = 50 is not strictly greater and refuses.
 	shooter.Y = numeric.FixedFromInt(35)
-	if !checkAdmission(shooter, direct, drowned, terrain) {
+	if !checkAdmission(nil, shooter, direct, drowned, terrain) {
 		t.Fatal("the shooter clause dropped the model-top addend [06 R-WPN-05 §9]")
 	}
 	shooter.Y = numeric.FixedFromInt(30)
-	if checkAdmission(shooter, direct, drowned, terrain) {
+	if checkAdmission(nil, shooter, direct, drowned, terrain) {
 		t.Fatal("the shooter clause is strictly greater than sea level [06 R-WPN-05 §9]")
 	}
 	// A water weapon stops after clause 1 and admits the same submerged shooter.
 	water := &content.WeaponDef{Range: 100, LineOfSight: true, WaterWeapon: true}
-	if !checkAdmission(shooter, water, drowned, terrain) {
+	if !checkAdmission(nil, shooter, water, drowned, terrain) {
 		t.Fatal("a water weapon ran the shooter-side sea-level clause [06 R-WPN-05 §9]")
 	}
 }
@@ -68,11 +68,11 @@ func TestShotTimeRangeIsInclusiveAtEquality(t *testing.T) {
 	weapon := &content.WeaponDef{Range: 100, LineOfSight: true}
 
 	at := Vec3{X: numeric.FixedFromInt(100)}
-	if !checkAdmission(shooter, weapon, at, terrain) {
+	if !checkAdmission(nil, shooter, weapon, at, terrain) {
 		t.Fatal("a target at exactly range must be admitted — the compare is inclusive [06 §3.3]")
 	}
 	past := Vec3{X: numeric.FixedFromInt(101)}
-	if checkAdmission(shooter, weapon, past, terrain) {
+	if checkAdmission(nil, shooter, weapon, past, terrain) {
 		t.Fatal("a target one world unit past range was admitted")
 	}
 }

@@ -65,7 +65,21 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 			createdSparse[u.PlacementIdx] = u
 		}
 	}
-	if len(m.Units) == 0 {
+	RunInitialMissionsForCreated(m.Units, createdSparse, w, cat)
+}
+
+// RunInitialMissionsForCreated interprets one already-created placement pass.
+// The caller supplies the full authored placement slice and its equally-sized
+// sparse result array, so identifier and unit-name references retain placement
+// indices across failed allocations. It is used by the Community schema-unit
+// initial pass; the deferred queue never calls it
+// (research/extensions/community-patch-engine.md, CP-UD-3).
+//
+// Unlike RunInitialMissionsWithCatalog, this helper has no mission-type gate:
+// its caller owns the approved entry-path decision and the exactly-once
+// lifetime. Campaign and restore callers continue through the gated wrapper.
+func RunInitialMissionsForCreated(placements []UnitPlacement, createdSparse []*units.Unit, w *units.World, cat *content.Catalog) {
+	if w == nil || len(placements) == 0 || len(createdSparse) != len(placements) {
 		return
 	}
 	// Build ident->placementIdx and unitname->placementIdx maps for g/wa lookups
@@ -73,7 +87,7 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	// skipping NULL gaps [P0-06][P0-04] A27. Retail scans created[] directly.
 	identMap := make(map[string]int)    // lower(Ident) -> placementIdx
 	unitNameMap := make(map[string]int) // lower(UnitName) -> placementIdx
-	for i, pl := range m.Units {
+	for i, pl := range placements {
 		if createdSparse[i] == nil {
 			continue
 		}
@@ -101,7 +115,7 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	// Pass two interprets the placement's InitialMission text for every entry
 	// whose record carries a mission string and whose pass-one creation
 	// succeeded [P0-06].
-	for idx, placement := range m.Units {
+	for idx, placement := range placements {
 		u := createdSparse[idx]
 		if u == nil {
 			continue
@@ -124,7 +138,6 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 			identMap:      identMap,
 			unitNameMap:   unitNameMap,
 			attachPairs:   &attachPairs,
-			mission:       m,
 			catalog:       cat,
 			placementIdx:  idx,
 		}
@@ -182,8 +195,7 @@ type interpCtx struct {
 	createdSparse []*units.Unit // sparse P0-04/P0-06 created[placementIdx] [P0-04][P0-06]
 	identMap      map[string]int
 	unitNameMap   map[string]int
-	attachPairs   *[]attachPair // shared accumulator; see attachPair
-	mission       *Mission
+	attachPairs   *[]attachPair    // shared accumulator; see attachPair
 	catalog       *content.Catalog // production existence/building lookups [04 §3.6]
 	queued        int
 	suppressTail  bool

@@ -16,7 +16,7 @@ import (
 func statusCueFixture(owner uint8, alive, dying bool) (*Session, *units.Unit) {
 	s := &Session{
 		Clock:       &clock.State{GlobalTick: 41},
-		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
+		publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0),
 	}
 	s.LocalOwner = 0
 	u := &units.Unit{

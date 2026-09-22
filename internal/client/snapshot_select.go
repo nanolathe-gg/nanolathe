@@ -16,6 +16,9 @@ func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 	if f == nil {
 		return false
 	}
+	if v.DirectVisibilityKnown && viewer == f.ViewingPlayer {
+		return v.DirectlyVisible
+	}
 	var status uint32
 	if v.UnderwaterExempt {
 		status = visibility.SonarBit

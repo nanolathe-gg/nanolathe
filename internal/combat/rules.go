@@ -17,6 +17,38 @@ import (
 // draw from a stream it was not handed, so a bound rule set costs one indirect
 // call and no allocation per question [I4].
 type Rules interface {
+	// WeaponReloadTime derives the stored word at battle entry (CP-DMG-5).
+	WeaponReloadTime(s *Service, weapon *content.WeaponDef) int32
+	// AreaVictims enumerates one blast cell's unit selectors. The callback
+	// completes one recipient before the next selector is read, preserving the
+	// retail read-after-hit order; Community extends the selector set and
+	// Modern may lift only its overflow capacity.
+	AreaVictims(AreaVictimQuery, func(pool.Handle))
+	// AreaIndexTick eagerly rebuilds CP-DMG-1's tick-stamped footprint index at
+	// the session-owned authoritative boundary. Strict 3.1 is a no-op.
+	AreaIndexTick(AreaVictimQuery)
+	// OffMapAircraftMargin is the common selector for CP-ENV-1's three combat
+	// decisions. Zero preserves Strict 3.1; Community returns its projected
+	// table parameter in map cells.
+	OffMapAircraftMargin(*Service) int32
+	// TransportDeathEnabled gates CP-DMG-3 lifecycle capture under the selected
+	// rule set; DeathWeapon chooses the cause-specific explosion at death.
+	TransportDeathEnabled(bool) bool
+	DeathWeapon(DeathWeaponRequest) *content.WeaponDef
+	// VeteranLevel resolves the stored kill word through the selected gameplay
+	// policy. Unbounded is used only by consumers whose retail arithmetic has
+	// no five-tier cap.
+	VeteranLevel(VeteranLevelRequest) uint32
+	// VeteranLeadAdmitted resolves the one strict-comparison veterancy gate.
+	VeteranLeadAdmitted(VeteranRequest) bool
+	// VeteranSpreadDivisor resolves the accuracy divisor before its >1 gate.
+	VeteranSpreadDivisor(VeteranRequest) uint32
+	// CorpseVelocity may seed the placed feature's existing gravity integration.
+	CorpseVelocity(s *Service, position, velocity Vec3, terrain *world.Terrain) Vec3
+	// InterceptorCoverage tests the stored aim point against coverage.
+	InterceptorCoverage(s *Service, aim, origin Vec3, coverage int32) bool
+	// InterceptorRingRadius resolves the unscaled minimap radius at publication.
+	InterceptorRingRadius(s *Service, coverage int32) int32
 	// AutonomousSlot applies the policy to the existing maintenance admission.
 	AutonomousSlot(weapon *content.WeaponDef, ownerControlByte uint8) bool
 	// SelectTarget chooses among the existing registry query's contacts.
@@ -33,6 +65,24 @@ type Rules interface {
 	// Launched records only a successfully created projectile, never an aim.
 	Launched(s *Service, h pool.Handle, q *ShotQuery)
 
+	// AdmitTarget answers the shared unit-target medium and air gate before
+	// ballistic feasibility and range. StrictRules preserves the retail ladder;
+	// CommunityRules applies CP-WPN-1..3 when the session feature is enabled.
+	AdmitTarget(q TargetAdmission) bool
+	// SlotMayFire is asked after reload decrement and before aim-time work.
+	SlotMayFire(s *Service, u *units.Unit, weapon *content.WeaponDef, terrain *world.Terrain) bool
+	// DetonationBroadcast answers whether central impact should run the
+	// area-damage-and-broadcast call. The same answer drives map markers.
+	DetonationBroadcast(s *Service, p *Projectile, weapon *content.WeaponDef) bool
+	// GuidanceAdmitted answers the water-medium gate for a self-propelled
+	// projectile. preMotionY is the signed whole-world position word and sea is
+	// the map's zero-extended sea-level byte.
+	GuidanceAdmitted(s *Service, p *Projectile, weapon *content.WeaponDef, preMotionY int16, sea uint8) bool
+	// ShotTimeAdmitted answers the physical shot gate after a target point is
+	// resolved. Strict evaluates range, shooter medium and ballistic solution;
+	// Community may short-circuit the latter two clauses for CP-WPN-3.
+	ShotTimeAdmitted(q ShotTimeAdmission) bool
+
 	// AdmitShot reports whether one resolved fire attempt may launch.
 	// StrictRules returns true without work: retail admits the shot and never
 	// samples terrain [06 R-WPN-05 §1]. ModernRules runs the
@@ -48,6 +98,43 @@ type Rules interface {
 	// took on its own. StrictRules returns false: no retail weapon path reads
 	// the standing fire field [04 R-STANCE-01 §3].
 	HoldsFire(u *units.Unit, ordered bool) bool
+}
+
+// AreaVictimQuery is one cell visit in the shared area-damage walk. Rules must
+// not retain it or the callback [06 §9.3][CP-DMG-1].
+type AreaVictimQuery struct {
+	Service *Service
+	World   *units.World
+	Terrain *world.Terrain
+	Tick    uint32
+	CellX   int32
+	CellZ   int32
+}
+
+// ShotTimeAdmission is one request at the physical shot-time gate. Target is
+// a world point, so it deliberately carries no target-unit state. Rules must
+// not retain it [06 R-WPN-05 §9].
+type ShotTimeAdmission struct {
+	Service *Service
+	Shooter *units.Unit
+	Weapon  *content.WeaponDef
+	Target  Vec3
+	Terrain *world.Terrain
+}
+
+// TargetAdmission is one unit-to-unit target check at the shared boundary of
+// autonomous acquisition, damage reaction and order installation. Heights are
+// already truncated to the whole-world words the retail gate consumes.
+// Rules must not retain it.
+type TargetAdmission struct {
+	Service *Service
+	Weapon  *content.WeaponDef
+	Shooter TargetAdmissionEnd
+	Target  TargetAdmissionEnd
+	Sea     int32
+	// WaterWeapon and ToAir retain the value-only Acquisition fixture API when
+	// Weapon is nil. Authoritative requests carry Weapon, whose flags win.
+	WaterWeapon, ToAir bool
 }
 
 // ShotQuery is one resolved fire attempt put to Rules.AdmitShot. It carries
@@ -98,6 +185,88 @@ type ShotQuery struct {
 // Rules never allocates.
 type StrictRules struct{}
 
+// CommunityRules is the reserved Community 3.9 layer. It embeds StrictRules so
+// every unchanged answer remains retail's; Community contracts override only
+// the questions they own without changing the baseline or Modern's overrides.
+type CommunityRules struct{ StrictRules }
+
+// AreaVictims reads the two stock occupancy words in order. The first
+// callback returns before the second word is read, because damage may replace
+// either occupant during the visit [06 §9.3].
+func (StrictRules) AreaVictims(q AreaVictimQuery, visit func(pool.Handle)) {
+	if q.Terrain == nil || visit == nil {
+		return
+	}
+	cell := q.Terrain.PlotAt(q.CellX, q.CellZ)
+	if cell == nil {
+		return
+	}
+	if word := cell.OccupantA(); word > 0 {
+		visit(pool.Handle(word))
+	}
+	if word := cell.OccupantB(); word > 0 {
+		visit(pool.Handle(word))
+	}
+}
+
+func (StrictRules) AreaIndexTick(AreaVictimQuery) {}
+
+func (StrictRules) OffMapAircraftMargin(*Service) int32 { return 0 }
+
+// AreaVictims adds the source-defined six overflow selectors when CP-DMG-1
+// is enabled. Community retains the six-entry saturation limit.
+func (CommunityRules) AreaVictims(q AreaVictimQuery, visit func(pool.Handle)) {
+	communityAreaVictims(q, visit)
+}
+
+func (CommunityRules) AreaIndexTick(q AreaVictimQuery) {
+	if q.Service != nil && q.Service.Community.AreaDamageOverflow {
+		q.Service.ensureCommunityAreaIndex(q.World, q.Terrain, q.Tick, communityAreaOverflowSlots)
+	}
+}
+
+func (CommunityRules) OffMapAircraftMargin(s *Service) int32 {
+	if s == nil || s.Community.OffMapAircraftMarginTiles <= 0 {
+		return 0
+	}
+	return int32(s.Community.OffMapAircraftMarginTiles)
+}
+
+// VeteranLevelRequest is one veterancy-level lookup. Kills is already narrowed
+// to the unsigned stored word; rules must not retain the definition or request.
+type VeteranLevelRequest struct {
+	Service    *Service
+	Definition *content.UnitDef
+	Kills      uint16
+	Unbounded  bool
+}
+
+// VeteranRequest carries the same stored inputs for the lead and spread
+// consumers, whose answers are not levels.
+type VeteranRequest struct {
+	Service    *Service
+	Definition *content.UnitDef
+	Kills      uint16
+}
+
+// VeteranLevel is Strict 3.1's shared kill-word reader. The unbounded form is
+// the capture factor; every combat consumer asks for the bounded form.
+func (StrictRules) VeteranLevel(q VeteranLevelRequest) uint32 {
+	level := uint32(q.Kills) / 5
+	if !q.Unbounded && level > 5 {
+		level = 5
+	}
+	return level
+}
+
+// VeteranLeadAdmitted is retail's unique strict comparison: the sixth kill is
+// the first one that enables pre-fire lead [06 §3.3][06 R-DMG-01 §8].
+func (StrictRules) VeteranLeadAdmitted(q VeteranRequest) bool { return q.Kills > 5 }
+
+// VeteranSpreadDivisor is the retail accuracy divisor before the caller's
+// greater-than-one test [06 §4.4][06 R-WPN-03 §4].
+func (StrictRules) VeteranSpreadDivisor(q VeteranRequest) uint32 { return uint32(q.Kills) / 12 }
+
 // AdmitShot admits every resolved attempt. Retail's admission gate consults
 // range, medium and aim readiness and never samples terrain along the flight
 // path [06 R-WPN-05 §1].
@@ -108,6 +277,30 @@ func (StrictRules) AdmitShot(*ShotQuery) bool { return true }
 // and the auto-engage issuer, never a target already installed
 // [04 R-STANCE-01 §2] [04 R-STANCE-01 §3].
 func (StrictRules) HoldsFire(*units.Unit, bool) bool { return false }
+
+func (StrictRules) AdmitTarget(q TargetAdmission) bool {
+	waterWeapon, toAir := q.WaterWeapon, q.ToAir
+	if q.Weapon != nil {
+		waterWeapon, toAir = q.Weapon.WaterWeapon, q.Weapon.ToAirWeapon
+	}
+	return unitToUnitAdmitsBeforeRange(q.Shooter, q.Target, q.Sea, waterWeapon, toAir)
+}
+
+func (StrictRules) SlotMayFire(*Service, *units.Unit, *content.WeaponDef, *world.Terrain) bool {
+	return true
+}
+
+func (StrictRules) DetonationBroadcast(*Service, *Projectile, *content.WeaponDef) bool {
+	return true
+}
+
+func (StrictRules) GuidanceAdmitted(_ *Service, _ *Projectile, weapon *content.WeaponDef, preMotionY int16, sea uint8) bool {
+	return weapon != nil && (!weapon.WaterWeapon || int32(preMotionY) < int32(sea))
+}
+
+func (StrictRules) ShotTimeAdmitted(q ShotTimeAdmission) bool {
+	return strictShotTimeAdmits(q)
+}
 
 // strictRules is the shared retail answer handed back for an unbound service.
 // Holding the interface value in a package variable keeps the substitution off

@@ -75,6 +75,9 @@ func snapshotOrderViewsInto(dst []frame.OrderView, src []orders.SnapshotNode, ca
 		if cat != nil && n.BuildProduct != "" {
 			if def, ok := cat.Unit(n.BuildProduct); ok && def != nil {
 				footX, footZ = int8(def.FootprintX), int8(def.FootprintZ)
+				if n.BuildFacing&1 != 0 {
+					footX, footZ = footZ, footX
+				}
 			}
 		}
 		dst[i] = frame.OrderView{
@@ -87,7 +90,8 @@ func snapshotOrderViewsInto(dst []frame.OrderView, src []orders.SnapshotNode, ca
 			Satisfied: n.Satisfied, PathStatus: n.PathStatus,
 			Param1: n.Param1, Param2: n.Param2, Param3: n.Param3,
 			BuildProduct: n.BuildProduct, BuildCount: n.BuildCount,
-			FootX: footX, FootZ: footZ, RouteTruncated: n.RouteTruncated,
+			BuildFacing: uint8(n.BuildFacing),
+			FootX:       footX, FootZ: footZ, RouteTruncated: n.RouteTruncated,
 			Route: route[:0],
 		}
 		for _, p := range n.Route {

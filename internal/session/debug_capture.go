@@ -17,6 +17,10 @@ func (s *Session) DebugSnapshot() map[string]any {
 	d := map[string]any{"pending_human_commands": s.PendingHumanCommands(), "state": s.State,
 		"pending_battle":           s.pendingBattle,
 		"gameplay":                 s.Gameplay.Normalize(),
+		"gameplay_features":        s.Community,
+		"entry_gameplay_features":  s.EntryCommunity,
+		"gameplay_features_digest": s.Community.Digest(),
+		"schema_spawn_attempts":    append([]string(nil), s.communitySchema.diagnostics...),
 		"rules":                    s.Rules.Name,
 		"rng_sim_state":            s.rngSim.State,
 		"rng_crt_state":            s.rngCrt.State,
@@ -38,6 +42,9 @@ func (s *Session) DebugSnapshot() map[string]any {
 		"meteor":                   s.Meteor,
 		"phase_trace":              append([]string(nil), s.phaseTrace...),
 		"phase_draw_trace":         append([]PhaseDrawDelta(nil), s.phaseDrawTrace...)}
+	if s.Combat != nil {
+		d["area_damage_saturations"] = s.Combat.CommunityAreaSaturations()
+	}
 	if s.Clock != nil {
 		c := *s.Clock
 		d["clock"] = &c
@@ -54,6 +61,9 @@ func (s *Session) DebugSnapshot() map[string]any {
 	result.Winners = append([]int(nil), s.result.Winners...)
 	result.Scores = append([]frame.ResultScore(nil), s.result.Scores...)
 	d["result"] = result
+	if s.Build != nil {
+		d["repair_bank_fallbacks"] = s.Build.RepairBankFallbacks
+	}
 	if s.Econ != nil {
 		d["economy"] = s.Econ.ParitySnapshot(s.Units)
 	}

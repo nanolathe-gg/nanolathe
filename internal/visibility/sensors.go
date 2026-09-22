@@ -201,15 +201,16 @@ func (s *Service) sensorCandidates(source *SensorUnit, radius int32) []int {
 // The phase writes neither visibility grid, and it consumes no random draws
 // [R-VIS-01 §4] "Ordering and outputs", "Random draws".
 //
-// No pass consults an alliance row. Pass 1's allied disjunct cannot fire in
-// retail — [R-VIS-01 §7] establishes that no writer anywhere sets the option
-// bit it gates on — so an ally's radar contact never appears on the viewer's
-// minimap and an ally's units are not exempted from the underwater rejection on
-// the viewer's behalf. Pass 4 used to take an alliance predicate to separate
-// hostiles from friends in a live-unit scan; it no longer scans, because
-// hostility was settled once, for the whole side, when that side's target
-// registry was rebuilt [06 §3.1], and the pass reads the resulting membership
-// off SensorUnit.PrimaryCandidateOf (WU-19-210).
+// Under Strict, no pass consults an alliance row. Pass 1's allied disjunct
+// cannot fire in retail — [R-VIS-01 §7] establishes that no writer anywhere
+// sets the option bit it gates on — so an ally's radar contact never appears on
+// the viewer's minimap and an ally's units are not exempted from the underwater
+// rejection on the viewer's behalf. Community CP-FIX-6 changes only pass 3:
+// its rule may exempt an allied jammer. Pass 4 used to take an alliance
+// predicate to separate hostiles from friends in a live-unit scan; it no longer
+// scans, because hostility was settled once, for the whole side, when that
+// side's target registry was rebuilt [06 §3.1], and the pass reads the
+// resulting membership off SensorUnit.PrimaryCandidateOf (WU-19-210).
 func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	if s == nil {
 		return
@@ -323,12 +324,14 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		}
 	}
 
-	// Pass 3 — jam emission from every active unit the viewing player does not
-	// own. The jam callbacks apply no owner, alliance or stealth test, so they
-	// reach friend and foe alike including the jammer's own side [R-VIS-01 §5].
+	// Pass 3 — under Strict, jam emission comes from every active unit the
+	// viewing player does not own. The retail callbacks apply no alliance or
+	// stealth test, so they reach friend and foe alike including the jammer's
+	// own side [R-VIS-01 §5]. Community CP-FIX-6 asks the bound rule once per
+	// actual jammer and skips both callbacks when its owner is allied.
 	for i := range units {
 		e := &units[i]
-		if !e.Alive || e.Owner == s.local || !e.Active {
+		if !e.Alive || !e.Active || (e.RadarJam == 0 && e.SonarJam == 0) || !s.rules().JammerSuppresses(s, s.local, e.Owner) {
 			continue
 		}
 		if e.RadarJam != 0 {

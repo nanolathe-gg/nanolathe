@@ -17,8 +17,21 @@ const underwaterExempt uint32 = 0x200
 // TargetFromBounds for units. The extents are the definition's full signed
 // bounding spans, also 16.16 [06 §3.1][03 §3.2].
 type Target struct {
+	UnitID  uint16
 	Owner   PlayerID
 	X, Y, Z numeric.Fixed
+
+	// Community off-map visibility uses the unit origin before TargetFromBounds
+	// applies the hull offset. OffMap is the movement overlap filing's bucket
+	// identity, not the flight integrator's vertical-bypass state. FootprintX/Z
+	// and sizes are the unit's cached occupancy stamp [community patch engine
+	// behavior CP-ENV-1(a)].
+	OriginX, OriginY, OriginZ numeric.Fixed
+	Flying                    bool
+	OffMap                    bool
+	FootprintX, FootprintZ    int32
+	FootprintSizeX            int32
+	FootprintSizeZ            int32
 
 	// XExtent, YExtent and ZExtent are the three hull deltas of [03 §3.2]
 	// step 5. They are three separate definition fields: YExtent is the height
@@ -62,9 +75,115 @@ func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	if s == nil {
 		return false
 	}
+	return s.rules().Visible(s, viewer, t)
+}
+
+// strictVisible is the retail unit predicate selected by StrictRules and the
+// fallback of every community request the extension does not own.
+func (s *Service) strictVisible(viewer PlayerID, t Target) bool {
+	if s == nil {
+		return false
+	}
 	return t.IsVisible(viewer, s.seaLevelWorld(), func(x, y, z numeric.Fixed) bool {
 		return s.sample(viewer, x, y, z)
 	})
+}
+
+// communityVisible preserves the first two retail gates, then either delegates
+// the whole remaining request to retail or substitutes the nearest-cell answer
+// for a qualifying aircraft [community patch engine behavior CP-ENV-1(a)].
+func (s *Service) communityVisible(viewer PlayerID, t Target) bool {
+	if !validPlayer(viewer) || !validPlayer(t.Owner) {
+		return false
+	}
+	if viewer == t.Owner {
+		return true
+	}
+	if t.Hidden {
+		return false
+	}
+	if t.UnitID != 0 && s.Community.OffMap != nil {
+		t.OffMap = s.Community.OffMap(t.UnitID)
+	}
+	if !t.Flying || (!t.OffMap && !s.originProjectionOutside(t)) || !s.footprintWithinCommunityMargin(t) {
+		return s.strictVisible(viewer, t)
+	}
+	return s.sampleClampedOrigin(viewer, t.OriginX, t.OriginY, t.OriginZ)
+}
+
+// originPixel keeps the extension's full signed world-pixel component. This
+// request is formed from a live unit origin and does not apply the retail
+// predicate's signed-16-bit hull-coordinate narrowing [community patch engine
+// behavior CP-ENV-1(a)].
+func originPixel(v numeric.Fixed) int64 { return int64(int32(v)) >> 16 }
+
+func (s *Service) originProjectionOutside(t Target) bool {
+	if s == nil || s.W <= 0 || s.H <= 0 {
+		return false
+	}
+	col := originPixel(t.OriginX) >> 5
+	row := (originPixel(t.OriginZ) - (originPixel(t.OriginY) >> 1)) >> 5
+	return col < 0 || col >= int64(s.W) || row < 0 || row >= int64(s.H)
+}
+
+// footprintWithinCommunityMargin measures Chebyshev tile distance from the
+// cached whole stamp to the map rectangle. A partially overlapping stamp has
+// distance zero [community patch engine behavior CP-ENV-1(a)].
+func (s *Service) footprintWithinCommunityMargin(t Target) bool {
+	if s == nil || s.terrain == nil || s.Community.OffMapAircraftMarginTiles <= 0 {
+		return false
+	}
+	lastX := int64(s.terrain.CellW) - 1
+	lastZ := int64(s.terrain.CellH) - 1
+	x0, z0 := int64(t.FootprintX), int64(t.FootprintZ)
+	x1 := x0 + int64(t.FootprintSizeX) - 1
+	z1 := z0 + int64(t.FootprintSizeZ) - 1
+	dx := int64(0)
+	if x1 < 0 {
+		dx = -x1
+	} else if x0 > lastX {
+		dx = x0 - lastX
+	}
+	dz := int64(0)
+	if z1 < 0 {
+		dz = -z1
+	} else if z0 > lastZ {
+		dz = z0 - lastZ
+	}
+	if dz > dx {
+		dx = dz
+	}
+	return dx <= int64(s.Community.OffMapAircraftMarginTiles)
+}
+
+func (s *Service) sampleClampedOrigin(viewer PlayerID, x, y, z numeric.Fixed) bool {
+	if s == nil || !validPlayer(viewer) || s.W <= 0 || s.H <= 0 {
+		return false
+	}
+	col := originPixel(x) >> 5
+	row := (originPixel(z) - (originPixel(y) >> 1)) >> 5
+	if row < 0 || row >= int64(s.H) {
+		trueRow := originPixel(z) >> 5
+		if trueRow >= 0 && trueRow < int64(s.H) {
+			row = trueRow
+		}
+	}
+	if col < 0 {
+		col = 0
+	} else if col >= int64(s.W) {
+		col = int64(s.W) - 1
+	}
+	if row < 0 {
+		row = 0
+	} else if row >= int64(s.H) {
+		row = int64(s.H) - 1
+	}
+	idx := int(row*int64(s.W) + col)
+	if s.mode&ModeCurrentEnabled != 0 {
+		grid := s.byteGrids[viewer]
+		return grid != nil && grid[idx] != 0
+	}
+	return s.wordMask[idx]&cellBit(s.local) != 0
 }
 
 // IsVisible applies the same ordered gameplay gate to live or committed hull

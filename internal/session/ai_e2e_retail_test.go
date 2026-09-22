@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -72,6 +73,14 @@ func aiE2ESkirmish(t *testing.T, mapName string, seed uint32) *Session {
 // rather than inheriting the default.
 func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) *Session {
 	t.Helper()
+	return aiE2ESkirmishAtMode(t, mapName, seed, difficulty, "")
+}
+
+// aiE2ESkirmishAtMode selects a mode for a fixture whose cited contract needs
+// an explicit baseline. Most callers retain the product default through the
+// empty mode passed by aiE2ESkirmishAt.
+func aiE2ESkirmishAtMode(t *testing.T, mapName string, seed uint32, difficulty int, mode gameplay.Mode) *Session {
+	t.Helper()
 	// The catalog is read-only from here: NewSkirmishWithProgress validates it
 	// and copies definitions into the session/unit pool, it never writes back
 	// into the compiled catalog. Every subtest and every WU-19-107/-115 rally
@@ -80,6 +89,7 @@ func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) 
 	cat, fs := retailcat.Shared(t)
 	cfg := DirectSkirmishConfig(mapName)
 	cfg.ApplyDefaults()
+	cfg.Gameplay = mode
 	cfg.Difficulty = difficulty
 	cfg.RNGSimSeed = seed
 	cfg.RNGCrtSeed = seed
@@ -248,7 +258,10 @@ func idleHumanEliminationRetail(t *testing.T, difficulty int) {
 // [08 R-P0-04 §3 "Wave merge"][08 R-AI-01 §4]. When the long test above fails,
 // this one says whether the classifier or the engagement is at fault.
 func TestComputerPlayerFormsAnAttackWaveRetail(t *testing.T) {
-	sess := aiE2ESkirmish(t, "ashap plateau", aiE2ESeed)
+	// The 24000-tick bound was established with retail's entry path allowance
+	// and unit-limit divisor. Community and Modern intentionally replace both
+	// parameters [DESIGN_COMMUNITY_PATCH §4.1].
+	sess := aiE2ESkirmishAtMode(t, "ashap plateau", aiE2ESeed, SkirmishDefaultDifficulty, gameplay.Strict31)
 	manager := sess.AI[1]
 	if manager == nil {
 		t.Fatal("the computer slot composed without a manager")

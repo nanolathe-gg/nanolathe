@@ -24,6 +24,11 @@ type paletteActivationContext struct {
 	paged    bool
 	selected *content.UnitDef
 	catalog  *content.Catalog
+	// pointerActivation distinguishes a button release from a quickkey. The
+	// pointer coordinates may select a CP-CON-5 edge facing; a quickkey must
+	// retain the cursor's previous facing even when the mouse rests on an edge.
+	pointerActivation  bool
+	pointerX, pointerY int32
 }
 
 func (h *retailBattleHUD) paletteContext(b *battleSession) (paletteActivationContext, bool) {
@@ -142,7 +147,9 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 		frame.AltHeld = in.Kbd.KeyHeld(input.KeyAlt)
 	}
 	wasCaptured := p.CaptureIndex() >= 0
-	result = p.ServiceFrame(frame, ui.WidgetHooks{ArtFrames: func(index int) int {
+	result = p.ServiceFrame(frame, ui.WidgetHooks{PreserveActiveToggle: func(index, status int) bool {
+		return b.sess.PreservePreparedBuildToggle(b.battleState().Latch() == input.LatchMobileBuild, uint8(status))
+	}, ArtFrames: func(index int) int {
 		if index < 0 || index >= len(ctx.window.Gadgets) {
 			return 0
 		}
@@ -156,6 +163,11 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 		in.DiscardTokens(result.ConsumedTokens)
 	}
 	if result.Fired {
+		if result.FiredButton != 0 {
+			pointer, _ := in.PointerSample()
+			ctx.pointerActivation = true
+			ctx.pointerX, ctx.pointerY = int32(pointer.X), int32(pointer.Y)
+		}
 		modifiers := input.Modifiers{Alt: frame.AltHeld}
 		if in.Kbd != nil {
 			modifiers.Shift = in.Kbd.HasShift()
@@ -280,6 +292,12 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 			}
 			if rightClick {
 				return true
+			}
+			// The edge gesture is a pointer-only preselection. A centre click and
+			// every keyboard accelerator take the ordinary arm path while keeping
+			// the retained facing (community patch engine CP-CON-5).
+			if ctx.pointerActivation {
+				h.selectCommunityRotationMenuFacing(b, ctx.window, index, product, ctx.pointerX, ctx.pointerY)
 			}
 			b.armPlacement(product)
 			b.playUICue(nil, cueAddBuild)

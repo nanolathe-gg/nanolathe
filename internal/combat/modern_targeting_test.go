@@ -141,7 +141,7 @@ func TestModernIncomingEffectiveDamageETAAndIdentity(t *testing.T) {
 
 func modernTargetQuery(s *Service, w *units.World, terrain *world.Terrain, shooter *units.Unit, targets ...*units.Unit) TargetQuery {
 	q := TargetQuery{Shooter: shooter, Slot: shooter.SlotAt(0), Index: 0, World: w, Terrain: terrain}
-	q.Acquisition = slotAcquisition(shooter, q.Slot, 0, w, nil, terrain, nil, nil, 0, -1)
+	q.Acquisition = slotAcquisition(s, shooter, q.Slot, 0, w, nil, terrain, nil, nil, 0, -1)
 	for _, target := range targets {
 		q.Candidates = append(q.Candidates, acquisitionCandidate(shooter, target, 0, target.Flags, nil))
 	}

@@ -437,7 +437,7 @@ func TestSnapshotPublishFailurePreservesStagedEvents(t *testing.T) {
 	if !c.EmitImpact(frame.Event{Tick: 4, Graphic: "pending"}) {
 		t.Fatal("admit event")
 	}
-	s := &Session{Snapshot: frame.NewBuffer(), publication: newPublicationState(c)}
+	s := &Session{Snapshot: frame.NewBuffer(), publication: newPublicationState(c, 0)}
 	s.publishSnapshot(4)
 	if !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "must-remain"}) {
 		t.Fatal("admit duplicate-tick event")
@@ -468,7 +468,7 @@ func TestSnapshotPublishFailurePreservesStagedEvents(t *testing.T) {
 
 func TestSnapshotWarmPublicationReusesFrameStorage(t *testing.T) {
 	c := frame.NewEventBuffer(frame.Limits{MaxEvents: 2, MaxEffectEvents: 2})
-	s := &Session{Snapshot: frame.NewBuffer(), publication: newPublicationState(c)}
+	s := &Session{Snapshot: frame.NewBuffer(), publication: newPublicationState(c, 0)}
 	for tick := uint32(1); tick <= 3; tick++ {
 		if !c.EmitExplosion(frame.Event{Tick: tick, Graphic: "steady"}) {
 			t.Fatal("warm event admission")
@@ -564,7 +564,7 @@ func TestSnapshotPublishesEventsInAdmissionOrderExactlyOnce(t *testing.T) {
 	if !c.EmitImpact(frame.Event{Tick: 4, Graphic: "first"}) || !c.EmitExplosion(frame.Event{Tick: 4, Graphic: "second"}) {
 		t.Fatal("admit presentation events")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c, 0)}
 	s.publication.effects.Advance(4, c.StagingEvents())
 	s.publishSnapshot(4)
 	first := s.Snapshot.Current()
@@ -592,7 +592,7 @@ func TestSnapshotPublishesActiveEffectsFromOrderedEvents(t *testing.T) {
 	}) {
 		t.Fatal("admit nanolathe event")
 	}
-	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c)}
+	s := &Session{Snapshot: &frame.Buffer{}, publication: newPublicationState(c, 0)}
 	s.publication.effects.Advance(4, c.StagingEvents())
 	s.publishSnapshot(4)
 	frame := s.Snapshot.Current()

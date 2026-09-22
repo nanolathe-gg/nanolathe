@@ -408,6 +408,11 @@ type Unit struct {
 	SightCellZ       int16
 	FootprintSizeX   int16
 	FootprintSizeZ   int16
+	// StructureFacing is derived creation geometry. Move.Heading remains the
+	// persistent representation; save restore recomputes this value through
+	// the selected construction rules before allocation [community patch
+	// engine behavior, CP-CON-5].
+	StructureFacing StructureFacing
 	// RevealDeadline is the ONE shared reveal/cloak-suppression deadline tick.
 	// Retail has a single field here and every producer writes it outright — a
 	// later write always wins and no maximum is taken [03 R-VIS-01 §6]:
@@ -1320,10 +1325,12 @@ func (w *World) SetSimulationRNG(sim *rng.Simulation) {
 // initializeAllocationFootprint retains the common initializer's origin and
 // dimensions before scripts or movement initialization. Death can read these
 // even without a mover [04 R-ORD-01 §1][05 R-FEAT-01 §13].
-func initializeAllocationFootprint(u *Unit) {
-	anchorX, anchorZ := world.PlacementAnchor(u.X, u.Z, u.Def.FootprintX, u.Def.FootprintZ)
+func initializeAllocationFootprint(u *Unit, facing StructureFacing) {
+	footX, footZ := OrientedFootprint(u.Def, facing)
+	anchorX, anchorZ := world.PlacementAnchor(u.X, u.Z, footX, footZ)
 	u.CachedOccupancyX, u.CachedOccupancyZ = int16(anchorX), int16(anchorZ)
-	u.FootprintSizeX, u.FootprintSizeZ = int16(u.Def.FootprintX), int16(u.Def.FootprintZ)
+	u.FootprintSizeX, u.FootprintSizeZ = int16(footX), int16(footZ)
+	u.StructureFacing = facing & 3
 }
 
 // initializeAllocationHeading performs the two common-initializer RNG
@@ -1636,7 +1643,14 @@ const NeutralAttackerSide uint8 = 10
 // `Activate` script. Callers building an unfinished frame must therefore say so
 // up front, through CreateNanoframe.
 func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
-	return w.create(def, owner, x, y, z, true, CreatedMoverMode)
+	return w.create(def, owner, x, y, z, true, CreatedMoverMode, FacingSouth)
+}
+
+// CreateFacing is Create with Community structure geometry selected before
+// COB Create and the initial occupancy stamp. The facing adds to the ordinary
+// allocator heading; a script turn during Create remains authoritative.
+func (w *World) CreateFacing(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, facing StructureFacing) (pool.Handle, error) {
+	return w.create(def, owner, x, y, z, true, CreatedMoverMode, facing)
 }
 
 // CreateWithMoverMode is the already-built creator with its caller-supplied
@@ -1646,7 +1660,15 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 // placement remains Create and therefore retains the grounded input
 // [05 R-WORK-01 §15].
 func (w *World) CreateWithMoverMode(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, moverMode uint8) (pool.Handle, error) {
-	return w.create(def, owner, x, y, z, true, moverMode)
+	return w.CreateWithMoverModeFacing(def, owner, x, y, z, moverMode, FacingSouth)
+}
+
+// CreateWithMoverModeFacing is the ownership-transfer creator with both the
+// victim's mover mode and its rule-selected structure geometry installed before
+// COB Create and the initial occupancy stamp. The caller copies the exact
+// orientation triple after creation, as on the ordinary capture path.
+func (w *World) CreateWithMoverModeFacing(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, moverMode uint8, facing StructureFacing) (pool.Handle, error) {
+	return w.create(def, owner, x, y, z, true, moverMode, facing)
 }
 
 // CreateNanoframe allocates a unit record that is NOT created already-built:
@@ -1659,10 +1681,16 @@ func (w *World) CreateWithMoverMode(def *content.UnitDef, owner uint8, x, y, z n
 // The caller still demotes the record's construction state (remaining fraction
 // and health); this entry point owns only the activation half.
 func (w *World) CreateNanoframe(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
-	return w.create(def, owner, x, y, z, false, CreatedMoverMode)
+	return w.create(def, owner, x, y, z, false, CreatedMoverMode, FacingSouth)
 }
 
-func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, alreadyBuilt bool, moverMode uint8) (pool.Handle, error) {
+// CreateNanoframeFacing is the oriented unfinished-unit creator. FacingSouth
+// is byte-for-byte the ordinary retail path.
+func (w *World) CreateNanoframeFacing(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, facing StructureFacing) (pool.Handle, error) {
+	return w.create(def, owner, x, y, z, false, CreatedMoverMode, facing)
+}
+
+func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, alreadyBuilt bool, moverMode uint8, facing StructureFacing) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
 	}
@@ -1743,10 +1771,11 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		// [06 R-WPN-04 §2].
 		LastDamageSide: NeutralAttackerSide,
 	}
-	initializeAllocationFootprint(u)
+	initializeAllocationFootprint(u, facing)
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions into Slots [P0-I04]
 	u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
 	w.initializeAllocationHeading(u, def)
+	u.Move.Heading = HeadingWithFacing(u.Move.Heading, facing)
 	w.units[idx] = u
 	w.rawUnits[idx] = u
 	if err := w.attachCOB(u); err != nil {
@@ -1975,6 +2004,18 @@ func composedPieceZ(u *Unit, binding *cob.Binding, piece int32) (numeric.Fixed, 
 // this path for active in-battle restoration; later fix-up passes restore the
 // remaining saved unit state.
 func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, forced pool.Handle) (pool.Handle, error) {
+	return w.createWithForcedSlotFacing(def, owner, x, y, z, forced, FacingSouth)
+}
+
+// CreateWithForcedSlotFacing rebuilds derived rotated geometry before the
+// restore binder and initial stamp. The caller still restores the exact saved
+// heading afterward; this method consumes the same two allocator draws as the
+// ordinary forced-slot path.
+func (w *World) CreateWithForcedSlotFacing(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, forced pool.Handle, facing StructureFacing) (pool.Handle, error) {
+	return w.createWithForcedSlotFacing(def, owner, x, y, z, forced, facing)
+}
+
+func (w *World) createWithForcedSlotFacing(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, forced pool.Handle, facing StructureFacing) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
 	}
@@ -2035,10 +2076,11 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		// stands.
 		LastDamageSide: NeutralAttackerSide,
 	}
-	initializeAllocationFootprint(u)
+	initializeAllocationFootprint(u, facing)
 	installWeapons(u, def) // [06 §1.2] wire Weapon1/2/3 definitions [P0-I04]
 	u.InitEconomyState()   // [P1-I04]
 	w.initializeAllocationHeading(u, def)
+	u.Move.Heading = HeadingWithFacing(u.Move.Heading, facing)
 	w.units[idx] = u
 	w.rawUnits[idx] = u
 	if err := w.attachCOB(u); err != nil {
@@ -2252,15 +2294,16 @@ func (w *World) FreeNeverCreated(h pool.Handle) {
 }
 
 // retainedRawRecord copies the raw slot fields that survive a free and are
-// consumed by death-packet reconstruction. Keeping this small value rather
-// than the freed Unit releases its per-unit VM, order queue, and render state
-// for collection while preserving the stale slot's owner and wrapping kill
-// word [P0-16][06 R-DMG-01 §2].
+// consumed by raw-slot readers. Keeping this small value rather than the freed
+// Unit releases its per-unit VM, order queue, and render state for collection
+// while preserving the stale slot's owner, wrapping kill word, and remaining
+// build fraction [P0-16][06 R-DMG-01 §2]
+// [research/extensions/script-ports.md "Boundary behavior"].
 func retainedRawRecord(u *Unit) *Unit {
 	if u == nil {
 		return nil
 	}
-	return &Unit{Handle: u.Handle, Owner: u.Owner, Kills: u.Kills}
+	return &Unit{Handle: u.Handle, Owner: u.Owner, Kills: u.Kills, Remaining: u.Remaining}
 }
 
 // unlinkAttachmentsForFree drops a record out of the carried representation
@@ -2367,10 +2410,11 @@ func (w *World) Unit(h pool.Handle) *Unit {
 
 // RawUnitRecord returns the record visible at a nonzero raw slot without
 // applying Unit's live/alive validation. A live slot returns its Unit; a freed
-// slot returns the retained slot, owner, and kill word until allocation
-// overwrites it. Thus a stale slot aliases the new occupant without a
-// generation check. Death packet reconstruction uses this view for its
-// recorded attacker [P0-16][06 §12.1].
+// slot returns the retained slot, owner, kill word, and remaining-build
+// fraction until allocation overwrites it. Thus a stale slot aliases the new
+// occupant without a generation check. Death packet reconstruction and the
+// adopted Community script ports use this view [P0-16][06 §12.1]
+// [research/extensions/script-ports.md "Boundary behavior"].
 func (w *World) RawUnitRecord(h pool.Handle) *Unit {
 	if w == nil || h == 0 {
 		return nil

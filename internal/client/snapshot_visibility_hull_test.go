@@ -75,3 +75,19 @@ func TestSnapshotVisibilityHullMatchesDirectGate(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotVisibilityUsesCommittedRuleAnswer(t *testing.T) {
+	f := &frame.Frame{ViewingPlayer: 2}
+	v := frame.UnitView{Owner: 1, X: -16 << 16, DirectVisibilityKnown: true, DirectlyVisible: true}
+	if !SnapshotVisible(f, v, 2) {
+		t.Fatal("discarded the committed border-aircraft answer")
+	}
+	v.DirectlyVisible = false
+	if SnapshotVisible(f, v, 2) {
+		t.Fatal("ignored the committed hidden answer")
+	}
+	v.DirectlyVisible = true
+	if SnapshotVisible(f, v, 3) {
+		t.Fatal("used another viewing player's visibility answer")
+	}
+}

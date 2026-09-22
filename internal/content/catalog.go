@@ -315,7 +315,7 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 
 	// Stage 2: link cross-references so enumeration order cannot leak into identity [02 §5] C1.
 	// weapon1..3 on a unit resolve only after all weapons compile.
-	linkUnitWeaponRecords(records, weapons)
+	unitWeaponWarnings := linkUnitWeaponRecords(records, weapons)
 	// Feature successors already linked inside CompileFeatures via LinkFeatureSuccessors [GAP T14] C9.
 	// Build menus [02 "Build-menu catalog keys"]: the pages live in
 	// gamedata/sidedata.tdf next to the sides. They must exist before the
@@ -332,6 +332,7 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 	// inside applyDownloadRecordMenus.
 	warnings := append([]string(nil), unitResult.warnings...)
 	warnings = append(warnings, mapWarnings...)
+	warnings = append(warnings, unitWeaponWarnings...)
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelRecordCatalog(records)
@@ -781,6 +782,8 @@ func (c *Catalog) Clone() *Catalog {
 		out.rewireWeaponLink(u.Weapon3, &u.Weapon3Def)
 		out.rewireWeaponLink(u.ExplodeAs, &u.ExplodeAsDef)
 		out.rewireWeaponLink(u.SelfDestructAs, &u.SelfDestructAsDef)
+		out.rewireOptionalWeaponLink(u.TransportedExplodeAs, &u.TransportedExplodeAsDef)
+		out.rewireOptionalWeaponLink(u.TransportedSelfDestructAs, &u.TransportedSelfDestructAsDef)
 	}
 	// Features deep copy without successors then rewire
 	if c.Features != nil {
@@ -1156,12 +1159,25 @@ func (c *Catalog) rewireWeaponLink(name string, slot **WeaponDef) {
 	}
 }
 
+// rewireOptionalWeaponLink preserves the extension override's empty-on-miss
+// policy; unlike retail weapon links it never substitutes record 0.
+func (c *Catalog) rewireOptionalWeaponLink(name string, slot **WeaponDef) {
+	*slot = nil
+	if name == "" {
+		return
+	}
+	if w, ok := c.Weapons[CanonicalKey(name)]; ok {
+		*slot = w
+	}
+}
+
 // cloneUnit deep copies a UnitDef without weapon link pointers (rewired in Clone).
 func cloneUnit(u *UnitDef) *UnitDef {
 	if u == nil {
 		return nil
 	}
 	out := *u
+	out.VeterancyThresholds = append([]uint32(nil), u.VeterancyThresholds...)
 	// DefinitionHeader is value copy (strings + Provenance struct)
 	if u.Unknown != nil {
 		out.Unknown = make(map[string]string, len(u.Unknown))
@@ -1175,6 +1191,8 @@ func cloneUnit(u *UnitDef) *UnitDef {
 	out.Weapon3Def = nil
 	out.ExplodeAsDef = nil
 	out.SelfDestructAsDef = nil
+	out.TransportedExplodeAsDef = nil
+	out.TransportedSelfDestructAsDef = nil
 	return &out
 }
 

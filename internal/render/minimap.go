@@ -521,7 +521,7 @@ func rebuildFinalExactInto(dst, mapped *RadarSurface, m camera.Minimap, playW, p
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
-		r := RadarRadius(c.RingRange-512, m.W, playW)
+		r := RadarRadius(c.RingRange, m.W, playW)
 		if r > 0 {
 			if c.RingDashed {
 				drawDashedCircle(final, int(rx), int(ry), int(r), ringColor, blink.Phase&1 != 0)

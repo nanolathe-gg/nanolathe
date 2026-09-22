@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -54,40 +55,121 @@ func FeatureNameToDefName(featureName string) string {
 // phase 5 draws no randomness at all [05 "Resurrection"]. The `sim` parameter
 // is kept for call-site stability (phase 1's approach draw is a separate
 // concern, owned by internal/orders) but this function no longer uses it.
-func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, def *content.UnitDef, posX, posY, posZ numeric.Fixed, sim *rng.Simulation) (*units.Unit, error) {
+func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, def *content.UnitDef, posX, posY, posZ numeric.Fixed, sim *rng.Simulation, request ResurrectionRequest) (ResurrectionResult, error) {
 	if s == nil || s.World == nil || builder == nil || def == nil {
-		return nil, nil
+		return ResurrectionResult{}, nil
 	}
 	if !CheckPerDefLimit(s.World, builder.Owner, def) {
-		return nil, ErrLimit
+		return ResurrectionResult{}, ErrLimit
 	}
+	snapshot := s.captureResurrectionSnapshot(featureCell)
 	var prod *units.Unit
 	if s.Allocator != nil {
 		allocated, err := s.Allocator(builder.Owner, def, posX, posY, posZ)
 		if err != nil || allocated == nil {
-			return nil, ErrLimit
+			return ResurrectionResult{}, ErrLimit
 		}
 		prod = allocated
 	} else {
-		h, err := s.World.Create(def, builder.Owner, posX, posY, posZ)
+		facing := s.ResolveStructureFacing(def, units.FacingFromHeading(request.Heading))
+		h, err := s.World.CreateFacing(def, builder.Owner, posX, posY, posZ, facing)
 		if err != nil {
-			return nil, ErrLimit
+			return ResurrectionResult{}, ErrLimit
 		}
 		prod = s.World.Unit(h)
 		if prod == nil {
-			return nil, ErrLimit
+			return ResurrectionResult{}, ErrLimit
 		}
 	}
-	// Phase 5 removes the corpse only after allocation succeeds. A slot or
-	// per-definition refusal must leave its anchor and complete footprint for
-	// the row's 300-tick retry [05 R-WORK-01 §7]. The separate same-tick
-	// replacement identity question remains open in [06 R-DMG-01 §4].
-	if featureCell != nil {
-		s.removeFeature(featureCell)
+	result := ResurrectionResult{Unit: prod}
+	currentTarget := pool.Handle(0)
+	orderPresent := request.BindTarget != nil
+	if orderPresent {
+		currentTarget = request.BindTarget(prod)
+	}
+	// Retail rereads the feature root after allocation. A real, bound feature
+	// continues normally; its identity is deliberately not compared with the
+	// pre-allocation definition because same-tick successor identity remains
+	// unresolved [05 R-WORK-01 §7][06 R-DMG-01 §4].
+	postRoot, postOK := s.resurrectionRootWithDefinition(featureCell)
+	if !postOK {
+		createdType := uint32(0)
+		created := s.World.Unit(currentTarget)
+		if s.Catalog != nil && created != nil && created.Def != nil {
+			createdType, _ = s.Catalog.UnitDefIndex(created.Def.CanonicalKey)
+		}
+		finalization := ResurrectionFinalization{
+			Snapshot: snapshot, Product: prod,
+			PriorTarget: request.PriorTarget, CurrentTarget: currentTarget,
+			OrderedType: request.OrderedType, CreatedType: createdType,
+			OrderPresent: orderPresent,
+		}
+		if !s.rules().FinalizeResurrection(s, finalization) {
+			return result, nil
+		}
+	} else {
+		// Allocation refusal returns above before this destructive transition.
+		// A normal post-create reread removes whichever real feature it found;
+		// the unresolved same-tick successor case therefore retains retail's
+		// absence of an identity comparison.
+		s.removeFeature(postRoot)
 	}
 	prod.Remaining = 0 // finished [05 R-WORK-01 §7 "Established — the transplant"]
 	prod.Health = 1    // one hit point, not max [05 R-WORK-01 §7 "Established — the transplant"]
-	return prod, nil
+	result.Finalized = true
+	return result, nil
+}
+
+// captureResurrectionSnapshot records the root feature state before allocation.
+// The recovery contract is narrower than an ordinary real-feature lookup: the
+// definition must be bound and carry the reclaimable bit that admits a corpse
+// to the retail resurrection row [05 R-WORK-01 §7].
+func (s *Service) captureResurrectionSnapshot(cell *world.PlotCell) ResurrectionSnapshot {
+	root, ok := s.resurrectionRootWithDefinition(cell)
+	if !ok {
+		return ResurrectionSnapshot{}
+	}
+	definition := root.Feature()
+	featureDef, ok := s.Terrain.FeatureDefAt(definition)
+	if !ok || featureDef == nil || !featureDef.Reclaimable {
+		return ResurrectionSnapshot{}
+	}
+	return ResurrectionSnapshot{
+		Root: root, Definition: definition, Animation: root.AnchorWord(), Valid: true,
+	}
+}
+
+// resurrectionRootWithDefinition follows one fringe cell to its root and
+// accepts any real feature identity that is bound by the terrain catalog. The
+// post-allocation reread intentionally does not compare identity with the
+// pre-allocation snapshot; that same-tick successor question is still unknown.
+func (s *Service) resurrectionRootWithDefinition(cell *world.PlotCell) (*world.PlotCell, bool) {
+	if s == nil || s.Terrain == nil || cell == nil {
+		return nil, false
+	}
+	root := cell
+	if cell.Feature() == world.PlotFeatureFringe {
+		idx := -1
+		for i := range s.Terrain.Plot {
+			if &s.Terrain.Plot[i] == cell {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 || s.Terrain.CellW <= 0 {
+			return nil, false
+		}
+		cx, cz := int32(idx)%s.Terrain.CellW, int32(idx)/s.Terrain.CellW
+		root = s.Terrain.PlotAt(cx+int32(cell.AnchorDXSigned()), cz+int32(cell.AnchorDZSigned()))
+		if root == nil {
+			return nil, false
+		}
+	}
+	if !root.IsRealFeature() {
+		return nil, false
+	}
+	_, ok := s.Terrain.FeatureDefAt(root.Feature())
+	return root, ok
 }
 
 // removeFeature is the feature-removal helper the resurrection create step

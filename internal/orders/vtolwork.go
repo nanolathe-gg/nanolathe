@@ -597,54 +597,60 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		}
 		armDeadline(n, tick, 45)
 		n.DynamicGate |= gateMoveOutcomes
-		// The low-health pad seek [04 R-ORD-01 §7]: the one health expression
-		// of [04 R-AIR-01 §11] over the target registry's third list at its
-		// last rebuild, filtered by combat.ScanAirBaseList.
-		if combat.AirBelowThreeQuarters(u) {
-			pads := airBasePads(u)
-			if pad := pickCandidate(u, pads); pad != nil {
-				releaseGoalPayload(u, n)
-				if spawnPatrolLanding(u, pad, tick) {
+		work := rulesOfUnit(u).PatrolWork(PatrolWorkRequest{Builder: u})
+		if work != PatrolReclaimOnly {
+			// The low-health pad seek [04 R-ORD-01 §7]: the one health expression
+			// of [04 R-AIR-01 §11] over the target registry's third list at its
+			// last rebuild, filtered by combat.ScanAirBaseList.
+			if combat.AirBelowThreeQuarters(u) {
+				pads := airBasePads(u)
+				if pad := pickCandidate(u, pads); pad != nil {
+					releaseGoalPayload(u, n)
+					if spawnPatrolLanding(u, pad, tick) {
+						n.DynamicGate = 0
+						return 0 // restart with the landing record at the head
+					}
+				}
+			}
+			if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
+				candidates := scanRepairCandidates(u, u.Def.SightDistance)
+				// "A complete `u` reaches the issue helper for command code 8:
+				// acceptance → *rotate*, refusal → *wait*. An unfinished `u`
+				// releases the payload, explicitly spawns `VTOL_HelpBuild` on `u`
+				// at the head, gate = 0, and returns *wait*" [04 R-ORD-01 §7].
+				// Step 4 therefore ENDS the visit whenever the bounded pick
+				// returned a candidate; only an empty list falls through to step
+				// 5's feature pairing. A refusal that fell through would draw that
+				// pairing's six bounded picks [01 §7.5] and shift the authoritative
+				// stream permanently (I4). Unlike the ground twin, this path does
+				// not repeat the scanner-to-candidate diplomacy read.
+				//
+				// The two arms are different routes, not one route with two return
+				// codes. The unfinished arm names its own record, so it does not
+				// reach the issue helper at all and takes none of the helper's
+				// three additions — the code-8 resolution, the stance-3 refusal,
+				// and the hold-position/maneuver return move ([04 R-STANCE-01 §4])
+				// — and it is the only one of the two that releases the payload.
+				// Routing it through the helper made a stance-3 flyer refuse an
+				// assist the row issues unconditionally, and left the old goal
+				// payload bound under the spawned record.
+				if target := pickRepairCandidate(u, candidates); target != nil {
+					if target.Remaining != 0 {
+						releaseGoalPayload(u, n)
+						spawnPatrolHelpBuild(u, target, tick)
+						n.DynamicGate = 0
+						return 3 // *wait* beneath the explicit VTOL_HelpBuild
+					}
+					if !spawnPatrolRepair(u, target, tick) {
+						return 3 // *wait*: the code-8 issue was refused
+					}
 					n.DynamicGate = 0
-					return 0 // restart with the landing record at the head
+					return 6 // accepted complete target repair rotates
 				}
 			}
 		}
-		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) {
-			candidates := scanRepairCandidates(u, u.Def.SightDistance)
-			// "A complete `u` reaches the issue helper for command code 8:
-			// acceptance → *rotate*, refusal → *wait*. An unfinished `u`
-			// releases the payload, explicitly spawns `VTOL_HelpBuild` on `u`
-			// at the head, gate = 0, and returns *wait*" [04 R-ORD-01 §7].
-			// Step 4 therefore ENDS the visit whenever the bounded pick
-			// returned a candidate; only an empty list falls through to step
-			// 5's feature pairing. A refusal that fell through would draw that
-			// pairing's six bounded picks [01 §7.5] and shift the authoritative
-			// stream permanently (I4). Unlike the ground twin, this path does
-			// not repeat the scanner-to-candidate diplomacy read.
-			//
-			// The two arms are different routes, not one route with two return
-			// codes. The unfinished arm names its own record, so it does not
-			// reach the issue helper at all and takes none of the helper's
-			// three additions — the code-8 resolution, the stance-3 refusal,
-			// and the hold-position/maneuver return move ([04 R-STANCE-01 §4])
-			// — and it is the only one of the two that releases the payload.
-			// Routing it through the helper made a stance-3 flyer refuse an
-			// assist the row issues unconditionally, and left the old goal
-			// payload bound under the spawned record.
-			if target := pickRepairCandidate(u, candidates); target != nil {
-				if target.Remaining != 0 {
-					releaseGoalPayload(u, n)
-					spawnPatrolHelpBuild(u, target, tick)
-					n.DynamicGate = 0
-					return 3 // *wait* beneath the explicit VTOL_HelpBuild
-				}
-				if !spawnPatrolRepair(u, target, tick) {
-					return 3 // *wait*: the code-8 issue was refused
-				}
-				n.DynamicGate = 0
-				return 6 // accepted complete target repair rotates
-			}
+		if work == PatrolAssistOnly {
+			return 2 // the Community option exits at the feature-reclaim boundary
 		}
 		if resources, ok := playerResources(u); ok && resourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && resourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
 			return 2

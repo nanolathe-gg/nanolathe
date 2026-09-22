@@ -6,7 +6,6 @@ package main
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
-	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
@@ -130,6 +129,16 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	b.updateTacticalRangeInput(in, cl == nil || cl.IsFocused())
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	if b.serviceCommunityIncome(mouse) {
+		return
+	}
+	if b.serviceCommunityPlacementInput(in, cl, mx, my) {
+		shortcutsServiced = true
+		return
+	}
+	if b.serviceCommunityOrderDrag(in, cl, b.hostPreferences().QueuedOrderDrag != 0) {
+		return
+	}
 	b.updateResourceQueueFeedback(cl)
 	if b.serviceCommandDrag(in, cl, mouse, pointerModifiers) {
 		// The modern gesture already applies Escape's cancellation; applying
@@ -271,6 +280,13 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if b.battleState().Input.HUDCaptured {
 		return
 	}
+	// The platform has already classified this event with the native
+	// timestamp/rectangle policy. The optional host rule consumes that exact
+	// record over an own unit and emits a normal selection replacement.
+	if b.handleCommunityDoubleClick(in, mx, my) {
+		b.disarmPlacement()
+		return
+	}
 
 	// A left press the placement path already consumed owns that button until
 	// it is released. Retail routes one press/release pair through exactly one
@@ -332,7 +348,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if mouse.Pressed(input.MouseButtonLeft) && b.battleState().Input.Latch != input.LatchNormal {
 		issued := false
 		code := hud.LatchToCode(b.battleState().Input.Latch)
-		if code != 0 {
+		if code == 12 && b.issueCommunityReclaimSnap(pointerModifiers.Shift) {
+			issued = true
+		} else if code != 0 {
 			issued = b.orderSelected(code, mx, my, pointerModifiers.Shift)
 		}
 		// Return latch to Normal after dispatch unless shift-queuing keeps it
@@ -715,7 +733,17 @@ func (b *battleSession) dispatchCtrlLetters(kbd *input.KeyboardState) {
 	case kbd.KeyDown(input.KeyD):
 		b.selfDestructSelection()
 		return
+	case b.communitySelectionEnabled() && !shift && kbd.KeyDown(input.KeyB):
+		b.cycleCommunityIdle(communityCycleBuilder)
+		return
+	case b.communitySelectionEnabled() && !shift && kbd.KeyDown(input.KeyF):
+		b.cycleCommunityIdle(communityCycleFactory)
+		return
 	case kbd.KeyDown(input.KeyS):
+		if b.communitySelectionEnabled() && !shift {
+			b.selectCommunityOnScreenWeapons()
+			return
+		}
 		// The on-screen list, replacing the selection [07 R-CAM-01 §2][07 §8].
 		b.commitSelection(b.ownSelectableHandles(b.onScreenUnit), false)
 		return
@@ -726,16 +754,7 @@ func (b *battleSession) dispatchCtrlLetters(kbd *input.KeyboardState) {
 		if !ok {
 			return
 		}
-		var mask content.CategoryMask
-		for i := range f.Units {
-			v := f.Units[i]
-			if !containsHandle(f.Selection.Handles, v.Slot) {
-				continue
-			}
-			if def, found := b.cat.Unit(v.DefName); found && def != nil {
-				mask = mask.Or(def.UnitMask)
-			}
-		}
+		mask := b.selectedDefinitionMask(f)
 		if mask.IsZero() {
 			return
 		}

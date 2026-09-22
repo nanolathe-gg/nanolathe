@@ -179,7 +179,19 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			stats.Halos++
 		}
 	}
-	var fragments [render.FixedEffectCap + 1]*frame.FragmentView
+	// Fragment identities follow the battle-sized effect pool [CP-LIM-1].
+	// Retain the lookup storage across draws; no retail-size cutoff applies.
+	needed := 0
+	for _, v := range options.Fragments {
+		needed = max(needed, int(v.Slot)+1)
+	}
+	if cap(c.effectFragments) < needed {
+		c.effectFragments = make([]*frame.FragmentView, needed)
+	} else {
+		clear(c.effectFragments)
+		c.effectFragments = c.effectFragments[:needed]
+	}
+	fragments := c.effectFragments
 	for i := range options.Fragments {
 		v := &options.Fragments[i]
 		if v.Slot > 0 && int(v.Slot) < len(fragments) {

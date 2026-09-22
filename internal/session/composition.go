@@ -456,21 +456,18 @@ func (s *Session) appendStripNanoForEvent(e frame.Event) {
 	}
 	src := [3]numeric.Fixed{e.X, e.Y, e.Z}
 	dst := [3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ}
-	var emitter *stripObject
+	color, known := radarOwnerPalette(s, e.Team, true)
+	var ownerColor []uint8
+	if known {
+		ownerColor = []uint8{color}
+	}
 	switch {
 	case e.NanolatheBoxAtSource && e.NanolatheTargetBoxKnown:
-		emitter = s.appendStripNanoEmitterFromBox(e.NanolatheTargetMin, e.NanolatheTargetMax, dst)
+		s.appendStripNanoEmitterFromBox(e.NanolatheTargetMin, e.NanolatheTargetMax, dst, ownerColor...)
 	case e.NanolatheTargetBoxKnown:
-		emitter = s.appendStripNanoEmitterBox(src, e.NanolatheTargetMin, e.NanolatheTargetMax)
+		s.appendStripNanoEmitterBox(src, e.NanolatheTargetMin, e.NanolatheTargetMax, ownerColor...)
 	default:
-		// No box published: both ends are points. The CRT cost is the same
-		// either way — six draws per particle, five particles [03 §5.5].
-		emitter = s.appendStripNanoEmitter(src, dst)
-	}
-	if emitter != nil {
-		// Retain the builder colour even if the source is reclaimed, captured,
-		// destroyed or its slot reused before the particles expire (§23.6).
-		emitter.nanoOwnerColor, emitter.nanoOwnerColorKnown = radarOwnerPalette(s, e.Team, true)
+		s.appendStripNanoEmitter(src, dst, ownerColor...)
 	}
 }
 
@@ -987,6 +984,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 	}
 	return &orders.QueueBinding{
 		Rules:               s.orderRules(),
+		Community:           s.orderCommunity(),
 		DangerVisible:       s.dangerVisible,
 		DangerCanRespond:    s.dangerCanRespond,
 		DangerStepFeasible:  s.dangerStepFeasible,
@@ -1464,6 +1462,7 @@ func (s *Session) bindConstructionEconomy(service *construction.Service) {
 		return
 	}
 	service.Economy = s.Econ
+	service.CRTRandom = func(bound uint32) uint32 { return s.CrtRNG().Uint32n(bound) }
 	service.ModeSelector = 2 // Unset difficulty follows the ledger's whole-credit path.
 	if s.Econ != nil && s.Econ.EconomySelector != nil {
 		service.ModeSelector = *s.Econ.EconomySelector
@@ -1489,7 +1488,7 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	// before validating the queue seam so a normal session cannot enter the
 	// binding check with an absent, but later-created, service [P0-00 A.3].
 	if s.Combat == nil {
-		s.Combat = &combat.Service{}
+		s.Combat = combat.NewServiceWithProjectileCapacity(s.EntryCommunity.ProjectileCapacity)
 	}
 	// Project the selected rule set onto the services just created. This runs
 	// on every allocation, so it re-projects what is bound instead of
@@ -1589,6 +1588,12 @@ func createAndBindServices(s *Session) error {
 	// World rebuilds disable automatic cycling but leave its counter dormant
 	// [07 R-CAM-01 §12]. Held input remains owned by the controller latch.
 	s.bigBrother.enabled = false
+	// Deferred placements belong to one battle; fresh skirmish entry rebuilds
+	// this queue after service composition. Campaign and restore leave it empty.
+	s.communitySchema.reset()
+	if s.Combat != nil {
+		s.Combat.TransportDeaths = combat.TransportDeathState{}
+	}
 	s.resetBigBrotherEvents()
 	// Bind the battle's single Park-Miller stream before any mission,
 	// commander, or factory allocation reaches the common unit initializer
@@ -1875,6 +1880,7 @@ func createAndBindServices(s *Session) error {
 		return fmt.Errorf("session: Movement.Scheduler nil")
 	}
 	s.Path = s.Movement.Scheduler
+	s.Path.SetStepAllowance(s.EntryCommunity.PathStepAllowance)
 	// Construct the work owner before composing its readiness adapter. The
 	// adapter reports the concrete service's presence; it is not an inert
 	// placeholder used to let a battle enter composition [P0-00 A.3].
@@ -1885,12 +1891,18 @@ func createAndBindServices(s *Session) error {
 	// before validating the queue seam so a normal session cannot enter the
 	// binding check with an absent, but later-created, service [P0-00 A.3].
 	if s.Combat == nil {
-		s.Combat = &combat.Service{}
+		s.Combat = combat.NewServiceWithProjectileCapacity(s.EntryCommunity.ProjectileCapacity)
 	}
 	// The composer selects the session's rule set here, from the word its
 	// constructor carried, and projects it onto the services above.
 	s.RebindRules()
 	s.Combat.ProjectileWind = s.Wind
+	s.Combat.ResetCommunityAreaState()
+	s.Combat.VisitOffMapFiled = s.Movement.Grid.VisitOffMapFiled
+	s.Combat.IsOffMapFiled = func(h pool.Handle) bool {
+		filing := s.Movement.OverlapFiling(int(h))
+		return filing != nil && filing.Filed && filing.OffMap
+	}
 	s.Build.Combat = s.Combat
 	// The area walk of [06 §9.3] offers a feature candidate in every covered
 	// cell, and the entry it reaches is the feature damage of [06 §13.1]. The
@@ -2423,10 +2435,19 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// reject an absent feature. Whether it also identifies a same-tick
 		// successor/replacement feature is unresolved [06 R-DMG-01 §4]; do not
 		// infer an identity gate from this pre-allocation view.
-		product, err := s.Build.Resurrect(builder, cell, def, view.X, view.Y, view.Z, nil)
-		if err != nil || product == nil {
+		result, err := s.Build.Resurrect(builder, cell, def, view.X, view.Y, view.Z, nil, construction.ResurrectionRequest{
+			Heading:     orient.Heading,
+			PriorTarget: n.Target,
+			OrderedType: n.Param1,
+			BindTarget: func(product *units.Unit) pool.Handle {
+				n.BindTarget(product.Handle)
+				return n.Target
+			},
+		})
+		if err != nil || result.Unit == nil || !result.Finalized {
 			return false
 		}
+		product := result.Unit
 		if s.Features != nil {
 			s.Features.ReleaseRemovedAt(int(view.CX), int(view.CZ))
 		}
@@ -2453,7 +2474,6 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// Runtime teardown above already returned the arena slot before any
 		// later unit visit or projectile phase can allocate a feature.
 		s.World.BumpStaticObstacleRevision()
-		n.BindTarget(product.Handle)
 		// A resurrected unit is finished (remaining 0), so it joins the world
 		// the way any completed product does: movement state and a visibility
 		// publish [01 §6.1][03 §3].
@@ -2575,7 +2595,7 @@ func (s *Session) bindDamageReaction() {
 		// The §3.1 acquisition physical gate, bound to the operands the damage
 		// path does not carry [06 §3.1][06 R-WPN-04 §2 part 3].
 		SlotAcquisitionAdmits: func(victim *units.Unit, idx int, cand *units.Unit) bool {
-			return combat.SlotAcquisitionAdmits(victim, idx, cand, s.Units, s.Vis, s.World, s.Econ, s.Catalog)
+			return s.Combat.SlotAcquisitionAdmits(victim, idx, cand, s.Units, s.Vis, s.World, s.Econ, s.Catalog)
 		},
 		UnderAttackSilenced: orders.UnderAttackSilenced,
 		// The message helper posts the kind-2 message only when the victim is

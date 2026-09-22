@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
@@ -54,7 +55,11 @@ func TestModernSaveLoadsAcrossUnitLimits(t *testing.T) {
 	f := loadRetailFixture(t)
 	for _, limit := range []int{250, 1000} {
 		f.cfg.UnitLimit = limit
-		src := f.session(t)
+		configuredLimit := 0 // Exercise the configured-limit override, not the shipped Community table.
+		src, err := NewSkirmishWithEntryOptions(f.fs, f.cat, f.cfg, SkirmishEntryOptions{CommunitySources: CommunitySources{Player: community.Overrides{UnitLimit: &configuredLimit}}})
+		if err != nil {
+			t.Fatal(err)
+		}
 		other := 1250 - limit
 		inputs, err := src.RetailBattleSaveInputs(RetailBattleSummary(src, "saved layout", "1", other), save.Camera{})
 		if err != nil {

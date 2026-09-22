@@ -104,7 +104,8 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	// The ordinary creator receives the victim's original two-bit mover mode.
 	// Its wrapper runs COB Create with the grounded default, then installs this
 	// argument before its activation edge [05 R-WORK-01 §15].
-	h, err := s.World.CreateWithMoverMode(victim.Def, newOwner, victim.X, victim.Y, victim.Z, victim.Move.Mode)
+	facing := s.ResolveStructureFacing(victim.Def, units.FacingFromHeading(victim.Move.Heading))
+	h, err := s.World.CreateWithMoverModeFacing(victim.Def, newOwner, victim.X, victim.Y, victim.Z, victim.Move.Mode, facing)
 	if err != nil {
 		return nil, false
 	}

@@ -564,6 +564,9 @@ type PlacementQuery struct {
 	Rules  PlacementRules
 	Self   uint16
 	Mobile bool
+	// AdmitOccupant is a command-preview exception supplied by the owning
+	// construction rules. Allocation leaves it nil and still requires clearance.
+	AdmitOccupant func(uint16) bool
 	// Viewer is the blocker's fourth argument: the player record the human
 	// build-cursor preview passes [04 R-P0-08-B §1]. A nil value is retail's
 	// NULL player, which every other caller passes — the computer player's
@@ -613,8 +616,9 @@ type PlacementViewer interface {
 // after legality succeeds. SiteHeight is the aggregate height published to a
 // build order/ghost [07 §9][05 "Geothermal requirement"].
 type PlacementResult struct {
-	Rect       FootprintRect
-	SiteHeight int32
+	Rect              FootprintRect
+	SiteHeight        int32
+	OccupantsAdmitted bool // Command preview accepted through AdmitOccupant.
 }
 
 // CheckPlacement is the one canonical, read-only placement legality function
@@ -635,6 +639,14 @@ type PlacementResult struct {
 // Both classes run the terrain half only in the inline terrain-check mode; the
 // site height is published either way.
 func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
+	admitted := false
+	admit := func(occupant uint16) bool {
+		if q.AdmitOccupant == nil || !q.AdmitOccupant(occupant) {
+			return false
+		}
+		admitted = true
+		return true
+	}
 	if t == nil {
 		return PlacementResult{}, fmt.Errorf("world: nil terrain")
 	}
@@ -758,7 +770,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				// products hold the air word over the exit rectangle and every
 				// later product's placement is refused (construction's
 				// four-aircraft liveness run stalls at two).
-				if occ := cell.OccupantA(); occ != 0 && uint16(occ) != q.Self {
+				if occ := cell.OccupantA(); occ != 0 && uint16(occ) != q.Self && !admit(uint16(occ)) {
 					return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", cx, cz)
 				}
 				// The same test on the other half of the split ground word.
@@ -769,7 +781,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				// the builder that issued the order included
 				// [04 R-COLL-01 §2][04 R-COLL-01 §6].
 				if t.Movers != nil {
-					if occ := t.Movers.CellOccupant(cx, cz); occ != 0 && occ != q.Self {
+					if occ := t.Movers.CellOccupant(cx, cz); occ != 0 && occ != q.Self && !admit(occ) {
 						return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied by a mover [04 R-COLL-01 §2]", cx, cz)
 					}
 				}
@@ -848,7 +860,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// was already decided cell by cell inside the walk above, and the mobile
 	// path publishes only siteHeight from here.
 	if q.Mobile || skipTerrain {
-		return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil
+		return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight, OccupantsAdmitted: admitted}, nil
 	}
 	// The yard walk compares the rectangle span against the land MaxSlope
 	// alone — there is no water pair on this path [04 R-SLOPE-01 §3 "Bounded
@@ -873,7 +885,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	if maxSample > sea-q.Rules.MinWaterDepth {
 		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
 	}
-	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight}, nil
+	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight, OccupantsAdmitted: admitted}, nil
 }
 
 // mobileCellLegal is the mobile class's terrain test for ONE covered cell,

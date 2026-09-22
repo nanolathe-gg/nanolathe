@@ -11,6 +11,14 @@ import (
 // Colour metadata is captured from the work owner's player record, including
 // reverse spray, and cannot change particles or the shared CRT stream.
 func TestNanoOwnerColourIsCapturedWithoutChangingParticles(t *testing.T) {
+	physicalParticles := func(src []stripParticle) []stripParticle {
+		particles := append([]stripParticle(nil), src...)
+		for i := range particles {
+			particles[i].colorSequence = 0
+			particles[i].colorSample = 0
+		}
+		return particles
+	}
 	for _, reverse := range []bool{false, true} {
 		a, b := nanoSegmentFixture(t), nanoSegmentFixture(t)
 		a.Econ = &economy.Service{}
@@ -21,14 +29,14 @@ func TestNanoOwnerColourIsCapturedWithoutChangingParticles(t *testing.T) {
 		e.NanolatheBoxAtSource = reverse
 		a.appendStripNanoForEvent(e)
 		b.appendStripNanoForEvent(e)
-		if a.CrtRNG().State != b.CrtRNG().State || !reflect.DeepEqual(a.strips.strips[6][0].particles, b.strips.strips[6][0].particles) {
+		if a.CrtRNG().State != b.CrtRNG().State || !reflect.DeepEqual(physicalParticles(a.strips.strips[6][0].particles), physicalParticles(b.strips.strips[6][0].particles)) {
 			t.Fatal("metadata changed emission")
 		}
 		a.Econ.Players[2].Logo = 3
 		a.Econ.Players[2].Exists = false
 		a.strips.sweepStrip(6, 1, a.CrtRNG(), nil, 0, nil)
 		b.strips.sweepStrip(6, 1, b.CrtRNG(), nil, 0, nil)
-		if a.CrtRNG().State != b.CrtRNG().State || !reflect.DeepEqual(a.strips.strips[6][0].particles, b.strips.strips[6][0].particles) {
+		if a.CrtRNG().State != b.CrtRNG().State || !reflect.DeepEqual(physicalParticles(a.strips.strips[6][0].particles), physicalParticles(b.strips.strips[6][0].particles)) {
 			t.Fatal("metadata changed sweep")
 		}
 		views := a.appendStripViews(0, nil)
@@ -62,7 +70,7 @@ func TestScriptNanoUsesSourceOwner(t *testing.T) {
 	s.Econ.Players[2].Exists = true
 	s.Econ.Players[2].Logo = 7
 	s.Units.Unit(sink.source).Owner = 2
-	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}))
+	s.publication = newPublicationState(frame.NewEventBuffer(frame.Limits{}), 0)
 	sink.publication = s.publication
 	sink.SetCOBPieceMap([]int{0})
 	emit := func() {

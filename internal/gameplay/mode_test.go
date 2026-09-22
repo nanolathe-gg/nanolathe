@@ -11,7 +11,7 @@ import (
 type stubNames struct{ registered []string }
 
 func (s stubNames) Known(name string) bool {
-	if name == string(Modern) || name == string(Strict31) {
+	if name == string(Modern) || name == string(Community39) || name == string(Strict31) {
 		return true
 	}
 	for _, have := range s.registered {
@@ -23,7 +23,7 @@ func (s stubNames) Known(name string) bool {
 }
 
 func (s stubNames) Names() []string {
-	return append([]string{string(Modern), string(Strict31)}, s.registered...)
+	return append([]string{string(Modern), string(Community39), string(Strict31)}, s.registered...)
 }
 
 // useNames installs a registry for one test and restores the previous one.
@@ -35,11 +35,11 @@ func useNames(t *testing.T, r NameRegistry) {
 }
 
 // With no registry installed — a build below the session, such as this test
-// binary by default — only the two reserved words are selectable, and the
+// binary by default — only the three reserved words are selectable, and the
 // vocabulary behaves exactly as it did before names existed.
 func TestWithoutARegistryOnlyTheReservedWordsAreSelectable(t *testing.T) {
 	useNames(t, nil)
-	for _, word := range []string{string(Modern), string(Strict31)} {
+	for _, word := range []string{string(Modern), string(Community39), string(Strict31)} {
 		if mode, err := Parse(word); err != nil || string(mode) != word {
 			t.Fatalf("Parse(%q) = %q, %v", word, mode, err)
 		}
@@ -55,6 +55,9 @@ func TestWithoutARegistryOnlyTheReservedWordsAreSelectable(t *testing.T) {
 	}
 	if got := Strict31.Normalize(); got != Strict31 {
 		t.Fatalf("Normalize(%q) = %q", Strict31, got)
+	}
+	if got := Community39.Normalize(); got != Community39 {
+		t.Fatalf("Normalize(%q) = %q", Community39, got)
 	}
 }
 
@@ -87,7 +90,7 @@ func TestAnUnselectableWordIsRejectedWithTheSelectableNames(t *testing.T) {
 	if mode != Modern {
 		t.Fatalf("a rejected word answered %q, want the default %q", mode, Modern)
 	}
-	for _, want := range []string{"nanolathe: invalid gameplay rule set", "providers searched", string(Modern), string(Strict31), "example"} {
+	for _, want := range []string{"nanolathe: invalid gameplay rule set", "providers searched", string(Modern), string(Community39), string(Strict31), "example"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("diagnostic %q does not carry %q", err, want)
 		}

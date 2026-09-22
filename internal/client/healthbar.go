@@ -91,10 +91,13 @@ func (c *Client) drawUnitLabels(cur *frame.Frame, ok bool) {
 		return
 	}
 	bars := damageBars
+	community := c.communityHUD
 	viewer := cur.ViewingPlayer
 	for i := range cur.Units {
 		u := &cur.Units[i]
-		if !bars && u.Group == 0 {
+		showGroup := u.Group != 0 && !community.DisableGroupNumbers
+		showCommunity := bars && (community.Counters || community.ReloadBars)
+		if !bars && !showGroup && !showCommunity {
 			continue
 		}
 		if u.Owner != viewer {
@@ -120,7 +123,11 @@ func (c *Client) drawUnitLabels(cur *frame.Frame, ok bool) {
 		if bars {
 			c.drawHealthBar(x, sy0+s.Px(healthBarRowOffset-camera.OriginY), u.Health, u.MaxHealth)
 		}
-		if u.Group != 0 {
+		healthY := sy0 + s.Px(healthBarRowOffset-camera.OriginY)
+		if showCommunity {
+			c.drawCommunityUnitHUD(u, x, healthY)
+		}
+		if showGroup {
 			c.drawGroupDigit(x, sy0+s.Px(groupDigitRowOffset-camera.OriginY), u.Group)
 		}
 	}

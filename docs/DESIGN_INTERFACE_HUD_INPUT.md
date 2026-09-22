@@ -2581,6 +2581,128 @@ host half: a mobile build dispatched while paused through the real dispatcher is
 addressed to the unit selected while paused and lands on it exactly once, and an
 open options window drains nothing.
 
+### 3.13 Optional community selection controls
+
+**Established host policy from the MIT patch source.** These consumers are
+presentation preferences and never depend on `gameplay.Mode` or the renderer.
+`presentation.communitySelection` enables Ctrl+B/F/S; the independent
+`presentation.doubleClickSelection` enables same-type double-click selection.
+Both default to zero and normalize as low-bit booleans. With either switch off,
+the existing retail keyboard and pointer paths are unchanged. Evidence is the
+[community patch engine behavior](../research/extensions/community-patch-engine.md)
+§4.2 input-and-command surface and its pinned `ExternQuickKey.cpp` source.
+
+With `communitySelection` enabled, unshifted Ctrl+B and Ctrl+F replace the
+selection with the next admitted own mobile builder or factory. Nanolathe first
+applies its shared host boundary of a completed selectable own unit. Within
+that boundary, a factory is idle unless its primary order is `BuildingBuild`;
+a mobile builder is idle only when its primary order is absent, `Standby`, or
+`VTOL_Standby`, and its committed prior-window health sample is neither zero
+nor one. The source's constructor scan itself has no common completion gate;
+that is the explicit Nanolathe host boundary. Neither scan reads secondary
+orders. Each shortcut owns a persistent unit-slot cursor. It scans committed
+units in ascending slot order after that cursor, then wraps once; an empty full
+pass clears the selection and resets the cursor. A hit centres the camera and
+discards prepared placement. Authored
+`CTRL_B` / `CTRL_F` membership wins whenever that category has any member.
+Only an empty category uses the patch fallback: builders that are not air bases
+or in the patch's commander/decoy class (`showplayername` and `hidedamage` both
+set), split by nonzero BMCode for mobile builders and zero BMCode for factories.
+Shift+Ctrl+B/F retain the retail additive category shortcuts.
+
+Unshifted Ctrl+S replaces the selection with completed selectable own units
+inside the current battle viewport whose definition belongs to `CTRL_W` and
+has its compiled `canfly` flag clear. The pinned source performs that flag test
+and contains no `NOTAIR` or `NAIR` lookup; its release notes' claim that those
+categories participate is therefore not implemented by that revision. The host
+does not assign those category names a guessed capability meaning. The action
+also discards prepared placement. Shift+Ctrl+S retains retail's on-screen
+selection.
+
+With `doubleClickSelection` enabled, a platform-classified left double-click
+strictly inside the battle viewport and over an own unit replaces the selection
+with the on-screen selectable own units whose committed numeric definition ID
+matches any ID in the committed selection. Shift does not make this additive. The consumer uses the
+event kind already classified from native timestamps and rectangle policy; it
+does not recognize a second click from simulation or host-frame time. Ctrl+Z
+uses the same full-width compiled definition masks without the patch's old
+512-definition truncation, but remains available independently of both options.
+All four paths read the committed frame and enqueue ordinary typed selection
+commands [I6]. The Orders options page exposes both default-off preferences.
+Its Restore/Undo affects only that page; Cancel restores the whole entry snapshot.
+
+### 3.14 Optional Community unit labels
+
+The four Community unit-label switches are host presentation preferences. They
+do not depend on the selected gameplay profile, do not enter its digest or a
+simulation fingerprint, and read only the committed `frame.UnitView`. Counters,
+reload bars and the `Vet<n>` footer label default off. Group digits retain the
+existing default-on retail behavior; the host option can suppress them. The
+client stores the compact `CommunityHUDOptions` value and replaces it through
+`SetCommunityHUDOptions`. This implements the authorized §7 candidate without
+creating another gameplay capability table
+([DESIGN_COMMUNITY_PATCH §7](DESIGN_COMMUNITY_PATCH.md#7-host-and-presentation-features-out-of-the-profile)).
+
+**Counters (Established, independently described from the pinned MIT Community
+source).** The unit-label walk considers only a living unit owned by the local
+human, at a nonzero projected centre, while the ordinary `damagebars` option is
+on. The stockpile label is `<completed> +<queued>` when either value is nonzero:
+completed is summed over all stockpile weapon slots, and queued is the positive
+count on the one current rear-segment head. It neither sums later rear records
+nor checks that head's descriptor. The transport label is `<loaded>/<capacity>`
+only when capacity and loaded count are both nonzero. A flying transport whose
+capacity is exactly one is excluded. When both labels exist, the stockpile line
+sits immediately above the health bar and the transport line one font height
+plus one pixel above it; a lone label uses the lower line. Both are centred and
+use the source's black one-pixel outline with raw palette index 255 foreground.
+The publisher supplies the four counts and the already resolved one-seat flying
+classification; presentation neither walks live cargo links nor reads an order
+queue [I6]. The transport count includes only cargo-list entries whose resolved
+child still points back to this carrier.
+
+**Reload bar (Established).** For a complete own unit under the same
+`damagebars` gate, scan the three committed weapon slots in order. A slot is
+tagged when either its authored definition or its current live weapon has
+`reloadbar` bit 0 set. Exclude stockpile slots and zero authored reload times,
+then retain the first slot having the largest reload time. The publisher uses
+the authored slot definition's reload/type value when nonzero and the live
+weapon's value otherwise, preserving a tag by weapon name across a changed
+live slot. Progress is zero when remaining reload exceeds the selected maximum;
+otherwise it is `maximum - remaining`. The outer inclusive rectangle spans
+35×5 at ordinary scale and begins three rows below the health-bar centre. Its
+32-unit inner progress width is `32*progress/maximum`; the inclusive fill makes
+a positive half-width of 16 occupy 17 pixels. The fill starts at logical palette
+entry 144 and darkens by `min((progress*100/maximum)/15, 6)` entries. This is
+the presentation-only contract of
+[community-patch-engine CP-WPN-7](../research/extensions/community-patch-engine.md#53-weapon-definition-tags-author-facing).
+
+**Veteran footer label (Established).** When enabled, an armed own unit whose
+ordinary footer kill line is nonempty displays `Vet<n>` whenever its committed
+bounded veteran level is above zero. Level zero keeps the retail kill-count
+line. The level is the result already bound through `combat.Service.VeteranLevel`;
+the HUD never recomputes thresholds from kills. This is the presentation half
+of [community-patch-engine CP-UD-1](../research/extensions/community-patch-engine.md#58-unit-definition-extensions-and-spawned-schema-units).
+
+The HUD options page persists counters, reload bars, veteran labels and group
+numbers alongside optional allied-resource and weather overlays. Restore/Undo
+is scoped to this page; Cancel restores the entry snapshot, and OK persists it.
+The publisher sums completed stockpile bytes over admitted slots, copies only
+the positive rear-head amount, and validates cargo back-links. Reload tag-name
+membership is cached from the immutable catalog; authored reload/type fallbacks
+are resolved before publication.
+
+**Nanolathe host layout.** Allied bars default off and use the committed viewing
+player's directional alliance row, excluding that player, in committed economy
+order. They show name, stored metal/energy, capacity bars and positive income
+with the source's compact-number formatting. The upper-right minus/plus widget
+collapses the panel; rows clip above the bottom HUD. This substitutes local
+committed records for the source's multiplayer shared-data transport. The
+weather option defaults off, shows both wind and tidal rows, and adapts the
+source's side-anchor/clamped layout with the retained retail wind hard limit
+5000. Current wind and clock read the committed frame; bounds, tidal strength
+and reference generators are immutable battle content. Source arithmetic is
+recorded in [community patch engine §5.10](../research/extensions/community-patch-engine.md#510-optional-resource-and-weather-presentation).
+
 ## 4. Retail behaviour that is not a bug
 
 * **The footer shows the *hovered* unit, never the selected one.** It persists
@@ -2882,3 +3004,169 @@ sections above. These include the unaligned text-list pen, whose unset native
 scratch is not reproduced, and a parity fixture whose pinned retail/Nanolathe
 screenshot pair does not record its original scenario. That fixture pins the
 comparison rather than reproducible staging.
+
+### Community builder preferences
+
+The **Builders** options page has a Guard home and a Patrol work control for
+Hold Position, Maneuver and Roam. Guard choices are Stay / Cavedog / Scatter;
+patrol choices are Reclaim / Both / Assist. These are the per-player policies
+of [DESIGN_COMMUNITY_PATCH §4.3](DESIGN_COMMUNITY_PATCH.md#43-construction),
+not new unit stances. Defaults are Cavedog for every guard stance and
+Reclaim / Both / Both for patrol. Strict ignores the preferences.
+
+The settings `builderOptions` block holds two three-element arrays in that
+stance order. Each choice is its zero-based position in the labels above.
+Invalid values fall back to Cavedog or Both. Every battle entry and retail
+save load copies the current human preference into session state; computer
+players receive the patch defaults. The retail save format is unchanged.
+
+The page participates in the existing options transaction: a live edit sends
+`HumanBuilderOptions` through the phase-1 boundary, Undo and Cancel send the
+restored values through the same boundary, and OK persists the settings.
+The command validates the local human owner and all six values. All existing
+and future queues read the acting owner's record through their shared
+binding, including after an ownership change. The guards and patrol handlers
+continue to ask their bound gameplay rules, so switching to Strict preserves
+the selected values without using them. Tests cover player isolation,
+boundary timing, preference reload, and the page's Undo/Cancel/OK behavior.
+
+
+### Prepared-build accelerator status
+
+CP-CON-4 is supplied by `orders.Rules.PreserveBuildToggle` through the existing
+session rule set. At the command palette's keyboard accelerator, Community
+with `ReclaimToggleKeepsBuild` retains the current toggle status when its low
+byte is nonzero and the prepared latch is MOBILEBUILD. Strict and a disabled
+feature use the ordinary toggle. The generic widget still clears its radio
+group and fires its callback; pointer gestures are unchanged. This follows
+the hook's actual generic-widget operands rather than the source comment's
+“reclaim-active” name (extension engine reference CP-CON-4). No separate
+reclaim boolean is introduced.
+
+The transient `+bps` switch preserves the two retail throughput lines and
+outlined bars in both world and strategic views. Since this single-player
+engine has no network transport, both rates are zero. It neither changes nor
+persists the independent `+clock` preference ([07 §3]).
+
+### Community placement input
+
+Structure rotation is presentation state selected through the construction
+rule already bound to the session. Strict 3.1 therefore exposes south only;
+Community and Modern expose the current definition's authored facings when
+their resolved feature table enables rotation. The retained cursor facing is
+not reset when placement ends or when the player selects a definition that
+does not allow it. Preview and order issue independently clamp that choice for
+the current definition. Quarter turns transpose the placement footprint, and
+the mobile-build command carries the clamped facing so the session validates
+the same oriented yard and footprint that the cursor showed.
+
+The configured rotation key defaults to `/`. It acts only during mobile-build
+placement, Ctrl blocks it, Shift does not, and a definition with fewer than two
+allowed facings leaves the key unconsumed. A successful press advances through
+allowed facings in S, E, N, W order and plays the ordinary interface click.
+Holding the click-snap override modifier (Alt by default) and scrolling cycles
+in either direction; the modifier owns and consumes the wheel even when no
+current definition can rotate. Build-menu edge selection and its GAF overlay
+use the same retained choice. These are sourced extension behaviours
+[community patch engine CP-CON-5].
+
+Build-menu structure buttons expose each authored facing in a 13-pixel
+nearest-edge band: bottom selects S, right E, top N and left W, with N, S, E,
+W tie precedence. A centre click and every keyboard accelerator retain the
+cursor's prior choice. Disallowed edges also fall through to ordinary product
+selection. The host's `BuildRotationOverlay` preference gates both the edge
+gesture and its art. The painter accepts the optional four-frame
+`anims/buildrotate.gaf` and `anims/buildrotateclick.gaf` sequences in S, E, N,
+W order, otherwise draws built-in chevrons. It reuses the resolved visible
+command page and is composed before the existing later popup and modal layers,
+so those windows occlude it without a second GUI-stack model [community patch
+engine CP-CON-5].
+
+The options root adds a **Placement** host page after **HUD**. Its compact
+staged controls expose nanoframe preview (off/full/wire), rotation art,
+queued-order drag, team-coloured nanolathe effects, mex and wreck snap radii,
+and the Alt/Ctrl/Shift snap
+override modifier. This control geometry and wording are Nanolathe host
+mapping, not extension behaviour. Outside battle each radius offers Auto, Off
+and 1..9 so a profile-independent preference can be stored. In battle the
+active profile caps that list, shows the resolved Auto value, and disables a
+radius whose resolved maximum is zero. The rotation key stays hand-editable in
+settings because this compact page has no general text editor. The ordinary
+options snapshot owns Cancel; Restore and Undo copy only these seven fields.
+
+Click snap changes the command point at the host boundary. Its mex and wreck
+radii come from host preferences bounded by the resolved community feature
+table: negative selects the table default, zero disables, a value above the
+table maximum returns to the default, and defaults and maxima are capped at
+nine cells. Strict's resolved table is empty, so it bypasses snapping without
+a host mode test. Holding the override modifier suppresses snap for that
+click.
+
+The search visits the square window from negative to positive X offsets and,
+inside each X, negative to positive Z offsets. Candidates with non-positive
+counts are discarded; the largest count wins, then the shortest squared
+distance from the raw cursor with the source's half-cell bias, then the first
+scan entry. An extractor counts footprint cells whose metal byte is strictly
+above surface metal and accepts the chosen point only when a second search of
+radius `max(footX, footZ)` leaves it unchanged (or it was already the raw build
+cell). A geothermal definition uses the ordinary oriented placement predicate
+as its candidate count and arms only after moving off the raw cell. Reclaim
+snap first refuses a raw cell occupied by a unit, then searches for a
+reclaimable feature with positive metal or energy, orders its footprint centre,
+and carries the terrain-derived click height raised to sea level when needed.
+All mutable terrain and feature reads occur through a read-only session query;
+the host owns only the deterministic scan and command substitution
+[community patch engine CP-CON-6][I6].
+
+The authored instructions mention Shift+Q/E alternation and using `v` before a
+patrol route, but neither the pinned source nor those instructions settle a
+separate extension input rule for those keys. `TODO(question)`: determine
+whether they rely only on authored gadget accelerators or need host dispatch by
+observing the pinned patch with a palette whose quick keys differ. Until then,
+Nanolathe does not add a second keyboard table.
+
+### Community order-position gestures
+
+Queued build and movement-order dragging is an optional host input preference,
+`presentation.queuedOrderDrag`, default off. It is independent of renderer and
+gameplay mode. With the preference enabled, Shift-left press over an eligible
+marker in the committed primary queue captures that marker. The host records
+the unit slot, published unit instance, primary index, descriptor, creation
+tick, target, build product, facing and old position; it never retains or
+mutates the live record. While the pointer moves, host-only state draws the
+candidate destination marker or oriented build rectangle; invalid build sites
+use the ordinary invalid-ghost colour. The patch rewrites the retained record
+on each mouse-move message, while Nanolathe commits one typed command on
+release so authoritative mutation remains at the input boundary. A committed
+selection change, unit-slot reuse, queue-index change or payload change cancels
+the gesture so stale input cannot move unrelated work. Leaving the idle latch,
+pressing the snap-override modifier, or entering strategic view also cancels
+and cannot later emit a command.
+
+The session reproduces the sourced in-place rewrite without removal or
+reordering. For an active head, the patch stages the unit's current position
+and invokes its ground-move entry before validation. Nanolathe stages the same
+position and calls `ReleaseGoalPayload`: that adapter cancels the path request,
+detaches and destroys the record's goal, and clears route active/repath state.
+The next accepted phase-zero visit installs the new destination; invalid build
+placement restores the old position while leaving the interrupted route
+released.
+
+Targetless move, patrol and unload destinations copy the cursor position and
+reset the record phase to zero. A mobile build retains its queued facing,
+derives the oriented footprint and yard through the construction service, and
+uses the ordinary cursor placement predicate; rejection preserves the old
+position, while acceptance stores the oriented footprint centre and canonical
+site height. Hit testing uses the source's projected half-open footprint with
+the definition's ordinary authored extents; per-order rotation applies only to
+destination centring, preview and validation.
+
+CP-CON-1's manual override gesture uses the configured click-snap override key
+(Alt by default) and takes precedence over both queued dragging and Modern
+Alt-move. Press over a committed local unit captures its slot and published
+instance without changing selection. Releasing while the override remains held
+emits `HumanCommunityKickout` to the cursor's unvalidated world point; releasing
+the key cancels. The command revalidates local ownership and the published
+instance, then calls the construction service's feature-gated `KickoutMove`.
+Strict and a disabled CP-CON-1 feature therefore cannot reach the rewrite. Both
+gestures are sourced extension input [community patch engine behavior §5.11].

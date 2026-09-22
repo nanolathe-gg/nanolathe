@@ -434,12 +434,5 @@ func (b *battleSession) categoryMask(name string) (content.CategoryMask, bool) {
 
 // inCategory reports whether a frame unit's definition is in a membership set.
 func (b *battleSession) inCategory(v frame.UnitView, mask content.CategoryMask) bool {
-	if b == nil || b.cat == nil {
-		return false
-	}
-	def, ok := b.cat.Unit(v.DefName)
-	if !ok || def == nil {
-		return false
-	}
-	return mask.Contains(def.UnitDefID)
+	return v.DefID != 0 && mask.Contains(uint32(v.DefID))
 }

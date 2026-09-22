@@ -108,9 +108,10 @@ func (p *FixedEffectPool) AdmitShatter(req FragmentRequest, draw func(uint32) ui
 	if p == nil || draw == nil {
 		return false
 	}
+	p.ensureStorage()
 	admitted := false
 	for _, quad := range req.Quads {
-		if len(p.records) >= FixedEffectCap {
+		if len(p.records) >= p.capacity {
 			break
 		}
 		slot := p.firstFreeFragment()
@@ -178,6 +179,20 @@ func (p *FixedEffectPool) FragmentMetadataInto(out []FragmentMetadata) []Fragmen
 }
 
 func (p *FixedEffectPool) firstFreeFragment() int {
+	if p.fragmentRoundRobin && len(p.fragments) != 0 {
+		for n := 0; n < len(p.fragments); n++ {
+			i := (p.fragmentCursor + n) % len(p.fragments)
+			if p.fragments[i].live {
+				continue
+			}
+			p.fragmentCursor = i + 1
+			if p.fragmentCursor == len(p.fragments) {
+				p.fragmentCursor = 0
+			}
+			return i
+		}
+		return -1
+	}
 	for i := range p.fragments {
 		if !p.fragments[i].live {
 			return i

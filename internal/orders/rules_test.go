@@ -32,6 +32,9 @@ func ruleCalls(u *units.Unit, n *Node, sink *bool) []struct {
 		{"GuardSeeksPad", func() { *sink = rulesOfUnit(u).GuardSeeksPad(u, n, 100) }},
 		{"GuardWorksNearby", func() { *sink = rulesOfUnit(u).GuardWorksNearby(u, n, 100) }},
 		{"GuardResumesFromPad", func() { *sink = rulesOfUnit(u).GuardResumesFromPad(u) }},
+		{"ScriptAttackSurfaceFire", func() {
+			*sink = rulesOfUnit(u).ScriptAttackSurfaceFire(ScriptAttackSurfaceFireRequest{Binding: bindingOfUnit(u), Actor: u})
+		}},
 	}
 }
 

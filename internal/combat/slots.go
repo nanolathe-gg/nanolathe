@@ -142,7 +142,9 @@ func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 	return false, false
 }
 
-// ComputeStoredReload implements the integer-truncated reload computation [06 §4.2] C7 (I3) [01 §8].
+// computeStoredReloadAtLevel implements the integer-truncated reload
+// computation after the bound rule resolves the consumer's level
+// [06 §4.2] C7 (I3) [01 §8].
 //
 // `authoredReload` is the weapon record's reload word, which every reader in
 // retail reads zero-extended — this recomputation, the maximum-reload
@@ -153,16 +155,14 @@ func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 //
 // Order is exact per [06 §4.2]:
 //
-//	tier           = min(floor(unsigned kills/5), 5)           // unsigned [06 §4.2]
+//	tier           = selected bounded level (Strict is min(unsigned kills/5, 5))
 //	veteranReload  = floor((100-6*tier)*authoredReload/100)    // trunc toward zero [01 §8]
 //	healthFactor   = 120 - floor(20*health/maxHealth)          // signed trunc toward zero [01 §8]
 //	storedReload   = floor(healthFactor*veteranReload/100)     // trunc toward zero [01 §8]
 //
 // Stockpile launch does not write reload [06 §4.2] C7 — caller must skip the store path for stockpile weapons.
 // Malformed states (zero maxHealth, negative health, overflow) are explicit unknowns per [06 §4.2] PLAN_09 Explicit unknowns.
-func ComputeStoredReload(health, maxHealth int32, kills int32, authoredReload int32) int32 {
-	// Tier: min(floor(unsigned kills/5),5) [06 §4.2] C7
-	tier := veteranTier(kills) // shared unsigned stored-word reader [06 §4.2]
+func computeStoredReloadAtLevel(health, maxHealth, tier, authoredReload int32) int32 {
 	// veteranReload = floor((100-6*tier)*authoredReload/100) trunc toward zero [01 §8] I3 [06 §4.2]
 	veteranReload := int32((int64(100-6*tier) * int64(authoredReload)) / 100) // trunc toward zero [01 §8]
 

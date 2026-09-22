@@ -978,6 +978,11 @@ func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, satisfied 
 	if unitCanFly(u) {
 		return vtolFollowOrbit(u, n, ward, satisfied, tick)
 	}
+	n.GoalX, n.GoalZ = rulesOfUnit(u).GuardHome(GuardHomeRequest{
+		Guard: u, Ward: ward,
+		OffsetX: n.GoalX, OffsetZ: n.GoalZ,
+		Spacing: n.Param1,
+	})
 	x, y, z, radius := GuardFollowPoint(n, ward.X, ward.Y, ward.Z)
 	// The payload form is used rather than installPointGoal so the record's
 	// goal triple keeps the offset [04 R-ORD-01 §8 point 2].

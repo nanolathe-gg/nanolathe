@@ -58,6 +58,13 @@ func buildWeaponHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 	if u == nil || n == nil {
 		return Code(5)
 	}
+	if rulesOfUnit(u).RejectStockpileOrder(u, n) {
+		// The selected corrupt-order exit returns 7. On this secondary
+		// segment the pump removes only this record and stops its pass;
+		// it is not the primary segment's cancel-all [04 §3.5]
+		// (community-patch-engine.md CP-DMG-5).
+		return Code(7)
+	}
 	// The node's slot index is used VERBATIM to select the weapon slot; the
 	// handler tests neither that the slot's weapon carries `stockpile` nor that
 	// it is a real weapon [06 R-WPN-05 §2]. The slot search this used to do —

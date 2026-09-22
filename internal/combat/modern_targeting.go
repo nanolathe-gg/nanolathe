@@ -71,8 +71,10 @@ func (r *ModernRules) Launched(s *Service, h pool.Handle, q *ShotQuery) {
 // ModernResponseAdmits is the out-of-range response suitability gate. Session
 // checks knowledge and hostility; orders owns pursuit distance and provenance.
 // Bad categories remain a preference in acquisition, but a response does not
-// start a pursuit with a weapon explicitly disfavored for that target.
-func ModernResponseAdmits(shooter, target *units.Unit, idx int, terrain *world.Terrain, catalog *content.Catalog) bool {
+// start a pursuit with a weapon explicitly disfavored for that target. The
+// live service keeps its estimate on the same bound veterancy answers as
+// accepted damage; omission retains the Strict fixture default.
+func ModernResponseAdmits(shooter, target *units.Unit, idx int, terrain *world.Terrain, catalog *content.Catalog, services ...*Service) bool {
 	if shooter == nil || target == nil || shooter.Def == nil || target.Def == nil || !target.Alive || target.Dying {
 		return false
 	}
@@ -81,7 +83,11 @@ func ModernResponseAdmits(shooter, target *units.Unit, idx int, terrain *world.T
 		return false
 	}
 	weapon := slot.Weapon
-	if modernEffectiveDamage(weapon, target, shooter, false, false) <= 0 || (weapon.Paralyzer && (target.Stunned || target.Def.ImmuneToParalyzer)) {
+	var service *Service
+	if len(services) != 0 {
+		service = services[0]
+	}
+	if modernEffectiveDamage(service, weapon, target, shooter, false, false) <= 0 || (weapon.Paralyzer && (target.Stunned || target.Def.ImmuneToParalyzer)) {
 		return false
 	}
 	if catalog != nil && !IsPreferredCategoryMask(target.Def.DefinitionMask(), badMaskForSlot(shooter.Def, idx)) {
@@ -142,23 +148,27 @@ func (s *Service) reliableETA(p Projectile, weapon *content.WeaponDef, target *u
 }
 
 func (s *Service) effectiveDamage(weapon *content.WeaponDef, target, shooter *units.Unit) int64 {
-	return modernEffectiveDamage(weapon, target, shooter, s.doubleShot, s.halfShot)
+	return modernEffectiveDamage(s, weapon, target, shooter, s.doubleShot, s.halfShot)
 }
 
-func modernEffectiveDamage(weapon *content.WeaponDef, target, shooter *units.Unit, doubleShot, halfShot bool) int64 {
+func modernEffectiveDamage(service *Service, weapon *content.WeaponDef, target, shooter *units.Unit, doubleShot, halfShot bool) int64 {
 	if weapon == nil || target == nil || target.Def == nil {
 		return 0
 	}
-	kills := int32(0)
+	level := uint32(0)
 	if shooter != nil {
-		kills = shooter.Kills
+		level = service.VeteranLevel(shooter.Def, shooter.Kills)
 	}
-	nominal := weaponNominal(SelectBaseDamage(weapon, target.Def.UnitName), 1, kills, shooter != nil, doubleShot, halfShot)
+	nominal := weaponNominal(SelectBaseDamage(weapon, target.Def.UnitName), 1, int32(level), shooter != nil, doubleShot, halfShot)
 	// Negative authored damage and narrowing overflow are not kill promises.
 	if nominal <= 0 || nominal > 65535 {
 		return 0
 	}
-	amount := scaleAcceptedAmount(nominal, target.Kills, UnitArmored(target), target.Def.DamageModifier)
+	defenderLevel := service.VeteranLevel(target.Def, target.Kills)
+	if defenderLevel > 25 {
+		defenderLevel = 25
+	}
+	amount := scaleAcceptedAmount(nominal, int32(defenderLevel), UnitArmored(target), target.Def.DamageModifier)
 	if weapon.Paralyzer {
 		// Paralyzer credit never enters health subtraction [06 §9.1].
 		return int64(amount)

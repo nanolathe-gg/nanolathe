@@ -63,6 +63,61 @@ func TestCombatTailAppendNeverFillsHoles(t *testing.T) {
 	}
 }
 
+func TestServiceBattleProjectileCapacityAndLinkRepair(t *testing.T) {
+	s := NewServiceWithProjectileCapacity(ProjectileCapacity + 2)
+	for i := 0; i < ProjectileCapacity+2; i++ {
+		h, ok := s.Reserve()
+		if !ok {
+			t.Fatalf("reserve %d failed above retail capacity", i+1)
+		}
+		s.Records[int(h)-1].WeaponID = int32(i + 1)
+	}
+	if _, ok := s.Reserve(); ok {
+		t.Fatal("reserve above configured capacity succeeded")
+	}
+	s.Records[ProjectileCapacity+1].TargetProjectile = pool.Handle(ProjectileCapacity + 1)
+	s.MarkDead(1)
+	s.Compact(nil)
+	if s.Count() != ProjectileCapacity+1 {
+		t.Fatalf("count after compact = %d, want %d", s.Count(), ProjectileCapacity+1)
+	}
+	tail := s.Records[ProjectileCapacity]
+	if tail.WeaponID != ProjectileCapacity+2 || tail.TargetProjectile != ProjectileCapacity {
+		t.Fatalf("moved tail = %+v, want weapon %d link %d", tail, ProjectileCapacity+2, ProjectileCapacity)
+	}
+}
+
+func TestServiceConfiguredCompactionDoesNotAllocate(t *testing.T) {
+	const capacity = 4096
+	s := NewServiceWithProjectileCapacity(capacity)
+	for i := 0; i < capacity; i++ {
+		h, ok := s.Reserve()
+		if !ok {
+			t.Fatalf("reserve %d failed", i+1)
+		}
+		s.Records[int(h)-1].WeaponID = int32(i + 1)
+	}
+	s.Records[capacity-1].TargetProjectile = capacity - 1
+	s.MarkDead(1)
+	s.Compact(nil)
+	tail := s.Records[capacity-2]
+	if s.Count() != capacity-1 || tail.WeaponID != capacity || tail.OldMarker != capacity-1 || tail.TargetProjectile != capacity-2 {
+		t.Fatalf("4096-slot compact truncated state: count=%d tail=%+v", s.Count(), tail)
+	}
+	if _, ok := s.Reserve(); !ok {
+		t.Fatal("restore reservation failed")
+	}
+	if got := testing.AllocsPerRun(50, func() {
+		s.MarkDead(1)
+		s.Compact(nil)
+		if _, ok := s.Reserve(); !ok {
+			panic("restore reservation failed")
+		}
+	}); got != 0 {
+		t.Fatalf("configured compaction allocations = %v, want 0", got)
+	}
+}
+
 // TestCombatCountSemanticsAfterCompact verifies retirement sets dead flag without
 // decrementing count [06 §5.1] and Compact publishes reduced count after scan [06 §5.2].
 func TestCombatCountSemanticsAfterCompact(t *testing.T) {

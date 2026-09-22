@@ -24,6 +24,9 @@ const degreesToRadians = 0.017453292519943278
 // DefinitionHeader must be the first field per catalog convention [02 §5].
 type WeaponDef struct {
 	DefinitionHeader
+	// extensionKeys records authored presence separately from a flag's stored
+	// low-bit value, so `key=2` is false but still contributes to identity.
+	extensionKeys uint16
 	// The definition-side active byte initially equals its catalog slot index.
 	// A battle restore may replace it independently of identity; the explicit
 	// state keeps hand-authored definitions initialized from ID as well
@@ -133,10 +136,14 @@ type WeaponDef struct {
 	// research/extensions/weapon-target-keys.md. Do not supply an admission
 	// test from the names; a settled one belongs on the combat.Rules seam
 	// (docs/DESIGN_GAMEPLAY_RULES.md §9).
-	NotToAir        bool // nottoair
-	ToAirOnly       bool // toaironly
-	NotToUnderwater bool // nottounderwater
-	SurfaceFire     bool // surfacefire
+	NotToAir         bool // nottoair
+	ToAirOnly        bool // toaironly
+	NotToUnderwater  bool // nottounderwater
+	SurfaceFire      bool // surfacefire
+	NoOverWater      bool // notoverwater
+	NoOverLand       bool // notoverland
+	NoMapWeaponAlert bool // nomapweaponalert
+	ReloadBar        bool // reloadbar
 
 	// Asset names [02 "Weapon record"] — string 256 default empty.
 	Model             string // model
@@ -196,6 +203,7 @@ var knownWeaponKeys = map[string]struct{}{
 	"targetable": {}, "interceptor": {}, "beamweapon": {}, "shellweapon": {}, "dropped": {}, "vlaunch": {}, "meteor": {}, "noradar": {}, "paralyzer": {}, "startsmoke": {}, "endsmoke": {},
 	// Non-retail target keys with a typed reader; they no longer reach Unknown.
 	"nottoair": {}, "toaironly": {}, "nottounderwater": {}, "surfacefire": {},
+	"notoverwater": {}, "notoverland": {}, "nomapweaponalert": {}, "reloadbar": {},
 	"model": {}, "explosiongaf": {}, "explosionart": {}, "waterexplosiongaf": {}, "waterexplosionart": {}, "lavaexplosiongaf": {}, "lavaexplosionart": {}, "soundstart": {}, "soundhit": {}, "soundwater": {},
 }
 
@@ -209,6 +217,7 @@ var knownWeaponKeys = map[string]struct{}{
 // authored-or-default on every parse, while DAMAGE overrides append to the
 // existing table [02 R-CONTENT-02][06 R-DMG-01 §1].
 func compileWeaponSectionWithPrior(section *formats.Section, sectionName string, prov Provenance, prior *WeaponDef) *WeaponDef {
+	var extensionKeys uint16
 	// C2 weapon identity: read ID first, default -1, use to select record; section name is catalog key; name is display string [02 "Weapon record"]
 	id := section.IntValue("ID", -1)
 	displayName, _ := section.StringValue("name", "")
@@ -354,10 +363,20 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	// The non-retail target keys read exactly as the retail flags above do:
 	// the integer accessor's default 0 consumed as a boolean. Retail content
 	// authors none of them, so every retail record reads false.
-	notToAir := storedFlag(section, "nottoair", false)
-	toAirOnly := storedFlag(section, "toaironly", false)
-	notToUnderwater := storedFlag(section, "nottounderwater", false)
-	surfaceFire := storedFlag(section, "surfacefire", false)
+	extensionFlag := func(key string, bit uint16) bool {
+		if _, ok := section.RawValue(key); ok {
+			extensionKeys |= bit
+		}
+		return storedFlag(section, key, false)
+	}
+	notToAir := extensionFlag("nottoair", 1<<0)
+	toAirOnly := extensionFlag("toaironly", 1<<1)
+	notToUnderwater := extensionFlag("nottounderwater", 1<<2)
+	surfaceFire := extensionFlag("surfacefire", 1<<3)
+	noOverWater := extensionFlag("notoverwater", 1<<4)
+	noOverLand := extensionFlag("notoverland", 1<<5)
+	noMapWeaponAlert := extensionFlag("nomapweaponalert", 1<<6)
+	reloadBar := extensionFlag("reloadbar", 1<<7)
 
 	// Asset names — string 256 default empty [02 "Weapon record"]
 	model, _ := section.StringValue("model", "")
@@ -447,6 +466,7 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 			CanonicalKey: CanonicalKey(sectionName),
 			Provenance:   prov,
 		},
+		extensionKeys:      extensionKeys,
 		ID:                 id,
 		Name:               displayName,
 		WeaponVelocity:     weaponVelocity,
@@ -514,6 +534,10 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 		ToAirOnly:          toAirOnly,
 		NotToUnderwater:    notToUnderwater,
 		SurfaceFire:        surfaceFire,
+		NoOverWater:        noOverWater,
+		NoOverLand:         noOverLand,
+		NoMapWeaponAlert:   noMapWeaponAlert,
+		ReloadBar:          reloadBar,
 		Model:              model,
 		ExplosionGaf:       explosionGaf,
 		ExplosionArt:       explosionArt,
@@ -558,21 +582,26 @@ func compileWeaponSectionWithPrior(section *formats.Section, sectionName string,
 	for _, k := range wd.UnknownKeysSorted() {
 		fmt.Fprintf(&b, "%s=%s|", k, wd.Unknown[k])
 	}
-	// The non-retail target keys contribute only when authored, in one fixed
-	// order. An unset key emits nothing, so a record that authors none — every
-	// retail record — canonicalizes to exactly the bytes it did before the keys
-	// had a typed reader, and the retail catalog digest is unchanged [02 §5] C12.
+	// Non-retail flags contribute only when authored, in one fixed order. The
+	// authored-presence bit is separate from the stored low bit, so `key=2`
+	// canonicalizes as false without becoming indistinguishable from absence.
+	// Every absent extension block emits no bytes, preserving retail hashes.
 	for _, ext := range [...]struct {
+		bit uint16
 		key string
 		set bool
 	}{
-		{"nottoair", wd.NotToAir},
-		{"nottounderwater", wd.NotToUnderwater},
-		{"surfacefire", wd.SurfaceFire},
-		{"toaironly", wd.ToAirOnly},
+		{1 << 0, "nottoair", wd.NotToAir},
+		{1 << 1, "toaironly", wd.ToAirOnly},
+		{1 << 2, "nottounderwater", wd.NotToUnderwater},
+		{1 << 3, "surfacefire", wd.SurfaceFire},
+		{1 << 4, "notoverwater", wd.NoOverWater},
+		{1 << 5, "notoverland", wd.NoOverLand},
+		{1 << 6, "nomapweaponalert", wd.NoMapWeaponAlert},
+		{1 << 7, "reloadbar", wd.ReloadBar},
 	} {
-		if ext.set {
-			fmt.Fprintf(&b, "%s=1|", ext.key)
+		if wd.extensionKeys&ext.bit != 0 {
+			fmt.Fprintf(&b, "%s=%t|", ext.key, ext.set)
 		}
 	}
 	wd.Hash = HashDefinition([]byte(b.String()))

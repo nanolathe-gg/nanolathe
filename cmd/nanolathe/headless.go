@@ -98,8 +98,10 @@ func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedS
 			seeds = source.NextBattleSeeds()
 		}
 		request.value = headless.FreshBattleRequest{
-			Gameplay: opts.Gameplay,
-			Map:      opts.Map, Mission: opts.Mission, Difficulty: opts.Difficulty,
+			CommunitySources: communitySources(opts, cs),
+			BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
+			Gameplay:         opts.Gameplay,
+			Map:              opts.Map, Mission: opts.Mission, Difficulty: opts.Difficulty,
 			LocalOwner: -1, SimulationSeed: uint32(seeds.Simulation), CRTSeed: seeds.CRT,
 			FS: cs.fs, ContentLimits: cs.limits, PresentationWidth: retailScreenW, PresentationHeight: retailScreenH,
 		}

@@ -369,26 +369,29 @@ registry branch at load; it overrides last-used registry values, not the reverse
   icon-config file named by `MegaMapConfig` carries its own `[Option]` keys
   and an `[Icon]` section; its contents are interface behavior and stay with
   [Shared draw-DLL interface](draw-engine-interface.md).
-- **Input and command surface (author-documented, host-side).** Beyond the
-  dialog: ctrl-F and ctrl-B cycle the selection to the next *idle* factory or
-  mobile constructor (a completed, alive, non-nanoframe builder with nothing
-  queued: deselect all, advance a persistent cursor, select, refresh the
-  selection effect, centre the view, rebuild the build menu discarding any
-  prepared placement; the cursor wraps once and gives up after a full empty
-  pass; membership is the mod-authored `CTRL_F` / `CTRL_B` category when any
-  unit carries it, otherwise a derived set — for ctrl-F, builders that cannot
-  move, are not air bases and are not the commander; the pinned revision's
-  top commit fixes the scan to walk the whole slot block rather than the live
-  count, skip freed slots, and allow slot 0); ctrl-S selects the on-screen
-  weapon-capable mobile units; the ctrl-Z / ctrl-A / ctrl-B / ctrl-C
+- **Input and command surface (Established from the pinned source, host-side).**
+  Ctrl-F and Ctrl-B advance independent persistent cursors through the full
+  owner slot block, skipping free records and wrapping once. Factory idle means
+  no primary order or a primary order other than factory production. Constructor
+  idle means no primary order or a ground/air standby primary order; its prior
+  health percentage sample must also be neither zero nor one. Secondary orders
+  do not participate, and the constructor scan has no separate completion gate.
+  A hit replaces selection, centres the view and discards prepared placement;
+  an empty full pass clears selection and resets the cursor. Authored `CTRL_F`
+  or `CTRL_B` membership wins when nonempty. Otherwise the fallback takes
+  builders excluding air bases and the class with both `showplayername` and
+  `hidedamage`, split by `bmcode` into factories and mobile constructors. It
+  does not subtract `CTRL_W`. Ctrl-S selects on-screen `CTRL_W` members with
+  `canfly` clear; the release-note `NOTAIR`/`NAIR` description has no lookup in
+  this pinned implementation. The Ctrl-Z / Ctrl-A / Ctrl-B / Ctrl-C
   selection truncation for definition IDs at or above 512 is fixed
   (CP-LIM-2); Shift with `q` and `e` alternates mex building and reclaim
   while snap is active; the `v` key sets a builder's movement option before a
   patrol route; a queued build or move order can be left-dragged to a new
   position; the share dialog and battleroom gain buttons that issue
   `+noshake`, `.ready`, `.autopause`, `+shootall`, AUTOTEAM, RANDOMTEAM and
-  CRCREPORT (host-only); `+bps` shows a throughput and game-time readout kept
-  visible over the megamap; and the F11 macro text is no longer relayed to
+  CRCREPORT (host-only); `+bps` keeps the throughput readout visible over the megamap;
+  the separate clock option keeps game time visible there; and the F11 macro text is no longer relayed to
   other players. Source: `ExternQuickKey.cpp`, `tahook.cpp`, `dialog.cpp`,
   `sharedialog.cpp`; `tdraw.txt`.
 - **Legacy keys.** `WeaponType` and `MultiGameWeapon` in the shipped INI belong
@@ -428,6 +431,15 @@ simulation-visible and a mixed fleet can desynchronise after the stock cap
 on the projectile and explosion pools). Install is also refused once the
 engine has allocated its projectile pool. Source: `EngineLimits.cpp`; author
 documentation in `tdraw.txt`.
+
+**Established — auxiliary owner mapping.** Matching the replaced allocation
+loops and their callers to the retail shatter path identifies the auxiliary
+records as the fragment-geometry pool of [04 R-COB-04 §3] and [04 R-COB-04 §4]: one eight-vertex,
+six-face geometry record paired with each admitted shatter effect. They are
+separate from the flying whole-model-piece slots. The enlarged geometry
+allocator starts at its retained cursor, wraps at capacity, claims the first
+free record, and advances the cursor to the following record; a full scan
+returns no record. Battle initialization resets that cursor.
 
 **CP-LIM-2 (B, inferred). Runtime capacity settings.** `LimitCrack` writes the
 `totala.ini` values into engine constants on process attach, before the pool
@@ -705,8 +717,9 @@ attacker compare per detonation, and nothing else; only the authored data
 decides what is active.
 
 **CP-WPN-1 (B). `nottoair = 1`.** The weapon cannot select or fire at a unit
-whose movement state is airborne (the low two bits of the target's state
-word equal the airborne value; a grounded aircraft reads grounded and flips
+whose position-committed unit-side movement state is airborne (the low two
+bits of the target's state word equal the airborne value, independently of a
+new live mover mode that has not yet been published; a grounded aircraft reads grounded and flips
 on lift-off, per a live observation the source records). At parse time the
 handler ORs a not-to-air bit (bit 31, the one free bit of that word) into the
 weapon definition's engine type-mask word — the only weapon-definition state
@@ -753,6 +766,14 @@ or above sea level — `>=`, not strictly above — and the redirect does not
 test the target). `nottoair` still wins over `surfacefire` for airborne
 targets. Author text: both auto-aim and manual targeting are affected.
 Source: `SurfaceFire.cpp`; author text in `tdraw.txt`.
+
+**Established — can-aim owner mapping.** The separate can-aim hook is the
+shot-time point gate of [06 R-WPN-05 §9]. Its inclusive range comparison has
+already passed. A tagged weapon takes success before the water-weapon branch,
+skipping both the shooter-depth rejection and the subsequent ballistic
+feasibility check. This hook tests the tag alone, so it also affects a tagged
+non-water weapon; an ordinary water weapon already takes the same success
+route. It does not bypass range or change the unit-target acquisition gate.
 
 **CP-WPN-4 (B). `notoverwater = 1` / `notoverland = 1`.** The weapon does not
 fire while the **firing unit** is over water (`notoverwater`) or over land
@@ -823,6 +844,20 @@ stockpile weapon**; tag membership matches by definition or by weapon name,
 so a name match survives a reload into a different slot. Presentation only.
 Source: `ReloadBars.cpp`.
 ### 5.4 Damage and claim mechanics
+
+**Established — shared callback timing.** The patch's callback named “game
+tick” is invoked in the outer game loop after its simulation catch-up work,
+not inside the authoritative sub-tick. Its callbacks can run repeatedly at the
+same game time or once after several sub-ticks. Among the adopted modules,
+registration order is deferred schema spawning, transported-death capture
+pruning, then area-overflow indexing. The area index alone suppresses a repeat
+rebuild at the same game time. Its indexed footprint population is therefore
+an outer-loop snapshot, not a lazy snapshot at the first blast and not an
+index rebuilt immediately before each projectile phase. This source behavior
+can depend on host batching. A deterministic Nanolathe projection requires an
+explicit design decision; this reference does not authorize one. Evidence:
+`GameTickHook.cpp`, registration in `ddraw.cpp`, and retail outer-loop call
+ordering [01 §4.4].
 
 **CP-DMG-1 (B). Area-damage overflow (air stacking).** Stock area damage
 visits two occupant slots per map cell (unit slot zero and unit slot one
@@ -898,7 +933,10 @@ applies when the unit is currently transported (carrier pointer non-null at
 selection), was transported at the moment of death (captured by a pre-death
 hook and cleared by the post-decision hook or consumed at selection), or was
 captured at a transport's passenger-death pass (pointer, index, type and
-health recorded and consumed when all still match). Those captures are not
+health recorded; consumption matches pointer, index and type, not health).
+The selector consumes a matching passenger capture even if the current carrier
+or pre-death capture already qualifies, then clears the single pending
+pre-death capture. The health sample is used only by pruning. Those captures are not
 tied to an event or tick: they persist until a per-tick sweep prunes them
 (identity changed, or the unit alive with changed health and not pending
 death), so a captured passenger that survives untouched and later dies is
@@ -924,6 +962,11 @@ the HP path truncates it toward zero, the energy path uses it as is):
   `buildTime` (at most one carry per call). A repairer holds two
   target-tagged banks: a lookup by target that misses claims the first empty
   slot, else overwrites slot 0; claiming starts the bank at zero.
+  **Established — bank lifetime:** the repairer index selects the pair and
+  the target's array-slot identity is its tag. The table is reset when the
+  engine's unit array changes, not when an individual slot dies. Reusing the
+  same repairer and target slots can therefore retain their matching fraction;
+  a different target tag resets the claimed bank.
 - **Energy** = `max(1, trunc(1 + (buildCostEnergy × t − 1) / buildTime))`,
   evaluated in the engine's own extended-precision sequence and its own
   truncating conversion helper (deliberately not reimplemented in C++ float
@@ -981,8 +1024,7 @@ offline scan found no degenerate stockpile weapon in live Escalation data.
 (2) The verdict path classifies an order's weapon slot as ok, zero-divisor,
 bad index (above 2, unsigned) or unreadable order/unit/weapon. On the
 simulation path a bad index or an unreadable state is redirected to the
-engine's own corrupt-order exit (which frees every order on the unit's main
-and background lists), while the zero-divisor case is deliberately left
+engine's own corrupt-order exit, while the zero-divisor case is deliberately left
 bit-identical to stock because that path has no integer divide and every
 generic exit changes order state. **The HUD path returns "no display" for any
 non-ok verdict, and that zero-divisor guard is the actual crash fix** (the
@@ -997,6 +1039,15 @@ Source: `BuildWeaponSlotGuard.cpp`; only the escalation profile installs it at
 the pinned revision, although the author notes the reviewer's finding that
 the same stock signatures appear on all seven shipped executables, which the
 project has not re-run itself.
+
+**Established — corrupt-order result and queue scope.** The selected exit
+returns result 7. The source comment describes the primary pump's cancel-all
+interpretation, but stockpile records run in the secondary pump, where result
+7 removes that record and returns from the secondary pass [04 §3.5]. Other
+primary and secondary records survive. This correction follows the installed
+exit and the retail pump contract, rather than the source comment. An unarmed
+Nanolathe slot's nil weapon represents the readable no-weapon sentinel, not
+the patch's unreadable-pointer verdict.
 
 ### 5.5 Unit identity and divergence handling
 
@@ -1049,12 +1100,16 @@ alone, and the changelog records the cheat path as deliberately removed. The
 permission applies only while the prepared order is a build, and a one-byte
 enable is written into the engine's placement test so it reaches that branch
 at all. The placement preview's rectangle colour index is rewritten at the
-start of every placement test and again (to the "yellow" index) when a
+start of every placement test (logical colour 6, green) and again (to
+logical colour 10, yellow) when a
 square is accepted only because own units occupy it, and the engine's
 "target area blocked" wait limit is patched to 20 at the mobile and VTOL
-sites (the retail wait counts past 10 [04 R-ORD-01 §5]; that the patched
-operand is that limit is **Supported inference** — the displaced original
-byte is not in the source). When the builder reaches the "waiting for the
+sites (**Established** by matching the two replacement operands to the retail
+mobile and VTOL blocked-site branches: each compares the current visit count
+against 10, waits and increments while it is at or below the limit, and
+abandons only when it is greater [04 R-ORD-01 §5]). The replacement changes
+that comparison limit to 20 and retains the increment and 30-tick wait.
+When the builder reaches the "waiting for the
 target area to clear" branch, the candidate set is the occupant of each
 footprint cell — cells from `(order position ÷ 16) − (footprint ÷ 2)` per
 axis, truncating, out-of-range cells skipped, results de-duplicated, the
@@ -1076,9 +1131,10 @@ considered:
   Everything else is kicked: no order, an order without a target, a completed
   target, or 600 or more invested.
 - *Where does it go?* A random bearing is drawn **first and unconditionally
-  on every call** from the C runtime generator (an integer 0..359 divided by
-  57.0, a coarse degrees-to-radians factor), so that generator advances once
-  per considered unit whatever branch is taken. The preferred bearing is then,
+  on every destination-search call** from the C runtime generator (an integer
+  0..359 divided by 57.0, a coarse degrees-to-radians factor). The caller runs
+  the should-move predicate first, so a rejected occupant never enters this
+  search and spends no draw; within the search the draw is unconditional. The preferred bearing is then,
   in precedence: the random one when the unit is already executing a kickout
   move; else, when the unit has a work or attack target, the bearing to that
   target rotated ±45°, choosing the sign whose unit vector has the smaller
@@ -1086,7 +1142,13 @@ considered:
   away from it), then re-based: the forward intersection of that ray with the
   circle of the nominal radius about the build square, if strictly inside the
   map (> 16 and < map size on both axes), replaces it with the bearing from
-  the build square to that point; else, when the unit is not exactly at the
+  the build square to that point. The intersection evaluates the ray tangent;
+  when its absolute value is at most 1 it substitutes the line equation into
+  the circle and solves the resulting quadratic in X, otherwise it uses the
+  reciprocal tangent and solves in Y. The discriminant is `b*b - 4*a*c`, the
+  roots are tested in `(-b + sqrt(discriminant))/a/2` then
+  `(-b - sqrt(discriminant))/a/2` order, and a root is accepted when its dot
+  product with the ray direction is nonnegative. Else, when the unit is not exactly at the
   build square, the bearing from the square to the unit ("away"); else the
   random one. The search then runs radii from `24 ×` the target footprint's
   X extent (world units) while **strictly less than** twice that, in 16-unit
@@ -1115,9 +1177,10 @@ considered:
   types in a fixed order (move first) against the order's handler index,
   falling back to "stop". After every branch the issued position is recorded
   in a table keyed by the unit's in-game index; "already being kicked out"
-  means the current order is a move whose position still equals that record,
-  a mismatch erases the entry, and the table is never pruned on death, so a
-  recycled index can match a stale record.
+means the current order is a move whose position still equals that record,
+a move-position mismatch erases the entry, while a non-move order leaves it
+alone, and the table is never pruned on death, so a recycled index can match a
+stale record.
 
 **Unknown — replication.** The kickout mutates the order list through the
 engine's local order-creation entry points on the owning client only, with a
@@ -1146,9 +1209,18 @@ trigger is author-documented) rewrites the unit's home position to the
 nearest diagonal offset from the guarded unit: stay-put uses
 `7 × spacing ÷ 20` (multiply first, then truncating integer division),
 scatter uses the full spacing, and the default option leaves stock behavior.
-"Spacing" is this document's name for the order field the hook reads — the
-source says only that the field is not the build-unit identifier it is
-named for. Each axis's sign is taken from the guarding unit's quadrant
+**Established — spacing and write shape.** Matching the hook to the retail
+ground guard's follow-maintenance leg identifies the operand as its stored
+follow radius: `(guard footprint X + ward footprint X + 2) × 16` whole world
+units, initialized at guard admission [04 R-ORD-01 §8]. The patch overwrites
+only the whole-unit halves of the two horizontal anchor offsets, preserving
+their fractional halves and the vertical offset. The quadrant comparison
+reads each unit's unsigned whole-unit horizontal coordinates. The source's
+Stay multiplication and division operate on the unsigned radius before the
+chosen offset is signed; ordinary admitted footprints keep it positive.
+The hooked maintenance leg can be reached by any ground guard, not only a
+builder or a guard of a factory; the narrower completed-build description
+above is author text, not an additional code gate. Each axis's sign is taken from the guarding unit's quadrant
 relative to the guarded unit (a zero difference goes positive), and the
 order's position fields receive that signed per-axis offset. The option is
 per movement setting (bits 18–19 of the unit's selection/flags word: 0 hold,
@@ -1161,16 +1233,20 @@ read at this revision; the gate is compile-time. Source: `TABugFix.cpp`,
 **CP-CON-3 (B). Patrolling builders' reclaim/assist filters.** With
 `PATROLING_CONS_RECLAIM_OR_ASSIST_ENABLE` (all except OTA), a patrolling
 construction unit's per-movement-setting option selects "reclaim only" (jump
-straight to the reclaim search, skipping the build/repair branch) or "assist
+to the storage gates preceding feature reclaim, skipping the build/repair branch) or "assist
 only" (return before the reclaim search); both mobile and VTOL patrol paths
 are patched. Defaults: **Hold Position is Reclaim Only**; Maneuver and Roam
 are Both (stock), as `tdraw.txt` also states. Source: `TABugFix.cpp`,
 `dialog.cpp`.
 
 **CP-CON-4 (A). Reclaim toggle does not cancel a prepared build.** While the
-prepared order type is BUILD and the local reclaim-active flag is set, the
-toggle is not applied, so the prepared build is not cancelled. Installed in
-every profile. Source: `TABugFix.cpp`.
+prepared order type is BUILD and the low byte of the current toggle gadget's
+status is nonzero, the keyboard accelerator skips the status toggle. Radio-group
+clearing and the fired callback still run. The hook does not test the gadget
+name: “reclaim-active” is the source author's label for a generic widget status
+byte, not a separate reclaim flag. Pointer toggles are outside this hook.
+Installed in every profile. Source: `TABugFix.cpp`; retail widget context
+confirmed against [07 R-WGT-01 §3].
 
 **CP-CON-5 (B, content-driven). Structure rotation.** The `Rotations =` FBI key
 (a string extension, default `S`) lists the cardinal letters a building
@@ -1188,7 +1264,25 @@ modifier) also cycles and is consumed whenever that modifier is held, and a
 per-cardinal margin band of a rotatable structure's build button selects a
 facing (S bottom, E right, N top, W left; centre clicks select normally and
 keep the facing; the overlay is switchable in ctrl-F2). The cursor's facing
-survives switching to a non-rotatable type and back. The chosen rotation is
+survives switching to a non-rotatable type and back.
+
+**Established — build-menu overlay.** The overlay preference gates both the
+art and edge selection. Every active build button whose definition is a
+building with at least two allowed facings shows a marker for each allowed
+cardinal. The selectable band is the 13 pixels nearest an edge; equal edge
+distances resolve north, south, east, then west, and the central area retains
+the prior facing. A successful edge choice flashes that marker for 200 ms.
+`anims/buildrotate.gaf` is optional: its first sequence is accepted only with
+exactly four nonempty frames ordered S, E, N, W, and each frame's hotspot is
+placed just inside its edge midpoint. `anims/buildrotateclick.gaf` has the same
+contract and replaces the idle frame during the flash when both files are
+valid. Missing or invalid idle art falls back to two black-outlined yellow
+chevrons per allowed edge, with the selected pair flashing white; custom idle
+art without valid click art has no flash substitution. Overlays are painted
+after the command panel refresh and are covered by later visible panels.
+Source: `unitrotate.cpp` at pinned revision `dcff5dd`.
+
+The chosen rotation is
 captured at order-issue time: the player's build-issue entry is wrapped so
 every order record allocated inside it is tagged with the current rotation,
 clamped to 0 when the selected type disallows it, in a table keyed by the
@@ -1227,10 +1321,10 @@ only; resurrection reproduces it from the wreck's stored orientation (on the
 state step that creates the unit, replicating the engine's cell lookup and
 the single redirect to the root cell); and save/load reads the saved heading
 word at the load path's creation call so the creation-time occupancy stamp
-is rotated and leaves no stale cells. No capture-specific hook exists; the
-author lists capture among the covered creation paths (2026.7.27), which
-implies capture routes through the hooked give path — **Supported
-inference**, not established. No new script port or simulated field exists;
+is rotated and leaves no stale cells. No capture-specific hook exists. **Established:** retail capture completion
+calls the central ownership-transfer path [05 R-WORK-01 §15], which is the
+same entry wrapped by the rotation give hook. Its local replacement therefore
+receives the source building's heading-derived footprint before creation. No new script port or simulated field exists;
 the only extra state is the per-order rotation table (local, transient, not
 saved) and the yardmap cache. A scripting `Create()` that forcibly turns the
 body runs after rotation and wins (author-documented limitation; the
@@ -1377,8 +1471,13 @@ leading minus sign is accepted by the unsigned parse and wraps to a very large
 value; an all-invalid or empty list falls back to the default `5 10 15 20 25`;
 the parsed list is memoised by the raw string) and `VeterancyAccuracyBuffRate`
 (integer; default 12; a rate <= 0 substitutes 0 for the divided term rather
-than disabling the hook) customize veterancy. The bounded level is the count
-of thresholds <= kills (so never above the list length; 0 below the first).
+than disabling the hook) customize veterancy. The bounded level is zero for
+an empty list or kills below its first threshold; otherwise it is the position
+returned by an upper-bound binary search for kills. At each step, compare the
+middle threshold: kills below it keeps the lower half, otherwise discard the
+middle and lower half. For an ascending list this is the count of thresholds
+<= kills, never above the list length. The source does not sort malformed
+lists, so counting all qualifying entries would change their answers.
 The unbounded level, used where the engine has no cap, equals the bounded
 level up to the last threshold and beyond it extrapolates
 `N + (kills - last) / (last - previous)` (unsigned integer division; a single
@@ -1418,11 +1517,15 @@ level `min(kills / 5, 5)` and the unbounded level `kills / 5`); that the retail
 consumers are those exact terms is the retail specification's claim. Two
 caveats: the HUD hooks do differ from retail (`Vet<n>` replaces the
 kill-count/`Veteran` display), and the accuracy hook adds a fixed `0x800` to
-its accumulator in both branches — **Supported inference** (resolving the
-earlier Unknown): that constant is the retail spread bound's `+ 0x800` term
-(`bound = accuracy - health term + 0x800`, [06 §4.4]), not a rounding bias,
-and the hook parameterizes the divisor of that same expression. What would
-settle the register reading: a trace of the hooked site. Source:
+its accumulator in both branches. **Established — spread operand identity**
+by tracing the retail code surrounding the replacement site: the accumulated
+low word is weapon accuracy minus the health term; the replaced block adds
+the retail spread bound's `0x800` term and computes the kill-count divisor.
+The continuation divides the unsigned low-word bound only when that divisor
+is greater than one, then draws the two spread samples [06 §4.4]. The patch
+substitutes `kills / rate` (or zero when disabled) and retains that same
+constant addition. It introduces no rounding bias, and default rate 12 leaves
+this complete arithmetic and draw cadence unchanged. Source:
 `VeterancyHack.cpp`, `UnitDefExtensions.cpp`; author text in `tdraw.txt`.
 
 **CP-UD-2 (P). Placement-preview keys.** All string keys with empty defaults,
@@ -1710,6 +1813,141 @@ the player's maximum storage every tick, and a plain integer clears the
 percentage. Local per-client state, so it cannot desync; the expanded share
 dialog's sliders are percentage-aware. Source: `SharePercent.cpp`.
 
+### 5.10 Optional resource and weather presentation
+
+**Established — allied income.** `cinomce.cpp` displays each allied player
+in its shared-data order, with the player's name and colour, current metal
+and energy, storage bars and income. Metal income has one decimal place;
+energy income has none. Stored values below 10000 have no decimals; values
+below 100000 are divided by 1000 with one decimal and `K`; larger values
+use whole thousands. A minimise control collapses the panel to its widget.
+The shared-data transport is multiplayer infrastructure, not an engine
+simulation rule; a host using committed economy records can present the
+same information without that transport.
+
+**Established — weather.** `HardCodeFunctions.cpp` derives the reference
+solar output from negated integer `ARMSOLAR.energyuse` and the reference
+wind generator maximum from integer `ARMWIN.windgenerator`. If either is
+missing or zero, both fall back to 20 and 30 respectively. For a positive
+wind hard limit, displayed current/minimum/maximum power is
+`(generator maximum * speed + hard limit / 2) / hard limit`, truncated,
+then capped above by the generator maximum. A nonpositive hard limit gives
+zero. Tidal strength is truncated to an integer. `cinomce.cpp` shows current
+wind plus its range, tidal output, and game time from integer tick / 30;
+wind/tidal rows are build-profile choices. It anchors those rows beside the
+side's energy/metal bars, falls back to production anchors and then a fixed
+reference, and clamps text to the screen. Watch mode omits current wind.
+The source's solar reference is computed but not drawn in this revision.
+
+**Established — bytes-per-second overlay.** `MegamapTAStuff.cpp` preserves
+the retail `+bps` overlay in the strategic view and supplies the selected
+side font and normal HUD colour. It delegates all readout contents to the
+retail renderer; this source provides no independent definition of those
+contents. The `BPS` console toggle is retail [07 §3].
+
+### 5.11 Order-position input
+
+**Established — queued build and movement-order drag.** While the prepared
+order is idle, Shift is held, click-snap override is not held, and the
+strategic overview is absent, a left press in the horizontal game area scans
+the local player's unit slots in order. Only selected units participate; each
+primary order list is visited from its head. The first targetless order whose
+descriptor uses the build, patrol, unload or move cursor wins when the pointer
+lies in its projected footprint: X is in `[goalX − 8×footX, goalX +
+8×footX)` and projected map Y is in the analogous half-open interval around
+`goalY − goalHeight/2`. A build uses the definition's ordinary, unrotated
+footprint here; the per-order rotation is consulted later by destination
+placement. Non-build orders use a 1×1 footprint. Source:
+`tahook.cpp` (`Message`, `FindUnitOrdersUnderMouse`).
+
+Mouse movement continues only while the prepared order remains idle, Shift
+remains held, the record remains linked in the same unit's order list, it
+remains targetless, and the strategic overview remains absent. If the record
+is the list head, its active move is first interrupted at the unit's current
+position. A build retains its recorded rotation; that orientation selects its
+footprint, cursor centring and placement test. A valid site resets the order's
+state byte to zero and replaces all three position coordinates with the
+validated cursor position. An invalid site preserves the old position and
+shows the invalid build rectangle. A non-build order performs no destination
+test: it resets the same state byte and copies the cursor position directly.
+No path reordering or remove-and-reinsert occurs. A release clears the retained
+record; a release before any movement replays the ordinary click. Source:
+`tahook.cpp` (`Message`, `DragUnitOrders`, `VisualizeDraggingBuildRectangle`).
+
+**Established — manual construction kickout gesture.** In profiles containing
+CP-CON-1, this handler runs before the queued-order handler. A left press while
+the configured click-snap override key is held captures the unit under the
+pointer only when it belongs to the local human and consumes that press without
+changing selection. On release it rechecks the same captured unit and the
+override key. If both remain valid, it invokes CP-CON-1's existing order
+rewrite with the current cursor's three-coordinate map position and consumes
+the release; otherwise it cancels. This manual path performs no destination
+search or placement validation and consumes no random number. Source:
+`ConstructionKickout.cpp` (`Message`, `IsKickoutOverrideKeyPressed`,
+`KickoutUnitTo`) and `iddrawsurface.cpp` (message-handler order).
+
+### 5.12 Team-coloured nanolathe and nanoframe colours
+
+**Established — source-read host presentation contract.** In the pinned MIT
+source, `TeamColorNanolathe.cpp` owns the preference parser, stream assignment,
+construction-frame remap and renderer installation; `buildghost.cpp` reuses the
+frame remap for both placement-preview styles. The feature is disabled by
+default and affects only rendering. It does not alter a work event, particle
+lifetime, random draw or session state.
+
+Enabling the feature installs these ten stock-palette defaults, in player-logo
+colour order. Each pair is `stream / frame`:
+
+| player colour | palette indices |
+|---|---|
+| 1 | `224,225,226,227,228,229` / `224,224,225,225,226,226,227,227,228,228,229,229,230,230,231,231` |
+| 2 | `249,201,202,203,204,205` / `201,201,201,202,202,203,203,204,204,205,205,206,206,207,207,207` |
+| 3 | `81,82,83,84,85,86,87` / `80,80,81,81,82,82,83,83,84,84,85,85,86,87,88,89` |
+| 4 | `233,234,235,236,237,238` / `232,232,233,233,234,234,235,235,236,236,237,237,238,238,239,239` |
+| 5 | `103,104,105,106,107,108,109` / `103,103,104,104,105,105,106,106,107,107,108,108,109,109,110,111` |
+| 6 | `217,218,219,220,221,222` / `216,216,217,217,218,218,219,219,220,220,221,221,222,222,223,223` |
+| 7 | `208,193,194,195,196,197` / `192,192,193,193,194,194,195,195,196,196,197,197,198,198,199,199` |
+| 8 | `89,90,91,92,93,94,95` / `88,88,89,89,90,90,91,91,92,92,93,93,94,94,95,95` |
+| 9 | `129,130,131,132,133,134,135` / `128,128,129,129,130,130,131,131,132,132,133,133,134,134,135,135` |
+| 10 | `65,66,67,68,69,70,71` / `64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79` |
+
+**Established — list grammar and fallback.** A list contains decimal palette
+indices `0..255` separated by commas. Spaces and tabs are accepted around a
+token; the decimal conversion also accepts C whitespace before a number, while
+only spaces and tabs are accepted between a number and its following comma. A
+semicolon ends the parsed portion. A stream list must contain 1–15
+indices and a frame list exactly 16. A missing or invalid list falls back
+independently to that player's corresponding built-in list. Parsing happens at
+installation, so source-side preference changes take effect at the next start.
+
+**Established — stream ownership and mapping.** An emitter burst is tagged with
+the player-logo colour of its builder. The currently dispatched order unit is
+the authority when it is valid for the current tick. The fallback scans live
+units for the smallest three-dimensional squared distance to the emission
+point, keeping the first unit on a tie. A direct-mapped 64-entry cache keyed by
+the exact three source coordinates retains only the resolved colour for 15
+ticks; an empty, expired or coordinate-mismatched entry performs the scan. One
+tag is then shared by every particle created by that emitter burst. An
+unresolved owner or a logo colour outside `0..9` keeps the stock stream. For a
+resolved owner, assignment chooses
+`stream[(incoming sample + per-colour sequence) mod stream-count]`, then advances
+that colour's sequence once. The incoming sample is the value already supplied
+by the particle constructor; the feature consumes no additional random value.
+The assigned byte stays fixed while the particle travels instead of following
+the stock adjacent-colour advance.
+
+**Established — construction and preview mapping.** For a resolved player-logo
+colour, each stock construction-ramp byte `0xa0..0xaf` maps directly through
+the corresponding position of the player's 16-entry frame list. Other bytes,
+an unresolved owner and an out-of-range colour are unchanged. The same mapping
+colours the animated construction surface and outline. The placement preview
+uses the local player's logo colour for its fill, edge and sweep colours in
+both full and wireframe styles; disabling team colour preserves its stock
+colours. Source: pinned `TeamColorNanolathe.cpp` symbols `LoadColorConfig`,
+`ParseColorList`, `SetPendingForSource`, `SetPalette`, `AdvancePalette` and
+`MapNanoframeColor`, plus `buildghost.cpp` `RenderGhostAtCurrentBuildSpot`.
+
+
 ## 6. Content interface inventory
 
 **Established — author-facing keys at the pinned revision.** Beyond retail
@@ -1734,7 +1972,7 @@ when the key is absent, keyed by definition ID; the module named in the
 | Weapon TDF | `ZeroDamageMapWeapons` | `nomapweaponalert` | integer, low bit | SIM + HOST |
 | Weapon TDF | `ReloadBars` | `reloadbar` | integer, low bit | HOST |
 | Map OTA | `MultiplayerSchemaUnits` | the mission-unit records | see CP-UD-3 | SIM |
-| Unit FBI categories | `ExternQuickKey` | `CTRL_F`, `CTRL_B`, `CTRL_W` (hotkey membership); `NOTAIR` / `NAIR` (the on-screen weapon-unit filter) | authored category names; when no unit carries one, a derived heuristic set applies (§4.2) | HOST |
+| Unit FBI categories | `ExternQuickKey` | `CTRL_F`, `CTRL_B`, `CTRL_W` (hotkey membership); `NOTAIR` / `NAIR` appear only in the release-note description, not the pinned consumer | authored category names; when no unit carries one, a derived heuristic set applies (§4.2) | HOST |
 | Animation | `unitrotate` | `anims/buildrotate.gaf` (four frames: S, E, N, W in order; implausible sizes skipped), optional `anims/buildrotateclick.gaf` | rotation overlay artwork; built-in chevrons are the fallback | HOST |
 | INI | `LimitCrack` etc. | §4.1 | see §4.1 | mixed |
 
@@ -1829,6 +2067,14 @@ seam per [DESIGN_GAMEPLAY_RULES](../../docs/DESIGN_GAMEPLAY_RULES.md).
 Unresolved questions, indexed here with their contracts (each contract keeps
 its own detail beside it).
 
+- **Author keyboard examples (CP-CON-3/6).** The release instructions name
+  Shift+Q/E to alternate mex placement and reclaim, and `v` to change movement
+  stance before patrol. The inspected extension handlers establish no separate
+  dispatch for these keys; whether the examples require anything beyond the
+  content's ordinary gadget accelerators remains unknown. A manual observation
+  with a palette whose quick keys differ would settle it. Nanolathe retains
+  authored gadget dispatch pending that evidence.
+
 - **Saturation behavior under CP-DMG-1.** Beyond six overflow units per cell
   the extra aircraft are unreachable; the source counts saturation rather than
   defining a policy. What would settle it: a Nanolathe-side decision informed
@@ -1852,20 +2098,13 @@ its own detail beside it).
   repair contribution between retail and Escalation play, or a maintainer
   statement — which would also close the repair-rate unknown of
   [Escalation engine package](taesc-engine.md).
-- **Accuracy-hook register reading (CP-UD-1).** The fixed `0x800` addition is
-  now identified as the retail spread bound's constant term
-  ([06 §4.4]); what remains open is which operands the hooked site's registers
-  hold. Settled by a trace of that site.
 - **Unit-number override at creation (CP-UD-3).** What the engine's creation
   entry does with the overridden unit number (the `90 + iMissionUnit`
   workaround). Settled by the engine's creation-entry contract.
 - **Kickout replication (CP-CON-1).** The kick mutates the order list locally
   with a C-runtime random direction; whether peers converge is not
   determinable from the module. Settled by a two-client observation.
-- **Capture and rotation (CP-CON-5).** No capture hook exists; the author
-  lists capture among the covered creation paths. Settled by establishing
-  whether retail capture transfers ownership in place or recreates the unit
-  through the give routine.
+
 - **The `+lostype` cheat marking (CP-FIX-11).** The command level is raised to
   the cheat level; whether use then marks the game as cheated is engine
   behavior the source does not state.
