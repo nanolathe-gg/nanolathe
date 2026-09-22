@@ -192,7 +192,7 @@ func maxDamageOf(u *units.Unit) uint32 {
 // per-executor mask by the §8 addendum of 2026-09-02 (see `airInterruptMask`
 // below).
 func airAttackExecutorHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
-	if code, done := airEntry(u, n, satisfied, airInterruptMask(n.ID)); done {
+	if code, done := airEntry(u, n, satisfied, airInterruptMask(n.ID), tick); done {
 		return code
 	}
 	return airHandOff(u, n, satisfied, tick)

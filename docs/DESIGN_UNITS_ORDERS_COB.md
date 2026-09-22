@@ -213,6 +213,20 @@ record that carried it leaves the segment unmarked and the next insertion then
 appends at the tail. `PushHead` is the handler-side spawn, which writes the
 link, the owner and the inherited auto flag and nothing else.
 
+**Replacement cleanup** (`insert.go`). `PurgeUnprotected` walks the live
+primary segment and removes a rejected record before delivering cancellation.
+It retains the original head for tombstone decisions and the traversal's
+predecessor across callbacks. Cancellation-created records receive the same
+survivor test as existing records [04 R-MOV-03 §6]. During synchronous cleanup,
+the queue temporarily retains the detached record's successor answer so the
+air entry can still decide whether that record was last. A cancelled air
+attack appends its seek through `appendTail`; the ongoing replacement purge
+removes that seek before the new player order is inserted [04 R-AIR-01 §16].
+If a callback removes the retained predecessor itself, the exceptional
+`TODO(question)` boundary stops the purge with remaining records pending;
+the reachability of that case needs the callback census identified in doc 04's
+Missing and unknown list. It is not a retail head-restart rule.
+
 **The queued-order toggle.** `CancelFrontMost` is the removal half of retail's
 Shift-click duplicate test: it walks the primary segment front to back, unlinks
 the first whole matching node — no count decrement — and reports that one went,

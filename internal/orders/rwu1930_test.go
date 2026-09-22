@@ -12,15 +12,26 @@ import (
 // unit implements: the air entry's two `VTOL_SeekAttack` replacements,
 // `SelfRepair` phase 0's split reads, and `HelpBuild`'s target-side footprint.
 
-// seekAtHead reports whether the queue's head is a spawned `VTOL_SeekAttack`
-// and returns it, so each case asserts the relationship (a record of that
-// identity at the head) rather than a queue census.
-func seekAtHead(q *Queue) *Node {
+// seekAtTail reports whether the queue's tail is a spawned `VTOL_SeekAttack`
+// and returns it. The shared air entry appends the replacement; the old record
+// remains linked until its caller applies the completion code.
+func seekAtTail(q *Queue) *Node {
 	primary := q.Primary()
 	if len(primary) == 0 {
 		return nil
 	}
-	if DescriptorFor(primary[0].ID).Name != "VTOL_SeekAttack" {
+	tail := primary[len(primary)-1]
+	if DescriptorFor(tail.ID).Name != "VTOL_SeekAttack" {
+		return nil
+	}
+	return tail
+}
+
+// seekAtHead is the post-completion form: once the replaced air attack has
+// been removed, its tail-appended seek becomes the head.
+func seekAtHead(q *Queue) *Node {
+	primary := q.Primary()
+	if len(primary) == 0 || DescriptorFor(primary[0].ID).Name != "VTOL_SeekAttack" {
 		return nil
 	}
 	return primary[0]
@@ -52,12 +63,15 @@ func TestAirEntryStep1SeekReplacement(t *testing.T) {
 			q.Push(Lookup("Wait"), Node{Owner: u.Handle})
 		}
 		n := q.Primary()[0]
+		if tc.wantSeek {
+			n.Flags |= FlagAutoOp // tail append must not inherit the old record's flag
+		}
 
-		code, done := airEntry(u, n, pendTargetRemoved, pendTargetGone)
+		code, done := airEntry(u, n, pendTargetRemoved, pendTargetGone, 91)
 		if !done || code != 5 {
 			t.Fatalf("%s: (code %d, done %v), want (5, true) — step 1 returns 5 either way [04 R-AIR-01 §16]", tc.name, code, done)
 		}
-		seek := seekAtHead(q)
+		seek := seekAtTail(q)
 		if (seek != nil) != tc.wantSeek {
 			t.Fatalf("%s: seek spawned = %v, want %v [04 R-AIR-01 §16]", tc.name, seek != nil, tc.wantSeek)
 		}
@@ -70,6 +84,12 @@ func TestAirEntryStep1SeekReplacement(t *testing.T) {
 		if seek.GoalX != n.GoalX || seek.GoalY != n.GoalY || seek.GoalZ != n.GoalZ {
 			t.Fatalf("%s: seek goal (%d,%d,%d), want the replaced record's cached goal (%d,%d,%d) [04 R-AIR-01 §16]",
 				tc.name, seek.GoalX, seek.GoalY, seek.GoalZ, n.GoalX, n.GoalY, n.GoalZ)
+		}
+		if seek.CreationTick != 91 {
+			t.Fatalf("%s: seek creation tick %d, want current handler tick 91 [04 R-AIR-01 §16]", tc.name, seek.CreationTick)
+		}
+		if seek.Flags&FlagAutoOp != 0 {
+			t.Fatalf("%s: tail-appended seek inherited auto flag %#x [04 R-AIR-01 §16]", tc.name, seek.Flags)
 		}
 	}
 }
@@ -106,7 +126,7 @@ func TestAirEntryStep2SeekReplacement(t *testing.T) {
 		}
 		n := q.Primary()[0]
 
-		code, done := airEntry(u, n, 0, pendTargetGone)
+		code, done := airEntry(u, n, 0, pendTargetGone, 92)
 		wantDone := tc.mask&staticTargetObserver != 0
 		wantCode := Code(0)
 		if wantDone {
@@ -115,7 +135,7 @@ func TestAirEntryStep2SeekReplacement(t *testing.T) {
 		if done != wantDone || code != wantCode {
 			t.Fatalf("%s: (code %d, done %v), want (%d, %v) — only issued-unit orders complete on a missing target [04 R-AIR-01 §8]", tc.name, code, done, wantCode, wantDone)
 		}
-		seek := seekAtHead(q)
+		seek := seekAtTail(q)
 		if (seek != nil) != tc.wantSeek {
 			t.Fatalf("%s: seek spawned = %v, want %v [04 R-AIR-01 §16]", tc.name, seek != nil, tc.wantSeek)
 		}

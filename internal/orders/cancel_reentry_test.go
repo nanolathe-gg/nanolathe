@@ -142,6 +142,38 @@ func TestCancelFrontMostAndPurgeSurviveAReentrantCleanup(t *testing.T) {
 	}
 }
 
+// The keep-survivors purge reloads the live chain after each cleanup. A record
+// appended by a cancel callback is therefore visited by that same purge rather
+// than escaping ahead of the producer's replacement [04 R-MOV-03 §6].
+func TestPurgeVisitsRecordAppendedByCancelCleanup(t *testing.T) {
+	u := newTestUnit()
+	q := &Queue{}
+	notices := 0
+	q.binding = &QueueBinding{
+		Lookup: func(h pool.Handle) *units.Unit {
+			if h == u.Handle {
+				return u
+			}
+			return nil
+		},
+		Work: &WorkAdapter{CancelNotice: func(_ *units.Unit, n *Node, _ uint32) bool {
+			notices++
+			n.DynamicGate &^= 2
+			q.appendTail(Lookup("Move_Ground"), Node{Owner: u.Handle})
+			return true
+		}},
+	}
+	q.Push(Lookup("MobileBuild"), Node{Owner: u.Handle, DynamicGate: 2})
+
+	q.PurgeUnprotected()
+	if notices != 1 {
+		t.Fatalf("cancel notices = %d, want one", notices)
+	}
+	if got := len(q.Primary()); got != 0 {
+		t.Fatalf("purge retained %d callback-appended records, want none", got)
+	}
+}
+
 // Established: the full purge frees both segments in order, with removal
 // callbacks on every record [04 §3.3][04 R-MOV-03 §6][04 R-ORDER-02 §2].
 // Construction's cancel notice can unlink its own record during that walk.

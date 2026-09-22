@@ -261,6 +261,18 @@ func (q *Queue) cleanupNode(n *Node) {
 	}
 }
 
+// cleanupDetached runs cleanup after n has been removed from the primary
+// segment while retaining the removed record's original next-link truth for
+// callbacks. The retail purge unlinks first, but the detached record still
+// carries its next link while its cancel notification runs [04 R-MOV-03 §6]
+// [04 R-AIR-01 §16].
+func (q *Queue) cleanupDetached(n *Node, hadSuccessor bool) {
+	priorNode, priorSuccessor := q.detachedNode, q.detachedHasSuccessor
+	q.detachedNode, q.detachedHasSuccessor = n, hadSuccessor
+	q.cleanupNode(n)
+	q.detachedNode, q.detachedHasSuccessor = priorNode, priorSuccessor
+}
+
 // PurgeUnprotected is the Replace purge of [05 "Queue insertion"]: issuing a
 // non-queued order first frees every front-segment record lacking the
 // purge-survivor bit. It writes no active marker — the producer insertion that
@@ -269,32 +281,47 @@ func (q *Queue) PurgeUnprotected() {
 	if q == nil || len(q.primary) == 0 {
 		return
 	}
-	// [05 "Queue insertion"] non-queued issue purges primary nodes lacking the protected flag.
-	//
-	// The doomed records are chosen from a snapshot and unlinked one at a time
-	// by identity, because each cleanup re-enters the queue (see
-	// spliceOutPrimary): the segment the loop started with is not the segment
-	// that exists after the first notification. The filter-in-place form that
-	// stood here compacted survivors into the same backing array it was still
-	// reading, so its front-head test compared against a slot a survivor had
-	// already been written into, and its final assignment reinstated whatever
-	// a notification had removed.
-	doomed := make([]*Node, 0, len(q.primary))
+	// The purge walks the live chain. It captures the original head for the
+	// tombstone decision, unlinks a rejected record before cleanup, then reloads
+	// the current link after cleanup. A cancel callback may mutate the segment;
+	// in particular an air-attack callback can append a seek, which this same
+	// purge must subsequently visit [04 R-MOV-03 §6][04 R-AIR-01 §16].
 	head := q.primary[0]
-	for _, n := range q.primary {
-		if n != nil && n.Flags&FlagPurgeSurvivor == 0 {
-			doomed = append(doomed, n)
+	var predecessor *Node
+	for {
+		i := 0
+		if predecessor != nil {
+			if predecessorIndex := q.indexOfPrimary(predecessor); predecessorIndex >= 0 {
+				i = predecessorIndex + 1
+			} else {
+				// TODO(question): Can a shipped cleanup callback remove the
+				// purge's retained predecessor? Retail resumes through storage
+				// owned by that predecessor, but the slice representation cannot
+				// recover that link after removal. No reachable callback is known;
+				// leave the remaining records pending rather than inventing a
+				// traversal. Exhaustive cleanup-callback reachability would settle
+				// this [04 R-MOV-03 §6].
+				return
+			}
 		}
-	}
-	for _, n := range doomed {
-		// non-head gets tombstone per [04 §3.3]; the head at the moment the
-		// removal was decided is the anchor, so the test is made here and not
-		// after the cleanup has moved records around.
+		if i >= len(q.primary) {
+			break
+		}
+		n := q.primary[i]
+		if n.Flags&FlagPurgeSurvivor != 0 {
+			predecessor = n
+			continue
+		}
+		hadSuccessor := i+1 < len(q.primary)
 		if n != head {
 			n.Flags |= FlagTombstone
 		}
-		q.cleanupNode(n)
-		q.spliceOutPrimary(n)
+		copy(q.primary[i:], q.primary[i+1:])
+		q.primary = q.primary[:len(q.primary)-1]
+		q.cleanupDetached(n, hadSuccessor)
+		// Keep predecessor rather than a numeric index: cleanup may insert
+		// before it, remove its former successor, or append a new record. The
+		// next iteration reloads the predecessor's current successor.
 	}
 	// No marker write. The purge helper "removes every front-chain record whose
 	// static-mask copy lacks bit 2 … every removal tombstones unless the record

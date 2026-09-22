@@ -751,6 +751,17 @@ originally issued against a unit takes the missing-target completion path
 `air_point_attack_test.go` in orders checks admission; its movement counterpart
 runs ground and feature orders through bomb release in both modes.
 
+Replacing an airborne attack starts a fresh record. The shared takeoff
+preamble installs no climb marker or climb-arrival wait when already airborne
+[04 R-AIR-01 §6]. Replacement purges also remove any seek appended by the
+cancelled run, so it cannot block the new player command [04 R-MOV-03 §6]
+[04 R-AIR-01 §16]. Weapon reload persists; the new point is armed by the new
+run's ordinary release phase. The session regression
+`TestRetailBomberRetargetAfterRelease` issues a second attack after a stock
+Thunder releases a bomb and verifies another release at the new point in
+both modes. The ordinary distance and reload gates still decide how soon
+that release occurs [04 R-AIR-01 §8][06 §4.1].
+
 ### 3.4.1 Modern bomber pass completion
 
 **Nanolathe Modern policy.** An accepted bombing pass may finish before its

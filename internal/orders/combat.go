@@ -942,13 +942,13 @@ func scanRegistryAroundPoint(u *units.Unit, x, z numeric.Fixed, radius int32) []
 // Off-map recovery is owned by the movement runner's marker family [04
 // R-AIR-01 §5]. The queue-side entry performs the shared record checks first;
 // the runner then applies the recovery leg with the current tick.
-func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (Code, bool) {
+func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32, tick uint32) (Code, bool) {
 	if satisfied&interruptMask != 0 {
 		// Step 1: the replacement carries the same target and cached goal, and
 		// runs only for the last record on the segment whose unit is not on
 		// hold fire [04 R-AIR-01 §16].
-		if !hasSuccessor(u, n) && u != nil && (u.Flags>>units.StandingFireShift)&units.StandingFieldMask != 0 {
-			spawnSeekAttack(u, n, n.Target, n.GoalX, n.GoalY, n.GoalZ)
+		if !airRecordHasSuccessor(u, n) && u != nil && (u.Flags>>units.StandingFireShift)&units.StandingFieldMask != 0 {
+			spawnSeekAttack(u, n, n.Target, n.GoalX, n.GoalY, n.GoalZ, tick)
 		}
 		return Code(5), true // "return 5 either way"
 	}
@@ -956,8 +956,8 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 	if tgt == nil && n.StaticGate&staticTargetObserver != 0 {
 		// Step 2: with the target gone, the seek starts from the unit's own
 		// position and carries no target [04 R-AIR-01 §16].
-		if !hasSuccessor(u, n) && u != nil {
-			spawnSeekAttack(u, n, 0, u.X, u.Y, u.Z)
+		if !airRecordHasSuccessor(u, n) && u != nil {
+			spawnSeekAttack(u, n, 0, u.X, u.Y, u.Z, tick)
 		}
 		return Code(5), true
 	}
@@ -974,18 +974,24 @@ func airEntry(u *units.Unit, n *Node, satisfied uint32, interruptMask uint32) (C
 	return Code(0), false
 }
 
-// spawnSeekAttack head-inserts the fresh `VTOL_SeekAttack` record the air
+// airRecordHasSuccessor retains the removed record's next-link answer while a
+// purge callback runs after unlinking it. Outside that narrow cleanup window it
+// is the ordinary live-segment query [04 R-MOV-03 §6][04 R-AIR-01 §16].
+func airRecordHasSuccessor(u *units.Unit, n *Node) bool {
+	if q := QueueOfUnit(u); q != nil && q.detachedNode == n {
+		return q.detachedHasSuccessor
+	}
+	return hasSuccessor(u, n)
+}
+
+// spawnSeekAttack tail-appends the fresh `VTOL_SeekAttack` record the air
 // entry's two replacement arms issue [04 R-AIR-01 §16]. The replacement
-// allocates the record, constructs it with the caller's target and position
-// triple, and hands it to the replace-at-head tail; the entry then returns 5,
-// so the head insert plus the completion is the replacement. "A null allocation
-// degrades to the plain return 5" — here, a missing descriptor or an unbound
-// queue leaves the completion alone.
-//
-// The spawned record inherits the replaced record's creation tick, as the
-// kamikaze self-destruct spawn does: nothing in [04 §3.2] gives a spawned
-// record a creation tick of its own.
-func spawnSeekAttack(u *units.Unit, n *Node, target pool.Handle, x, y, z numeric.Fixed) {
+// allocates the record with the current handler tick, constructs it with the
+// caller's target and position triple, and hands it to the ordinary tail-append
+// helper; that helper writes no active marker and inherits no auto flag. The
+// entry then returns 5, so removal of the old record exposes the appended seek.
+// A missing descriptor or unbound queue leaves the completion alone.
+func spawnSeekAttack(u *units.Unit, n *Node, target pool.Handle, x, y, z numeric.Fixed, tick uint32) {
 	id := rowVTOLSeekAttack
 	if id == 0 || u == nil || n == nil {
 		return
@@ -994,7 +1000,7 @@ func spawnSeekAttack(u *units.Unit, n *Node, target pool.Handle, x, y, z numeric
 	if q == nil {
 		return
 	}
-	q.PushHead(id, NewNodeForOrder(id, target, x, y, z, n.CreationTick, u.Handle, false))
+	q.appendTail(id, NewNodeForOrder(id, target, x, y, z, tick, u.Handle, false))
 }
 
 // ---------------------------------------------------------------------------

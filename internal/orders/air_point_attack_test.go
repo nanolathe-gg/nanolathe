@@ -22,7 +22,7 @@ func TestAirPointAttackKeepsGoal(t *testing.T) {
 				t.Fatal("point attack acquired a unit observer")
 			}
 			before := *q.binding.SimRNG
-			if code, done := airEntry(u, n, 0, airInterruptMask(n.ID)); done {
+			if code, done := airEntry(u, n, 0, airInterruptMask(n.ID), 0); done {
 				t.Fatalf("point attack completed before its flight leg: code=%d", code)
 			}
 			if *q.binding.SimRNG != before {
@@ -44,7 +44,7 @@ func TestAirEntryGoalRefreshByExecutor(t *testing.T) {
 			q.binding.Lookup = func(pool.Handle) *units.Unit { return u }
 			q.Push(Lookup(name), Node{Owner: u.Handle, Target: 7})
 			n := q.Head()
-			if _, done := airEntry(u, n, 0, airInterruptMask(n.ID)); done {
+			if _, done := airEntry(u, n, 0, airInterruptMask(n.ID), 0); done {
 				t.Fatal("live target completed attack")
 			}
 			wantX, wantY, wantZ := numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0)

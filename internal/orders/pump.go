@@ -209,6 +209,16 @@ type Queue struct {
 	secondary []*Node
 	danger    dangerState
 
+	// detachedNode is the record currently running removal cleanup after it has
+	// already been unlinked, together with whether its retained next link was
+	// non-null. Retail leaves that link readable during the cancel callback;
+	// the slice representation needs this transient mirror so handlers can ask
+	// the same successor question. cleanupDetached saves and restores the pair
+	// around nested cleanup. They exist only during synchronous cleanup and are
+	// not persisted or published.
+	detachedNode         *Node
+	detachedHasSuccessor bool
+
 	// diagnostics records dispatch failures for this unit's queue. It is per
 	// queue rather than package-global so two worlds in one process cannot
 	// interleave their logs and so a queue's diagnostics die with it

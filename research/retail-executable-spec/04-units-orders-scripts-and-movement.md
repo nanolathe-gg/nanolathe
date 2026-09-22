@@ -1238,13 +1238,14 @@ behavior.
 ### Cleanup callbacks: tombstone, TargetCleared, StopBuilding [R-ORDER-02 §2]
 
 **Established — tombstone mechanics.** The tombstone bit is set at removal
-time on every freed record EXCEPT one that is the primary segment's front
-head at that moment; the comparison is always against the front segment's
-anchor regardless of which segment the record occupies (all removal paths —
-both pumps, the above-9 delegate, the insertion purge, the leading-auto drop,
-and cancel-by-negative — share this shape). Consequences: the front record of
-the primary queue is never tombstoned; every rear-segment record (only
-`BuildWeapon` and `SelfDestruct` live there) is ALWAYS tombstoned when freed,
+time on every freed record except the primary-head identity captured by its
+removal caller. A single removal captures the current primary head before
+unlinking; a multi-record purge captures the original primary head once and
+retains that identity throughout its traversal, including cancellation-created
+records. The comparison remains against the primary segment regardless of
+which segment the record occupies. Consequently, only the captured primary
+head is exempt; every rear-segment record (only `BuildWeapon` and
+`SelfDestruct` live there) is ALWAYS tombstoned when freed,
 because it can never be the primary front head. The bit gates exactly one
 cleanup step — the weapon-target clear below; the cancel notification and
 the StopBuilding emission run regardless of it. The completion flag the pump
@@ -1350,8 +1351,9 @@ script argument, arity 1, receiver none — the cell map of `[R-UNIT-06 §4]`.
 * **The purge.** One helper serves both purges of section 3.3: in
   *keep-survivors* mode it removes every front-chain record whose static-mask
   copy lacks **bit 2** (`0x4`); in *full* mode it removes every record of the
-  front chain and then of the rear chain. Every removal tombstones unless the
-  record is the front head, runs the cleanup of [R-ORDER-02 §2], and frees.
+  front chain and then of the rear chain. Every removal unlinks the record,
+  tombstones it unless it is the captured original primary head, runs the
+  cleanup of [R-ORDER-02 §2], and frees.
   The keep-survivors mode is what the damage-reaction auto-engage issue
   ([08 R-AI-01 §11], [R-STANCE-01 §3]) calls before inserting its attack; the
   full mode is the pump's cancel-all (code 7) and unit finalisation. **Static
@@ -1359,6 +1361,19 @@ script argument, arity 1, receiver none — the cell map of `[R-UNIT-06 §4]`.
   `MakeSelectable`, `Wait`, `AttackUType`, `WaitForAttack`, `GetBuilt`,
   `BeCarried`, `Paralyze`, `SelfRepair` and `BuildingBuild` survive an
   auto-engage purge.
+
+  **Established — purge traversal and cancellation callbacks.** The purge
+  captures the original primary head before walking the live chain. For each
+  record selected for removal, it first unlinks that record, preserving the
+  removed record's own successor reference; it then tombstones the record unless
+  it is the captured original head, runs cleanup, and frees it. After cleanup,
+  traversal reads the current successor of the retained predecessor, or the
+  current primary head when there is no predecessor. Records appended by cleanup
+  are therefore visited by the same purge and undergo its ordinary survivor
+  test. The traversal is not a snapshot of the original records. Full
+  cancellation uses this live traversal for the primary chain before draining
+  the secondary chain.
+
 * **An identity predicate.** A three-identity predicate returns 0 for
   `Attack_Chase`, `BeCarried` and `Cloak_Off` and 1 for every other identity;
   its only caller is the battle host's event pump (doc 01/07). **Unknown:**
@@ -14473,11 +14488,20 @@ bombing run's entry block (the four executors share it):
   the mask bit set, a record that has a successor returns 5 **without**
   issuing the seek; only the last record on its segment replaces itself.
 
-The replacement itself allocates the seek record (a null allocation degrades
-to the plain return 5), constructs it with the same target and the record's
-goal triple (step 1) or with no target at the unit's own position (step 2),
-and hands it to the replace-at-head tail; the entry then returns 5.
-Established (direct trace of the shared entry block).
+**Established — seek insertion and replacement cleanup.** The entry
+constructs a fresh seek record carrying the same target and cached goal for
+interruption, or no target and the unit's current position for target loss,
+and appends it to the selected segment's tail. A null allocation leaves the
+completion alone. The constructor stamps the current simulation tick. Tail
+insertion neither inherits the replaced record's auto/default flag nor assigns
+an active marker. The entry then returns completion. During a nonqueued
+replacement purge, the retiring attack has already been unlinked when its
+cancellation callback runs, but its retained successor reference still
+controls the last-record test. A seek appended by that callback is subsequently
+visited and removed by the same purge because it lacks the survivor bit. It
+cannot remain ahead of the newly issued attack. This corrects the earlier
+head-insertion description, which hid the cancellation-created seek from a
+snapshot purge.
 
 ### The flight command block's flags byte: its writers, its one reader, and its clear site [R-AIR-01 §17]
 
@@ -14655,6 +14679,13 @@ the fault contracts stated in sections 4.6 and 7.3 are the whole of what the
 executable answers.
 
 ## Missing and unknown
+
+* **Unknown — removal of a purge's retained predecessor.** The purge in
+  [R-MOV-03 §6] reads the retained predecessor's successor after cleanup;
+  there is no predecessor-membership check or restart at the head. No traced
+  bomber cancellation removes that predecessor, but whether another shipped
+  cancellation callback can remove it remains unresolved. A complete
+  cancellation-callback reachability census would settle this boundary.
 
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.

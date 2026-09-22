@@ -26,7 +26,7 @@ func TestModernBomberLeashBoundary(t *testing.T) {
 					n := q.Head()
 					random := *b.SimRNG
 					before := ledger.Players
-					code, done := airEntry(u, n, 0, airInterruptMask(n.ID))
+					code, done := airEntry(u, n, 0, airInterruptMask(n.ID), 0)
 					wantDone := !(modern && name == "AirStrike" && phase >= 1 && phase <= 5)
 					if done != wantDone || (done && code != 5) {
 						t.Fatalf("entry=(%d,%v), want completion=%v", code, done, wantDone)
@@ -35,11 +35,11 @@ func TestModernBomberLeashBoundary(t *testing.T) {
 						t.Fatal("leash decision consumed RNG or resources")
 					}
 					n.Param3 = 31 // One unit inside the inclusive boundary always continues.
-					if _, done = airEntry(u, n, 0, airInterruptMask(n.ID)); done {
+					if _, done = airEntry(u, n, 0, airInterruptMask(n.ID), 0); done {
 						t.Fatal("inside-leash attack ended")
 					}
 					n.Param3 = 0
-					if _, done = airEntry(u, n, 0, airInterruptMask(n.ID)); done {
+					if _, done = airEntry(u, n, 0, airInterruptMask(n.ID), 0); done {
 						t.Fatal("unleashed attack ended")
 					}
 				})
@@ -61,7 +61,7 @@ func TestModernBomberPassStillCancels(t *testing.T) {
 			n.Target = 0
 		}
 		random := *q.Binding().SimRNG
-		if code, done := airEntry(u, n, reason, airInterruptMask(n.ID)); !done || code != 5 {
+		if code, done := airEntry(u, n, reason, airInterruptMask(n.ID), 0); !done || code != 5 {
 			t.Fatalf("reason %d did not cancel: (%d,%v)", reason, code, done)
 		}
 		if *q.Binding().SimRNG != random {
