@@ -16,6 +16,18 @@ const retailUnitRecordSize = 0xB8
 // fields represented by Unit; neutral fields retain the established
 // persisted values whose consumers run in later phases [08 R-SAVE-02 §6].
 func RetailUnitBase(u *Unit, data []byte) error {
+	if err := RetailUnitPose(u, data); err != nil {
+		return err
+	}
+	if err := RetailUnitState(u, data); err != nil {
+		return err
+	}
+	return RetailUnitWeapons(u, data)
+}
+
+// RetailUnitPose restores the fields the reader publishes before recursively
+// loading the carrier and engagement references [08 R-SAVE-02 §6].
+func RetailUnitPose(u *Unit, data []byte) error {
 	if u == nil {
 		return fmt.Errorf("units: retail restore: nil unit")
 	}
@@ -33,6 +45,18 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	// even though its orientation is replaced [08 R-SAVE-UNIT-01].
 	u.Health = int32(int16(binary.LittleEndian.Uint16(data[0x3D:])))
 	u.Kills = int32(binary.LittleEndian.Uint16(data[0x3F:]))
+	return nil
+}
+
+// RetailUnitState restores the scalar body after attachment and engagement
+// recursion, including the pending-death latch [08 R-SAVE-02 §6].
+func RetailUnitState(u *Unit, data []byte) error {
+	if u == nil {
+		return fmt.Errorf("units: retail restore: nil unit")
+	}
+	if len(data) != retailUnitRecordSize {
+		return fmt.Errorf("units: retail restore: unit image size %d, want 0xB8", len(data))
+	}
 	u.SpotMetal = math.Float32frombits(binary.LittleEndian.Uint32(data[0x8F:]))
 	u.RestoredAIGroup = int32(binary.LittleEndian.Uint32(data[0x9F:]))
 	u.Pending = uint32(binary.LittleEndian.Uint16(data[0xAE:]))
@@ -94,6 +118,19 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	// Operational byte bit 2: the INSTANCE cloaked bit [05 R-ECO-01 §8].
 	u.Hidden = state&4 != 0
 	u.BuildingState = state&8 != 0
+	return nil
+}
+
+// RetailUnitWeapons restores the slot scalars after the script image. Keeping
+// this separate lets recursive loading finish each unit before returning to
+// its caller or constructing the next numbered record [08 R-SAVE-02 §6].
+func RetailUnitWeapons(u *Unit, data []byte) error {
+	if u == nil {
+		return fmt.Errorf("units: retail restore: nil unit")
+	}
+	if len(data) != retailUnitRecordSize {
+		return fmt.Errorf("units: retail restore: unit image size %d, want 0xB8", len(data))
+	}
 	for i := 0; i < NumSlots; i++ {
 		off := 0x41 + i*0x18
 		s := &u.Slots[i]
@@ -109,23 +146,22 @@ func RetailUnitBase(u *Unit, data []byte) error {
 		s.Flags = (s.Flags &^ SlotFlagPersisted) | (data[off+0x17] & SlotFlagPersisted)
 		s.Aim.IssueBit = s.Flags&SlotFlagAimLatch != 0
 		// The scratch pair exists only to hand the on-disk words from this
-		// scalar pass to RetailUnitWeaponTargets, which runs once every forced
-		// slot exists. The save writer never reads it — the live Target is the
-		// authority there.
+		// slot pass to RetailUnitWeaponTargets. The save writer never reads it;
+		// the live Target is the authority there.
 		s.SavedTargetLow = binary.LittleEndian.Uint16(data[off:])
 		s.SavedTargetHigh = binary.LittleEndian.Uint16(data[off+2:])
 		s.Aim.RestoreReadyWord(binary.LittleEndian.Uint32(data[off+0x04:]))
 		s.DistanceWord = int32(binary.LittleEndian.Uint32(data[off+0x0C:]))
-		// Target identity is fixed up from the saved pair only after every
-		// forced slot exists; do not treat the serialized low word as a live
-		// pool handle in this scalar pass [08 R-SAVE-WEAPON-01].
+		// Target identity is fixed up from the saved pool-slot pair; do not treat
+		// the serialized low word as a live pool handle in this scalar pass
+		// [08 R-SAVE-WEAPON-01].
 		s.Target = Target{}
 	}
 	return nil
 }
 
-// RetailUnitWeaponTargets resolves the saved unit-mode target words after all
-// stable slots have been forced-allocated. The high word is the discriminator
+// RetailUnitWeaponTargets resolves the saved unit-mode target words without
+// requiring a live object in the target slot. The high word is the discriminator
 // [08 R-SAVE-WEAPON-01]: the unit sentinel 0x8000 over a zero low word is the
 // empty encoding, the same sentinel over a nonzero low word is a unit target
 // named by its pool slot, and any other high word is a ground point whose
@@ -164,10 +200,10 @@ func RetailUnitWeaponTargets(u *Unit, slot func(uint16) (pool.Handle, bool)) err
 	return nil
 }
 
-// RetailUnitReferences installs the two logical cross-unit links after every
-// fixed slot has been allocated. The first is the carrier relationship; the
-// second is a plain engagement link and has no attachment side effect [08
-// R-SAVE-02 §6].
+// RetailUnitReferences installs the two logical cross-unit links once the
+// referenced slots have been allocated. The first is the carrier relationship;
+// the second is a plain engagement link and has no attachment side effect
+// [08 R-SAVE-02 §6].
 func RetailUnitReferences(u *Unit, carrier, engagement pool.Handle, attachPiece uint8) error {
 	if u == nil {
 		return fmt.Errorf("units: retail restore: nil unit")

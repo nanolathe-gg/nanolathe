@@ -51,7 +51,7 @@ type restoreCoreFixtureUnit struct {
 }
 
 // newRestoreCoreFixture builds a minimal session with n forced-slot mobile
-// units, exactly like reserveRetailUnits would leave them, but without the
+// units for isolated core-reader tests, without the lazy constructor or
 // filesystem/catalog/mission machinery StageRetailBattle needs. Every field
 // RestoreRetailBattleCore does not gate on nil (Vis, Features, World,
 // Mission, AI, Build) is left nil; the per-unit later passes under test

@@ -79,14 +79,16 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID, targetSlot RetailStab
 	carrier := optionalRetailStableID(stableID, u.Attachment.Carrier)
 	binary.LittleEndian.PutUint16(data[0x89:], carrier)
 	binary.LittleEndian.PutUint16(data[0x8b:], optionalRetailStableID(stableID, u.EngagementTarget))
-	// The attach slot byte follows the written link: 0xFF when the unit has
-	// no live carrier [08 R-SAVE-02 §6].
+	// The attach slot is a byte on the wire and a sign-extended byte in live
+	// state. That includes the reserved no-piece value: a carried unit may
+	// legitimately hold AttachPiece == -1 and serialize it as 0xFF
+	// [04 R-FAC-02 §1][08 R-SAVE-02 §6].
 	data[0x8d] = 0xff
 	if carrier != 0 {
-		if u.Attachment.AttachPiece < 0 || u.Attachment.AttachPiece > math.MaxUint8 {
-			return nil, fmt.Errorf("units: retail save: unit %d attach piece %d is outside byte range", id, u.Attachment.AttachPiece)
+		if u.Attachment.AttachPiece < math.MinInt8 || u.Attachment.AttachPiece > math.MaxInt8 {
+			return nil, fmt.Errorf("units: retail save: unit %d attach piece %d is outside signed byte range", id, u.Attachment.AttachPiece)
 		}
-		data[0x8d] = byte(u.Attachment.AttachPiece)
+		data[0x8d] = byte(int8(u.Attachment.AttachPiece))
 	}
 	// 0x8E is the attacker-side snapshot: the owner byte of the last unit that
 	// damaged this one, 10 meaning no attacker [08 R-SAVE-02 §6]

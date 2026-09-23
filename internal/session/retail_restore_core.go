@@ -17,17 +17,33 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
+// A rejected detached candidate may be retried after its bad payload is
+// corrected. Retain completed unit phases so retry neither draws a new
+// constructor phase nor repeats an attachment after restoring pending death.
+type retailUnitRestoreProgress uint8
+
+const (
+	retailUnitCarrierRestored retailUnitRestoreProgress = iota + 1
+	retailUnitBodyRestored
+	retailUnitOrdersRestored
+	retailUnitRestored
+)
+
 // RestoreRetailBattleCore applies the D2 live-state passes to a successful D1
 // stage. It never advances the clock or runs a simulation tick. The caller
 // remains responsible for atomically swapping the resulting Session into the
 // client [08 R-SAVE-02 §11].
 //
-// The order is deliberately explicit: player/account fields, alliances, base
-// bodies, depth-first references, economy, queues, one front-head goal bind, then
-// exact matching COB snapshots [08 R-SAVE-02 §6, §7, §8, §9, §11].
+// Each unit is constructed on its first recursive visit, publishes its saved
+// pose, loads its carrier and engagement references, then finishes its scalar
+// body, accounts, mover, orders, script and weapons before returning
+// [08 R-SAVE-02 §6, §7, §8, §9, §11].
 func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	if stage == nil || stage.Session == nil || stage.Image == nil {
 		return fmt.Errorf("session: retail restore: nil stage")
+	}
+	if stage.coreRestored {
+		return nil
 	}
 	s := stage.Session
 	image := stage.Image
@@ -109,114 +125,6 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		return err
 	}
 
-	// Every standard body has already been forced-allocated by D1. Validate
-	// reservation before reference reconstruction; saved status is applied only
-	// after each record's attachment and engagement links [08 R-SAVE-02 §6].
-	for _, rec := range image.Units.Records {
-		if rec.Compat {
-			continue // 0xB6 is a null compatibility record [08 R-SAVE-02 §6]
-		}
-		h, ok := stage.StableUnit[rec.StableID]
-		if !ok || h == 0 {
-			return fmt.Errorf("session: retail restore: stable unit %d was not reserved", rec.StableID)
-		}
-		if len(rec.Data) != save.UnitBoxSize {
-			return fmt.Errorf("session: retail restore: unit %d base: invalid image size %d", rec.StableID, len(rec.Data))
-		}
-	}
-	// Strict COB binding registered constructor yards before the saved bodies.
-	// Release all those placements before any restored occupancy is installed:
-	// a later unit's constructor stamp must not affect an earlier unit's
-	// restored overlap decisions [08 R-SAVE-02 §11][04 R-COLL-01 §4].
-	if s.Build != nil {
-		for _, rec := range image.Units.Records {
-			if !rec.Compat {
-				s.Build.ReleasePlacement(stage.StableUnit[rec.StableID])
-			}
-		}
-	}
-	// Resolve carrier containment depth-first even though D1 has reserved all
-	// bodies. Engagement links are ordinary references, not ownership edges:
-	// they may point at this unit or form a cycle [08 R-SAVE-02 §6].
-	processing := make(map[uint16]bool, len(image.Units.Records))
-	carrierPath := make(map[uint16]bool, len(image.Units.Records))
-	visited := make(map[uint16]bool, len(image.Units.Records))
-	// Group membership is appended after recursive references, not in pool
-	// order. Retain that order for the derived manager pass [08 R-SAVE-02 §6].
-	restoredUnits := make([]*units.Unit, 0, len(image.Units.Records))
-	var restoreRefs func(uint16) error
-	restoreRefs = func(id uint16) error {
-		if visited[id] {
-			return nil
-		}
-		// The retail reader reserves a stable slot before it follows either
-		// link. A reference back to a record currently being read is therefore
-		// already live and is skipped, rather than forming an ownership cycle.
-		if processing[id] {
-			return nil
-		}
-		processing[id] = true
-		rec, ok := retailUnitRecord(image.Units.Records, id)
-		if !ok {
-			return fmt.Errorf("session: retail restore: unit reference %d missing", id)
-		}
-		carrier := readUnitRef(rec.Data, 0x89)
-		engagement := readUnitRef(rec.Data, 0x8B)
-		if carrier != 0 {
-			if carrierPath[carrier] {
-				return fmt.Errorf("session: retail restore: cyclic carrier reference %d", carrier)
-			}
-			carrierPath[id] = true
-			if err := restoreRefs(carrier); err != nil {
-				return err
-			}
-			carrierPath[id] = false
-		}
-		h := stage.StableUnit[id]
-		u := s.Units.Unit(h)
-		engagementHandle := stage.StableUnit[engagement]
-		if engagement != 0 && engagementHandle == 0 {
-			return fmt.Errorf("session: retail restore: engagement reference %d missing", engagement)
-		}
-		if err := units.RetailUnitReferences(u, 0, engagementHandle, rec.Data[0x8D]); err != nil {
-			return err
-		}
-		if carrier != 0 {
-			// The restore reader applies the same head-inserting attachment
-			// operation as a live attach, with the saved mode and piece. The
-			// saved unit-side mode mirror is the source here; the mover-side byte
-			// is restored later and remains a separate saved word. The packed
-			// status itself must follow attachment so a pending-death passenger
-			// can be reattached before its latch is replayed [08 R-SAVE-02 §6].
-			mode := int((binary.LittleEndian.Uint32(rec.Data[0xB4:]) >> 4) & 3)
-			if !movement.AttachCargoMode(s.Units, stage.StableUnit[carrier], h, int(rec.Data[0x8D]), mode) {
-				return fmt.Errorf("session: retail restore: attach unit %d to carrier %d", id, carrier)
-			}
-		}
-		// The engagement reference follows the current record's local attach.
-		// That order is observable because a referenced child can attach to the
-		// same carrier and inserts at its cargo head [08 R-SAVE-02 §6].
-		if engagement != 0 {
-			if err := restoreRefs(engagement); err != nil {
-				return err
-			}
-		}
-		if err := units.RetailUnitBase(u, rec.Data); err != nil {
-			return fmt.Errorf("session: retail restore: unit %d base: %w", id, err)
-		}
-		restoredUnits = append(restoredUnits, u)
-		processing[id] = false
-		visited[id] = true
-		return nil
-	}
-	for _, rec := range image.Units.Records {
-		if !rec.Compat {
-			if err := restoreRefs(rec.StableID); err != nil {
-				return err
-			}
-		}
-	}
-
 	if s.Clock == nil {
 		return fmt.Errorf("session: retail restore: missing clock")
 	}
@@ -254,58 +162,168 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	for i, order := range image.Units.Orders {
 		ordersByParent[order.ParentStableID] = append(ordersByParent[order.ParentStableID], i)
 	}
-	for recIndex, rec := range image.Units.Records {
+	// Identity reservation and payload indexing consume no constructor RNG.
+	// Detached test shells may supply already allocated bodies; production
+	// leaves every reserved slot empty until this traversal first reaches it.
+	recordIndex := make(map[uint16]int, len(image.Units.Records))
+	for i, rec := range image.Units.Records {
 		if rec.Compat {
 			continue
 		}
-		h := stage.StableUnit[rec.StableID]
-		owner := s.Units.Unit(h)
-		if owner == nil {
-			return fmt.Errorf("session: retail restore: unit %d vanished", rec.StableID)
+		if stage.StableUnit[rec.StableID] == 0 {
+			return fmt.Errorf("session: retail restore: stable unit %d was not reserved", rec.StableID)
 		}
-		// Unit economy accounts are detached in UnitImage.Other. This is the
-		// first per-unit later pass [08 R-SAVE-02 §6].
-		for _, idx := range otherByName[unitBoxName(rec.StableID, "acc")] {
-			if err := economy.RetailUnitAccount(s.Econ, h, image.Units.Other[idx].Data); err != nil {
+		if len(rec.Data) != save.UnitBoxSize {
+			return fmt.Errorf("session: retail restore: unit %d base: invalid image size %d", rec.StableID, len(rec.Data))
+		}
+		recordIndex[rec.StableID] = i
+	}
+	// Carrier containment is acyclic even when engagement references form a
+	// cycle. Validate those edges separately: a mixed reference path is not
+	// itself a containment cycle [08 R-SAVE-02 §6].
+	carrierState := make(map[uint16]uint8, len(recordIndex))
+	var validateCarrier func(uint16) error
+	validateCarrier = func(id uint16) error {
+		if carrierState[id] == 1 {
+			return fmt.Errorf("session: retail restore: cyclic carrier reference %d", id)
+		}
+		if carrierState[id] == 2 {
+			return nil
+		}
+		i, ok := recordIndex[id]
+		if !ok {
+			return fmt.Errorf("session: retail restore: unit reference %d missing", id)
+		}
+		carrierState[id] = 1
+		if carrier := readUnitRef(image.Units.Records[i].Data, 0x89); carrier != 0 {
+			if err := validateCarrier(carrier); err != nil {
 				return err
 			}
 		}
-		// A mover box is read only inside the established HasMover branch;
-		// detached boxes for a no-mover unit are ignored [08 R-SAVE-02 §6, §8].
-		// Construction progress does not suppress the saved mover branch: a
-		// factory product can be unfinished and still own a mover.
-		if s.Movement != nil && owner.HasMover {
-			moverIdx := otherByName[unitBoxName(rec.StableID, "mob")]
-			if len(moverIdx) > 1 {
-				return fmt.Errorf("session: retail restore: unit %d has duplicate mover boxes", rec.StableID)
+		carrierState[id] = 2
+		return nil
+	}
+	for _, rec := range image.Units.Records {
+		if !rec.Compat {
+			if err := validateCarrier(rec.StableID); err != nil {
+				return err
 			}
-			if len(moverIdx) == 0 {
-				return fmt.Errorf("session: retail restore: unit %d has mover flag but no mover box", rec.StableID)
+			if target := readUnitRef(rec.Data, 0x8b); target != 0 {
+				if _, ok := recordIndex[target]; !ok {
+					return fmt.Errorf("session: retail restore: engagement reference %d missing", target)
+				}
 			}
-			if err := s.Movement.RestoreMover(h, image.Units.Other[moverIdx[0]].Data); err != nil {
-				return fmt.Errorf("session: retail restore: unit %d mover: %w", rec.StableID, err)
-			}
-		} else if s.Movement != nil && owner.Remaining == 0 {
-			// A completed no-mover structure still has the collision surface that
-			// owns its saved yard/footprint stamp. This is structure support, not a
-			// fabricated mover, and it remains separate from HasMover.
-			s.Movement.EnsureUnit(owner)
 		}
-		// Rebuild queues after the account and mover state, then bind any saved
-		// goal payload on the front head before the script snapshot. This does
-		// not run an order handler or advance its queue [08 R-SAVE-02 §11].
-		orderIdx := ordersByParent[rec.StableID]
-		group := make([]save.OrderRecord, len(orderIdx))
-		for i, idx := range orderIdx {
-			group[i] = image.Units.Orders[idx]
+	}
+	if stage.unitProgress == nil {
+		stage.unitProgress = make(map[uint16]retailUnitRestoreProgress, len(recordIndex))
+	}
+	processing := make(map[uint16]bool, len(recordIndex))
+	var restoreUnit func(uint16) error
+	restoreUnit = func(id uint16) error {
+		// The allocator makes the slot live before either reference is read.
+		// A recursive back-reference skips that record; its original visit
+		// still finishes its later fields [08 R-SAVE-02 §6].
+		if processing[id] || stage.unitProgress[id] == retailUnitRestored {
+			return nil
 		}
-		if err := orders.RetailRestoreOrdersAtTick(owner, group, stage.StableUnit, binding, s.Clock.GlobalTick); err != nil {
-			return fmt.Errorf("session: retail restore: unit %d orders: %w", rec.StableID, err)
-		}
-		if s.Movement != nil {
-			if err := s.Movement.RestoreHeadGoal(owner); err != nil {
-				return fmt.Errorf("session: retail restore: unit %d head goal: %w", rec.StableID, err)
+		processing[id] = true
+		recIndex := recordIndex[id]
+		rec := image.Units.Records[recIndex]
+		h := stage.StableUnit[id]
+		owner := s.Units.Unit(h)
+		if owner == nil {
+			if s.Catalog == nil {
+				return fmt.Errorf("session: retail restore: unit %d has no catalog", id)
 			}
+			if _, err := allocateRetailUnit(s.Units, s.Catalog, rec, s.Build); err != nil {
+				return err
+			}
+			owner = s.Units.Unit(h)
+		}
+		if stage.unitProgress[id] < retailUnitCarrierRestored {
+			if err := units.RetailUnitPose(owner, rec.Data); err != nil {
+				return fmt.Errorf("session: retail restore: unit %d pose: %w", id, err)
+			}
+			carrier := readUnitRef(rec.Data, 0x89)
+			if carrier != 0 {
+				if err := restoreUnit(carrier); err != nil {
+					return err
+				}
+				// Attach before the engagement recursion and saved death latch.
+				// Retain this phase before recursing into engagement, so a
+				// retry never repeats this head insertion [08 R-SAVE-02 §6].
+				mode := int((binary.LittleEndian.Uint32(rec.Data[0xb4:]) >> 4) & 3)
+				if !movement.AttachCargoMode(s.Units, stage.StableUnit[carrier], h, int(rec.Data[0x8d]), mode) {
+					return fmt.Errorf("session: retail restore: attach unit %d to carrier %d", id, carrier)
+				}
+			} else {
+				owner.Attachment.AttachPiece = -1
+			}
+			stage.unitProgress[id] = retailUnitCarrierRestored
+		}
+		if stage.unitProgress[id] < retailUnitBodyRestored {
+			engagement := readUnitRef(rec.Data, 0x8b)
+			if engagement != 0 {
+				if err := restoreUnit(engagement); err != nil {
+					return err
+				}
+			}
+			owner.EngagementTarget = stage.StableUnit[engagement]
+			if err := units.RetailUnitState(owner, rec.Data); err != nil {
+				return fmt.Errorf("session: retail restore: unit %d base: %w", id, err)
+			}
+			// The group append follows the recursive references, so retain this
+			// sequence for the derived manager vectors [08 R-SAVE-02 §6].
+			stage.restoredUnits = append(stage.restoredUnits, owner)
+			stage.unitProgress[id] = retailUnitBodyRestored
+		}
+		if stage.unitProgress[id] < retailUnitOrdersRestored {
+			// Unit economy accounts are detached in UnitImage.Other. This is the
+			// first per-unit later pass [08 R-SAVE-02 §6].
+			for _, idx := range otherByName[unitBoxName(rec.StableID, "acc")] {
+				if err := economy.RetailUnitAccount(s.Econ, h, image.Units.Other[idx].Data); err != nil {
+					return err
+				}
+			}
+			// A mover box is read only inside the established HasMover branch;
+			// detached boxes for a no-mover unit are ignored [08 R-SAVE-02 §6, §8].
+			// Construction progress does not suppress the saved mover branch: a
+			// factory product can be unfinished and still own a mover.
+			if s.Movement != nil && owner.HasMover {
+				moverIdx := otherByName[unitBoxName(rec.StableID, "mob")]
+				if len(moverIdx) > 1 {
+					return fmt.Errorf("session: retail restore: unit %d has duplicate mover boxes", rec.StableID)
+				}
+				if len(moverIdx) == 0 {
+					return fmt.Errorf("session: retail restore: unit %d has mover flag but no mover box", rec.StableID)
+				}
+				if err := s.Movement.RestoreMover(h, image.Units.Other[moverIdx[0]].Data); err != nil {
+					return fmt.Errorf("session: retail restore: unit %d mover: %w", rec.StableID, err)
+				}
+			} else if s.Movement != nil && owner.Remaining == 0 {
+				// A completed no-mover structure still has the collision surface that
+				// owns its saved yard/footprint stamp. This is structure support, not a
+				// fabricated mover, and it remains separate from HasMover.
+				s.Movement.EnsureUnit(owner)
+			}
+			// Rebuild queues after the account and mover state, then bind any saved
+			// goal payload on the front head before the script snapshot. This does
+			// not run an order handler or advance its queue [08 R-SAVE-02 §11].
+			orderIdx := ordersByParent[rec.StableID]
+			group := make([]save.OrderRecord, len(orderIdx))
+			for i, idx := range orderIdx {
+				group[i] = image.Units.Orders[idx]
+			}
+			if err := orders.RetailRestoreOrdersAtTick(owner, group, stage.StableUnit, binding, s.Clock.GlobalTick); err != nil {
+				return fmt.Errorf("session: retail restore: unit %d orders: %w", rec.StableID, err)
+			}
+			if s.Movement != nil {
+				if err := s.Movement.RestoreHeadGoal(owner); err != nil {
+					return fmt.Errorf("session: retail restore: unit %d head goal: %w", rec.StableID, err)
+				}
+			}
+			stage.unitProgress[id] = retailUnitOrdersRestored
 		}
 		if script, ok := scripts[recIndex]; ok {
 			vm := owner.GetScript()
@@ -316,6 +334,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 				return fmt.Errorf("session: retail restore: unit %d script: %w", rec.StableID, err)
 			}
 		}
+		if err := units.RetailUnitWeapons(owner, rec.Data); err != nil {
+			return fmt.Errorf("session: retail restore: unit %d weapon state: %w", id, err)
+		}
 		if err := units.RetailUnitWeaponDefinitions(owner, rec.Data); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d weapons: %w", rec.StableID, err)
 		}
@@ -323,6 +344,26 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			return pool.Handle(id), id != 0 && int(id) < s.Units.TotalRecords()
 		}); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d weapon targets: %w", rec.StableID, err)
+		}
+		stage.unitProgress[id] = retailUnitRestored
+		processing[id] = false
+		return nil
+	}
+	for _, rec := range image.Units.Records {
+		if !rec.Compat {
+			if err := restoreUnit(rec.StableID); err != nil {
+				return err
+			}
+		}
+	}
+	// All constructor yards must be released together before the derived
+	// occupancy pass, so a later constructor stamp cannot affect an earlier
+	// unit's restored overlap decision [08 R-SAVE-02 §11][04 R-COLL-01 §4].
+	if s.Build != nil {
+		for _, rec := range image.Units.Records {
+			if !rec.Compat {
+				s.Build.ReleasePlacement(stage.StableUnit[rec.StableID])
+			}
 		}
 	}
 	if s.Build != nil {
@@ -364,22 +405,10 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 	}
 
-	// The AI group index is the one base-record word with a side effect beyond
-	// a field copy: the reader moves the unit out of whatever group it holds
-	// and into the saved one [08 R-SAVE-02 §6]. That is two writes — the unit's
-	// own stored group value and the owner's group vector — and the base-record
-	// pass only stages the saved index. Apply the stored value here, before the
-	// managers rebuild their vectors from it, so a restored unit reports the
-	// group it was saved in rather than the ungrouped record.
-	for _, u := range restoredUnits {
-		u.Group = 0
-		if u.RestoredAIGroup >= 1 && u.RestoredAIGroup <= 9 {
-			u.Group = uint8(u.RestoredAIGroup)
-		}
-	}
+	// Rebuild the manager vectors from the retained recursive group order.
 	for _, mgr := range s.AI {
 		if mgr != nil {
-			mgr.RestoreGroupsFromUnits(restoredUnits)
+			mgr.RestoreGroupsFromUnits(stage.restoredUnits)
 		}
 	}
 	// The shower sits between the units and the trigger records in retail's
@@ -426,6 +455,7 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 	}
 	stage.burnSounds = nil
+	stage.coreRestored = true
 	return nil
 }
 
@@ -568,13 +598,4 @@ func readUnitRef(data []byte, off int) uint16 {
 		return 0
 	}
 	return uint16(data[off]) | uint16(data[off+1])<<8
-}
-
-func retailUnitRecord(records []save.UnitRecord, id uint16) (save.UnitRecord, bool) {
-	for _, rec := range records {
-		if !rec.Compat && rec.StableID == id {
-			return rec, true
-		}
-	}
-	return save.UnitRecord{}, false
 }

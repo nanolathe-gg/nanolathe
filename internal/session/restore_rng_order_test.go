@@ -164,20 +164,20 @@ func TestStagedFeatureIgnitionIsNotRepeatedByCoreRetry(t *testing.T) {
 	if err := RestoreRetailBattleCore(stage); err == nil {
 		t.Fatal("invalid script snapshot was accepted")
 	}
-	if sounds != 0 || s.SimRNG().Draws() != before {
-		t.Fatal("failed core pass published ignition or repeated its draw")
+	if sounds != 0 || s.SimRNG().Draws() != before+3 {
+		t.Fatal("failed core pass must construct only its first unit, without publishing ignition")
 	}
 	stage.Image.Units.Scripts[0].Data = good
 	if err := RestoreRetailBattleCore(stage); err != nil {
 		t.Fatal(err)
 	}
-	if sounds != 1 || s.SimRNG().Draws() != before {
-		t.Fatalf("retry sounds/draws = %d/%d, want 1/%d", sounds, s.SimRNG().Draws(), before)
+	if sounds != 1 || s.SimRNG().Draws() != before+6 {
+		t.Fatalf("retry sounds/draws = %d/%d, want 1/%d", sounds, s.SimRNG().Draws(), before+6)
 	}
 	if err := RestoreRetailBattleCore(stage); err != nil {
 		t.Fatal(err)
 	}
-	if sounds != 1 || s.SimRNG().Draws() != before {
+	if sounds != 1 || s.SimRNG().Draws() != before+6 {
 		t.Fatal("completed core pass repeated ignition or its deferred sound")
 	}
 }

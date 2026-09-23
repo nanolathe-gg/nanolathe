@@ -290,6 +290,41 @@ func TestRetailUnitImageDeadOptionalLinksWriteZero(t *testing.T) {
 	}
 }
 
+// The attachment helper stores the event's piece byte after signed widening,
+// and the carried-position consumer reads that signed value. The writer must
+// narrow the same signed-byte domain back onto the wire, including the 0xFF
+// no-piece value used by the stock sea-transport reattachment idiom
+// [04 R-FAC-02 §1][04 R-UNIT-06 §3][08 R-SAVE-02 §6].
+func TestRetailUnitImageWritesSignedAttachPieceByte(t *testing.T) {
+	resolve := func(h pool.Handle) (uint16, bool) { return uint16(h), h == 1 || h == 2 }
+	for _, tc := range []struct {
+		piece int
+		want  byte
+	}{
+		{piece: -128, want: 0x80},
+		{piece: -1, want: 0xff},
+		{piece: 0, want: 0x00},
+		{piece: 127, want: 0x7f},
+	} {
+		u := pairFixtureUnit()
+		u.Attachment = AttachmentState{Carrier: 2, AttachPiece: tc.piece}
+		image, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{})
+		if err != nil {
+			t.Fatalf("attach piece %d: %v", tc.piece, err)
+		}
+		if got := image[0x8d]; got != tc.want {
+			t.Fatalf("attach piece %d wrote %#x, want %#x", tc.piece, got, tc.want)
+		}
+	}
+	for _, piece := range []int{-129, 128} {
+		u := pairFixtureUnit()
+		u.Attachment = AttachmentState{Carrier: 2, AttachPiece: piece}
+		if _, err := RetailUnitImage(u, 0, resolve, resolve, RetailUnitWriterScratch{}); err == nil {
+			t.Fatalf("attach piece %d outside the signed-byte domain was accepted", piece)
+		}
+	}
+}
+
 // Pending death is a saved latch, independently of health or last damage kind
 // [08 R-SAVE-02 §6]. Inspect the wire and author the reader input independently.
 func TestRetailPendingDeathProjection(t *testing.T) {

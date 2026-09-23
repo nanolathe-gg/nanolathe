@@ -254,8 +254,10 @@ predicate notices at the next settlement due `[08 R-SKIR-01 §3]`
 **Elimination, the end latch and the result.** A slot is eliminated when its
 live-unit count is zero *and* its units-ever-created count is not — the exact
 negation of the settlement gate's status pair, so no separate elimination flag
-exists `[08 R-SKIR-01 §3]` `[05 R-ECO-01 §12]`. `EndLatch` is the one signed
-16-bit countdown plus the latch bits: ending, the two win bits, and the lose
+exists `[08 R-SKIR-01 §3]` `[05 R-ECO-01 §12]`. The local skirmish defeat
+predicate separately tests only zero live units, so a defeated side restored
+with both counters zero still satisfies defeat at its next due
+`[08 R-TRIG-01 §6]`. `EndLatch` is the one signed 16-bit countdown plus the latch bits: ending, the two win bits, and the lose
 bit that clears the first win bit. `Result` is the frozen outcome — kind,
 reason, winner and loser teams, per-player score rows and their column maxima —
 and `PostBattleController` plays the retail post-battle state order over it.
@@ -278,7 +280,9 @@ checks bounds and the ordinary weapon visit resolves liveness
 `[08 R-SAVE-02 §6]` `[08 R-SAVE-WEAPON-01]`. The writer projects `Dying`
 into the packed pending-death bit without changing live state, and the reader
 restores that logical latch independently of health and damage cause. Reference
-reconstruction attaches cargo before replaying each unit's scalar/status body,
+reconstruction publishes each unit's saved pose, health and kills before loading
+its carrier recursively and attaching locally, then loading its engagement
+reference recursively. The scalar/status body follows those references,
 so a live pending-death passenger remains loadable. Attachment takes its saved
 unit-side mode explicitly; ordinary live admission remains unchanged. The writer
 also projects current `Move.ModeMirror` and cached `MoveTier` into the packed movement
@@ -863,15 +867,31 @@ persisted key, and the world rebuild's reset precedes the dispatcher, so a
 load resumes unarmed and the settlement gate stays open `[05 R-ECO-01 §12]`
 `[08 R-TRIG-01 §6]` `[08 R-ENTRY-01 §8]`.
 
-Detached staging restores Features, Metal and PlayerFeatures before reserving
-units through the ordinary forced-slot allocator. Burning features consume
-ignition RNG before unit initialization; the allocator's new hover phase is
-not a saved field and survives core restoration. Stage state retains the
+Detached staging restores Features, Metal and PlayerFeatures before validating
+and reserving the stable unit identities. It constructs no units; core
+restoration invokes the ordinary forced-slot allocator on each record's first
+recursive visit. The numbered scan starts each unseen record, but a carrier or
+engagement reference can construct a later numbered record first. Burning
+features consume ignition RNG before unit initialization; the allocator's new
+hover phase is not a saved field and survives core restoration. Stage state retains the
 completed feature pass so core restoration cannot ignite it twice. Burn sounds
 remain buffered until core restoration has rebuilt visibility and succeeded;
 a discarded stage publishes none. This changes no stable unit identities or
 save bytes `[08 R-SAVE-UNIT-01]` `[08 R-SAVE-FEATURE-01]`
-`[08 R-SAVE-02 §11]` `[04 R-MOV-01 §5c]`.
+`[08 R-SAVE-02 §6, §11]` `[04 R-MOV-01 §5c]`.
+
+Each recursive visit publishes saved pose, health and kills immediately after
+construction, restores the carrier recursively and attaches locally, then
+restores the engagement reference recursively. A back-reference to an ongoing
+visit skips its already live slot. Carrier cycles are rejected independently
+of engagement cycles. The visit then restores the scalar/status body, account,
+mover, queues and front-head goal, script, and weapon state before returning.
+Thus a completed referenced unit's shared weapon-definition writes can affect
+later constructors, while a pending-death passenger attaches before its saved
+latch is applied. Detached retries retain completed phases, preserving the
+constructor draws and attachment order. The final derived occupancy rebuild
+still releases all constructor placements together before restoring saved yards
+`[08 R-SAVE-02 §6, §11]` `[08 R-SAVE-WEAPON-01]`.
 
 During core restoration, `HasMover` alone selects the 35-byte mover reader;
 an unfinished product therefore restores its saved mover fields and committed
@@ -901,7 +921,9 @@ group reconstruction. A unit's carrier and engagement references complete
 before its group append, so this order can differ from pool order. The manager
 consumes the retained unit sequence before the entry prime; it never substitutes
 a pool scan, which would change wave bootstrap and distance tie-breaking
-`[08 R-SAVE-02 §6]` `[08 R-P0-04 §3]`.
+`[08 R-SAVE-02 §6]` `[08 R-P0-04 §3]`. The saved AI index is separate from
+the UI control-group value; reconstruction never copies one into the other
+`[07 §9]`.
 
 **C11 — the container header.** 34 bytes: magic `HAPIBANK` compared
 case-sensitively, the tag's pool offset, the absolute pool offset, the first
@@ -959,7 +981,10 @@ elimination flag. A slot is eliminated when its 16-bit live count is zero and
 its 32-bit ever-created count is not; that is the exact negation of the
 settlement gate's status pair. Both counters are incremented by the allocators
 and the live count is decremented where the alive bit clears
-`[08 R-SKIR-01 §3]` `[05 R-ECO-01 §12]`.
+`[08 R-SKIR-01 §3]` `[05 R-ECO-01 §12]`. This economy status does not gate
+the local defeat predicate, which reads only the live count. A save with no
+local units reconstructs both counters as zero and must still resume the local
+defeat countdown on its saved settlement phase `[08 R-TRIG-01 §6]`.
 
 **C19 — the commander-death chain.** Identity is the dead definition's name
 against the owner's side commander name, read from the **player record**. On a
@@ -976,20 +1001,19 @@ victory sweep run. Defeat therefore wins a tie, and a wipe that leaves nobody
 standing is a local defeat, not a draw. The victory sweep walks slots 0–9,
 skips the local slot, skips any slot allied in the local player's first
 alliance row, skips any slot with zero live units, and declares victory only if
-nothing survives those skips; under the deathmatch rule it returns false
-immediately, because the local player's own elimination is what arms the
-respawn `[08 R-TRIG-01 §6]` `[08 R-SKIR-01 §3]`.
+nothing survives those skips. The kind-2 sweep has no rule-word test, so
+deathmatch still permits victory `[08 R-TRIG-01 §6]` `[08 R-SKIR-01 §3]`.
 
 **C21 — one shared countdown, one latch.** A true due finds the signed
 countdown negative and sets it to 4; each later true due decrements it; the due
 whose decrement takes it below zero is terminal — the sixth consecutive true
 due, 150 ticks after the first. A false due neither resets nor advances it. At
-most one predicate steps it per due. On the terminal due the rule word alone
-selects the arm: the deathmatch rule respawns the local commander, any other
-value writes the latch — the ending bit always, the two win bits on the won
-path, the lose bit with the first win bit cleared on the lost path. A rule-2
-session can never reach the latch write: an exhausted respawn search simply
-leaves the countdown below zero and the next true due re-arms it
+most one predicate steps it per due. On the terminal lost due, deathmatch
+respawns the local commander; the terminal won path still writes the victory
+latch under that rule. Other outcomes write the latch — the ending bit always,
+the two win bits on the won path, the lose bit with the first win bit cleared
+on the lost path. An exhausted deathmatch respawn search leaves the countdown
+below zero and the next true due re-arms it
 `[08 R-TRIG-01 §6]` `[08 R-SKIR-01 §3]`.
 
 **C21a — respawn and watch-mode entry both call the full visibility rebuild.**
@@ -1435,10 +1459,10 @@ random-draw count `[08 R-AI-01 §3]`.
 * **An eliminated slot keeps advancing its settlement deadline and simply never
   settles.** The deadline advance deliberately precedes the elimination test
   `[05 R-ECO-01 §12]` `[05 "Authoritative settlement order"]`.
-* **A deathmatch session never ends by elimination.** The victory sweep returns
-  false immediately under that rule, and an exhausted respawn search leaves the
-  countdown below zero for the next due to re-arm. There is no
-  post-exhaustion transition to find `[08 R-SKIR-01 §3]`.
+* **A deathmatch loss respawns; a victory still ends the battle.** The kind-2
+  victory sweep ignores the rule word. An exhausted respawn search on the lost
+  path leaves the countdown below zero for the next due to re-arm; there is no
+  post-exhaustion transition `[08 R-TRIG-01 §6]` `[08 R-SKIR-01 §3]`.
 * **A campaign battle's commander death does nothing on its own.** The OTA load
   writes the continue rule, and that rule skips the owner sweep entirely
   `[08 R-SKIR-01 §3]` `[08 R-SKIR-01 §4]`.

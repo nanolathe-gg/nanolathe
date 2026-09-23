@@ -261,12 +261,11 @@ func resultWinnersFor(winner int, draw bool) []int {
 // zero. It is not a team aggregate — an allied peer that is still fighting
 // does not keep the local player in the game.
 //
-// The one guard beyond the counter is the ever-created term of the derived
-// elimination predicate. Retail's live count is decremented by the kill-record
-// handler, so a slot can only reach zero by having held a unit; our evaluator
-// runs from the first sub-tick, before which a fixture that has allocated
-// nothing would read zero and latch. The term is unobservable in every state
-// retail can reach [08 R-SKIR-01 §3] "Counters".
+// The economy's elimination predicate also requires a nonzero ever-created
+// count, but local defeat does not. Loading rebuilds both counters from the
+// surviving units, so a player who saved after losing the last unit has both
+// counters zero and must still enter defeat or deathmatch respawn
+// [05 R-ECO-01 §12][08 R-SKIR-01 §3].
 func (s *Session) localDefeated() bool {
 	if s == nil || s.Units == nil {
 		return false
@@ -275,7 +274,7 @@ func (s *Session) localDefeated() bool {
 	if local < 0 || local >= 10 || !s.resultOwnerEligible(local) {
 		return false
 	}
-	return s.ownerEliminated(local)
+	return s.Units.LiveCountForPlayer(local) == 0
 }
 
 // victorySweep is the kind-2 elimination sweep of [08 R-TRIG-01 §6] "The
@@ -641,10 +640,11 @@ func (s *Session) endedResultView(tick uint32) Result {
 	}
 }
 
-// ownerEliminated is the elimination predicate the victory sweep, the phase-2
-// player gate and the sharing dispatcher share: live count zero AND at least
-// one unit ever created [08 R-SKIR-01 §3][05 R-SHARE-01 §3]. It is derived from
-// the player record's two counters; there is no elimination flag to read.
+// ownerEliminated exposes the economy's elimination predicate to session
+// presentation: live count zero AND at least one unit ever created
+// [05 R-SHARE-01 §3]. It is derived from the player's two counters; local
+// defeat and the kind-2 victory sweep read only the live count instead
+// [08 R-SKIR-01 §3][08 R-TRIG-01 §6].
 func (s *Session) ownerEliminated(owner int) bool {
 	if s == nil {
 		return false

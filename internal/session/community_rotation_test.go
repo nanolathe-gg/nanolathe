@@ -35,7 +35,7 @@ func TestCommunityRestoreRotatesBeforeBinding(t *testing.T) {
 		data := make([]byte, save.UnitBoxSize)
 		copy(data, "lab")
 		binary.LittleEndian.PutUint16(data[0x39:], 32768+16384)
-		_, err := reserveRetailUnits(w, cat, []save.UnitRecord{{StableID: 1, Data: data}}, build)
+		_, err := allocateRetailUnit(w, cat, save.UnitRecord{StableID: 1, Data: data}, build)
 		if err != nil {
 			t.Fatal(err)
 		}

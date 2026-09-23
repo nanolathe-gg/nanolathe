@@ -55,7 +55,7 @@ func TestReserveRetailUnitsSkipsCompatibilityNullRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mixed standard/null records: %v", err)
 	}
-	if w.Used() != 2 || stable[1] == 0 || stable[3] == 0 {
-		t.Fatalf("null record was allocated or standard slots lost: used=%d stable=%v", w.Used(), stable)
+	if w.Used() != 0 || stable[1] != 1 || stable[3] != 3 {
+		t.Fatalf("identity reservation constructed units or lost standard slots: used=%d stable=%v", w.Used(), stable)
 	}
 }

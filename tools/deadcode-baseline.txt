@@ -59,5 +59,7 @@ github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat isSolar
 github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat producesKbot
 github.com/nanolathe-gg/nanolathe/internal/units BindCOBWithPorts
 github.com/nanolathe-gg/nanolathe/internal/units NewSliced
+github.com/nanolathe-gg/nanolathe/internal/units RetailUnitBase
+github.com/nanolathe-gg/nanolathe/internal/units RetailUnitReferences
 github.com/nanolathe-gg/nanolathe/vfs WriteArchive
 github.com/nanolathe-gg/nanolathe/vfs zlibChunks

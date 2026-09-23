@@ -47,8 +47,10 @@ type RetailLoadDeps struct {
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
-// caller may atomically install Session only after this function succeeds.
-// StableUnit maps each saved nonzero unit ID to its forced pool handle.
+// caller may atomically install Session only after core restoration and the
+// entry tail succeed, as coordinated by LoadRetailSaveWithDeps.
+// StableUnit maps each saved nonzero unit ID to its reserved pool identity.
+// The recursive core reader allocates the corresponding object on first visit.
 type RetailBattleStage struct {
 	Image      *save.BattleImage
 	Session    *Session
@@ -56,12 +58,15 @@ type RetailBattleStage struct {
 
 	featuresRestored bool
 	burnSounds       [][3]numeric.Fixed
+	unitProgress     map[uint16]retailUnitRestoreProgress
+	restoredUnits    []*units.Unit
+	coreRestored     bool
 }
 
 // StageRetailBattle validates and stages an in-battle retail save. It does
 // not run a tick and does not mutate the caller's Bank or any existing
-// session. Feature/terrain restoration precedes D1 unit allocation; unit body
-// fixups are owned by later persistence stages [08 R-SAVE-02 §11].
+// session. Feature/terrain restoration precedes unit identity validation;
+// core restoration allocates and restores units recursively [08 R-SAVE-02 §11].
 func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage, error) {
 	entryFeatures, err := ResolveCommunity(deps.Gameplay, deps.CommunitySources)
 	if err != nil {
@@ -234,7 +239,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err := stage.restoreFeatures(); err != nil {
 		return nil, err
 	}
-	stable, err := reserveRetailUnits(s.Units, cat, image.Units.Records, s.Build)
+	stable, err := reserveRetailUnits(s.Units, cat, image.Units.Records)
 	if err != nil {
 		return nil, err
 	}
@@ -333,12 +338,13 @@ func loadRetailStageMission(fs vfs.FSOps, summary save.Summary) (*mission.Missio
 	return mission.LoadCampaignWithSink(fs, campaign.Path, idx, int(summary.Difficulty), int(summary.Players), nil)
 }
 
-func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.UnitRecord, build ...*construction.Service) (map[uint16]pool.Handle, error) {
+func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.UnitRecord) (map[uint16]pool.Handle, error) {
 	if w == nil || cat == nil {
 		return nil, fmt.Errorf("session: retail unit reservation has nil world/catalog")
 	}
-	// Validate every mandatory identity before the first allocation, so a bad
-	// image cannot expose a partially reserved result even inside the stage.
+	// Reserve identities without constructing objects: recursive references
+	// determine constructor order, not the numbered record scan [08 R-SAVE-02 §6].
+	stable := make(map[uint16]pool.Handle, len(records))
 	for _, rec := range records {
 		// Compatibility records are null results. They retain their writer
 		// enumeration position for ScriptN indexing but have no identity or
@@ -352,9 +358,16 @@ func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.Uni
 		if rec.StableID == 0 {
 			return nil, fmt.Errorf("session: retail unit %d has null stable slot", rec.Number)
 		}
+		if _, exists := stable[rec.StableID]; exists {
+			return nil, fmt.Errorf("session: retail unit %d repeats stable slot %d", rec.Number, rec.StableID)
+		}
 		owner := rec.Data[0x20]
 		if owner >= 10 {
 			return nil, fmt.Errorf("session: retail unit %d owner %d outside player slices", rec.Number, owner)
+		}
+		first, last, ok := w.SliceForPlayer(int(owner))
+		if !ok || int(rec.StableID) < first || int(rec.StableID) > last {
+			return nil, fmt.Errorf("session: retail unit %d forced slot %d outside owner %d slice", rec.Number, rec.StableID, owner)
 		}
 		nameBytes := rec.Data[:0x20]
 		if n := bytes.IndexByte(nameBytes, 0); n >= 0 {
@@ -367,30 +380,30 @@ func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.Uni
 		if _, ok := cat.Units[content.CanonicalKey(name)]; !ok {
 			return nil, fmt.Errorf("session: retail unit %d definition %q is unresolved", rec.Number, name)
 		}
-	}
-	stable := make(map[uint16]pool.Handle, len(records))
-	for _, rec := range records {
-		if rec.Compat {
-			continue
-		}
-		nameBytes := rec.Data[:0x20]
-		if n := bytes.IndexByte(nameBytes, 0); n >= 0 {
-			nameBytes = nameBytes[:n]
-		}
-		def := cat.Units[content.CanonicalKey(strings.TrimSpace(string(nameBytes)))]
-		x := numeric.Fixed(int64(int32(binary.LittleEndian.Uint32(rec.Data[0x2b:]))))
-		y := numeric.Fixed(int64(int32(binary.LittleEndian.Uint32(rec.Data[0x2f:]))))
-		z := numeric.Fixed(int64(int32(binary.LittleEndian.Uint32(rec.Data[0x33:]))))
-		facing := units.FacingSouth
-		if len(build) != 0 && build[0] != nil {
-			heading := binary.LittleEndian.Uint16(rec.Data[0x39:]) // Existing saved heading [08 R-SAVE-02 §6].
-			facing = build[0].ResolveStructureFacing(def, units.FacingFromHeading(heading))
-		}
-		h, err := w.CreateWithForcedSlotFacing(def, rec.Data[0x20], x, y, z, pool.Handle(rec.StableID), facing)
-		if err != nil {
-			return nil, fmt.Errorf("session: retail unit %d forced slot %d: %w", rec.Number, rec.StableID, err)
-		}
-		stable[rec.StableID] = h
+		stable[rec.StableID] = pool.Handle(rec.StableID)
 	}
 	return stable, nil
+}
+
+// allocateRetailUnit runs the ordinary constructor only when the recursive
+// reader first reaches this record [08 R-SAVE-02 §6][04 R-MOV-01 §5c].
+func allocateRetailUnit(w *units.World, cat *content.Catalog, rec save.UnitRecord, build *construction.Service) (pool.Handle, error) {
+	nameBytes := rec.Data[:0x20]
+	if n := bytes.IndexByte(nameBytes, 0); n >= 0 {
+		nameBytes = nameBytes[:n]
+	}
+	def := cat.Units[content.CanonicalKey(strings.TrimSpace(string(nameBytes)))]
+	x := numeric.Fixed(int32(binary.LittleEndian.Uint32(rec.Data[0x2b:])))
+	y := numeric.Fixed(int32(binary.LittleEndian.Uint32(rec.Data[0x2f:])))
+	z := numeric.Fixed(int32(binary.LittleEndian.Uint32(rec.Data[0x33:])))
+	facing := units.FacingSouth
+	if build != nil {
+		heading := binary.LittleEndian.Uint16(rec.Data[0x39:])
+		facing = build.ResolveStructureFacing(def, units.FacingFromHeading(heading))
+	}
+	h, err := w.CreateWithForcedSlotFacing(def, rec.Data[0x20], x, y, z, pool.Handle(rec.StableID), facing)
+	if err != nil {
+		return 0, fmt.Errorf("session: retail unit %d forced slot %d: %w", rec.Number, rec.StableID, err)
+	}
+	return h, nil
 }

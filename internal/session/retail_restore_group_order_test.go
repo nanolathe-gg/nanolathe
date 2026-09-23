@@ -29,6 +29,7 @@ func TestRetailRestoreGroupsFollowRecursiveReferences(t *testing.T) {
 			s, fixtures := newRestoreCoreFixture(t, len(tc.engagement))
 			image := &save.BattleImage{}
 			for i, fixture := range fixtures {
+				s.Units.Unit(fixture.handle).Group = 7 // UI groups are independent of the saved AI group.
 				data := unitRecordData(false)
 				if target := tc.engagement[i]; target >= 0 {
 					binary.LittleEndian.PutUint16(data[0x8B:], fixtures[target].stableID)
@@ -47,8 +48,9 @@ func TestRetailRestoreGroupsFollowRecursiveReferences(t *testing.T) {
 			var want []pool.Handle
 			for _, i := range tc.want {
 				want = append(want, fixtures[i].handle)
-				if got := s.Units.Unit(fixtures[i].handle).Group; got != 3 {
-					t.Fatalf("unit group = %d, want 3 before entry prime", got)
+				u := s.Units.Unit(fixtures[i].handle)
+				if u.RestoredAIGroup != 3 || u.Group != 7 {
+					t.Fatalf("AI/UI groups = %d/%d, want 3/7", u.RestoredAIGroup, u.Group)
 				}
 			}
 			if got := s.AI[0].GroupMembers(3); !slices.Equal(got, want) {
