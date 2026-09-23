@@ -70,6 +70,8 @@ Mods can live in separate directories. Repeat `--root` in load order:
 ./nanolathe --root "$HOME/TotalAnnihilation" --root "$HOME/TA-Mods/MyMod"
 ```
 
+For ProTA 4.8, see the [ProTA setup and support notes](docs/PROTA_SUPPORT.md).
+
 Every later root overrides earlier roots, even when a later `totala1.hpi`
 provides a file already supplied by an earlier `.ccx`, `.gp3`, or loose file.
 Within each root, the existing loose-file and archive precedence is unchanged.

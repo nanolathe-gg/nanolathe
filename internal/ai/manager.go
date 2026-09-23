@@ -645,6 +645,10 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 // constructionPlacePass is pass one: choose and place a building for every
 // member of the construction vector, in vector order [08 R-AI-01 §3].
 func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *economy.Service, centreX, centreZ numeric.Fixed, buildCapable int32) {
+	// TODO(question): ProTA documents raising the commander builder threshold
+	// from five to ten; readable source or bounded observations must establish
+	// its eligibility and the paired reposition gate before adopting it. See
+	// research/extensions/prota-engine.md "Unknown".
 	// The retail task does not rediscover builders from the world when its
 	// vector is empty; the classifier and ordinary group writers are the
 	// admissions to this input [R-P0-04].
@@ -956,6 +960,10 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		}
 		// The authored makes-metal byte selects the activation branch
 		// [08 "Eco toggle and group-vector population"].
+		// TODO(question): ProTA documents shutting down other energy consumers;
+		// their eligibility, thresholds and reactivation/RNG path need readable
+		// source or bounded observations. Keep the retail predicate here. See
+		// research/extensions/prota-engine.md "Unknown".
 		if u.Def.MakesMetal != 0 {
 			// Established: equality disables; nonpositive net energy and a
 			// zero draw leave activation unchanged [08 R-AI-01 §2].

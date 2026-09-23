@@ -109,6 +109,69 @@ func TestCommunityIconUseDefaultDoesNotOpenCustomPCX(t *testing.T) {
 	}
 }
 
+func TestCommunityIconConfigAcceptsSectionHeaderComments(t *testing.T) {
+	u := iconUnit("a", "ALL", 1)
+	cat := iconTestCatalog(u)
+	registry, err := content.CompileCategories(cat.Units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat.Categories = registry
+	dir := t.TempDir()
+	writeCommunityPCX(t, filepath.Join(dir, "all.pcx"), []byte{0, 1}, [][3]byte{{}, {255, 255, 255}})
+	writeCommunityPCX(t, filepath.Join(dir, "unknown.pcx"), []byte{1, 0}, [][3]byte{{}, {255, 255, 255}})
+	config := `[Option] ; General Settings
+UseDefaultIcon=false
+[Icon] # Custom Icons
+ALL=all.pcx
+Unknow=unknown.pcx
+`
+	path := filepath.Join(dir, "iconcfg.ini")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	icons, err := LoadStrategicIconCatalog(cat, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := icons.Lookup("a", 1)
+	if !ok || !d.communityConfigured || d.Atlas == nil {
+		t.Fatalf("commented section headers did not load custom art: ok=%v descriptor=%+v", ok, d)
+	}
+	if len(d.Evidence) == 0 || !strings.Contains(d.Evidence[len(d.Evidence)-1], "ALL=all.pcx") {
+		t.Fatalf("custom mapping evidence = %v", d.Evidence)
+	}
+}
+
+func TestCommunityIconPathCaseFallbackIsPortable(t *testing.T) {
+	dir := t.TempDir()
+	authored := filepath.Join(dir, "MiXeD.PCX")
+	writeCommunityPCX(t, authored, []byte{0, 1}, [][3]byte{{}, {255, 255, 255}})
+	got, err := resolveCommunityIconPath(dir, "MIXED.pcx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != authored {
+		t.Fatalf("case-insensitive fallback resolved %q, want directory spelling %q", got, authored)
+	}
+
+	// Case-sensitive hosts can represent two folded matches. Neither is a
+	// portable winner unless the authored spelling exactly selects one.
+	second := filepath.Join(dir, "MIXED.pcx")
+	writeCommunityPCX(t, second, []byte{1, 0}, [][3]byte{{}, {255, 255, 255}})
+	firstInfo, firstErr := os.Stat(authored)
+	secondInfo, secondErr := os.Stat(second)
+	if firstErr == nil && secondErr == nil && !os.SameFile(firstInfo, secondInfo) {
+		if _, err := resolveCommunityIconPath(dir, "mixed.PcX"); err == nil || !strings.Contains(err.Error(), "ambiguous case-insensitive matches") {
+			t.Fatalf("ambiguous folded path error = %v", err)
+		}
+		got, err := resolveCommunityIconPath(dir, "MIXED.pcx")
+		if err != nil || got != second {
+			t.Fatalf("exact authored spelling did not win: path=%q err=%v", got, err)
+		}
+	}
+}
+
 func writeCommunityPCX(t *testing.T, path string, pixels []byte, palette [][3]byte) {
 	t.Helper()
 	if len(pixels) == 0 || len(pixels) > 65535 {

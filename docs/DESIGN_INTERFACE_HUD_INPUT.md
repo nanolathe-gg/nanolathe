@@ -1391,7 +1391,21 @@ and Orders for every authored faction at 480, 768 and 1080 pixels under both ren
 selections. Supply
 `NANOLATHE_MOD_ROOTS_PROTA` and `NANOLATHE_MOD_ROOTS_ZERO` as host path lists,
 with the usual retail asset variable; `NANOLATHE_MENU_SHOTS` saves HUD
-captures outside the repository.
+captures outside the repository. The capture is the common software HUD
+composition with the selected Classic or Modern sidebar policy; it does not
+execute the Modern GPU world replay. A 2026-09-22 run against the identified
+ProTA 4.8 archive (`ba2ee5c…`) passed both factions and all six size/policy
+combinations. The reviewed first and trailing pages showed the package's own
+ARM/CORE build pictures, letter overlays, fonts and command chrome; Modern's
+flat pages preserved the four directional shipyard buttons as one composite.
+This establishes authored interface presentation only. It does not establish
+the package DLL's gameplay, complete hotkey assignment table, or GPU model
+parity. `TestRetailProTAPresentationAssets` separately locks the archive
+provenance for those GUI pages, both 96×96 commander portraits and all six
+authored palette/table overrides, checks the twelve-slot/shortcut records and
+decodes the package's pink and slate 32×32 team-logo frames. Its optional
+`NANOLATHE_PROTA_PRESENTATION_SHOTS` directory receives those four small art
+captures for visual review.
 
 #### Modern expanded sidebar
 

@@ -85,8 +85,8 @@ func parseCommunityIconConfig(path string, data []byte, cat *content.Catalog) (*
 		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+		if parsed, ok := communityIconSection(line); ok {
+			section = parsed
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -110,8 +110,8 @@ func parseCommunityIconConfig(path string, data []byte, cat *content.Catalog) (*
 		if line == "" || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+		if parsed, ok := communityIconSection(line); ok {
+			section = parsed
 			continue
 		}
 		if section != "icon" {
@@ -141,6 +141,21 @@ func parseCommunityIconConfig(path string, data []byte, cat *content.Catalog) (*
 		return nil, fmt.Errorf("custom icon mode has no [Icon] rows")
 	}
 	return cfg, nil
+}
+
+func communityIconSection(line string) (string, bool) {
+	if !strings.HasPrefix(line, "[") {
+		return "", false
+	}
+	end := strings.IndexByte(line, ']')
+	if end < 1 {
+		return "", false
+	}
+	trailing := strings.TrimSpace(line[end+1:])
+	if trailing != "" && !strings.HasPrefix(trailing, ";") && !strings.HasPrefix(trailing, "#") {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(line[1:end])), true
 }
 
 func setCommunityIconOption(options *communityIconOptions, key, value string) {
@@ -175,8 +190,10 @@ func (cfg *communityIconConfig) loadArt() error {
 	loaded := make(map[string]communityIconArt)
 	for i := range cfg.rows {
 		row := &cfg.rows[i]
-		name := filepath.FromSlash(strings.ReplaceAll(row.path, `\`, "/"))
-		path := filepath.Clean(filepath.Join(dir, name))
+		path, err := resolveCommunityIconPath(dir, row.path)
+		if err != nil {
+			return fmt.Errorf("icon %q from %s: %w", row.name, row.path, err)
+		}
 		art, ok := loaded[path]
 		if !ok {
 			data, err := os.ReadFile(path)
@@ -193,6 +210,49 @@ func (cfg *communityIconConfig) loadArt() error {
 		row.art = art
 	}
 	return cfg.packArt()
+}
+
+func resolveCommunityIconPath(dir, authored string) (string, error) {
+	name := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(authored, `\`, "/")))
+	current := filepath.Clean(dir)
+	parts := strings.Split(name, string(filepath.Separator))
+	for _, part := range parts {
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			current = filepath.Dir(current)
+			continue
+		}
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return "", fmt.Errorf("resolve authored path %q at %s: %w", authored, current, err)
+		}
+		exact := ""
+		var folded []string
+		for _, entry := range entries {
+			if entry.Name() == part {
+				exact = entry.Name()
+				break
+			}
+			if strings.EqualFold(entry.Name(), part) {
+				folded = append(folded, entry.Name())
+			}
+		}
+		if exact != "" {
+			current = filepath.Join(current, exact)
+			continue
+		}
+		switch len(folded) {
+		case 0:
+			return "", fmt.Errorf("resolve authored path %q at %s: component %q: %w", authored, current, part, os.ErrNotExist)
+		case 1:
+			current = filepath.Join(current, folded[0])
+		default:
+			return "", fmt.Errorf("resolve authored path %q at %s: component %q has ambiguous case-insensitive matches %v", authored, current, part, folded)
+		}
+	}
+	return current, nil
 }
 
 func makeCommunityIconArt(pcx *formats.PCX, options communityIconOptions) communityIconArt {

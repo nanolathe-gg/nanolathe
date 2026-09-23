@@ -128,8 +128,10 @@ changelogs. Sources: `OTA 3.1 to ProTA 4.3 changelog.txt`,
   behaviour and stockpile-queue limiting (4.5), scoreboard completeness,
   reclaim-sound fixes, the Necro "Resurrection failed" text, and the AI
   builder-count threshold (4.5). The shipped executable is stock, so these
-  are applied at runtime by the engine DLL; the exact patch sites are outside
-  this document.
+  are applied at runtime by the engine DLL. The exact established boundaries
+  and the separate current-source contract are recorded under
+  [AI and economy evidence audit](#ai-and-economy-evidence-audit); the release
+  notes alone do not supply missing arithmetic or ordering.
 - **Display and hosting defaults.** `ProTA.ini` documents engine defaults that
   differ from retail 3.1: unit limit 1500, pathfinding cycles 66650, effect
   limit 20480, unit model buffer 1280×1280, unit and weapon identifier limits
@@ -221,6 +223,142 @@ Neither these switches nor the `prota` name establish the historical 4.8
 switches, authorize Nanolathe gameplay changes, or follow from choosing a
 content directory profile.
 
+### AI and economy evidence audit
+
+This audit is deliberately split between the **shipped 2025 package** and the
+**pinned 2026 source**. A contract established for one is not evidence that the
+other implements it. No third-party binary was inspected to close these gaps.
+
+**Established — licensed source identity and binary separation.** The readable
+source is the TADR repository at
+`dcff5ddeb6bd1030e3f452c0f16e5f005850f62f` (20 September 2026). Its root
+[`LICENSE`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/LICENSE)
+grants the MIT license separately to `src/DDRaw` and `src/Recorder`. The
+[`compile.yml`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/.github/workflows/compile.yml)
+workflow builds the `prota` draw DLL from this revision but packages a
+committed recorder DLL because the hosted builder cannot compile its Delphi
+source. That recorder identifies itself as `2026.9.9`; its SHA-256 is
+`865f00361bc2726bc0f7349d9a16ad22f5d2673df1c99685ee21b68e3baff9f5`.
+It is not the ProTA 4.8 recorder DLL, whose SHA-256 is
+`b641a7c97389088f93e7270425a24a1b6d0c442a112cd6be47a46c2773efdacf`.
+The committed 2026 binary was identified and hashed, not inspected for
+behavior, and its correspondence to the readable recorder source remains
+**Unknown**.
+
+**Established — shipped 4.8 difficulty factors, documentation scope.** The
+ProTA 4.8 release note assigns the computer player's resource-generation and
+feature-reclamation income the factors Easy `0.5`, Medium `1.0` and Hard
+`4.0`. It contrasts those values with the documented earlier factors Easy
+`0.5`, Medium `0.7` and Hard `1.0`. The statement names resource generation
+and feature reclamation together, so both are required acceptance surfaces for
+4.8 support.
+
+**Unknown — shipped 4.8 factor arithmetic.** The release note does not say
+which per-unit production or refund contributions participate, whether unit
+reclaim participates, where the multiply occurs relative to accumulation and
+single-precision stores, how unordered or negative values behave, or whether
+the selector is sampled once or per contribution. The pinned source contains
+no implementation of these three factors. Primary source for the shipped
+patch or a bounded manual observation at arithmetic-sensitive inputs would be
+needed before claiming exact behavioral parity. Until then an implementation
+may use the three named values only as an explicitly approved Nanolathe policy;
+it may not present a guessed multiplication boundary as ProTA 4.8 behavior.
+
+**Established — shipped 4.8 stockpile intent.** The ProTA 4.5 release note,
+retained in the 4.8 package, states three results: computer players can build
+and fire nuclear and anti-nuclear stockpiles, they do not queue stockpile
+weapons without bound, and the change applies as a runtime engine patch. That
+document does not give the queue predicate or distinguish stationary and
+mobile producers.
+
+**Established — pinned-source stockpile admission.** The readable recorder
+[`Builders.pas`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/Builders.pas)
+has one optional AI-stockpile group, enabled only when the
+`Preferences/AiNukes` Boolean is true;
+[`IniOptions.pas`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/Recorder/plugins/IniOptions.pas)
+sets its source default to false. Neither the current source package's generic
+`totala.ini` nor any readable INI in ProTA 4.8 sets that key. Thus a build from
+the readable source, used with those files, keeps these hooks disabled. This
+does not establish the state of either committed recorder binary.
+
+When enabled, the pinned source recognizes a stockpile product only when its
+authored name contains the case-sensitive substring `MAKENUKE` or `MAKEANTI`.
+Its stationary-producer wrapper handles a positive queue request as follows,
+in order:
+
+1. If weapon slot zero already has at least one completed round, reject the
+   request without calling the ordinary stockpile-queue helper.
+2. Otherwise, if a secondary order exists and its second integer parameter is
+   positive, reject in the same way.
+3. Otherwise, forward the caller's original requested count unchanged.
+
+A zero or negative request, and every name outside those two substring
+classes, bypasses both guards and is forwarded unchanged. Consequently the
+source does not by itself establish a universal queue size of one: that result
+also depends on what count the caller supplies.
+
+For a mobile producer, a matching nonzero candidate type with no completed
+round in weapon slot zero and no positive secondary-order count submits one
+round to the ordinary helper. The helper's return value remains false on every
+path, including after that submission, so its wrapper then resumes the
+ordinary build-as-unit arm. This fallthrough is part of the pinned source
+contract; skipping the ordinary arm after submitting the round would be a
+different algorithm. What that inherited arm subsequently changes is
+**Unknown** from this extension source alone because its implementation belongs
+to the host executable.
+
+The same option installs a fixed host-instruction replacement described by its
+source as allowing AI-owned stationary stockpile producers to make nuclear
+rounds. The readable source does not express the replaced algorithm, and no
+separate readable hook implements the documented firing behavior. Production
+arithmetic, target choice, launch timing, interceptor response and any random
+draws therefore remain **Unknown** for both the shipped 4.8 patch and the
+pinned-source package. The exact admission predicates above do not settle
+those later stages.
+
+**Established — shipped 4.8 low-energy intent; Unknown algorithm.** The 4.5
+release note says a computer player may turn off any energy-hungry appliance
+when energy is low. Neither that note nor the pinned source defines
+"appliance" or "low", identifies the resource fields compared, gives visit
+order, states whether the decision draws randomness, or says when a disabled
+unit is re-enabled. No implementation of this change appears in the pinned
+source. These questions must be settled by primary patch source or bounded
+manual observations before this can be cloned as ProTA behavior.
+
+**Established — shipped 4.8 builder threshold; Unknown boundary details.** The
+4.5 release note changes from 5 to 10 the number of "build units" before a
+computer-controlled commander enters repair patrol, and defines that count's
+membership only as laboratories, construction units and the commander itself.
+It does not state whether unfinished or disabled members count, the comparison
+at exactly ten, the iteration point that samples the count, or whether the
+same threshold also gates the commander's attempt to place buildings. The
+pinned source contains no implementation of this change. An older, later
+removed source option enlarged an AI probability-list capacity; its value and
+purpose do not establish this commander threshold.
+
+**Established — Nanolathe comparison.** Nanolathe currently implements the
+retail baseline for each reachable surface:
+
+- `internal/economy` applies Easy `0.5`, Medium `0.7` and Hard `1.0` at the
+  per-unit production/refund contribution store, and applies the same selector
+  separately to feature-reclaim energy and metal credit. The feature service
+  returns raw pools, so the ledger is already the single scaling boundary.
+- `internal/ai` uses the retail build-capable count in two complementary
+  commander branches: a capture-capable builder stops attempting placement at
+  five or more, and starts the reposition/repair-patrol arm at five or more.
+- The retail AI eco task toggles only completed building-class metal makers.
+  Its disable test is `energy stock <= 2 × metal stock`; a possible enable
+  requires positive net energy and consumes one simulation draw with bound
+  five. It is not the documented ProTA "any energy-hungry appliance" rule.
+- The planner has no producer for the secondary `BuildWeapon` order. Existing
+  order and combat code can produce and launch stockpiled rounds after that
+  counted order has been inserted, but no computer-player task inserts it.
+
+These comparisons describe the current implementation; they do not establish
+the missing extension contracts or authorize guesses for them. The existing
+gameplay-selection requirements remain in
+[DESIGN_GAMEPLAY_RULES §9](../../docs/DESIGN_GAMEPLAY_RULES.md#9-extending-the-existing-mechanism).
+
 ## Authored package, interface and single-player coverage
 
 **Established — archive namespace.** The identified `ProTA.gp3` uses
@@ -232,6 +370,17 @@ even though its executable on disk matches retail. Empty `downloadP` is not
 evidence that retail `download` records should be imported. Sources: the
 archive directory and `gamedatP/SIDEDATA.TDF`; the latter supplies `[CANBUILD]`
 lists including the separately named rotated shipyards.
+
+**Established — two directional shipyard membership gaps.** The identified
+4.8 archive defines the regular Core shipyards `CORSYE` and `CORSYW`, but its
+populated `SIDEDATA/CANBUILD` sections are named `CORSYNE` and `CORSYNW`.
+Nanolathe's exact-name build-menu lookup therefore gives `CORSYE` and `CORSYW`
+no products. The northern regular variant and the advanced Core variants have
+matching membership. Loading all directional definitions does not establish
+that all those factories can build. Sources: the archive's unit definitions
+and `gamedatP/SIDEDATA.TDF`, exercised by `TestProTA48PackageAcceptance`.
+Whether the unmatched names are an archive error or depend on a historical
+patch alias remains **Unknown**; no alias is inferred from their spelling.
 
 **Established — authored interface.** `SIDEDATA` orders Arm then Core, with
 commanders `ARMCOM` and `CORCOM`, interface GAFs `ARMINT` and `CORINT`, and
@@ -304,6 +453,13 @@ not reported passing tests or new gameplay authorization:
 
 ## Unknown
 
+- **Unknown — regular Core east/west shipyard aliases.** What makes the
+  `CORSYE`/`CORSYW` definitions consume the differently named
+  `CORSYNE`/`CORSYNW` build lists, if anything? Primary ProTA documentation,
+  appropriately licensed source, or a bounded manual observation of selecting
+  and building from those yards in ProTA 4.8 would distinguish a packaging
+  defect from an engine contract. Nanolathe currently leaves their membership
+  empty rather than inventing an alias.
 - **Unknown — hotkey assignment table.** The bundled readme does not list the
   extended hotkeys, and the stock in-game help file is unchanged. Which
   letters the engine reserves (idle-builder/factory cycling, on-screen weapon
@@ -312,8 +468,13 @@ not reported passing tests or new gameplay authorization:
   ProTA's own current documentation or a bounded in-game observation would
   settle it.
 - **Unknown — runtime patch boundaries.** Which documented "`.exe` hack" is
-  applied by `tdraw.dll`, by `tplayx.dll`, or by a cooperating backend, and
-  the exact arithmetic of the AI difficulty multipliers, are not established.
+  applied by `tdraw.dll`, by `tplayx.dll`, or by a cooperating backend is not
+  established. The three AI difficulty factors are documented, but their
+  multiplication, accumulation and rounding boundaries are not. The exact
+  appliance predicate and re-enable rule, commander-threshold comparator and
+  count membership, and stockpile production/fire stages are also unresolved;
+  see [AI and economy evidence audit](#ai-and-economy-evidence-audit) for the
+  evidence that would settle each.
 - **Unknown — engine-family provenance (settled for the current line).** The
   relationship between `tdraw.dll`, TA: Escalation's `TAESC.dll` and TA Zero's
   `zdraw.dll` is established for the current generation: one MIT-licensed

@@ -716,6 +716,60 @@ is the same word the campaign constructor threads through and the skirmish
 config takes after `ApplyDefaults` has run `[08 R-SKIR-01 §9]`
 `[08 R-AI-01 §12]`.
 
+### 2.7 ProTA 4.8 package acceptance boundary
+
+`internal/session/prota_retail_test.go` is the asset-gated session acceptance
+check for the identified ProTA 4.8 archive. It mounts original assets first and
+the package second, resolves the `prota` content profile, and compiles and runs
+through the profile's directory table, limits and `prota` gameplay-feature
+declaration. The session's resolved feature value must equal the independently
+selected `prota` table, while its explicit rule-set selection remains Modern;
+content detection does not select a gameplay mode. The check requires the
+profile-mapped `SIDEDATA`, Spark, Blaze, Apex, both commanders, and the separate
+Arm and Core shipyard direction definitions to retain `ProTA.gp3` provenance.
+It then runs a bounded skirmish in which an explicit human order makes Spark
+damage Blaze, an Arm commander reaches a live factory nanoframe, and the battle
+crosses the retail bank write/read boundary. A correctly authored east-facing
+Arm shipyard admits an authored product into its counted factory queue, and the
+queue survives that boundary. At the restore boundary the live unit and economy
+projections, selected rule set, feature-table digest and ProTA catalog
+provenance match; after it, the restored factory remains alive and continues
+construction. The bank does not carry the gameplay selection or content
+profile: the load dependency record explicitly reselects Modern and supplies
+the same profile declaration, then the restore check verifies the result. This
+establishes authored definition, weapon, construction, factory-queue and
+save/load integration. The explicit attack is not evidence about autonomous
+targeting or the package DLL's AI policy. See
+[ProTA 4.8 engine package, “Package acceptance cases”](../research/extensions/prota-engine.md#package-acceptance-cases).
+
+The directional-yard result has one concrete package limitation. Every Arm
+regular/advanced direction and every Core advanced direction has effective
+build membership, as do the base and north Core regular yards. `ProTA.gp3`
+defines the remaining Core regular units as `CORSYE` and `CORSYW`, but authors
+the populated build pages as `CORSYNE` and `CORSYNW`; the two defined units
+therefore have empty effective build membership in this integration. The test
+records that gap and does not infer an alias. Primary ProTA documentation,
+appropriately licensed source, or a bounded manual observation of those two
+yards in ProTA 4.8 would be needed to decide whether the archive has a naming
+error or the patch supplies an alias.
+
+The same check enters original Core mission 1 and Core Contingency mission 6,
+ticks both as campaign sessions with a campaign AI manager, and checks the
+concrete overlay boundaries. Original Core mission 1 uses its authored
+use-only list, excludes Apex from the battle-local catalog while leaving the
+shared catalog unchanged, advances to the discovered `MISSION1`, and resolves
+`CC01.TNT` from `ProTA.gp3`. Core Contingency mission 6 resolves its OTA overlay
+from `ProTA.gp3`, its base terrain from `ccmiss.ccx`, and retains authored wind
+bounds `90..900`.
+
+This automated check does not cover the twelve-slot GUI, build hotkeys,
+portraits, palette colors, campaign GUI build submission, trigger-driven
+mission completion, a full autonomous AI match, the documented patch-side AI
+resource/appliance behavior, or music backends. Those remain separate visual,
+long-running or manual package acceptance work. The successor assertion proves
+campaign discovery and routing only; it does not claim that the bounded session
+won mission 1.
+
 ## 3. Contracts
 
 Three numbered sets meet here, and each keeps the numbering its comments use.

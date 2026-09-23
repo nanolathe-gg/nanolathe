@@ -3097,12 +3097,21 @@ before designing any.
 `settings.Presentation.StrategicIconConfig` is an optional host path to the
 community draw engine's
 [icon-configuration contract](../research/extensions/draw-engine-interface.md#megamap).
+The path may name the exact INI or a package/config directory containing
+exactly one case-insensitive `iconcfg.ini` at its root, `Icon/`, or `ZIcon/`.
+No match or multiple matches reports the searched directory and retains the
+generated catalog; an exact file path always remains the user's selection.
 Empty keeps the generated
 catalog above. `UseDefaultIcon=true`, including its source default when the key
 is absent, also keeps that catalog and does not open any PCX named by `[Icon]`.
 An unreadable INI, malformed PCX or atlas outside the host bound reports the
 config and art paths and falls back to the complete generated catalog; a partly
-loaded mapping is never published.
+loaded mapping is never published. Authored relative PCX paths keep their
+separator spelling portable. Each path component first takes an exact directory
+entry, then a unique case-insensitive match so packages authored on a
+case-insensitive host also load on a case-sensitive host. Multiple folded
+matches are ambiguous and fail the whole custom mapping rather than selecting
+one by directory order.
 
 With custom icons enabled, `[Icon]` rows retain authored order. Each ordinary
 name resolves through the final content catalog's category registry, and the

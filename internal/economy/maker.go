@@ -76,6 +76,10 @@ func (s *Service) TidalScalar() float32 {
 // is the record load, not an extra rounding. A *product just formed* stays at
 // working precision all the way into the store here.
 func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
+	// TODO(question): ProTA documents different computer-player difficulty
+	// factors, but their arithmetic and applicable credit paths need readable
+	// source or bounded observations; retain retail until established. See
+	// research/extensions/prota-engine.md "Unknown".
 	if b == nil {
 		return
 	}
@@ -221,11 +225,10 @@ func (s *Service) SetEconomySelector(v int) {
 //     first and adding afterwards — which this file's unit-reclaim refund used
 //     to do — narrows twice and rounds differently, which §3 warns about
 //     explicitly ("the factored form rounds differently");
-//   - neither traced site tests the sign of the contribution, where
-//     addContribution short-circuits a non-positive one to the plain add. No
-//     shipped feature authors a negative pool [05 R-WORK-01 §5-A], so the
-//     difference is unobservable on retail content, but cloning the guard here
-//     would be cloning something the sites do not have;
+//   - neither traced site tests the sign of the contribution, just as the
+//     shared contribution helper has no sign gate. No shipped feature authors
+//     a negative pool [05 R-WORK-01 §5-A], but adding a guard here would still
+//     introduce a predicate the sites do not have;
 //   - a selector this build has not been given is the undiscounted path, which
 //     is also what the traced ladder does for any selector above one (hard).
 func creditReclaimedMaterial(s *Service, b *Bucket, contribution float64, discounted bool) {
