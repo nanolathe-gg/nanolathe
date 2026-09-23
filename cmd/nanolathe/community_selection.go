@@ -210,7 +210,7 @@ func (b *battleSession) handleCommunityDoubleClick(in *input.State, mx, my int32
 		return false
 	}
 	event, ok := in.CurrentPointer()
-	if !ok || event.Kind != input.LeftDoubleClick {
+	if !ok || (event.Kind != input.LeftDoubleClick && event.Kind != input.RightDoubleClick) {
 		return false
 	}
 	f, ok := b.currentSnapshot()

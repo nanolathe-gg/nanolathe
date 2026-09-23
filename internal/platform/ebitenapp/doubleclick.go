@@ -21,27 +21,35 @@ const (
 	doubleClickTolerance int32 = 2
 )
 
-// doubleClickRecognizer retains the one candidate left press. Only the left
-// button is paired: the widget pass acts on a left double-click alone
-// [07 R-WGT-01 §4].
-type doubleClickRecognizer struct {
+type doubleClickCandidate struct {
 	armed bool
 	x, y  int32
 	at    uint32
 }
 
-// press classifies one left-press transition and reports whether it completes
-// a pair. A completed pair is consumed, so a third press inside the same window
-// arms a new candidate instead of producing a triple. A press outside the
-// interval or the rectangle also becomes the new candidate, matching an OS
-// recognizer that restarts on the press it rejected.
-func (r *doubleClickRecognizer) press(x, y int32, at uint32) bool {
-	if r.armed && at >= r.at && at-r.at <= doubleClickInterval &&
-		within(x, r.x) && within(y, r.y) {
-		r.armed = false
+// doubleClickRecognizer retains independent candidates for the left and right
+// buttons. Interleaved presses therefore cannot complete a cross-button pair.
+type doubleClickRecognizer struct {
+	left  doubleClickCandidate
+	right doubleClickCandidate
+}
+
+// press classifies one transition for the selected button and reports whether
+// it completes a pair. A completed pair is consumed, so a third press inside
+// the same window arms a new candidate instead of producing a triple. A press
+// outside the interval or rectangle also becomes the new candidate, matching
+// an OS recognizer that restarts on the press it rejected.
+func (r *doubleClickRecognizer) press(left bool, x, y int32, at uint32) bool {
+	candidate := &r.right
+	if left {
+		candidate = &r.left
+	}
+	if candidate.armed && at >= candidate.at && at-candidate.at <= doubleClickInterval &&
+		within(x, candidate.x) && within(y, candidate.y) {
+		candidate.armed = false
 		return true
 	}
-	r.armed, r.x, r.y, r.at = true, x, y, at
+	candidate.armed, candidate.x, candidate.y, candidate.at = true, x, y, at
 	return false
 }
 

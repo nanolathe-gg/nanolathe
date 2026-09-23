@@ -173,7 +173,7 @@ func applyInputWith(in *input.State, sample sampledInput, clicks *doubleClickRec
 			// the widget pass treats the double-click as a press that also
 			// fires [07 R-WGT-01 §4]. See doubleclick.go for the host policy.
 			event.Kind = input.LeftDown
-			if clicks != nil && clicks.press(sample.x, sample.y, sample.timestamp) {
+			if clicks != nil && clicks.press(true, sample.x, sample.y, sample.timestamp) {
 				event.Kind = input.LeftDoubleClick
 			}
 		} else {
@@ -184,16 +184,19 @@ func applyInputWith(in *input.State, sample sampledInput, clicks *doubleClickRec
 	if wasRight != sample.buttons.Right {
 		if sample.buttons.Right {
 			event.Kind = input.RightDown
+			if clicks != nil && clicks.press(false, sample.x, sample.y, sample.timestamp) {
+				event.Kind = input.RightDoubleClick
+			}
 		} else {
 			event.Kind = input.RightUp
 		}
 		in.EnqueuePointer(event)
 	}
 	// TODO(T25): Ebiten polling exposes no native message order and no
-	// key-repeat history. Do not synthesize those details here. The left
-	// double-click above is the one reconstruction, and only because its
+	// key-repeat history. Do not synthesize those details here. The double-click
+	// classification above is the one reconstruction, and only because its
 	// inputs — interval and rectangle — are host settings rather than retail
-	// behaviour.
+	// behaviour. Each button has an independent recognizer candidate.
 	in.PublishPointer()
 
 	// AppendInputChars preserves character order within its own batch. Ebiten

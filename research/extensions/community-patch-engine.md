@@ -394,6 +394,22 @@ registry branch at load; it overrides last-used registry values, not the reverse
   the separate clock option keeps game time visible there; and the F11 macro text is no longer relayed to
   other players. Source: `ExternQuickKey.cpp`, `tahook.cpp`, `dialog.cpp`,
   `sharedialog.cpp`; `tdraw.txt`.
+- **Double-click selection (Established from the pinned source, host-side).**
+  `ExternQuickKey::Message` handles both left and right double-click messages
+  through the same branch when `DoubleClick` is enabled. The live-game gate
+  must pass, the replacement megamap must not be displaying, and the key read
+  from `Eye/KeyCode` (default `X`) must not be held. The nearby source comment
+  calls this the whiteboard key, but the constructor reads `KeyCode`, not
+  `WhiteboardKey`; those settings must not be conflated. The pointer must lie strictly inside the game viewport
+  and identify an own unit. The branch replaces selection with on-screen own
+  units matching the definitions already selected; it does not add the hovered
+  definition or make Shift additive. Both mouse buttons are admitted regardless
+  of interface type: the source's old interface-type filter is commented out.
+  The input is an already-classified host double-click message; this function
+  does not define its timing or pixel tolerance. Source: `src/DDraw/ExternQuickKey.cpp`,
+  `Message` and `SelectOnlyInScreenSameTypeUnit`, pinned revision `dcff5dd`.
+  This current-source contract does not establish the historical 4.8 DLL's
+  behavior.
 - **Legacy keys.** `WeaponType` and `MultiGameWeapon` in the shipped INI belong
   to a commented-out legacy weapon-ID patch: neither is read anywhere in the
   tree, and the class that read them survives only as a forward declaration.

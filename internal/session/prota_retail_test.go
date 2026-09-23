@@ -272,13 +272,17 @@ func assertProTADirectionalShipyards(t *testing.T, s *Session) {
 		}
 	}
 
-	// TODO(question): ProTA 4.8 defines CORSYE/CORSYW but authors the two
-	// populated CANBUILD pages as CORSYNE/CORSYNW. Primary package docs,
-	// appropriately licensed source, or a bounded manual observation must
-	// establish whether the patch aliases these names before the engine does.
+	// ProTA 4.8 defines CORSYE/CORSYW but authors the two populated CANBUILD
+	// pages as CORSYNE/CORSYNW. Preserve that exact table: these empty results
+	// constrain AI/mobile-builder membership, while the physical factory pages
+	// independently install the human queue products [07 §9].
+	// TODO(question): Whether ProTA 4.8's patched AI maps either orphan section
+	// to the corresponding yard remains unknown. Appropriately licensed 4.8
+	// source or a bounded AI-production observation would settle that narrower
+	// question; human factory activation does not depend on it.
 	for _, key := range []string{"CORSYE", "CORSYW"} {
 		if products := s.buildProducts(key); len(products) != 0 {
-			t.Fatalf("unresolved Core regular shipyard %s unexpectedly admits %v; update the package acceptance finding", key, products)
+			t.Fatalf("Core regular shipyard %s unexpectedly acquired CANBUILD membership %v", key, products)
 		}
 	}
 	for _, orphanPage := range []string{"CORSYNE", "CORSYNW"} {

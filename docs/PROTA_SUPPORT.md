@@ -42,6 +42,26 @@ Directory selection requires exactly one configuration at the directory root,
 INI path takes precedence over directory discovery. Missing or ambiguous
 configurations report a diagnostic and keep generated icons available.
 
+## Selection controls
+
+Options → Orders exposes **Idle keys** and **2-click**. Both are off by default
+and are independent of the gameplay and renderer selections. Enable Idle keys
+for these current Community-source controls:
+
+| Input | Nanolathe action |
+|---|---|
+| Ctrl+B | Select the next idle mobile builder and centre the view. |
+| Ctrl+F | Select the next idle factory and centre the view. |
+| Ctrl+S | Select on-screen units in the authored `CTRL_W` category that cannot fly. |
+| Ctrl+Shift+B/F | Keep the ordinary additive authored-category selection. |
+
+Enable 2-click for on-screen same-type selection with either mouse button.
+Build shortcuts still come from the unit's authored GUI page and appear on its
+buttons. These controls implement the pinned current-source contracts. The
+[historical 4.8 selection audit](../research/extensions/prota-engine.md#shipped-selection-and-hotkey-audit)
+also establishes those key assignments, but records older idle-cycle and
+prepared-order behavior that differs from the current source.
+
 ## Music
 
 Nanolathe already reads MP3 and PCM WAV tracks from a mounted `music` folder,
@@ -50,11 +70,15 @@ directory named by ProTA 4.8's bundled `wgmus.ini`; Nanolathe does not import
 that INI or execute WGMUS. Playback uses Nanolathe's portable backend and its
 [documented track ordering](DESIGN_PRESENTATION_CLIENT.md#5-divergences).
 The ProTA package itself contains no soundtrack. Options → Music controls
-playback and volume after entering a battle.
+playback and volume after entering a battle. Choose **Random** there to match
+ProTA 4.8's documented `CDMode=2` preference (`audio.cdMode: 2` in Nanolathe's
+settings). Nanolathe does not automatically import `ProTA.ini` preferences.
 
-The historical bundle's choice between its two music DLLs, fallback behavior
-and exact track ordering remain unresolved in
-[the extension reference](../research/extensions/prota-engine.md#unknown).
+The shipped executable uses its bundled `WIN32.dll` music proxy. That proxy
+uses Windows file enumeration order without a separate sort and does not
+fall back to CD or another backend when its music folder is empty. These
+version-specific findings are recorded in
+[the extension reference](../research/extensions/prota-engine.md#versioned-music-documentation).
 
 ## Verification
 
@@ -105,18 +129,26 @@ the historical patched engine or an assessment of AI strength.
 
 ## Remaining compatibility gaps
 
-The regular Core east- and west-facing shipyards (`CORSYE`, `CORSYW`) currently
-have no build products. The 4.8 archive names their build lists `CORSYNE` and
-`CORSYNW`. An upstream content correction or evidence of the historical alias
-is needed; Nanolathe does not guess that relationship. The other directional
-yard definitions retain their matching authored membership.
+The regular Core east- and west-facing shipyards (`CORSYE`, `CORSYW`) have
+working human build buttons: the package check clicks each yard's authored
+constructor-ship button into its factory queue. Their CANBUILD lists remain
+empty because the archive names those sections `CORSYNE` and `CORSYNW`.
+Historical AI use of those lists remains unverified; the human GUI does not
+require an alias.
 
-The 4.8 documentation names different computer-player income/reclaim factors,
-broader low-energy shutdown and a higher commander construction threshold.
-Their exact arithmetic and runtime boundaries are not established by the
-audited readable source. Nanolathe retains its retail behavior at these sites;
-the Community profile name does not enable those documented changes.
+The shipped 4.8 loader's computer-player production and feature-reclaim factors
+are now established as Easy/Medium/Hard `0.5/1/4`, applied per contribution.
+Unit reclaim and other refund paths retain retail factors. Its construction
+task stops capture-capable builders placing buildings at ten build units, but
+admits reposition/repair patrol at five, leaving an overlap from five to nine.
+These are implementation gaps: Nanolathe retains its retail behavior at these
+sites, and the Community profile name does not enable the historical changes.
 
-The historical stockpile/nuke implementation, complete hotkey assignment table
-and music backend also remain unverified. Their evidence requirements are
-recorded in [ProTA's unknowns](../research/extensions/prota-engine.md#unknown).
+The shipped low-energy task also selects building-class appliances with
+authored energy use of at least 32 for ordinary finite values, and its stockpile
+task submits one product only while both order paths are empty. These contracts
+are established but not implemented as historical ProTA behavior; in particular,
+the queue rule differs from the later source's completed-ammunition guard. See
+[the AI audit](../research/extensions/prota-engine.md#ai-and-economy-evidence-audit)
+for exact admission, arithmetic and ordering boundaries, and
+[remaining unknowns](../research/extensions/prota-engine.md#unknown).

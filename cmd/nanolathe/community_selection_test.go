@@ -142,45 +142,56 @@ func TestDoubleClickAndCtrlZKeepFullDefinitionIdentity(t *testing.T) {
 		t.Fatal("selected definition mask conflated equal display names")
 	}
 
-	cat := testCatalogON05()
-	def, ok := cat.Unit("armcons")
-	if !ok || def == nil {
-		t.Fatal("fixture has no armcons")
-	}
-	def.UnitDefID = 700
-	def.UnitMask = content.MaskForID(700)
-	b := newTestBattle(cat, testWorldON05(100, 100))
-	b.shell = &gameShell{presentation: settings.Presentation{DoubleClickSelection: 1}}
-	b.sess.LocalOwner = 0
-	one := placeUnit(b, "armcons", numeric.FixedFromInt(200), numeric.FixedFromInt(120))
-	two := placeUnit(b, "armcons", numeric.FixedFromInt(260), numeric.FixedFromInt(150))
-	far := placeUnit(b, "armcons", numeric.FixedFromInt(1200), numeric.FixedFromInt(1200))
-	replaceSelectionForTest(t, b, one)
+	for _, tc := range []struct {
+		name    string
+		kind    input.PointerEventKind
+		buttons input.MouseButtons
+	}{
+		{name: "left", kind: input.LeftDoubleClick, buttons: input.MouseButtons{Left: true}},
+		{name: "right", kind: input.RightDoubleClick, buttons: input.MouseButtons{Right: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cat := testCatalogON05()
+			def, ok := cat.Unit("armcons")
+			if !ok || def == nil {
+				t.Fatal("fixture has no armcons")
+			}
+			def.UnitDefID = 700
+			def.UnitMask = content.MaskForID(700)
+			b := newTestBattle(cat, testWorldON05(100, 100))
+			b.shell = &gameShell{presentation: settings.Presentation{DoubleClickSelection: 1}}
+			b.sess.LocalOwner = 0
+			one := placeUnit(b, "armcons", numeric.FixedFromInt(200), numeric.FixedFromInt(120))
+			two := placeUnit(b, "armcons", numeric.FixedFromInt(260), numeric.FixedFromInt(150))
+			far := placeUnit(b, "armcons", numeric.FixedFromInt(1200), numeric.FixedFromInt(1200))
+			replaceSelectionForTest(t, b, one)
 
-	sx, sy := screenPos(b.cam, two)
-	in := input.NewState()
-	event := input.PointerEvent{Kind: input.LeftDoubleClick, X: sx, Y: sy, Modifiers: input.Modifiers{Shift: true}, Buttons: input.MouseButtons{Left: true}, Timestamp: 1234}
-	if !in.EnqueuePointer(event) || !in.PublishPointer() {
-		t.Fatal("publish native double-click record")
-	}
-	if !b.handleCommunityDoubleClick(in, sx, sy) {
-		t.Fatal("native double-click was not consumed")
-	}
-	applyPendingBattleCommands(b)
-	got := selectedHandles(t, b)
-	if len(got) != 2 || !containsHandle(got, one.Handle) || !containsHandle(got, two.Handle) || containsHandle(got, far.Handle) {
-		t.Fatalf("double-click selection = %v, want two on-screen definition-700 units", got)
-	}
+			sx, sy := screenPos(b.cam, two)
+			in := input.NewState()
+			event := input.PointerEvent{Kind: tc.kind, X: sx, Y: sy, Modifiers: input.Modifiers{Shift: true}, Buttons: tc.buttons, Timestamp: 1234}
+			if !in.EnqueuePointer(event) || !in.PublishPointer() {
+				t.Fatal("publish native double-click record")
+			}
+			if !b.handleCommunityDoubleClick(in, sx, sy) {
+				t.Fatal("native double-click was not consumed")
+			}
+			applyPendingBattleCommands(b)
+			got := selectedHandles(t, b)
+			if len(got) != 2 || !containsHandle(got, one.Handle) || !containsHandle(got, two.Handle) || containsHandle(got, far.Handle) {
+				t.Fatalf("double-click selection = %v, want two on-screen definition-700 units", got)
+			}
 
-	pressKeys(b, input.KeyCtrl, input.KeyZ)
-	got = selectedHandles(t, b)
-	if len(got) != 3 || !containsHandle(got, far.Handle) {
-		t.Fatalf("Ctrl+Z selection = %v, want all three definition-700 units", got)
-	}
+			pressKeys(b, input.KeyCtrl, input.KeyZ)
+			got = selectedHandles(t, b)
+			if len(got) != 3 || !containsHandle(got, far.Handle) {
+				t.Fatalf("Ctrl+Z selection = %v, want all three definition-700 units", got)
+			}
 
-	b.shell.presentation.DoubleClickSelection = 0
-	if b.handleCommunityDoubleClick(in, sx, sy) {
-		t.Fatal("disabled double-click option consumed the native event")
+			b.shell.presentation.DoubleClickSelection = 0
+			if b.handleCommunityDoubleClick(in, sx, sy) {
+				t.Fatal("disabled double-click option consumed the native event")
+			}
+		})
 	}
 }
 

@@ -28,7 +28,9 @@ does not permit for third-party patch binaries. The wording is clean-room and
 the observations stand as recorded, but no new contract may be closed by this
 method: future gaps must be settled from documentation, authored content,
 appropriately licensed source (now available for this family), or a bounded
-manual observation.
+manual observation unless explicitly authorized by the user. The ProTA selection
+follow-up below uses the user's 22 September 2026 authorization, scoped and
+recorded in [ProTA's evidence statement](prota-engine.md#evidence-scope-and-sources).
 
 ## Megamap
 
@@ -168,27 +170,24 @@ store, which is created once at engine init.
 
 ## Selection
 
-**Established — preference.** `DoubleClick` (default on) is read by the
-selection object at startup; the same-type identity rule itself is engine-side
-and not in the DLL.
+**Established — ProTA 4.8 selection, authorized follow-up audit.** The
+shipped draw DLL contains the selection algorithms themselves, not merely
+category masks: both-button double-click selection, Ctrl+B/F idle cycling,
+Ctrl+S on-screen armed selection, and W/B/Y filtering are traced in
+[ProTA's shipped selection audit](prota-engine.md#shipped-selection-and-hotkey-audit).
+That versioned contract replaces the earlier assertion that those paths were
+only in the executable. It also corrects the constructor/factory fallback:
+empty authored categories derive builders excluding airbases and the
+commander/decoy mask, not the `CTRL_W` set. Double-click defaults on, uses the
+prior selection's definition identities, and admits either mouse button.
 
-**Established — drag filters.** The DLL precomputes three per-unit bitmaps
-from the authored categories `CTRL_W`, `CTRL_B` and `CTRL_F`. When an authored
-category matches nothing, `CTRL_B` falls back to units with one flag bit set
-and another clear and a non-zero per-unit byte, and `CTRL_F` to the same flag
-pattern with that byte zero; both fallbacks exclude the `CTRL_W` set. The
-meaning of those unit flag bits is **Unknown** from the DLL alone.
-
-**Unknown — remaining selection rules in the older inspected builds.** No
-DLL-side rule was found for circle select, the `CTRL+S` on-screen-weapons predicate, or the
-idle-builder/idle-factory cycle order, camera behavior and shift variants; the
-DLL contributes only the filter masks in that earlier analysis.
-
-**Established — the current source closes part of that historical gap.** Its
-`ExternQuickKey.cpp` implements the idle-unit cycles and derived membership
-sets, described in
-[Community patch engine behavior §4.2](community-patch-engine.md#42-data-driven-switches-outside-totalaini).
-That current-source finding does not prove the older DLLs used the same rules.
+**Established — version boundary.** The current-source contracts in
+[Community patch engine behavior §4.2](community-patch-engine.md#42-data-driven-switches-outside-totalaini)
+remain separate. In particular, the historical ProTA cycles stop at live unit
+count and omit slot zero, while the current source scans the full slot block;
+the historical menu refresh also preserves a prepared order. The follow-up
+user authorization applies to the identified ProTA artifacts. Corresponding
+older Escalation and Zero algorithms have not been reverified by this audit.
 
 ## Preference keys
 
@@ -219,12 +218,12 @@ differs across the inspected builds. Two placements worth keeping straight:
   that hides attacked-unit icons.
 - **Unknown — local marker distribution.** How a marker created locally is
   announced to peers.
-- **Unknown — older-build `CTRL+S` and cycle rules.** Current source has
-  additional contracts in Community patch engine behavior §4.2; their
-  applicability to the older package DLLs has not been established.
-- **Unknown — older-build drag-filter fallback semantics.** Current source
-  names the derived membership sets in Community patch engine behavior §4.2;
-  equivalence to the earlier observations needs version-matched evidence.
+- **Unknown — older Escalation/Zero `CTRL+S` and cycle rules.** ProTA 4.8 is
+  now traced separately above. Neither its behavior nor current source proves
+  equivalence to the other historical package DLLs.
+- **Unknown — older Escalation/Zero drag-filter fallback semantics.** The
+  ProTA correction above is version-specific; the other historical builds need
+  equivalent caller and field checks.
 - **Unknown — TA Zero's effective megamap key.** Its controls page documents
   F4; the DLL's built-in default is Tab and the inspected preferences do not
   override it.

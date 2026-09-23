@@ -184,16 +184,19 @@ key repeat/history.
 `TODO(T25): establish an Ebiten event source that exposes native ordering and
 repeat.` [07 §2] [01 R-PLAT-01 §6]
 
-The one identity the producer does reconstruct is the **left double-click**,
+The producer reconstructs **left and right double-clicks**,
 because its inputs are host settings rather than retail behaviour: retail read
 the operating system's double-click message, whose interval and rectangle were
 the user's OS settings. `internal/platform/ebitenapp/doubleclick.go` owns that
 policy and both constants; §5 records the values and the rationale. The second
-press of a pair carries `LeftDoubleClick` **instead of** `LeftDown`, the way
+press of a pair carries `LeftDoubleClick` or `RightDoubleClick` **instead of**
+the corresponding plain down event, the way
 the operating system replaced the second press message — one observed
 transition stays one record, publication still takes a single record per host
 service, and the widget pass acts on a left double-click as a press that also
-fires `[07 R-WGT-01 §4]`. Right presses never pair.
+fires `[07 R-WGT-01 §4]`. Each button retains its own candidate; interleaved
+left and right presses never pair with one another. The optional Community
+selection consumer uses either double-click identity (§3.13).
 
 `cmd/nanolathe` uses one `pointerFrame` adapter whenever it services a
 `ui.Panel`. It projects the already-published record into the frame and passes
@@ -2634,7 +2637,7 @@ does not assign those category names a guessed capability meaning. The action
 also discards prepared placement. Shift+Ctrl+S retains retail's on-screen
 selection.
 
-With `doubleClickSelection` enabled, a platform-classified left double-click
+With `doubleClickSelection` enabled, a platform-classified left or right double-click
 strictly inside the battle viewport and over an own unit replaces the selection
 with the on-screen selectable own units whose committed numeric definition ID
 matches any ID in the committed selection. Shift does not make this additive. The consumer uses the
@@ -2812,12 +2815,15 @@ recorded in [community patch engine §5.10](../research/extensions/community-pat
   and a **4×4 pixel** rectangle, applied as **±2 surface pixels** about the
   first press. Both bounds are inclusive. The clock unit quantizes the
   interval to roughly a thirtieth of a second; the edge deliberately does not
-  invent a finer host time than it publishes. A second left press inside both
-  bounds is published as `LeftDoubleClick` in place of its `LeftDown`; a press
+  invent a finer host time than it publishes. A second press of the same button
+  inside both bounds is published as its double-click event in place of the
+  plain down event; a press
   outside either bound becomes the new candidate, and a completed pair is
   consumed, so a third press starts a fresh pair instead of producing a
-  triple. Only the left button pairs, because the list open action is the left
-  double-click. This is host input policy, not a retail behavior claim: no
+  triple. Left and right retain independent candidates under this host policy.
+  The list open action still admits only the left button; the optional Community
+  same-type selector admits both buttons, matching the licensed patch source.
+  This is host input policy, not a retail behavior claim: no
   number here was measured from the executable.
 
 * **SC15 — the cursor index table.** The previously published twenty-entry table

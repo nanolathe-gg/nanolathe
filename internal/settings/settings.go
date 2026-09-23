@@ -464,7 +464,7 @@ type Presentation struct {
 	// policy, independent of gameplay and renderer selection.
 	CommunitySelection int `json:"communitySelection"`
 	// DoubleClickSelection enables the community patch's on-screen same-type
-	// selection for a native left-double-click record.
+	// selection for a native left- or right-double-click record.
 	DoubleClickSelection int `json:"doubleClickSelection"`
 	// The five Enhanced effect switches (DESIGN_GPU_RENDERER §30). They are
 	// Nanolathe options with no retail bit, read only by the modern recorder

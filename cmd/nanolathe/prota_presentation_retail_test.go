@@ -13,6 +13,10 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -199,6 +203,120 @@ func TestRetailProTAPresentationAssets(t *testing.T) {
 	}
 	// The host-config evidence and matching Lookup atlas prove the authored
 	// UseDefaultIcon=false branch decoded and packed its configured PCX art.
+}
+
+// TestRetailProTADirectionalCoreShipyardClicks locks the authored-source
+// boundary exposed by ProTA 4.8. CORSYE and CORSYW have physical product pages
+// whose installed gadget names are authoritative for a human factory queue,
+// even though neither unit has a matching CANBUILD section [07 §9].
+func TestRetailProTADirectionalCoreShipyardClicks(t *testing.T) {
+	value := strings.TrimSpace(os.Getenv("NANOLATHE_MOD_ROOTS_PROTA"))
+	if value == "" {
+		t.Skip("NANOLATHE_MOD_ROOTS_PROTA is unset")
+	}
+	retail := testsupport.RetailRoot(t)
+	var roots []string
+	for _, root := range filepath.SplitList(value) {
+		if root = strings.TrimSpace(root); root != "" {
+			roots = append(roots, root)
+		}
+	}
+	opts := Options{Root: retail, Roots: append([]string{retail}, roots...), Map: "ashap plateau", Seed: 7}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	if cs.profile != "prota" {
+		t.Fatalf("detected profile %q, want prota", cs.profile)
+	}
+
+	cfg := session.SkirmishConfig{MapName: opts.Map, NumPlayers: 2}
+	cfg.Players[0].Side = 1
+	cfg.Players[1].Controller = session.SkirmishControllerComputer
+	cfg.ApplyDefaults()
+	sess, cat, err := newBattleSessionWithConfig(opts, cs, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step := int32(1); step <= 30; step++ {
+		sess.Step(step)
+	}
+	b := &battleSession{sess: sess, cat: cat}
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, retailPaletteForTest(t, cs), nil, newBattleWindowContext(cs, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for n, key := range []string{"CORSYE", "CORSYW"} {
+		t.Run(key, func(t *testing.T) {
+			def, ok := cat.Unit(key)
+			if !ok || def == nil || !strings.EqualFold(def.UnitName, key) {
+				t.Fatalf("directional shipyard definition %s is absent or aliased", key)
+			}
+			if menu := cat.BuildMenus[strings.ToLower(key)]; menu != nil && len(menu.AuthoredButtons) != 0 {
+				t.Fatalf("%s unexpectedly acquired CANBUILD membership: %#v", key, menu.AuthoredButtons)
+			}
+			for _, u := range sess.Units.Iter() {
+				if u != nil {
+					u.Flags &^= hud.SelectionFlag
+				}
+			}
+			x := numeric.FixedFromInt(int64(800 + n*240))
+			z := numeric.FixedFromInt(600)
+			handle, err := sess.Units.Create(def, sess.LocalOwner, x, sess.World.HeightAt(x, z), z)
+			if err != nil {
+				t.Fatal(err)
+			}
+			yard := sess.Units.Unit(handle)
+			if yard == nil {
+				t.Fatalf("created %s not in unit pool", key)
+			}
+			sess.CompleteUnit(handle)
+			yard.Flags |= hud.SelectionFlag
+			yard.Flags = hud.EncodePageBits(yard.Flags, 1)
+			sess.Step(sess.Clock.ScaledAnchor + 1)
+
+			f := sess.Snapshot.Current()
+			if f == nil || f.CommandPage.Builder != handle {
+				t.Fatalf("%s command page = %#v, want builder %d", key, f, handle)
+			}
+			if len(f.CommandPage.AllowedProducts) != 0 {
+				t.Fatalf("%s published CANBUILD membership %v, want empty", key, f.CommandPage.AllowedProducts)
+			}
+			w, _, err := b.hud.windowForRequired(b, f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantWindow := strings.ToLower(key) + "1.gui"
+			if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
+				if w == nil {
+					t.Fatalf("%s command window is nil; want %s", key, wantWindow)
+				}
+				t.Fatalf("%s command window = %q, want suffix %s", key, w.Name, wantWindow)
+			}
+			productIndex := -1
+			for i, gadget := range w.Gadgets {
+				if gadget.CommonAttribs&4 != 0 && strings.EqualFold(gadget.Name, "CORCS") {
+					productIndex = i
+					break
+				}
+			}
+			if productIndex < 0 {
+				t.Fatalf("%s has no installed CORCS product gadget", w.Name)
+			}
+			r := w.PlacedRect(productIndex)
+			cx, cy := r.X+r.W/2, r.Y+r.H/2
+			if !b.hud.sameButton(b, cx, cy, cx, cy) || !hudConsumeClick(b.hud, b, cx, cy) {
+				t.Fatalf("%s CORCS gadget did not activate at its center", key)
+			}
+			sess.Step(sess.Clock.ScaledAnchor + 1)
+			queue := orders.QueueForUnit(yard).Primary()
+			if len(queue) == 0 || queue[0] == nil || !strings.EqualFold(queue[0].BuildDefKey, "CORCS") || queue[0].Param2 == 0 {
+				t.Fatalf("%s queue = %#v, want one counted CORCS order", key, queue)
+			}
+		})
+	}
 }
 
 func writeProTAPCXCapture(t *testing.T, path string, pcx *formats.PCX) {

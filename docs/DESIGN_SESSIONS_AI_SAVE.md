@@ -746,16 +746,19 @@ save/load integration. The explicit attack is not evidence about autonomous
 targeting or the package DLL's AI policy. See
 [ProTA 4.8 engine package, “Package acceptance cases”](../research/extensions/prota-engine.md#package-acceptance-cases).
 
-The directional-yard result has one concrete package limitation. Every Arm
-regular/advanced direction and every Core advanced direction has effective
-build membership, as do the base and north Core regular yards. `ProTA.gp3`
-defines the remaining Core regular units as `CORSYE` and `CORSYW`, but authors
-the populated build pages as `CORSYNE` and `CORSYNW`; the two defined units
-therefore have empty effective build membership in this integration. The test
-records that gap and does not infer an alias. Primary ProTA documentation,
-appropriately licensed source, or a bounded manual observation of those two
-yards in ProTA 4.8 would be needed to decide whether the archive has a naming
-error or the patch supplies an alias.
+The directional-yard result preserves two distinct authored sources. Every Arm
+regular/advanced direction and every Core advanced direction has CANBUILD
+membership, as do the base and north Core regular yards. `ProTA.gp3` defines
+the remaining Core regular units and their physical pages as `CORSYE` and
+`CORSYW`, while its two populated CANBUILD sections are named `CORSYNE` and
+`CORSYNW`. Those yards retain empty CANBUILD membership; the unmatched section
+names are not treated as aliases. The installed `CORSYE1.GUI` and
+`CORSYW1.GUI` pages each name `CORCS` as a product gadget, and physical factory
+activation resolves that exact gadget independently of CANBUILD [07 §9]. The
+acceptance checks therefore keep both directional yards' published CANBUILD
+lists empty while proving that clicking each installed `CORCS` gadget reaches
+a counted factory queue. No synthesized membership or name-similarity fallback
+participates.
 
 The same check enters original Core mission 1 and Core Contingency mission 6,
 ticks both as campaign sessions with a campaign AI manager, and checks the
