@@ -621,6 +621,16 @@ Strict 3.1 defends and assists the ward, copies its work, then follows or
 orbits; it does not scan surrounding allies or wrecks, and `VTOL_Follow` does
 not seek pads `[04 R-UNIT-06 §1]` `[04 R-ORD-02 §3]`.
 
+In both modes Guard is a standing order with no success exit: only a missing
+ward (code 5), a flying ward for the ground row (code 8) or cancel-all
+(code 7) ends it `[04 R-ORD-01 §8]`. Because the pump runs only the front head
+`[04 §3.3]`, a record Shift-queued behind a guard — including a second Guard —
+never starts while the ward lives, and a plain issue purges the guard, which
+lacks the purge-survivor bit `[04 R-MOV-03 §6]`. One unit therefore never
+guards two wards. Modern assistance temporarily prepends work but never
+completes the guard. `guard_queue_test.go` locks replacement, the blocked
+successor and the never-admitted second guard in both modes.
+
 Modern adds these branches at the existing guard maintenance cadence:
 
 * Aircraft below the patrol repair threshold first try the existing allied

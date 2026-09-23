@@ -162,7 +162,7 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 	}
 	var ops []hud.QueuePrimitive
 	if show {
-		ops = hud.QueueOverlay(f, opts)
+		ops = hud.QueueOverlay(queueAnchorFrame(f), opts)
 	}
 	ops = append(ops, b.placementRangeOverlay(c, opts)...)
 	// The overlay's positions come through the projection and scale with it;
@@ -193,6 +193,80 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 			drawQueueIcon(c, queueIconEntry(b.fs, op.IconCursor), op, scale)
 		}
 	}
+}
+
+// queueAnchorFrame supplies the overlay walker's target tracking. Retail's
+// anchor getter resolves a node that carries a target to the target unit's
+// position, and only a targetless node to its own stored goal
+// [07 R-P0-11 §3 "The dash chain's artwork, and the anchor getter that doubles
+// as the icon"]. The walker in internal/hud reads the stored goal alone, which
+// is wrong for every targeted row and badly wrong for `Follow_Ground`: that
+// record's goal triple holds the follow OFFSET from the ward, not a position
+// [04 R-ORD-01 §8 point 2], so a guard's connector ran to the neighbourhood of
+// the world origin — the top-left corner of the map, and off the top-left of
+// the screen whenever the camera was elsewhere.
+//
+// The committed frame is immutable, so this returns a shallow copy whose
+// primary orders carry the target's committed position in their goal fields,
+// and returns f itself when no order needs it. Only the primary list is
+// rewritten because it is the only list the walker traverses. A target absent
+// from the committed unit list keeps the stored goal. A build-site row keeps
+// its stored goal too: the marker helper projects the queued footprint from
+// those same fields [07 §9], and the site a nanoframe stands on is that goal.
+//
+// TODO(question): retail's anchor getter also maintains a cached target
+// position (runtime bit 21 of the record flags [04 R-ORD-01 §13]); when it
+// prefers that cache over the live target — for example for a target outside
+// the viewer's line of sight — is not recorded, and the cache is not
+// published. A trace of the anchor getter's cache branch would settle it.
+func queueAnchorFrame(f *frame.Frame) *frame.Frame {
+	if f == nil || len(f.OrderQueues) == 0 {
+		return f
+	}
+	var positions map[pool.Handle]hud.QueueWorldPoint
+	anchor := func(o frame.OrderView) (hud.QueueWorldPoint, bool) {
+		if o.Target == 0 || o.BuildProduct != "" {
+			return hud.QueueWorldPoint{}, false
+		}
+		if positions == nil {
+			// Presentation-only lookup, never ranged, so it produces no order [I1][I6].
+			positions = make(map[pool.Handle]hud.QueueWorldPoint, len(f.Units))
+			for _, u := range f.Units {
+				if u.Slot != 0 {
+					positions[u.Slot] = hud.QueueWorldPoint{X: u.X, Y: u.Y, Z: u.Z}
+				}
+			}
+		}
+		p, ok := positions[o.Target]
+		return p, ok
+	}
+	var queues []frame.OrderQueueView
+	for qi, q := range f.OrderQueues {
+		var primary []frame.OrderView
+		for oi, o := range q.Primary {
+			p, ok := anchor(o)
+			if !ok || (o.GoalX == p.X && o.GoalY == p.Y && o.GoalZ == p.Z) {
+				continue
+			}
+			if primary == nil {
+				primary = append([]frame.OrderView(nil), q.Primary...)
+			}
+			primary[oi].GoalX, primary[oi].GoalY, primary[oi].GoalZ = p.X, p.Y, p.Z
+		}
+		if primary == nil {
+			continue
+		}
+		if queues == nil {
+			queues = append([]frame.OrderQueueView(nil), f.OrderQueues...)
+		}
+		queues[qi].Primary = primary
+	}
+	if queues == nil {
+		return f
+	}
+	out := *f
+	out.OrderQueues = queues
+	return &out
 }
 
 // drawDashChain blits the authored travelling-dash sprites along one queue
