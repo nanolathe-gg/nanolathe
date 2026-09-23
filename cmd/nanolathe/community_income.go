@@ -141,8 +141,17 @@ func (h *retailBattleHUD) drawCommunityWeather(c *client.Client, b *battleSessio
 	wind := fmt.Sprintf("Wind : +%d (%d-%d)", current, lo, hi)
 	tide := fmt.Sprintf("Tidal : +%d", tidal)
 	clock := standaloneClockText("Game Time", f.Tick)
-	clockX := min(x+117, width-client.MeasureText(h.console, clock)-4)
-	x = min(x, max(0, clockX-client.MeasureText(h.console, wind)-4))
+	clockWidth := client.MeasureText(h.console, clock)
+	clockX := x + max(117, client.MeasureText(h.console, wind)+8)
+	if clockX+clockWidth > width-4 {
+		// Compact displays have no spare resource-strip space. Keep this
+		// optional host overlay below the strip, beside the side rail, rather
+		// than clamping it over the energy readout (interface design §3.14).
+		x, y1 = 132, 36
+		y2 = y1 + int(h.console.Height) + 4
+		clockX = x + max(client.MeasureText(h.console, wind), client.MeasureText(h.console, tide)) + 8
+		c.UIFillRect(x-4, y1-2, clockX+clockWidth-x+8, y2-y1+int(h.console.Height)+4, h.guiColor(0))
+	}
 	y1 = max(0, min(y1, height-int(h.console.Height)))
 	y2 = max(0, min(y2, height-int(h.console.Height)))
 	c.UIText(h.console, wind, x, y1, h.guiColor(10))

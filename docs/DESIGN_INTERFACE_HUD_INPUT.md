@@ -2122,7 +2122,8 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
 
 * **The multiplayer lobby shell.** Out of scope for the whole engine; the
   single-player skirmish setup screen is a different surface and is implemented
-  `[07 §12]` `[07 R-FE-02 §1]`.
+  `[07 §12]` `[07 R-FE-02 §1]`. Until multiplayer is implemented, the authored
+  `MAINMENU` `MULTI` button is greyed and cannot be activated by pointer or key.
 * **The front-end movie stage.** Normal launches play the original startup
   logo `Data/1.zrb` once, then open `MAINMENU` `[07 R-FE-01 §3]`. Playback
   is deferred to the first shell update so the platform PCM device is ready;
@@ -2733,6 +2734,10 @@ a positive half-width of 16 occupy 17 pixels. The fill starts at logical palette
 entry 144 and darkens by `min((progress*100/maximum)/15, 6)` entries. This is
 the presentation-only contract of
 [community-patch-engine CP-WPN-7](../research/extensions/community-patch-engine.md#53-weapon-definition-tags-author-facing).
+An inspection of the installed stock retail and ProTA4.8 catalogs found no
+weapon with `ReloadBar` true. The option therefore draws no reload bar with
+those two installed content sets, even when Health bars is on; content with an
+authored `reloadbar` tag can exercise it.
 
 **Veteran footer label (Established).** When enabled, an armed own unit whose
 ordinary footer kill line is nonempty displays `Vet<n>` whenever its committed
@@ -2742,8 +2747,17 @@ the HUD never recomputes thresholds from kills. This is the presentation half
 of [community-patch-engine CP-UD-1](../research/extensions/community-patch-engine.md#58-unit-definition-extensions-and-spawned-schema-units).
 
 The HUD options page persists counters, reload bars, veteran labels and group
-numbers alongside optional allied-resource and weather overlays. Restore/Undo
-is scoped to this page; Cancel restores the entry snapshot, and OK persists it.
+numbers alongside optional allied-resource and weather overlays. It also
+exposes the existing `damagebars` bit as **Health bars**, so the prerequisite
+for counters and reload bars can be enabled on the same page. Changing that bit
+joins pending presentation recording before the live write and advances the
+presentation epoch. Each control's hover help states when it has an effect:
+counters need stockpiles or loaded cargo, reload bars need tagged weapons and
+Health bars, groups need an assigned group, veteran labels need a hovered
+eligible unit, allied rows need another active ally, and weather reports appear
+in battle. Restore/Undo is scoped to this page, including Health bars; Cancel
+restores the entry snapshot, and OK persists the live `damagebars` bit through
+the existing settings block. The source draw/admission gates remain unchanged.
 The publisher sums completed stockpile bytes over admitted slots, copies only
 the positive rear-head amount, and validates cargo back-links. Reload tag-name
 membership is cached from the immutable catalog; authored reload/type fallbacks
@@ -2757,7 +2771,10 @@ collapses the panel; rows clip above the bottom HUD. This substitutes local
 committed records for the source's multiplayer shared-data transport. The
 weather option defaults off, shows both wind and tidal rows, and adapts the
 source's side-anchor/clamped layout with the retained retail wind hard limit
-5000. Current wind and clock read the committed frame; bounds, tidal strength
+5000. If the report and clock do not fit beside the resource-strip anchors,
+they occupy a backed panel just below the strip beside the left rail; compact
+displays must not clamp the report over the energy readout. Current wind and
+clock read the committed frame; bounds, tidal strength
 and reference generators are immutable battle content. Source arithmetic is
 recorded in [community patch engine §5.10](../research/extensions/community-patch-engine.md#510-optional-resource-and-weather-presentation).
 

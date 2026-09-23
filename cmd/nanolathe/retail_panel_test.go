@@ -61,6 +61,36 @@ func TestOpenMenuStackIsPanelSourceOfTruth(t *testing.T) {
 	}
 }
 
+func TestMainMenuMultiIsGreyedAndCannotFire(t *testing.T) {
+	window := &gui.Window{Rect: gui.Rect{W: 640, H: 480}, Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel, Active: 1},
+		{Kind: gui.KindButton, Name: "MULTI", Active: 1, Rect: gui.Rect{X: 20, Y: 20, W: 80, H: 30}},
+		{Kind: gui.KindButton, Name: "SINGLE", Active: 1, Rect: gui.Rect{X: 20, Y: 60, W: 80, H: 30}},
+	}}
+	shell := &gameShell{frontend: ui.NewFrontend(modeMenuMain), assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{
+		modeMenuMain: {window: window},
+	}}}
+	shell.openMenu(modeMenuMain)
+	panel := shell.activePanel()
+	multi := panel.Index("MULTI")
+	if panel.Window.Gadgets[multi].GrayedOut&1 == 0 || window.Gadgets[multi].GrayedOut != 0 {
+		t.Fatal("runtime MULTI should be greyed without changing the authored window")
+	}
+	if panel.Fires(multi) || panel.Press(30, 30) != -1 {
+		t.Fatal("MULTI accepted a pointer press")
+	}
+	if _, ok := panel.Release(30, 30); ok {
+		t.Fatal("MULTI fired on pointer release")
+	}
+	panel.SetFocus(multi)
+	if action := panel.DefaultKeyAction(false); action.Kind != ui.ActionNone {
+		t.Fatalf("MULTI accepted keyboard activation: %+v", action)
+	}
+	if !panel.Fires(panel.Index("SINGLE")) {
+		t.Fatal("SINGLE should remain enabled")
+	}
+}
+
 func TestShowRetailMessageReportsMissingWindow(t *testing.T) {
 	shell := &gameShell{frontend: ui.NewFrontend(modeMenuMain), assets: &menuAssets{}}
 	if err := shell.showRetailMessage("diagnostic"); err == nil {

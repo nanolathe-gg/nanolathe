@@ -132,16 +132,17 @@ var (
 // settle it: a writer of either bit reachable from the options family; until
 // one is found, copying them here would be two dead fields.
 type retailOptionsSnapshot struct {
-	builderOptions settings.BuilderOptions
-	display        settings.Display
-	presentation   settings.Presentation
-	gameplay       gameplay.Mode
-	audio          settings.Audio
-	messages       settings.Messages
-	scrollSpeed    int
-	gameSpeed      int
-	interfaceType  int
-	categories     [retailMusicCategoryCount]int
+	builderOptions      settings.BuilderOptions
+	display             settings.Display
+	presentation        settings.Presentation
+	communityHealthBars bool
+	gameplay            gameplay.Mode
+	audio               settings.Audio
+	messages            settings.Messages
+	scrollSpeed         int
+	gameSpeed           int
+	interfaceType       int
+	categories          [retailMusicCategoryCount]int
 }
 
 // retailMusicCategoryCount is the length of the per-track category array: one
@@ -594,16 +595,17 @@ func hideRetailBattleOptionsGadgets(window *gui.Window) {
 // snapshots on entry [07 R-FE-01 §6].
 func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 	s := retailOptionsSnapshot{
-		builderOptions: g.builderOptions,
-		display:        g.display,
-		presentation:   g.presentation,
-		gameplay:       g.gameplay,
-		audio:          g.audioPrefs,
-		messages:       g.messages,
-		scrollSpeed:    g.scrollSpeed,
-		gameSpeed:      g.gameSpeed,
-		interfaceType:  g.interfaceType,
-		categories:     retailDefaultCategories(),
+		builderOptions:      g.builderOptions,
+		display:             g.display,
+		presentation:        g.presentation,
+		communityHealthBars: client.DamageBars(),
+		gameplay:            g.gameplay,
+		audio:               g.audioPrefs,
+		messages:            g.messages,
+		scrollSpeed:         g.scrollSpeed,
+		gameSpeed:           g.gameSpeed,
+		interfaceType:       g.interfaceType,
+		categories:          retailDefaultCategories(),
 	}
 	if optionsState != nil {
 		s.categories = optionsState.categories
@@ -617,6 +619,7 @@ func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.display = s.display
 	g.setPresentation(s.presentation)
+	g.setCommunityHealthBars(s.communityHealthBars)
 	g.setGameplay(s.gameplay)
 	g.setBuilderOptions(s.builderOptions)
 	g.audioPrefs = s.audio
@@ -1292,6 +1295,7 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 	switch optionsState.page {
 	case "communityhud":
 		g.setCommunityHUDPreferences(settings.DefaultPresentation())
+		g.setCommunityHealthBars(settings.DefaultDamageBars != 0)
 	case "builders":
 		g.setBuilderOptions(settings.DefaultBuilderOptions())
 		g.setSelectionPreferences(settings.DefaultPresentation())
@@ -1364,6 +1368,7 @@ func (g *gameShell) undoRetailOptionsPage() {
 	switch optionsState.page {
 	case "communityhud":
 		g.setCommunityHUDPreferences(s.presentation)
+		g.setCommunityHealthBars(s.communityHealthBars)
 	case "builders":
 		g.setBuilderOptions(s.builderOptions)
 		g.setSelectionPreferences(s.presentation)
@@ -1475,7 +1480,7 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // handler that consumes the fired result [07 R-WGT-01 §3].
 func retailOptionsCue(key string) string {
 	switch key {
-	case "communityhud", "ncounters", "nreload", "nveteran", "ngroups", "nallies", "nweather",
+	case "communityhud", "nhealth", "ncounters", "nreload", "nveteran", "ngroups", "nallies", "nweather",
 		"builders", "bghold", "bgman", "bgroam", "bphold", "bpman", "bproam", "ncycle", "ndouble",
 		"placement", "npreview", "nroverlay", "norderdrag", "nteamnano", "nmexsnap", "nwrecksnap", "nsnapmod",
 		"nanolathe", "ngameplay", "nrender", "nfps", "nsidebar",
@@ -1506,7 +1511,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	// precedes them all, as it does on the screens frontendCue serves.
 	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
 	switch name {
-	case "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
+	case "NHEALTH", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
 		return g.activateCommunityHUDOption(name)
 	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE":
 		return g.activateBuilderOption(name)

@@ -645,6 +645,13 @@ func (g *gameShell) openMenu(mode shellMode) {
 			// installed record and never reassign keys [07 R-WGT-01 §3].
 			g.installRetailWindowButtonArt(window, p.art)
 			g.installRetailListScrollbars(window, p.art)
+			if mode == modeMenuMain {
+				// Multiplayer is outside this build's scope. The widget grey bit
+				// darkens MULTI and prevents pointer and key activation [07 R-WGT-01 §13].
+				if i := window.GadgetIndex("MULTI"); i >= 0 {
+					window.Gadgets[i].GrayedOut |= 1
+				}
+			}
 			panel = ui.NewPanel(window)
 			if mode == modeMenuMain {
 				// Retail supplies this literal, reveals the authored label, and
