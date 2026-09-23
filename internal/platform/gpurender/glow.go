@@ -68,12 +68,12 @@ const (
 	glowLightGain = 0.35
 	// glowNearWeight and glowFarWeight are the two blurred octaves' shares of
 	// the composite at the default strength: the quarter-resolution one is the
-	// tight core, the eighth the wide falloff. They were 0.65 and 0.5 until a
-	// play-test found the halo washing out bright hulls and the shipyard's
-	// nanolathe emitters; halving both halves the halo's energy and keeps its
-	// shape, so a strength of 200 percent reproduces the earlier look exactly.
-	glowNearWeight = 0.325
-	glowFarWeight  = 0.25
+	// tight core, the eighth the wide falloff. They were tuned at 0.65 and 0.5.
+	// A play-test found the halo washing out a shipyard's hulls; the cause was
+	// the nanolathe family, which now has its own lower gain (nano.go), so the
+	// weapon and explosion halo keeps about 85 percent of its first energy.
+	glowNearWeight = 0.55
+	glowFarWeight  = 0.425
 	// GlowStrengthDefault and GlowStrengthMax are the strength percentages of
 	// SetGlowStrength: 100 is the tuned look above and 200 the most a
 	// preference or a content pack may ask for. The percentage scales both
@@ -118,6 +118,49 @@ const (
 	// describe, as destOpHalo tests it.
 	glowOpHalo = 3
 )
+
+// glowFamily names one family of light a content pack can scale on its own
+// (docs/DESIGN_GPU_RENDERER.md §19.4). The families are presentation groupings,
+// not retail classes.
+type glowFamily uint8
+
+const (
+	// glowFamilyWeapons is the glow of beams and lightning, effect, projectile
+	// and strip sprites, and explosion flash discs and halos.
+	glowFamilyWeapons glowFamily = iota
+	// glowFamilyNanolathe is the nanolathe spray: its glow quads and the light
+	// its clusters cast on models, smoke and terrain (§23.5).
+	glowFamilyNanolathe
+	// glowFamilyGround is the terrain receiver of every battle light (§31.3):
+	// the pools of light on the ground, not the light on models or smoke.
+	glowFamilyGround
+	glowFamilyCount
+)
+
+// glowFamilies holds each family's scale as its difference from 1, so the zero
+// value is every family at its default and a renderer that never hears from
+// the host draws the tuned look.
+type glowFamilies struct {
+	offset [glowFamilyCount]float32
+}
+
+// scale is family k's multiplier: 1 at 100 percent, 0 when it is off.
+func (f *glowFamilies) scale(k glowFamily) float32 { return 1 + f.offset[k] }
+
+// SetGlowFamilies sets the three families' strengths as percentages of their
+// tuned look, each clamped to 0..GlowStrengthMax (§19.4). A family at 0 is off
+// and no other family changes. The weapons and nanolathe glow are further
+// scaled by SetGlowStrength, which weights the whole glow layer. The host
+// applies the content pack's values before every Execute, beside the glow
+// switch and strength.
+func (r *Renderer) SetGlowFamilies(weapons, nanolathe, ground int) {
+	if r == nil {
+		return
+	}
+	for k, percent := range [glowFamilyCount]int{weapons, nanolathe, ground} {
+		r.families.offset[k] = glowStrengthScale(percent) - 1
+	}
+}
 
 // glowRun is one device draw of the batch: the image bindings it needs and its
 // vertex and index span.
@@ -289,7 +332,8 @@ func (g *glowLayer) rect(imgs [4]*ebiten.Image, dx0, dy0, dx1, dy1, sx0, sy0, sx
 // pixels wide along the stroke, extended by half its width at both ends so a
 // short stroke keeps its energy.
 func (r *Renderer) glowLine(l drawlist.Line) {
-	if !r.glowActive() {
+	weapons := r.families.scale(glowFamilyWeapons)
+	if weapons <= 0 || !r.glowActive() {
 		return
 	}
 	s := &r.sched
@@ -306,7 +350,7 @@ func (r *Renderer) glowLine(l drawlist.Line) {
 	custom := [4]float32{0, 0, 0, glowOpSolid}
 	r.glow.quad([4]*ebiten.Image{1: r.tables.atlas}, xs, ys,
 		[4]float32{}, [4]float32{},
-		[4]float32{float32(l.Index), glowGain, 0, 0},
+		[4]float32{float32(l.Index), glowGain * weapons, 0, 0},
 		[4][4]float32{custom, custom, custom, custom})
 }
 
@@ -314,7 +358,8 @@ func (r *Renderer) glowLine(l drawlist.Line) {
 // space, over the same clip-intersected rectangle the sprite itself covered.
 // gain is the emission scale: 1 for an opaque sprite, ½ for a tinted one.
 func (r *Renderer) glowSprite(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int, gain float32) {
-	if f == nil || !r.glowActive() {
+	weapons := r.families.scale(glowFamilyWeapons)
+	if f == nil || weapons <= 0 || !r.glowActive() {
 		return
 	}
 	e := r.sceneFrameFor(f)
@@ -336,14 +381,15 @@ func (r *Renderer) glowSprite(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cl
 	r.glow.rect(imgs,
 		s.txx(float32(x+col0)), s.txy(float32(y+row0)), s.txx(float32(x+col1)), s.txy(float32(y+row1)),
 		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
-		[4]float32{0, gain * glowSpriteGain * glowGain, glowThreshold, 0}, [4]float32{0, 0, 0, glowOpKeyed})
+		[4]float32{0, gain * glowSpriteGain * glowGain * weapons, glowThreshold, 0}, [4]float32{0, 0, 0, glowOpKeyed})
 }
 
 // glowFlash appends one explosion disc: the same magnified atlas quad Flash
 // compiled, reading the composite under it. The rectangle and source span are
 // the ones Flash computed, in record space.
 func (r *Renderer) glowFlash(cx0, cy0, cx1, cy1 int, sx0, sy0, sx1, sy1 float32) {
-	if !r.glowActive() || r.sched.flash.img == nil {
+	weapons := r.families.scale(glowFamilyWeapons)
+	if weapons <= 0 || !r.glowActive() || r.sched.flash.img == nil {
 		return
 	}
 	r.noteGlowViewScale()
@@ -351,14 +397,15 @@ func (r *Renderer) glowFlash(cx0, cy0, cx1, cy1 int, sx0, sy0, sx1, sy1 float32)
 	r.glow.rect([4]*ebiten.Image{0: s.flash.img, 1: r.tables.atlas, 2: r.surfaces[0]},
 		s.txx(float32(cx0)), s.txy(float32(cy0)), s.txx(float32(cx1)), s.txy(float32(cy1)),
 		sx0, sy0, sx1, sy1,
-		[4]float32{0, glowLightGain * glowGain, 0, 0}, [4]float32{0, 0, 0, glowOpLight})
+		[4]float32{0, glowLightGain * glowGain * weapons, 0, 0}, [4]float32{0, 0, 0, glowOpLight})
 }
 
 // glowHalo appends one flat ground halo: the disc test of destOpHalo over the
 // composite under it, emitting the row's high lane. Arguments are the ones
 // Halo computed, in record space.
 func (r *Renderer) glowHalo(cx0, cy0, cx1, cy1 int, high, lx0, ly0, lx1, ly1, r2 float32) {
-	if !r.glowActive() || high <= 0 {
+	weapons := r.families.scale(glowFamilyWeapons)
+	if weapons <= 0 || !r.glowActive() || high <= 0 {
 		return
 	}
 	r.noteGlowViewScale()
@@ -367,7 +414,7 @@ func (r *Renderer) glowHalo(cx0, cy0, cx1, cy1 int, high, lx0, ly0, lx1, ly1, r2
 		[4]float32{s.txx(float32(cx0)), s.txx(float32(cx1)), s.txx(float32(cx0)), s.txx(float32(cx1))},
 		[4]float32{s.txy(float32(cy0)), s.txy(float32(cy0)), s.txy(float32(cy1)), s.txy(float32(cy1))},
 		[4]float32{}, [4]float32{},
-		[4]float32{high, glowLightGain * glowGain, 0, 0},
+		[4]float32{high, glowLightGain * glowGain * weapons, 0, 0},
 		[4][4]float32{
 			{lx0, ly0, r2, glowOpHalo},
 			{lx1, ly0, r2, glowOpHalo},

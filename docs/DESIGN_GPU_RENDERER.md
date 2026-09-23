@@ -3172,7 +3172,7 @@ modern-only commands and always light sources.
 | sprite | the texel's `PAL` colour × `smoothstep(glowThreshold, 1, max channel)` × `glowSpriteGain`; a tinted strip sprite at half that, so fire and flares emit and smoke and debris do not; only the sprite's keyed texels |
 | lit disc | the composite colour under the fragment × the disc atlas lane `max(k−1, 0)` × `glowLightGain`, read from the same atlas texel the disc used (§13.11), so the glow's colour is the lit ground's |
 | halo | the composite colour under the fragment × the row's high lane × `glowLightGain`, inside the same disc test the halo runs |
-| nanolathe spray | a palette-coloured quad two world pixels beyond each side of the particle core, at gain 0.45 (§23.5) |
+| nanolathe spray | a palette-coloured quad two world pixels beyond each side of the particle core, at gain 0.16 (§23.5) |
 
 The composite is bound as a source image while the glow plane is the destination,
 so reading it there is legal and reads the frame as replayed so far. The emission
@@ -3228,20 +3228,26 @@ planes are unmanaged"). Steady-state frames allocate no options, no uniform map
 and no geometry here.
 
 The knobs (`glowLineWidth` 4 world px, `glowGain` 1, `glowThreshold` 0.65,
-`glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.325,
-`glowFarWeight` 0.25, `glowSigma` 2 over `glowTapCount` 4 taps a side,
+`glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.55,
+`glowFarWeight` 0.425, `glowSigma` 2 over `glowTapCount` 4 taps a side,
 `glowNearSigmaWorld` = `glowSigma` × `glowOctaveNear` = 8 world px, which is the
 eight framebuffer pixels the layer was tuned at when the view scale is 1) are
 presentation choices tuned by eye on
 the battle benchmark capture; a first pass at 0.8/0.5 with an additive composite
 and no sprite gain blew every fireball to a white blob, which is the case the
-screen blend and the sprite threshold exist for. The octave weights were 0.65
-and 0.5 until a play-test on a naval map (2026-09-22) found the halo washing
-out bright grey hulls and a shipyard's nanolathe emitters; both were halved,
-which halves the halo's energy and keeps its size and colour. On the staged
-naval and factory film scenes the mean light the layer adds to the frame fell
-from 0.52 to 0.26 and from 1.00 to 0.50 levels per channel. A strength of 200
-percent (§19.4) reproduces the earlier look exactly.
+screen blend and the sprite threshold exist for.
+
+The octave weights were tuned at 0.65 and 0.5. A play-test on a naval map
+(2026-09-22) found the halo washing out a shipyard and the hulls around it; a
+first response halved both weights, which dimmed every family alike. The
+complaint was the nanolathe spray's glow and light, so the weights now stand at
+about 85 percent of the first tuning (0.55 and 0.425) and the spray has its own
+lower gains (§23.5 NL2–NL3): weapons and explosions stay close to the first
+look while the spray reads as a soft tint. Measured against the same frame with
+the glow off and the spray unlit, on the staged film scenes: the naval battle
+adds 1.35 levels per channel in a crop around two ships against 1.59 at the
+first tuning (85 percent); a crop around two factories under construction adds
+1.33 against 3.62 (37 percent).
 
 ### 19.4 The switch
 
@@ -3256,7 +3262,7 @@ the key keeps the default because the loader decodes over the defaults
 deliberately **not** one of the five `Effects` families of §30.
 
 **Strength.** `settings.Display.GlowStrength` (`display.glowStrength`, default
-100, stored 0..200) is the halo's strength as a percentage of the tuned look,
+100, stored 0..200) is the player's halo strength as a percentage of the tuned look,
 applied while the switch is on. `Renderer.SetGlowStrength(percent)` clamps it to
 `0..GlowStrengthMax` (200) and multiplies both octave weights by
 `percent / GlowStrengthDefault`; that is the only value it reaches, so the
@@ -3269,11 +3275,35 @@ button, the `+glow` command and every file already written; read as a
 percentage those would be a 1 percent halo. The loader repairs a negative value
 to the default and caps a larger one at 200.
 
-A content pack's strength is to compose with the player's as a product of
-percentages, `pack × player / 100`, clamped to 0..200, so a pack sets the
-baseline and the player scales it. The pack's value is authored beside the
-material annotation of §29.1 as `glow=<percent>;` in an `[effects]` section of
-`nanolathe/materials.tdf`.
+**Families.** A content pack scales three families of Enhanced light
+separately, each as a percentage of its tuned look, 0..200, default 100, in an
+`[effects]` section of the annotation file of §29.1 (`nanolathe/materials.tdf`):
+
+| key | family | what it scales |
+|---|---|---|
+| `weapons` | beams and lightning, effect, projectile and strip sprites, explosion flash discs and halos | their glow emission |
+| `nanolathe` | the nanolathe spray | its glow quad (NL2) and the light its clusters cast on models, smoke and terrain (NL3) |
+| `ground` | every battle light | the terrain receiver alone (§31.3); models and smoke keep their light |
+
+`Renderer.SetGlowFamilies(weapons, nanolathe, ground)` clamps each to 0..200 and
+multiplies only its own family's gains by `percent / 100`. 0 turns that family
+off: its sources append nothing (or, for the nanolathe light, gather no
+cluster), and no other family changes. The ground percentage reaches the
+terrain pass through the one per-source multiplier only the terrain reads, the
+source's fade (§31.7), so the ground pass needs no switch of its own. The
+player's `display.glowStrength` weights the whole glow layer, so it multiplies
+the weapons and nanolathe glow on top of the pack's percentages; the nanolathe
+light and the ground family belong to battle lighting (§30's Lighting switch)
+and take the pack's value alone. The renderer's zero value is every family at
+100, so a host that never sets them draws the tuned look.
+
+`internal/client` parses the section beside `[materials]` when it installs the
+file (`SetMaterialTable`) and holds the result with the texture table; hosts
+read it through `Client.GlowFamilies()`. An override without `[materials]`
+keeps the texture table in force and sets only the families; one without
+`[effects]` restores every family to 100; one with neither section, or a family
+value that is not a whole number, is reported and changes nothing. Unknown keys
+are ignored so a later family does not make an older build reject the file.
 
 The host carries it the way it carries the switch: `Client.SetGlowStrength` /
 `Client.GlowStrength` beside `Client.Glow` (a changed strength advances the
@@ -3286,12 +3316,15 @@ benchmark keeps the renderer's default strength, so two runs measure the same
 work. A film builds its own client and draws the default strength, so footage
 stays reproducible whatever the player's preference.
 
-Owed: `applyVisualOptions` copying `display.glowStrength` into the client, which
-is what reaches the windowed shell's client (created after the settings load)
-and the `--shot` routes; the `[effects]` parse beside the `[materials]` one in
-`internal/client/model_finish.go` (whose parser today rejects a file without a
-`[materials]` section); and an options-page control. Until the first lands, the
-windowed game and `--shot` draw the default strength.
+`applyVisualOptions` copies `display.glowStrength` into the client, which is
+what reaches the windowed shell's client (created after the settings load) and
+the `--shot` routes.
+
+Every site that copies the strength also copies the content pack's families,
+`Renderer.SetGlowFamilies(Client.GlowFamilies())`: the window, the paused world,
+`--shot`, `--shot-debris` and `--film`. The battle benchmark keeps every family
+at 100, like its strength. Owed: an options-page control for the player's
+strength.
 
 ### 19.5 Verification
 
@@ -3863,16 +3896,18 @@ switch and gameplay mode. No particle lifetime, RNG call or classic pixel change
 
 **NL2 — spray glow.** The existing glow source pass receives a palette-coloured
 quad extending two world pixels beyond each side of the particle core, at gain
-0.45. The existing two blur octaves resolve it beneath fog and interface. No
+0.16 (first tuned at 0.45 over heavier octave weights; §19.3). The existing two blur octaves resolve it beneath fog and interface. No
 shader, render target or extra blur pass is added, and the existing glow switch
 controls it.
 
 **NL3 — local lighting.** Before model preparation, visible particles join the
 nearest existing cluster within 24 world pixels in unsheared physical space.
 Clusters follow the arithmetic mean of their particles' positions, with no
-screen-grid snapping. Each particle adds 0.06 times the mean displayed RGB of the
+screen-grid snapping. Each particle adds 0.018 times the mean displayed RGB of the
 seven-entry nano palette ramp [03 §5.5]; the completed cluster is uniformly
-scaled down if its peak exceeds 0.7, and its radius is 80 world pixels. At most
+scaled down if its peak exceeds 0.21, and its radius is 80 world pixels. (First
+tuned at 0.06 and 0.7, which washed factories and shipyards white; the
+nanolathe family of §19.4 scales both.) At most
 64 clusters occupy fixed scratch storage; later particles may join an existing
 cluster but cannot open a 65th. Clusters then compete with explosions for the
 64-light budget by peak energy with stable ties. Subject selection, outward face
@@ -4464,10 +4499,11 @@ leaves the embedded table in force, because presentation art never fails a load.
 The retail executable carries no material classification for model textures, and
 nothing here reaches authoritative state.
 
-The same file is where a content pack is to set the glow layer's strength
-(§19.4): an `[effects]` section with `glow=<percent>;`, 0..200, default 100,
-composed with the player's `display.glowStrength` as a product of percentages.
-Its parse is owed with the rest of the strength's host wiring (§19.4).
+The same file carries a content pack's light strengths: an `[effects]` section
+of `weapons=`, `nanolathe=` and `ground=` whole percentages, 0..200, default 100
+(§19.4). A file may carry either section alone: one without `[materials]`
+keeps the texture table in force, and one without `[effects]` keeps every
+family at 100.
 
 `ModelFace.Material` carries the annotation, resolved **once at texture bind**
 rather than per face: `resolveModelTexture` stamps the annotation and the
@@ -4689,6 +4725,12 @@ The quad covers the light's full radius rather than the smaller disc a lifted
 light reaches, so the cover is conservative and the shader's own distance test
 discards the difference without a square root [I2]. The world transform of §16.3
 applies exactly once, here.
+
+A content pack scales every pool through the **ground** family of §19.4: its
+percentage is folded into each source's terrain-only fade when the source is
+selected, so the pools brighten or dim together and model and smoke receivers
+keep their light. The nanolathe family scales the spray's cluster energy before
+selection, so its pools follow it as well.
 
 Placement is deliberate: the copy is taken AFTER the water and reflection resolve,
 so the pools brighten the water surface too, and the pass runs BEFORE objects,

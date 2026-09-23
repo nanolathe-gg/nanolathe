@@ -17,7 +17,17 @@
 //
 // An installed override replaces this whole table: a remaster pack or loose
 // gamedata directory supplying the logical path nanolathe/materials.tdf is
-// used instead of the embedded copy.
+// used instead of the embedded copy. An override without a [materials]
+// section keeps this table and sets only its [effects].
+//
+// [effects] sets the strength of each family of Enhanced light as a whole
+// percentage of the tuned look, 0..200 (docs/DESIGN_GPU_RENDERER.md §19.4):
+//   weapons    the glow of beams, effect and projectile art, explosion flashes
+//   nanolathe  the nanolathe spray's glow and the light it casts
+//   ground     the pools every battle light casts on the terrain
+// 0 turns a family off; an absent key, or an override without [effects],
+// keeps 100. The player's display.glowStrength scales the two glow families
+// on top.
 
 [materials]
 	{
@@ -75,4 +85,11 @@
 	bluenoise2=paint;
 	bluenoise3=paint;
 	bluenoise4=paint;
+	}
+
+[effects]
+	{
+	weapons=100;
+	nanolathe=100;
+	ground=100;
 	}

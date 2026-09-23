@@ -115,10 +115,27 @@ type battleLight struct {
 	ground float32
 	// fade is the source's own remaining emission and fadeKnown whether its
 	// producer carried one at all, so a spent source's zero is distinct from a
-	// family that never fades. Only the terrain receiver applies it (§31.7).
+	// family that never fades. Only the terrain receiver applies it (§31.7),
+	// which is why add() also folds the ground family's strength into it
+	// (§19.4): it is the one multiplier the terrain alone reads.
 	fade      float32
 	fadeKnown bool
 	kind      lightKind
+}
+
+// foldGroundFamily applies the ground family's strength to the terrain receiver
+// alone: a source without a fade of its own takes the strength as its fade, and
+// one with a fade is scaled by it. A strength of exactly 1 leaves the source as
+// it was, so the default look does not depend on this path.
+func (light *battleLight) foldGroundFamily(ground float32) {
+	if ground == 1 {
+		return
+	}
+	if light.fadeKnown {
+		light.fade *= ground
+		return
+	}
+	light.fade, light.fadeKnown = ground, true
 }
 
 type battleLighting struct {
@@ -128,6 +145,10 @@ type battleLighting struct {
 	colors    map[*formats.GAFFrame][3]float32
 	nano      [battleLightLimit]nanoLightCluster
 	nanoCount int
+	// groundOffset is the ground family's strength for this frame's gather
+	// less one (§19.4), so the zero value is the default; add folds it into
+	// each source's terrain-only fade.
+	groundOffset float32
 	// recordW, recordH are the record-space viewport sources are culled
 	// against. Gathering precedes replay, so the framebuffer size is not the
 	// record extent below a rest zoom factor (§16.3).
@@ -159,6 +180,7 @@ func (r *Renderer) prepareBattleLighting(list *drawlist.List) {
 	if l.colors == nil {
 		l.colors = make(map[*formats.GAFFrame][3]float32)
 	}
+	l.groundOffset = r.families.offset[glowFamilyGround]
 	w, h := list.RecordedWorldExtent()
 	l.recordW, l.recordH = float32(w), float32(h)
 	if w <= 0 || h <= 0 {
@@ -388,6 +410,7 @@ func (l *battleLighting) add(light battleLight) {
 	if k >= lightKindCount {
 		return
 	}
+	light.foldGroundFamily(1 + l.groundOffset)
 	if l.counts[k] >= lightKindCap[k] {
 		if at := l.weakestOf(k); at >= 0 && lightPower(light) > lightPower(l.lights[at]) {
 			l.lights[at] = light

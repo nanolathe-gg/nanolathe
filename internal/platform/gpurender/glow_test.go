@@ -389,3 +389,106 @@ func TestGlowStrengthSettingReachesRendererThroughClient(t *testing.T) {
 			near, far, glowNearWeight/2, glowFarWeight/2)
 	}
 }
+
+// Each family's strength reaches only its own family, and 0 turns off only that
+// family (§19.4): the weapons percentage scales a beam's emission, the
+// nanolathe percentage the spray's glow and the light its cluster casts, and
+// the ground percentage the terrain receiver's share of every light alone.
+func TestGlowFamiliesScaleOnlyTheirOwnFamily(t *testing.T) {
+	type reading struct {
+		weapon, nanoGlow float32
+		weaponQuad       bool
+		nanoQuad         bool
+		nanoLight        [3]float32
+		ground           float32
+		lit              bool
+	}
+	read := func(weapons, nanolathe, ground int) reading {
+		r := &Renderer{w: 320, h: 240}
+		r.tables.atlas = &ebiten.Image{}
+		r.surfaces[0] = &ebiten.Image{}
+		r.SetGlow(true)
+		r.SetGlowStrength(GlowStrengthDefault)
+		for i := 161; i <= 167; i++ {
+			r.displayPalette[i] = [4]byte{40, 200, 40, 255}
+		}
+		r.SetGlowFamilies(weapons, nanolathe, ground)
+		var out reading
+		r.glowLine(drawlist.Line{X0: 10, Y0: 10, X1: 60, Y1: 10, Index: 255, Emissive: true})
+		if n := len(r.glow.verts); n > 0 {
+			out.weaponQuad, out.weapon = true, r.glow.verts[n-1].ColorG
+		}
+		before := len(r.glow.verts)
+		spray := drawlist.Fill{Nano: true, Rect: drawlist.Rect{X: 100, Y: 80, W: 2, H: 2}, Index: 163, WorldHeight: 16}
+		r.glowNano(spray)
+		if n := len(r.glow.verts); n > before {
+			out.nanoQuad, out.nanoGlow = true, r.glow.verts[n-1].ColorG
+		}
+		var list drawlist.List
+		for i := 0; i < 10; i++ {
+			f := spray
+			f.Rect.X += int32(i)
+			list.RecordFill(f)
+		}
+		r.prepareBattleLighting(&list)
+		if len(r.lighting.lights) > 0 {
+			out.lit = true
+			out.nanoLight = r.lighting.lights[0].color
+			out.ground = groundScale(&r.lighting.lights[0])
+		}
+		return out
+	}
+	near := func(a, b float32) bool { return math.Abs(float64(a-b)) < 1e-6 }
+	base := read(100, 100, 100)
+	if !base.weaponQuad || !base.nanoQuad || !base.lit || base.ground <= 0 {
+		t.Fatalf("default families left a family dark: %+v", base)
+	}
+	for _, tc := range []struct {
+		name                           string
+		weapons, nanolathe, ground     int
+		weapon, nanoGlow, light, earth float32
+	}{
+		{"weapons at half", 50, 100, 100, 0.5, 1, 1, 1},
+		{"nanolathe at half", 100, 50, 100, 1, 0.5, 0.5, 1},
+		{"ground at half", 100, 100, 50, 1, 1, 1, 0.5},
+		{"ground doubled", 100, 100, 200, 1, 1, 1, 2},
+	} {
+		got := read(tc.weapons, tc.nanolathe, tc.ground)
+		if !near(got.weapon, base.weapon*tc.weapon) || !near(got.nanoGlow, base.nanoGlow*tc.nanoGlow) ||
+			!near(got.nanoLight[1], base.nanoLight[1]*tc.light) || !near(got.ground, base.ground*tc.earth) {
+			t.Fatalf("%s: read %+v against the default %+v", tc.name, got, base)
+		}
+	}
+	if got := read(0, 100, 100); got.weaponQuad || !got.nanoQuad || got.nanoLight != base.nanoLight || got.ground != base.ground {
+		t.Fatalf("weapons at 0 reached another family or kept its own: %+v", got)
+	}
+	if got := read(100, 0, 100); !got.weaponQuad || got.weapon != base.weapon || got.nanoQuad || got.lit {
+		t.Fatalf("nanolathe at 0 reached another family or kept its own: %+v", got)
+	}
+	if got := read(100, 100, 0); got.weapon != base.weapon || got.nanoGlow != base.nanoGlow || got.nanoLight != base.nanoLight || got.ground != 0 {
+		t.Fatalf("ground at 0 reached another family or kept its own: %+v", got)
+	}
+}
+
+// A content pack's [effects] nanolathe=50 reaches the renderer the way every
+// host hands it over: the annotation loader installs it, the client reads it,
+// and the executor site copies it before Execute, halving only the nanolathe
+// family (§19.4).
+func TestGlowFamiliesContentReachesRendererThroughClient(t *testing.T) {
+	// An [effects]-only file keeps the texture table in force, so restoring
+	// the defaults this way leaves nothing else changed.
+	t.Cleanup(func() {
+		if err := client.SetMaterialTable("test", []byte("[effects]\n\t{\n\t}\n"), "test"); err != nil {
+			t.Errorf("restore: %v", err)
+		}
+	})
+	if err := client.SetMaterialTable("test", []byte("[effects]\n\t{\n\tnanolathe=50;\n\t}\n"), "test"); err != nil {
+		t.Fatal(err)
+	}
+	cl := &client.Client{}
+	r := &Renderer{}
+	r.SetGlowFamilies(cl.GlowFamilies())
+	if w, n, g := r.families.scale(glowFamilyWeapons), r.families.scale(glowFamilyNanolathe), r.families.scale(glowFamilyGround); w != 1 || n != 0.5 || g != 1 {
+		t.Fatalf("nanolathe=50 gave family scales %v/%v/%v, want 1/0.5/1", w, n, g)
+	}
+}

@@ -137,7 +137,10 @@ type Renderer struct {
 
 	// glow is the Enhanced glow layer of docs/DESIGN_GPU_RENDERER.md §19: the
 	// emissive batch, its planes and passes (glow.go).
-	glow     glowLayer
+	glow glowLayer
+	// families is the per-family strength a content pack sets (glow.go,
+	// §19.4): the weapon and nanolathe glow and the terrain light.
+	families glowFamilies
 	lighting battleLighting
 	// ground is the Enhanced terrain illumination pass of §31: one clipped
 	// disc per battle light, drawn at the end of the terrain pass.
@@ -214,6 +217,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	// The glow layer starts at its default strength, which is also the
 	// player preference's default (§19.4).
 	r.SetGlowStrength(GlowStrengthDefault)
+	// Every light family starts at its tuned look until the host hands over
+	// the content pack's (§19.4).
+	r.SetGlowFamilies(GlowStrengthDefault, GlowStrengthDefault, GlowStrengthDefault)
 	if pal != nil {
 		r.displayPalette = pal.Base
 	}

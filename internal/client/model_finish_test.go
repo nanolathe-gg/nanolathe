@@ -95,7 +95,7 @@ func TestTextureReferenceCachesMaterialAnnotation(t *testing.T) {
 // applies comes from the authored file, so a name missing from it is a
 // regression in the data, not in the code.
 func TestEmbeddedMaterialTableCoversTheAuthoredClassification(t *testing.T) {
-	table, err := parseMaterialTable(embeddedMaterialTDF)
+	table, _, err := parseContentTable(embeddedMaterialTDF)
 	if err != nil {
 		t.Fatalf("embedded material annotation does not parse: %v", err)
 	}
@@ -196,5 +196,64 @@ func TestLoadMaterialTableFromMountedContent(t *testing.T) {
 	}
 	if modelTextureMaterial("corsea6d") != drawlist.ModelMaterialDefault {
 		t.Fatal("the mounted override did not replace the embedded table")
+	}
+}
+
+// restoreGlowFamilies puts the family strengths in force back after a test
+// installs an override.
+func restoreGlowFamilies(t *testing.T) {
+	t.Helper()
+	before := glowFamilies.Load()
+	t.Cleanup(func() { glowFamilies.Store(before) })
+}
+
+// The annotation file's [effects] section sets the content pack's light family
+// strengths (DESIGN_GPU_RENDERER §19.4). A file with only [effects] keeps the
+// texture table in force; one with only [materials] restores the default
+// families; values clamp to 0..200 and a non-number rejects the whole file.
+func TestMaterialOverrideEffectsSection(t *testing.T) {
+	restoreMaterialTable(t)
+	restoreGlowFamilies(t)
+	var cl *Client
+	if w, n, g := cl.GlowFamilies(); w != 100 || n != 100 || g != 100 {
+		t.Fatalf("embedded families %d/%d/%d, want 100 each", w, n, g)
+	}
+
+	effectsOnly := []byte("[effects]\n\t{\n\tNanolathe=35;\n\tground=250;\n\tweapons=-5;\n\tfuture=7;\n\t}\n")
+	if err := SetMaterialTable("test", effectsOnly, "test"); err != nil {
+		t.Fatalf("an [effects]-only override was rejected: %v", err)
+	}
+	if w, n, g := cl.GlowFamilies(); w != 0 || n != 35 || g != GlowFamilyMax {
+		t.Fatalf("[effects]-only families %d/%d/%d, want 0/35/%d", w, n, g, GlowFamilyMax)
+	}
+	if modelTextureMaterial("corsea6d") != drawlist.ModelMaterialMetal {
+		t.Fatal("an override without [materials] dropped the texture table in force")
+	}
+
+	both := []byte("[materials]\n\t{\n\tmysheet=metal;\n\t}\n[effects]\n\t{\n\tweapons=80;\n\t}\n")
+	if err := SetMaterialTable("test", both, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if w, n, g := cl.GlowFamilies(); w != 80 || n != 100 || g != 100 {
+		t.Fatalf("families with both sections %d/%d/%d, want 80/100/100", w, n, g)
+	}
+	if modelTextureMaterial("mysheet") != drawlist.ModelMaterialMetal || modelTextureMaterial("corsea6d") != drawlist.ModelMaterialDefault {
+		t.Fatal("the [materials] section did not replace the table")
+	}
+
+	materialsOnly := []byte("[materials]\n\t{\n\tmetal3a=metal;\n\t}\n")
+	if err := SetMaterialTable("test", materialsOnly, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if w, n, g := cl.GlowFamilies(); w != 100 || n != 100 || g != 100 {
+		t.Fatalf("a [materials]-only override left families %d/%d/%d, want the defaults", w, n, g)
+	}
+
+	bad := []byte("[effects]\n\t{\n\tnanolathe=lots;\n\t}\n")
+	if err := SetMaterialTable(MaterialTablePath, bad, "pack"); err == nil {
+		t.Fatal("a non-numeric family strength was accepted")
+	}
+	if _, n, _ := cl.GlowFamilies(); n != 100 {
+		t.Fatalf("a rejected override changed the nanolathe family to %d", n)
 	}
 }

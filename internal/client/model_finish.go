@@ -3,6 +3,7 @@ package client
 import (
 	_ "embed"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -22,8 +23,37 @@ import (
 // directory. Absent, the embedded table stands.
 const MaterialTablePath = "nanolathe/materials.tdf"
 
-// materialSection is the single section the annotation file authors.
-const materialSection = "materials"
+// materialSection is the texture annotation's section, and effectsSection the
+// per-family light strengths a content pack may set beside it (§19.4).
+const (
+	materialSection = "materials"
+	effectsSection  = "effects"
+)
+
+// GlowFamilies is a content pack's strength for each family of Enhanced light,
+// as a percentage of the tuned look (DESIGN_GPU_RENDERER §19.4): Weapons is the
+// glow of beams, effect and projectile art and explosion flashes; Nanolathe is
+// the nanolathe spray's glow and the light it casts; Ground is the terrain
+// receiver of every battle light. Each is 0..GlowFamilyMax, 100 by default.
+type GlowFamilies struct {
+	Weapons, Nanolathe, Ground int
+}
+
+// GlowFamilyDefault and GlowFamilyMax bound a family's percentage; they match
+// the executor's GlowStrengthDefault and GlowStrengthMax.
+const (
+	GlowFamilyDefault = 100
+	GlowFamilyMax     = 200
+)
+
+// DefaultGlowFamilies is every family at its tuned look.
+func DefaultGlowFamilies() GlowFamilies {
+	return GlowFamilies{Weapons: GlowFamilyDefault, Nanolathe: GlowFamilyDefault, Ground: GlowFamilyDefault}
+}
+
+// glowFamilies is the content's family strengths in force, installed with the
+// material annotation and read by every host before a modern frame.
+var glowFamilies atomic.Pointer[GlowFamilies]
 
 //go:embed materials/materials.tdf
 var embeddedMaterialTDF []byte
@@ -57,8 +87,8 @@ func materialForKey(key string) (uint8, uint64) {
 }
 
 func init() {
-	table, err := parseMaterialTable(embeddedMaterialTDF)
-	if err != nil {
+	table, families, err := parseContentTable(embeddedMaterialTDF)
+	if err != nil || table == nil {
 		// The embedded file ships inside the binary, so a parse failure is a
 		// build defect rather than a content condition; the package tests fail
 		// on it before anything reaches a player.
@@ -66,27 +96,92 @@ func init() {
 	}
 	materialTable.Store(&table)
 	materialGeneration.Add(1)
+	glowFamilies.Store(&families)
 }
 
-// parseMaterialTable reads the authored [materials] section into a lowercase
+// GlowFamilies returns the installed content's family strengths, in the order
+// the executor's SetGlowFamilies takes them (DESIGN_GPU_RENDERER §19.4). They
+// are content, not a player preference, so every client reads the same values.
+func (c *Client) GlowFamilies() (weapons, nanolathe, ground int) {
+	f := glowFamilies.Load()
+	if f == nil {
+		return GlowFamilyDefault, GlowFamilyDefault, GlowFamilyDefault
+	}
+	return f.Weapons, f.Nanolathe, f.Ground
+}
+
+// findSection returns the root section named name, ignoring case, or nil.
+func findSection(doc *formats.Document, name string) *formats.Section {
+	for _, s := range doc.Root.Sections() {
+		if strings.EqualFold(s.Name, name) {
+			return s
+		}
+	}
+	return nil
+}
+
+// parseContentTable reads the whole annotation file: the [materials] texture
+// table, nil when the file has no such section, and the [effects] family
+// strengths, every family at its default when the file has none. A file with
+// neither section is unreadable, and so is one whose [materials] section
+// annotates nothing or whose [effects] section holds a value that is not a
+// whole number.
+func parseContentTable(data []byte) (map[string]uint8, GlowFamilies, error) {
+	families := DefaultGlowFamilies()
+	doc, err := formats.ParseTDF(data)
+	if err != nil {
+		return nil, families, err
+	}
+	materials, effects := findSection(doc, materialSection), findSection(doc, effectsSection)
+	if materials == nil && effects == nil {
+		return nil, families, fmt.Errorf("no [%s] or [%s] section", materialSection, effectsSection)
+	}
+	var table map[string]uint8
+	if materials != nil {
+		if table, err = materialSectionTable(materials); err != nil {
+			return nil, families, err
+		}
+	}
+	if effects != nil {
+		if families, err = parseGlowFamilies(effects); err != nil {
+			return nil, families, err
+		}
+	}
+	return table, families, nil
+}
+
+// parseGlowFamilies reads the [effects] section: weapons=, nanolathe= and
+// ground= percentages, each clamped to 0..GlowFamilyMax, last write winning
+// [fmt tdf "Duplicate keys"]. An unknown key is ignored, so a later build's
+// family does not make an older build reject the file.
+func parseGlowFamilies(section *formats.Section) (GlowFamilies, error) {
+	families := DefaultGlowFamilies()
+	for _, item := range section.Assignments() {
+		var field *int
+		switch strings.ToLower(strings.TrimSpace(item.Key)) {
+		case "weapons":
+			field = &families.Weapons
+		case "nanolathe":
+			field = &families.Nanolathe
+		case "ground":
+			field = &families.Ground
+		default:
+			continue
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(item.Value))
+		if err != nil {
+			return DefaultGlowFamilies(), fmt.Errorf("[%s] %s=%q is not a whole percentage", effectsSection, item.Key, item.Value)
+		}
+		*field = min(max(v, 0), GlowFamilyMax)
+	}
+	return families, nil
+}
+
+// materialSectionTable reads the authored [materials] section into a lowercase
 // texture-name map. Assignments are taken in source order, so a repeated
 // spelling keeps its last value, matching TDF's own duplicate policy
 // [fmt tdf "Duplicate keys"].
-func parseMaterialTable(data []byte) (map[string]uint8, error) {
-	doc, err := formats.ParseTDF(data)
-	if err != nil {
-		return nil, err
-	}
-	var section *formats.Section
-	for _, s := range doc.Root.Sections() {
-		if strings.EqualFold(s.Name, materialSection) {
-			section = s
-			break
-		}
-	}
-	if section == nil {
-		return nil, fmt.Errorf("no [%s] section", materialSection)
-	}
+func materialSectionTable(section *formats.Section) (map[string]uint8, error) {
 	table := make(map[string]uint8)
 	for _, item := range section.Assignments() {
 		name := strings.ToLower(strings.TrimSpace(item.Key))
@@ -115,20 +210,27 @@ func parseMaterialTable(data []byte) (map[string]uint8, error) {
 // materialDiagnostic is the one diagnostic shape this loader reports
 // [AGENTS.md §Diagnostics].
 func materialDiagnostic(logical, providers string, cause error) error {
-	return fmt.Errorf("nanolathe: material annotation override is unreadable: logical path %s, providers searched [%s], expected a TDF [%s] section of texture=metal|paint: %w",
-		logical, providers, materialSection, cause)
+	return fmt.Errorf("nanolathe: material annotation override is unreadable: logical path %s, providers searched [%s], expected a TDF [%s] section of texture=metal|paint and/or an [%s] section of family=percent: %w",
+		logical, providers, materialSection, effectsSection, cause)
 }
 
-// SetMaterialTable replaces the active annotation with an authored table. The
-// table in force is kept when the supplied bytes cannot be read, so a broken
-// override falls back to the embedded annotation rather than to no finish.
+// SetMaterialTable installs an authored annotation file. Its [materials]
+// section replaces the texture table whole; a file without one keeps the table
+// in force, so a pack may set only its light strengths. Its [effects] section
+// replaces the family strengths, and a file without one restores the defaults.
+// Everything in force is kept when the supplied bytes cannot be read, so a
+// broken override falls back to the embedded annotation rather than to no
+// finish.
 func SetMaterialTable(logical string, data []byte, providers string) error {
-	table, err := parseMaterialTable(data)
+	table, families, err := parseContentTable(data)
 	if err != nil {
 		return materialDiagnostic(logical, providers, err)
 	}
-	materialTable.Store(&table)
-	materialGeneration.Add(1)
+	if table != nil {
+		materialTable.Store(&table)
+		materialGeneration.Add(1)
+	}
+	glowFamilies.Store(&families)
 	return nil
 }
 

@@ -6,12 +6,20 @@ import (
 )
 
 // Enhanced artistic choices, not retail constants (GPU design §23.5).
+//
+// The spray's energy was cut to three tenths of its first tuning (particle
+// 0.06, cluster 0.7, glow 0.45 over octave weights of 0.65/0.5) after a
+// play-test found it washing a shipyard and its hulls white; the light it adds
+// to a factory scene measured 37 percent of the first tuning's, and it reads
+// as a soft green tint on what it builds. The glow gain is set against the
+// current octave weights (glow.go): 0.55 × 0.16 against the first 0.65 × 0.45.
+// The nanolathe family strength scales all three (§19.4).
 const (
 	nanoClusterReach   = 24
 	nanoLightRadius    = 80
-	nanoParticleEnergy = 0.06
-	nanoClusterEnergy  = 0.7
-	nanoGlowGain       = 0.45
+	nanoParticleEnergy = 0.018
+	nanoClusterEnergy  = 0.21
+	nanoGlowGain       = 0.16
 )
 
 type nanoLightCluster struct {
@@ -44,6 +52,11 @@ func (r *Renderer) nanoInView(f drawlist.Fill) bool {
 func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 	l := &r.lighting
 	l.nanoCount = 0
+	family := r.families.scale(glowFamilyNanolathe)
+	if family <= 0 {
+		return
+	}
+	particleEnergy, clusterEnergy := nanoParticleEnergy*family, nanoClusterEnergy*family
 	color := nanoLightColor(&r.displayPalette)
 	list.VisitNanoSources(func(f drawlist.Fill) {
 		if f.NanoSubmerged || !r.nanoInView(f) {
@@ -82,7 +95,7 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 		group.count++
 		for j := range pos {
 			group.light.position[j] += (pos[j] - group.light.position[j]) / float32(group.count)
-			group.light.color[j] += particleColor[j] * nanoParticleEnergy
+			group.light.color[j] += particleColor[j] * particleEnergy
 		}
 	})
 	for i := 0; i < l.nanoCount; i++ {
@@ -91,9 +104,9 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 		if peak == 0 {
 			continue
 		}
-		if peak > nanoClusterEnergy {
+		if peak > clusterEnergy {
 			for j := range light.color {
-				light.color[j] *= nanoClusterEnergy / peak
+				light.color[j] *= clusterEnergy / peak
 			}
 		}
 		l.add(light)
@@ -116,7 +129,8 @@ func nanoLightColor(pal *[256][4]byte) (color [3]float32) {
 // glowNano widens the emission footprint around the existing two-pixel core.
 // The existing blur and fog composite soften it; the particle draw is untouched.
 func (r *Renderer) glowNano(f drawlist.Fill) {
-	if f.NanoSubmerged || !r.glowActive() || !r.nanoInView(f) {
+	family := r.families.scale(glowFamilyNanolathe)
+	if family <= 0 || f.NanoSubmerged || !r.glowActive() || !r.nanoInView(f) {
 		return
 	}
 	pad := 2 * nanoScale(f)
@@ -126,6 +140,6 @@ func (r *Renderer) glowNano(f drawlist.Fill) {
 	s := &r.sched
 	r.glow.rect([4]*ebiten.Image{1: r.tables.atlas},
 		s.txx(x0), s.txy(y0), s.txx(x1), s.txy(y1), 0, 0, 0, 0,
-		[4]float32{float32(f.Index), nanoGlowGain * glowGain, 0, 0},
+		[4]float32{float32(f.Index), nanoGlowGain * glowGain * family, 0, 0},
 		[4]float32{0, 0, 0, glowOpSolid})
 }
