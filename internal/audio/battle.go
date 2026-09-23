@@ -97,6 +97,11 @@ func (a *Service) UpdateBattleMusic(localUnits int, ended bool) {
 // EndBattleMusic transfers the live controller to the shell's continuing
 // music pump. In Custom mode category 4 completes its ordinary fade before
 // stopping; closing the service here would cut that fade short [03 R-AUD-01 §4].
+//
+// Every other mode's category request only records the category and returns,
+// so nothing would reach the tick until the playing track ended. Battle exit
+// and the front-end return request silence, which the tick applies in any mode
+// [03 R-AUD-01 §4 tick step 2][03 R-AUD-01 §5], so run it here.
 func (a *Service) EndBattleMusic() {
 	if a == nil {
 		return
@@ -105,7 +110,10 @@ func (a *Service) EndBattleMusic() {
 	a.musicStartPending = false
 	a.StopStream()
 	a.StopVoices()
-	if a.Music != nil {
-		a.Music.SetDesired(4)
+	if c := a.Music; c != nil {
+		c.SetDesired(4)
+		if c.playMode != ModeCategoryShuffle {
+			c.tickFromMedia()
+		}
 	}
 }

@@ -128,6 +128,26 @@ func TestBattleMusicRetainedActivityAndExitFade(t *testing.T) {
 	}
 }
 
+// Outside Custom mode a category request registers no fade, so the exit's
+// silence request must stop the playing track itself [03 R-AUD-01 §5].
+func TestBattleMusicExitStopsNonCustomModes(t *testing.T) {
+	for _, mode := range []PlayMode{ModeIdle, ModeSequential, ModeRandom, ModeSingle} {
+		s := NewService(nil)
+		m := s.Music
+		m.SetPresentationClock(func() uint32 { return 0 })
+		m.Open(2)
+		m.Configure(mode, 0)
+		p := &musicProbePlayer{}
+		m.openTrack = func(int) (MusicPlayer, error) { return p, nil }
+		s.StartBattleMusic()
+		m.Play(1)
+		s.EndBattleMusic()
+		if !p.closed || m.IsPlaying() || m.DesiredCategory() != 4 {
+			t.Fatalf("mode %d: exit left music playing (closed=%v playing=%v)", mode, p.closed, m.IsPlaying())
+		}
+	}
+}
+
 func TestBattleMusicRetainedWantCanSuppressLaterBattleTransition(t *testing.T) {
 	s := NewService(nil)
 	now := uint32(1000)
