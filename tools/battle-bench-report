@@ -128,6 +128,10 @@ for directory in sys.argv[1:]:
           f"{data['mallocs']/len(rows):.1f} objects/frame; GC {data['gc']}")
     census = [row.get("Census", {}) for row in rows]
     for key in ("units", "moving_units", "damaged_units", "projectiles", "effects", "fragments",
+                "in_view_units", "in_view_projectiles", "in_view_effects",
+                "view_fog_cells", "fogged_view_cells", "unexplored_view_cells",
+                "airborne_units", "surface_ships", "submarines", "water_buildings",
+                "in_view_airborne_units", "in_view_surface_ships", "in_view_submarines", "in_view_water_buildings",
                 "features", "sprite_features", "burning_features", "in_view_sprite_features",
                 "in_view_burning_features", "builds", "nanoframes", "nanolathe_events", "shake"):
         values = [sample[key] for sample in census if key in sample]

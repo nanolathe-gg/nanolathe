@@ -72,10 +72,10 @@ func filmRoster(name string) ([2][]string, error) {
 }
 
 // filmBattleCentre allows deliberately authored coast framing without changing
-// the benchmark's dry-land search or guessing a naval placement rule.
+// the dry-land search or guessing a naval placement rule.
 func filmBattleCentre(scene film.Scene, terrain *world.Terrain) (int32, int32, int32, error) {
 	if scene.Anchor == nil {
-		if x, z, relief, err := benchmarkBattleCentre(terrain); err == nil {
+		if x, z, relief, err := filmDryBattleCentre(terrain); err == nil {
 			return x, z, relief, nil
 		}
 		x, z, err := filmCoverageCentre(terrain, false)
@@ -426,4 +426,42 @@ func revealFilmScene(s *session.Session) {
 		Kind:       session.HumanVisibility,
 		Visibility: session.HumanVisibilityCommand{ClearMask: visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled},
 	})
+}
+
+// filmDryBattleCentre minimizes terrain relief across the dry film fixture:
+// both formations, the crossing lanes, and the rear buildings. These are
+// film placement choices, not retail movement thresholds. A plateau is
+// fine; a hillside or a cliff through the middle of a formation is not.
+// Stable row-major ties keep scene selection independent of either RNG.
+func filmDryBattleCentre(t *world.Terrain) (int32, int32, int32, error) {
+	const halfX, halfZ = int32(800), int32(520)
+	bestX, bestZ := t.PlayRight/2, t.PlayBottom/2
+	best := int32(1 << 30)
+	for z := halfZ + 32; z <= t.PlayBottom-halfZ-32; z += 32 {
+		for x := halfX + 32; x <= t.PlayRight-halfX-32; x += 32 {
+			low, high := int32(255), int32(0)
+			valid := true
+			for dz := -halfZ; dz <= halfZ && valid; dz += 16 {
+				for dx := -halfX; dx <= halfX; dx += 16 {
+					h := int32(t.HeightAt(numeric.Fixed(x+dx)<<16, numeric.Fixed(z+dz)<<16).Int())
+					if h <= int32(t.SeaLevel) {
+						valid = false
+						break
+					}
+					low, high = min(low, h), max(high, h)
+					if high-low >= best {
+						valid = false
+						break
+					}
+				}
+			}
+			if valid {
+				bestX, bestZ, best = x, z, high-low
+			}
+		}
+	}
+	if best == 1<<30 {
+		return 0, 0, 0, fmt.Errorf("nanolathe: film placement failed: logical path <battle terrain>, providers searched [map], expected a dry area large enough for the formations and buildings")
+	}
+	return bestX, bestZ, best, nil
 }

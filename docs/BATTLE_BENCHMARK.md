@@ -15,31 +15,58 @@ worker setting as well as scene metadata when comparing runs. The existing
 and census rather than shortening it for every change. Authoritative-tick-only
 changes use the quick simulation benchmark instead of both windowed renderers.
 
- The default scene
-is Great Divide, seed 7, 1920×1080, 160 armed mobile units and 16 buildings per side,
-plus the normal starting commanders. Labs queue ten Peewees/AKs through normal
-factory production. Units receive movement orders; COB, pathfinding, combat,
-weapons, explosions, shake, construction and both renderers run production code.
-The ten mobile types on each side include tanks, light/rocket/artillery kbots,
-heavy assault units, fighters and bombers; unarmed Peeper/Fink scouts are gone.
-Each army occupies eight columns and twenty rows at 48-pixel spacing, facing
-across the same twenty movement lanes. This gives combat a tall front rather
-than packing units into a short horizontal strip.
+The benchmark uses **Expanded Confluence**, seed 7, at 1920×1080. Its shoreline
+anchor at (7296, 10592) frames sea, beach and forested land; 29.3% of the installed
+map's terrain samples lie below sea level. This is the sole battle fixture
+(scene version 5), replacing the Great Divide scene. It requires this map;
+`--map` cannot substitute an unmeasured coast.
 
-The fixture deterministically searches the map for the least height variation
-across a 1600×1040 area covering both formations, their approach lanes and the
-rear buildings. It tries centres every 32 pixels, checks every 16-pixel terrain vertex within
-the area, rejects water, and keeps row-major
-ties. This is a benchmark placement heuristic, not a retail passability rule;
-normal pathfinding still handles trees and other blockers. A map without a dry
-area large enough returns an error. The selected centre and sampled terrain
-relief are recorded so a hillside cannot silently become the benchmark baseline.
-Natural weapon impacts ignite the authored forest; ignition, smoke, spread and
-burnout run ordinary feature behavior. Fire is not forced or refreshed by the
-fixture, so custom maps, seeds or warmup durations need their census checked.
+Each side stages 120 land units, 24 naval units (including eight submarines),
+16 aircraft and 20 buildings, plus the normal distant starting commanders.
+Four producing labs per side queue ten Peewees/AKs with inherited patrol rallies.
+The four water structures per side are a tidal generator, underwater metal
+storage, floating rocket tower and torpedo launcher. The land roster includes
+Merls, mobile artillery, Fidos, heavy tanks and Core rocket units; battleships,
+cruisers and destroyers add offshore fire. Submarines occupy the leading naval
+columns so surface ships stopping to fire do not block their approach.
 
-Building spacing derives from the largest authored footprint to keep neighboring
-solar collectors out of factory yards. The fixture places the initial units directly; it is not a normal skirmish opening.
+Aircraft start at their authored cruise altitude through `CreateWithMoverMode`
+with airborne mode 2, then receive `VTOL_Patrol` orders. The existing movement
+bootstrap installs the matching flight and occupancy state; no takeoff wait or
+flight-physics change is needed [04 §10.1][04 R-AIR-01 §6]. Half start on return
+legs over the opposing formation. Land and naval units also patrol through the
+opposing formation instead of becoming idle at a one-way destination. Normal
+combat and AI may replace those orders, and flight turning radii can take
+survivors outside the viewport.
+
+Normal player visibility remains enabled. Aircraft LOS reveals the fight while
+leaving fog around its edges, exercising exploration and current-visibility
+presentation along with water, beach effects and reflections. Nothing forces
+firing, feature ignition, resources, health or synthetic effects. Natural weapon
+impacts ignite the authored trees; ignition, smoke, spread and burnout run
+ordinary feature behavior.
+
+Buildings are placed first. Every ground/water slot searches a deterministic
+192-pixel neighbourhood on a 16-pixel grid, checks the compiled footprint,
+terrain profile and building yard, and reserves its rectangle against overlap.
+A missing definition or unplaceable slot fails the run rather than silently
+reducing the workload. Ships use authored waterline draft [04 R-MOV-01 §9].
+This setup is a benchmark fixture, not a new gameplay placement rule.
+
+Census fields record surviving airborne units, surface ships, submarines and
+water buildings, plus each group's in-view anchors. Submarines are the explicitly
+staged ARM/Core submarine cohort, not a guessed geometric depth threshold.
+`in_view_units`, `in_view_projectiles` and `in_view_effects` are also projected
+anchor counts, not pixel coverage, fog visibility or proof of a reflection.
+`view_fog_cells`, `fogged_view_cells` and `unexplored_view_cells` count projected
+fog-cell centres inside the viewport, a coverage proxy rather than exact pixels.
+Inspect captures and activity as well as frame times. Preserve matching scene,
+camera, draw rate, zoom, lead-in, visibility and display settings for regression
+comparisons. Comparisons with archived Great Divide captures measure different
+workloads, not an isolated cost of water; this larger map also has a different
+map-wide feature load and fewer burning trees in the measured view.
+
+## Running and reading the benchmark
 
 ```
 tools/battle-bench --battle-benchmark=/tmp/battle-classic --renderer=classic
@@ -48,7 +75,7 @@ tools/battle-bench-report /tmp/battle-classic /tmp/battle-modern
 ```
 
 Each output directory must be new. Use `--root` for another retail install,
-`--seed` or `--map` for a different scenario, `--benchmark-frames` to change
+`--seed` for a different deterministic battle, `--benchmark-frames` to change
 180 measured draws, `--benchmark-pre-ticks` to change the default 300 simulation
 ticks before the window opens (ten simulated seconds), and `--benchmark-factories=false` to disable factory orders. Assets are not embedded or committed. Run cases
 sequentially without concurrent builds, tests or other performance workloads.
@@ -86,7 +113,7 @@ This changes the earlier 60 TPS benchmark, which advanced one simulation tick
 per draw and therefore ran the battle twice as fast as a 30 TPS run. Earlier
 runs also gated measured draws through Ebitengine's update scheduler. Version 2
 separates that scheduler from the benchmark's pacing; its timings are not
-directly comparable with version 1, even when `scene_version` remains 4.
+directly comparable with version 1, independently of `scene_version`.
 
 `frames.json` records benchmark and scene versions, seed, map, renderer, view
 scale, gameplay mode, display options, runtime and build information, per-frame timings and
@@ -201,7 +228,7 @@ or live user input.
 The seed fixes simulation streams; authored content, settings and code revision
 also matter. Camera origins and shake status are recorded with each census.
 
-Scene version 4 has a different workload from the earlier Ashap scene. The
+Scene version 5 has a different workload from the earlier Great Divide and Ashap scenes. The
 report warns when scene metadata differs across input directories, and when
 measured combat, sprite features, fire or requested construction is absent.
 `features` and `sprite_features` count live committed features across the map;

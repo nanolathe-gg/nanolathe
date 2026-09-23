@@ -3,18 +3,17 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
-	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
-	"os"
-	"path/filepath"
 )
 
 func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *client.Client) error {
@@ -26,73 +25,12 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 	}
 	s := b.sess
 	diagnostics := newBattleBenchmarkDiagnostics(opts.BattleBenchmark, s)
-	var factories []*units.Unit
-	// Scene composition and spacing are fixture choices, not retail rules.
-	n := 160
-	cx, cz, terrainRelief, err := benchmarkBattleCentre(s.World)
+	scene, err := stageCoastalBenchmark(opts, s)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("map=%dx%d center=%d,%d terrain_relief=%d\n", b.cam.MapW, b.cam.MapH, cx, cz, terrainRelief)
-	names := [][]string{{"armflash", "armstump", "armpw", "armrock", "armham", "armfav", "armzeus", "armfig", "armthund", "armwar"}, {"corraid", "corlevlr", "corak", "corstorm", "corthud", "corfav", "corpyro", "corveng", "corshad", "correap"}}
-	buildings := [][]string{{"armsolar", "armlab", "armllt", "armrad"}, {"corsolar", "corlab", "corllt", "corrad"}}
-	// Reserve a full largest authored building width plus a cell on either side.
-	// The earlier fixed 80-pixel pitch overlapped ARM solar and lab yards.
-	buildingPitch := int32(80)
-	for _, side := range buildings {
-		for _, name := range side {
-			if def, ok := s.Catalog.Unit(name); ok {
-				buildingPitch = max(buildingPitch, int32(def.FootprintX)*16+32)
-			}
-		}
-	}
-	for side := 0; side < 2; side++ {
-		for i := 0; i < n+16; i++ {
-			name := names[side][i%len(names[side])]
-			if i >= n {
-				name = buildings[side][(i-n)%4]
-			}
-			def, ok := s.Catalog.Unit(name)
-			if !ok {
-				return fmt.Errorf("nanolathe: benchmark unit missing: logical path %s, providers searched [catalog], expected an authored unit definition", name)
-			}
-			x := cx + int32((side*2-1)*300) + int32(i%8)*48 - 168
-			z := cz + int32(i/8)*48 - 456
-			if i >= n {
-				x = cx + int32((side*2-1)*620) + int32((i-n)%2)*buildingPitch - (buildingPitch - 80)
-				z = cz + int32((i-n)/2)*80 - 250
-			}
-			fx, fz := numeric.Fixed(x<<16), numeric.Fixed(z<<16)
-			fy := s.World.HeightAt(fx, fz)
-			h, e := s.Units.Create(def, uint8(side), fx, fy, fz)
-			if e != nil {
-				return fmt.Errorf("create %s: %w", name, e)
-			}
-			u := s.Units.Unit(h)
-			if opts.BenchmarkFactories && (name == "armlab" || name == "corlab") {
-				factories = append(factories, u)
-				product := "armpw"
-				if side == 1 {
-					product = "corak"
-				}
-				if err := construction.QueueFactoryBuild(u, product, 10, s.Catalog); err != nil {
-					return fmt.Errorf("nanolathe: benchmark factory queue: %w", err)
-				}
-			}
-			if s.Movement != nil {
-				s.Movement.EnsureUnit(u)
-			}
-			if i < n {
-				q, ok := u.Orders.(*orders.Queue)
-				if ok {
-					id := orders.Lookup("Move_Ground")
-					goalX := numeric.Fixed(cx+int32((1-side*2)*250)) << 16
-					goalY := s.World.HeightAt(goalX, fz)
-					q.Push(id, orders.NewNodeForOrder(id, 0, goalX, goalY, fz, s.Clock.GlobalTick, h, false))
-				}
-			}
-		}
-	}
+	factories := scene.Factories
+	cx, cz := scene.X, scene.Z
 	millis := &shotMillisSource{}
 	b.millisSource = millis
 	step := func() {
@@ -120,6 +58,11 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 	census := func() any {
 		f := s.Snapshot.Current()
 		nanoframes, nano, damaged := 0, 0, 0
+		visibleUnits, visibleProjectiles, visibleEffects := 0, 0, 0
+		visible := func(x, y, z numeric.Fixed) bool {
+			sx, sy := b.cam.WorldToScreen(x, y, z)
+			return sx >= camera.OriginX && sx < 1920 && sy >= camera.OriginY && sy < 1048
+		}
 		moving := benchmarkMovingUnits(f, s.Snapshot.Previous())
 		// In-view counts use projected anchors inside the battle viewport;
 		// they do not claim pixel visibility after fog or sprite occlusion.
@@ -160,6 +103,9 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 			production[i] = row
 		}
 		for _, u := range f.Units {
+			if visible(u.X, u.Y, u.Z) {
+				visibleUnits++
+			}
 			if u.Health < u.MaxHealth && u.BuildRemaining == 0 {
 				damaged++
 			}
@@ -167,14 +113,29 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 				nanoframes++
 			}
 		}
+		for _, p := range f.Projectiles {
+			if visible(p.X, p.Y, p.Z) {
+				visibleProjectiles++
+			}
+		}
+		for _, e := range f.Effects {
+			if visible(e.X, e.Y, e.Z) {
+				visibleEffects++
+			}
+		}
 		for _, e := range f.Events {
 			if e.Kind == frame.EventKindNanolathe {
 				nano++
 			}
 		}
-		return map[string]any{"features": len(f.Features), "sprite_features": sprites, "burning_features": burning, "in_view_sprite_features": visibleSprites, "in_view_burning_features": visibleBurning, "damaged_units": damaged, "moving_units": moving, "tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
+		sample := map[string]any{"in_view_units": visibleUnits, "in_view_projectiles": visibleProjectiles, "in_view_effects": visibleEffects, "features": len(f.Features), "sprite_features": sprites, "burning_features": burning, "in_view_sprite_features": visibleSprites, "in_view_burning_features": visibleBurning, "damaged_units": damaged, "moving_units": moving, "tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
+		addCoastalBenchmarkCensus(sample, f, s, b.cam)
+		return sample
 	}
-	err = ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, BeforeMeasure: diagnostics.Begin, AfterMeasure: diagnostics.End, Metadata: map[string]any{"scene_version": 4, "gameplay": s.Gameplay.Normalize(), "rules": s.Rules.Name, "gameplay_features": s.Community, "entry_gameplay_features": s.EntryCommunity, "gameplay_features_digest": s.Community.Digest(), "content_profile": cs.contentProfileName(), "phase_timing": true, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "pre_window_ticks": opts.BenchmarkPreTicks, "mobiles_per_side": n, "mobile_roster": names, "battle_center": []int32{cx, cz}, "terrain_relief": terrainRelief, "display": loadedSettings().Display, "root": opts.Root, "roots": opts.Roots}})
+	metadata := map[string]any{"scene_version": 5, "gameplay": s.Gameplay.Normalize(), "rules": s.Rules.Name, "gameplay_features": s.Community, "entry_gameplay_features": s.EntryCommunity, "gameplay_features_digest": s.Community.Digest(), "content_profile": cs.contentProfileName(), "phase_timing": true, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "pre_window_ticks": opts.BenchmarkPreTicks, "mobiles_per_side": 160, "mobile_roster": coastalBenchmarkMobiles(), "battle_center": []int32{cx, cz}, "display": loadedSettings().Display, "root": opts.Root, "roots": opts.Roots}
+	metadata["coastal_scene"] = scene
+	metadata["visibility"] = "normal"
+	err = ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, BeforeMeasure: diagnostics.Begin, AfterMeasure: diagnostics.End, Metadata: metadata})
 	if err != nil {
 		return err
 	}
@@ -220,44 +181,6 @@ type benchmarkFactory struct {
 	Product  string
 	Deadline int32
 	Target   uint32
-}
-
-// benchmarkBattleCentre minimizes terrain relief across the whole fixture:
-// both formations, the crossing lanes, and the rear buildings. These are
-// benchmark placement choices, not retail movement thresholds. A plateau is
-// fine; a hillside or a cliff through the middle of a formation is not.
-// Stable row-major ties keep scene selection independent of either RNG.
-func benchmarkBattleCentre(t *world.Terrain) (int32, int32, int32, error) {
-	const halfX, halfZ = int32(800), int32(520)
-	bestX, bestZ := t.PlayRight/2, t.PlayBottom/2
-	best := int32(1 << 30)
-	for z := halfZ + 32; z <= t.PlayBottom-halfZ-32; z += 32 {
-		for x := halfX + 32; x <= t.PlayRight-halfX-32; x += 32 {
-			low, high := int32(255), int32(0)
-			valid := true
-			for dz := -halfZ; dz <= halfZ && valid; dz += 16 {
-				for dx := -halfX; dx <= halfX; dx += 16 {
-					h := int32(t.HeightAt(numeric.Fixed(x+dx)<<16, numeric.Fixed(z+dz)<<16).Int())
-					if h <= int32(t.SeaLevel) {
-						valid = false
-						break
-					}
-					low, high = min(low, h), max(high, h)
-					if high-low >= best {
-						valid = false
-						break
-					}
-				}
-			}
-			if valid {
-				bestX, bestZ, best = x, z, high-low
-			}
-		}
-	}
-	if best == 1<<30 {
-		return 0, 0, 0, fmt.Errorf("nanolathe: benchmark placement failed: logical path <battle terrain>, providers searched [map], expected a dry area large enough for the formations and buildings")
-	}
-	return bestX, bestZ, best, nil
 }
 
 // Published units are in ascending pool-slot order [I1]. Compare only the same

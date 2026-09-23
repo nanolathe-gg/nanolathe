@@ -303,7 +303,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			return opts, fmt.Errorf("nanolathe: benchmark tps must be 30, 60 or 120")
 		}
 		if opts.Map == "" {
-			opts.Map = "great divide"
+			opts.Map = "expanded confluence"
 		}
 		if opts.Seed < 0 {
 			opts.Seed = 7
