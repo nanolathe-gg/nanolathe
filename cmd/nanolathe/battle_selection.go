@@ -109,8 +109,8 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	// world pointer [07 §8][07 §9][I6].
 	//
 	// Over the minimap the pointer's unit word is not the view's hot-units
-	// winner but the unit whose minimap dot lies within squared pixel distance
-	// 4 of the pointer, nearest first [07 R-HUD-03 §1]. cursorWorld above has
+	// winner but the HOT RADAR unit within squared pixel distance < 4 of
+	// the pointer, nearest first [03 §3.9][07 R-SEL-02B2]. cursorWorld above has
 	// already taken the lens branch for the position, so only the unit word
 	// differs — and both take it under the same condition, an armed drag
 	// rectangle keeping the pointer in the view branch [07 R-CAM-01 §11].

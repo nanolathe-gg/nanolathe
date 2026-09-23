@@ -247,8 +247,8 @@ func (b *battleSession) minimapClickOrder(cl *client.Client, mx, my int32, addit
 	// Branch 2: cursor kind 0x0F, the resolver's "select" answer. With the
 	// latch idle and the hovered unit an own selectable unit the click selects
 	// it — Shift toggles the selected bit, otherwise the selection is replaced.
-	// The hovered unit over the minimap is the blip-dot winner within squared
-	// pixel distance 4, so clicking a blip selects that unit
+	// The hovered unit over the minimap is the nearest HOT RADAR candidate
+	// within squared pixel distance 4, so clicking a blip selects that unit
 	// [07 R-CAM-01 §14 step 2][07 R-HUD-03 §1]. This branch used to be missing
 	// here, which made an own blip unclickable.
 	if f, ok := b.currentSnapshot(); ok {
@@ -305,10 +305,10 @@ func (b *battleSession) siteBuildAtMinimapPoint(cl *client.Client, mx, my int32,
 	}
 }
 
-// minimapHoverUnit is the minimap half of the pointer's unit word: the unit
-// whose minimap dot lies within squared pixel distance < 4 of the pointer,
-// nearest first, else 0 [07 R-HUD-03 §1]. Ties keep the lower pool slot so the
-// result is stable [I1].
+// minimapHoverUnit is the minimap half of the pointer's unit word. The HOT
+// RADAR list contains every live unit, projected to radar pixels; the pointer
+// admits squared pixel distance < 4, nearest first, else 0 [03 §3.9]
+// [07 R-SEL-02B2]. Ties keep the lower pool slot so the result is stable [I1].
 func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Handle {
 	layout, dst, ok := b.minimapLayout()
 	if !ok {
@@ -324,7 +324,11 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 	bestDist := int64(1 << 62)
 	for i := range f.Units {
 		v := f.Units[i]
-		if v.Slot == 0 || !client.SnapshotVisible(f, v, f.ViewingPlayer) {
+		// The radar hover list contains every live unit in pool order. Its
+		// two-pixel hit test does not use the viewport's direct-visibility
+		// gate; a sensor contact can be picked even when the unit is outside
+		// line of sight [03 §3.9][07 R-SEL-02B2].
+		if v.Slot == 0 {
 			continue
 		}
 		rx, ry := render.RadarProjection(radarMapPixel(v.X), radarMapPixel(v.Z), radarMapPixel(v.Y), playW, playH, layout)

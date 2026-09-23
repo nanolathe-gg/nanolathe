@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 // withMinimap gives a fixture battle the rail's fixed 126-pixel radar canvas,
@@ -74,6 +75,75 @@ func TestMinimapLeftClickIssuesAnOrderAtTheLensPoint(t *testing.T) {
 	// And the camera did not move: the left button is the order button here.
 	if b.cam.X != 0 || b.cam.Z != 0 {
 		t.Fatalf("minimap left click moved the camera to %d,%d", b.cam.X, b.cam.Z)
+	}
+}
+
+// A radar contact has a minimap blip even when the viewport cannot draw its
+// unit. The minimap's own hover list still resolves that unit for an armed
+// attack [03 §3.9][07 R-SEL-02B2][07 R-CAM-01 §14].
+func TestMinimapAttackTargetsRadarOnlyContact(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+	dst := withMinimap(b)
+	const mx, my int32 = 70, 50
+	layout, _, _ := b.minimapLayout()
+	playW, playH, _ := b.sess.PlayArea()
+	wx, wz, ok := client.MinimapPointerWorld(layout, dst, playW, playH, mx, my)
+	if !ok {
+		t.Fatal("fixture pointer did not classify as minimap")
+	}
+	target := placeUnit(b, "armcons", numeric.Fixed(wx)<<16, numeric.Fixed(wz)<<16)
+	target.Owner = 1
+	actor := placeUnit(b, "armcons", numeric.Fixed(8<<16), numeric.Fixed(8<<16))
+	actor.Def.CanAttack = true
+	replaceSelectionForTest(t, b, actor)
+	cur, ok := b.currentSnapshot()
+	if !ok {
+		t.Fatal("fixture did not publish a snapshot")
+	}
+	written := b.sess.Snapshot.BeginWrite()
+	*written = *cur
+	written.Units = append([]frame.UnitView(nil), cur.Units...)
+	written.Radar.Contacts = append([]frame.RadarContactView(nil), cur.Radar.Contacts...)
+	written.Radar.MappingLOS = 1
+	written.Radar.BlinkPhase = 1
+	unitFound, contactFound := false, false
+	for i := range written.Units {
+		if written.Units[i].Slot == target.Handle {
+			written.Units[i].DirectVisibilityKnown = true
+			written.Units[i].DirectlyVisible = false
+			unitFound = true
+		}
+	}
+	for i := range written.Radar.Contacts {
+		if written.Radar.Contacts[i].Handle == target.Handle {
+			written.Radar.Contacts[i].Status |= visibility.SeenBit
+			written.Radar.Contacts[i].Seen = true
+			written.Radar.Contacts[i].Visible = true
+			contactFound = true
+		}
+	}
+	if !unitFound || !contactFound {
+		t.Fatal("fixture did not publish the target unit and radar contact")
+	}
+	if err := b.sess.Snapshot.Publish(cur.Tick + 1); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ = b.currentSnapshot()
+	view, _ := snapshotUnitByHandle(cur, target.Handle)
+	if client.SnapshotVisible(cur, view, cur.ViewingPlayer) {
+		t.Fatal("radar-only target became directly visible in the viewport")
+	}
+	if got := b.minimapHoverUnit(cur, mx, my); got != target.Handle {
+		t.Fatalf("radar-only minimap hover = %d, want target %d", got, target.Handle)
+	}
+	b.battleState().Input.Latch = input.LatchAttack
+	in := input.NewState()
+	in.Mouse.X, in.Mouse.Y = float32(mx), float32(my)
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
+	b.handleInput(in, nil)
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanOrder || pending[0].Order.Code != hud.LatchToCode(input.LatchAttack) || pending[0].Order.Target != target.Handle {
+		t.Fatalf("radar-only minimap attack queued %+v, want target %d", pending, target.Handle)
 	}
 }
 
