@@ -268,6 +268,20 @@ maximizing fills the desktop work area, while Alt+Enter enters fullscreen.
 Manual resizing scales the selected logical canvas with aspect preserved and
 does not change the saved resolution. The adapter only reapplies host size
 when the selected resolution changes.
+
+**Fullscreen pointer confinement (host presentation policy).** Retail's
+exclusive display mode makes the whole display the canvas, so its pointer can
+never leave it [03 §4.2]. Desktop fullscreen aspect-fits the logical canvas
+inside the monitor, leaving bars on a display of another aspect that the
+hidden pointer could wander into, carrying the software cursor out of sight.
+On Windows the adapter confines the pointer to exactly the device pixels that
+report a logical canvas coordinate (`presentedCursorRect`) while the window is
+fullscreen, focused and not in drag-scroll capture, reconciling the clip every
+host step and releasing it on focus loss, in windowed mode and at shutdown.
+Windowed play is never confined. Other hosts are unconfined pending a manual
+check on macOS and X11 (`cursor_clip_other.go`). Keypad Enter is folded into
+the one Enter identity by the adapter, so it opens chat, commits a text edit
+and toggles fullscreen with Alt exactly as the main Enter does.
 On macOS, focused fullscreen hides the menu bar and Dock completely so moving
 the pointer to the top edge scrolls the camera without revealing the native
 window controls. The adapter reconciles AppKit's application presentation

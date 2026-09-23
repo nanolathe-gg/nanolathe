@@ -91,10 +91,11 @@ func readInput(timestamp uint32) sampledInput {
 			sample.keys[key] = sample.modifiers.Alt
 			sample.heldKeys[key] = sample.heldModifiers.Alt
 		default:
-			if ek, ok := ebitenKey(key); ok {
-				sample.keys[key] = ebiten.IsKeyPressed(ek)
-				sample.pressedKeys[key] = inpututil.IsKeyJustPressed(ek)
-				sample.heldKeys[key] = inpututil.KeyPressDuration(ek) > 0
+			keys, n := ebitenKeys(key)
+			for _, ek := range keys[:n] {
+				sample.keys[key] = sample.keys[key] || ebiten.IsKeyPressed(ek)
+				sample.pressedKeys[key] = sample.pressedKeys[key] || inpututil.IsKeyJustPressed(ek)
+				sample.heldKeys[key] = sample.heldKeys[key] || inpututil.KeyPressDuration(ek) > 0
 			}
 		}
 	}
@@ -280,6 +281,27 @@ func translatedKeyToken(key input.Key, modifiers input.Modifiers) (input.Token, 
 		}
 	}
 	return input.Token{}, false
+}
+
+// ebitenKeys lists every Ebitengine key that drives one portable key, without
+// allocating on the per-refresh poll.
+//
+// KeyEnter has two physical keys. Retail opens chat and ends a text edit on
+// the character token 0x0D, which it enqueues straight from the character
+// message [07 §2][07 §5 "Chat"]. Win32 reports the keypad Enter as the same
+// Return virtual key, differing only in the extended-key flag, and translates
+// it to the same 0x0D character (Supported inference: documented Win32
+// keyboard behaviour; the reviewed window procedure is not recorded as reading
+// that flag). Ebitengine reports a distinct KeyNumpadEnter, so the adapter
+// folds it back into the one Enter identity; holding both is one hold.
+func ebitenKeys(k input.Key) (keys [2]ebiten.Key, n int) {
+	if k == input.KeyEnter {
+		return [2]ebiten.Key{ebiten.KeyEnter, ebiten.KeyNumpadEnter}, 2
+	}
+	if ek, ok := ebitenKey(k); ok {
+		return [2]ebiten.Key{ek}, 1
+	}
+	return keys, 0
 }
 
 func ebitenKey(k input.Key) (ebiten.Key, bool) {

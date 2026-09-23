@@ -16,6 +16,14 @@ import (
 //
 // Visible unit icons use the committed world-visibility predicate independently
 // of minimap blink/status. Radar-only dots retain the minimap admission gate.
+//
+// A submerged enemy without sonar contact is never identified here: the world
+// predicate rejects it below the sea plane [03 §3.2] step 3. Inside the
+// viewer's line of sight it still gets a generic dot, because the retail
+// line-of-sight probe sets the seen bit with no sea-level term and the minimap
+// blips on that bit [03 R-VIS-01 §4] pass 5 [03 R-MM-01 §3]. Hiding that dot
+// in the main view would be a new Enhanced presentation policy (§16.11 names
+// the minimap gate as this layer's own), not a retail correction.
 
 // SetStrategicTeamArt binds the same lobby-colour logo frames used by the HUD.
 // Their dominant opaque shade supplies Enhanced icon ink (§18.4). The radar

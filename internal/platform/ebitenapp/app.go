@@ -71,6 +71,9 @@ type app struct {
 	fullscreen             bool
 	fullscreenEnterHeld    bool
 	fullscreenPresentation *nativeFullscreenPresentation
+	// cursorClip keeps the pointer on the presented canvas in fullscreen
+	// (presentedCursorRect); a no-op on hosts without a native clip.
+	cursorClip nativeCursorClip
 	// presentPending is set by the 30 Hz update and consumed by Draw. Draw can
 	// still be called at the monitor's refresh rate, so the retained-screen
 	// mode configured by Run lets those extra calls leave the frame untouched.
@@ -236,6 +239,7 @@ func (a *app) updateBody() {
 	a.syncRendererSources()
 	a.syncWindowSize()
 	a.syncPointerCapture()
+	a.syncCursorClip()
 	a.syncPresentationSettings()
 	a.serviceRendererRequest()
 	a.presentPending = true
@@ -251,6 +255,7 @@ func (a *app) updateBody() {
 func (a *app) terminate() error {
 	a.c.SetPointerCaptured(false)
 	a.syncPointerCapture()
+	a.cursorClip.release()
 	a.reportPipeline()
 	return ebiten.Termination
 }
@@ -352,6 +357,14 @@ func (a *app) syncPointerCapture() {
 	if ebiten.CursorMode() != want {
 		ebiten.SetCursorMode(want)
 	}
+}
+
+// syncCursorClip runs after the capture mode is settled, so a capture that
+// just ended (and cleared the host clip) is re-confined in the same update.
+// Windowed play leaves the pointer free (DESIGN_PRESENTATION_CLIENT §2.1).
+func (a *app) syncCursorClip() {
+	width, height := a.c.Size()
+	a.cursorClip.update(a.fullscreen, a.c.IsFocused(), a.c.PointerCaptured(), width, height)
 }
 
 func (a *app) scaledInputNow() uint32 {
@@ -736,5 +749,6 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	defer stopScrollMonitor()
 	game.fullscreenPresentation = startNativeFullscreenPresentation()
 	defer game.fullscreenPresentation.close()
+	defer game.cursorClip.release()
 	return ebiten.RunGame(game)
 }

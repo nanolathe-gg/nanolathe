@@ -8488,6 +8488,11 @@ can remain composed under the appropriate overlay.
 
 - Chat commit-versus-cancel semantics on every send route, including whether
   the terminator is included per route · §11 · static trace.
+- Whether a mouse button press outside the open chat editor (the tester's
+  expectation for the right button) releases its capture and discards the
+  line, or is ignored · §5 "Chat" [R-WGT-01 §6] · static trace of the editor
+  capture release on an outside button-down, or a retail capture of
+  right-clicking with chat open.
 - Outcome transition timing · §11 · static trace.
 - Pause authorization and forwarding authority for chat, pause, and speed
   packets in multiplayer · §11 · static trace. Out of implementation scope.

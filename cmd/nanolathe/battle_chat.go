@@ -84,6 +84,15 @@ func (b *battleSession) serviceTalk(in *input.State) {
 		return
 	}
 	b.chat.ownsFrame = true
+	// Enter commits and Escape empties then fires, so both close the line
+	// [07 R-WGT-01 §6]; keypad Enter reaches here as Enter (ebitenapp).
+	// TODO(question): whether a right-button press outside the TALK input
+	// cancels the open chat line. Research records only that a left or right
+	// press inside an input takes the capture [07 R-WGT-01 §6] and that the
+	// battle right button cancels an armed order or clears the selection
+	// [07 §9]; neither covers TALK.GUI's outside press. A trace of the text
+	// editor's capture release on an outside button-down, or a retail capture
+	// of right-clicking with chat open, would settle it.
 	frame := pointerFrame(in, in.PeekTokens(), false)
 	frame.DisableQuickKeys = b.developer.quickkeysDisabled
 	result := b.hud.talkPanel.ServiceFrame(frame, ui.WidgetHooks{Measure: b.talkMeasure})
