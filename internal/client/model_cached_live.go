@@ -1,6 +1,7 @@
 package client
 
 import (
+	"reflect"
 	"slices"
 	"sync/atomic"
 
@@ -190,7 +191,7 @@ func (c *Client) replaceFeatureGeometry(key uint64, draw *presentationrender.Uni
 		body = &cachedModelBody{}
 		c.cachedModelBodies[key] = body
 	}
-	body.geometry = body.retainGeometry(geometry)
+	body.geometry = body.retainGeometry(geometry, c.modelFrameSerial)
 	body.takeSerial()
 	body.geometryRevision++
 	body.model, body.structure, body.teamColor = in.model, draw.Structure, in.teamColor
@@ -232,6 +233,17 @@ func (b *cachedModelBody) shadowCacheKey(halfX, halfY int32) drawlist.ModelCache
 // rebuild. ModelGeometry.Clone allocated a packet, four slices and one vertex
 // slice per face on every one of those rebuilds, which was the largest single
 // item in the recorder's frame.
+//
+// The store also keeps the lane as it was last rebased (rebasedFaces), so a
+// subject whose box and half-pixel offset did not move since the previous
+// frame hands its packet the faces it already rebased instead of copying and
+// offsetting every corner again, and a zero offset hands over the retained
+// faces themselves. Packets only read the faces they are given, and a recorded
+// list is dead once the next frame starts recording
+// (docs/DESIGN_GPU_RENDERER.md §13.10), so the only write that could move faces
+// under a live packet is a second one inside the same frame: lent records the
+// frame whose packets address these arenas, and a write inside that frame
+// takes fresh storage or falls back to the frame's own scratch.
 type cachedGeometryStore struct {
 	g                drawlist.ModelGeometry
 	faces            []drawlist.ModelFace
@@ -239,6 +251,67 @@ type cachedGeometryStore struct {
 	supersample      drawlist.ModelGeometry
 	supersampleFaces []drawlist.ModelFace
 	supersampleVerts []drawlist.ModelVertex
+	lent             uint64
+	native, doubled  rebasedLane
+	// doubledHX, doubledHY is the half-pixel offset the retained doubled lane
+	// was projected with (fill); the rebase adds only the difference to this
+	// frame's. Every doubled corner carries it additively, so the rebased
+	// corners equal those of a lane projected with none.
+	doubledHX, doubledHY int32
+	// env is the retained packet's envelope (retainedModelExtent), valid until
+	// the lane is stored again.
+	env           modelEnvelope
+	envelopeValid bool
+}
+
+// rebasedLane is one lane of a retained packet offset by (dx, dy), and whether
+// it still describes the retained faces.
+type rebasedLane struct {
+	valid    bool
+	dx, dy   int32
+	faces    []drawlist.ModelFace
+	vertices []drawlist.ModelVertex
+}
+
+// rebased returns src offset by (dx, dy): src itself for a zero offset, the
+// kept copy when it was made for the same offset, and otherwise a new copy in
+// this lane's arenas. ok is false when the copy would overwrite faces a packet
+// recorded in this frame already addresses; the caller then copies into the
+// frame's scratch.
+func (l *rebasedLane) rebased(src []drawlist.ModelFace, dx, dy int32, lentThisFrame bool) (faces []drawlist.ModelFace, ok bool) {
+	if dx == 0 && dy == 0 {
+		return src, true
+	}
+	if l.valid && l.dx == dx && l.dy == dy {
+		return l.faces, true
+	}
+	if lentThisFrame {
+		return nil, false
+	}
+	l.faces, l.vertices = copyModelFaces(l.faces, l.vertices, src, dx, dy)
+	l.valid, l.dx, l.dy = true, dx, dy
+	return l.faces, true
+}
+
+// rebasedFaces is the retained lanes of src — which must be this store's own
+// packet — offset by (dx, dy) natively and (sdx, sdy) on the doubled lane,
+// shared with the store rather than copied (cachedGeometryStore). ok is false
+// when that is not possible this frame.
+func (s *cachedGeometryStore) rebasedFaces(src *drawlist.ModelGeometry, dx, dy, sdx, sdy int32, frame uint64) (faces, doubled []drawlist.ModelFace, ok bool) {
+	if s == nil || src != &s.g || frame == 0 {
+		return nil, nil, false
+	}
+	lent := s.lent == frame
+	if faces, ok = s.native.rebased(src.Faces, dx, dy, lent); !ok {
+		return nil, nil, false
+	}
+	if src.Supersample != nil {
+		if doubled, ok = s.doubled.rebased(src.Supersample.Faces, sdx, sdy, lent); !ok {
+			return nil, nil, false
+		}
+	}
+	s.lent = frame
+	return faces, doubled, true
 }
 
 // retainGeometry copies src into this body's arenas and returns the retained
@@ -246,17 +319,25 @@ type cachedGeometryStore struct {
 // supersample of the same shape — that is what borrowModelPacket produces — so
 // anything carrying a shadow, children, an outline, a live lane or a reveal
 // keeps the general deep copy rather than being silently flattened.
-func (b *cachedModelBody) retainGeometry(src *drawlist.ModelGeometry) *drawlist.ModelGeometry {
-	return b.store.retain(src)
+func (b *cachedModelBody) retainGeometry(src *drawlist.ModelGeometry, frame uint64) *drawlist.ModelGeometry {
+	return b.store.retain(src, frame)
 }
 
 // retain copies src into this store's arenas and returns the retained packet.
 // Both retained lanes are plain face packets with an optional supersample of the
 // same shape, so anything else keeps the general deep copy.
-func (s *cachedGeometryStore) retain(src *drawlist.ModelGeometry) *drawlist.ModelGeometry {
+func (s *cachedGeometryStore) retain(src *drawlist.ModelGeometry, frame uint64) *drawlist.ModelGeometry {
 	if src == nil {
 		return nil
 	}
+	// New faces invalidate both rebased copies. A packet this store filled
+	// itself (fill) is already in place.
+	s.native.valid, s.doubled.valid, s.envelopeValid = false, false, false
+	if src == &s.g {
+		return src
+	}
+	s.beginWrite(frame)
+	s.doubledHX, s.doubledHY = 0, 0
 	if !plainCachedPacket(src) || src.Supersample != nil && !plainCachedPacket(src.Supersample) {
 		return src.Clone()
 	}
@@ -276,6 +357,61 @@ func (s *cachedGeometryStore) retain(src *drawlist.ModelGeometry) *drawlist.Mode
 	s.supersample.Reveal, s.supersample.Shadow, s.supersample.Supersample = nil, nil, nil
 	s.g.Supersample = &s.supersample
 	return &s.g
+}
+
+// beginWrite abandons, rather than overwrites, arenas a packet recorded in
+// this frame already addresses (cachedGeometryStore).
+func (s *cachedGeometryStore) beginWrite(frame uint64) {
+	if frame != 0 && s.lent == frame {
+		s.faces, s.vertices, s.supersampleFaces, s.supersampleVerts = nil, nil, nil, nil
+		s.native, s.doubled = rebasedLane{}, rebasedLane{}
+		s.lent = 0
+	}
+}
+
+// fill projects a cached lane straight into this store's arenas: exactly the
+// packet borrowModelPacket and borrowModelPacketDoubled would build from the
+// same UNPLACED polygons, without the frame-scratch copy that retain would then
+// copy again. It places the polygons, as the scratch route does. The returned
+// packet is the store's own, so retain keeps it as it is.
+//
+// place may carry this frame's half-pixel offset: the doubled lane is then
+// stored already rebased for it (doubledHX, doubledHY), so the frame that
+// rebuilds does not copy the lane again just to add the offset.
+func (s *cachedGeometryStore) fill(c *Client, polys []screenPoly, width, height int, originX, originY, anchorX, anchorY int32, keyPlane bool, place doubledPlacement) *drawlist.ModelGeometry {
+	s.beginWrite(c.modelFrameSerial)
+	s.envelopeValid = false
+	count := 0
+	for i := range polys {
+		count += len(polys[i].x)
+	}
+	var supersample *drawlist.ModelGeometry
+	if c.supersampleGeometry() {
+		ox, oy := place.originX, place.originY
+		s.supersampleVerts = resizeScratch(s.supersampleVerts, count)
+		s.supersample.Faces = s.supersampleFaces
+		supersample = fillModelPacket(&s.supersample, s.supersampleVerts, polys, int32(2*width), int32(2*height), 2*ox, 2*oy, 2*ox, 2*oy, 2, keyPlane, drawlist.ModelFallbackNone, &place)
+		s.supersampleFaces = supersample.Faces
+	}
+	s.doubledHX, s.doubledHY = place.hx, place.hy
+	placeFaces(polys, originX, originY, 1)
+	s.vertices = resizeScratch(s.vertices, count)
+	s.g.Faces = s.faces
+	g := fillModelPacket(&s.g, s.vertices, polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, keyPlane, drawlist.ModelFallbackNone, nil)
+	s.faces = g.Faces
+	g.Supersample = supersample
+	return g
+}
+
+// cachedBodyFor is cachedBody that creates the entry, as replaceCachedGeometry
+// would, so a lane can be filled into the entry's own arenas.
+func (c *Client) cachedBodyFor(id uint64) *cachedModelBody {
+	body := c.cachedBody(id)
+	if body == nil {
+		body = &cachedModelBody{}
+		c.cachedModelBodies[id] = body
+	}
+	return body
 }
 
 // plainCachedPacket reports whether a packet is faces and placement only, which
@@ -303,14 +439,7 @@ func (c *Client) cachedBodyInputs(draw *presentationrender.UnitDraw) cachedBodyI
 	input.supersampled = c.supersampleModel(draw != nil && draw.Structure)
 	input.geometrySupersampled = c.supersampleGeometry()
 	if draw != nil {
-		for _, piece := range draw.Pieces {
-			for _, primitive := range piece.Primitives {
-				if primitive.ShadeRow != presentationrender.NoShadeRow {
-					input.shaded = true
-					return input
-				}
-			}
-		}
+		input.shaded = draw.ShadedFaces()
 	}
 	return input
 }
@@ -374,7 +503,7 @@ func (c *Client) retainedShadowGeometry(body *cachedModelBody, draw *presentatio
 	}
 	src := body.shadow
 	ax, ay, hx, hy := c.shadowPlacement(draw)
-	g := c.borrowRebasedModelGeometry(src, src.Width, src.Height, src.OriginX, src.OriginY, ax, ay, hx, hy)
+	g := c.rebaseRetained(&body.shadowStore, src, src.Width, src.Height, src.OriginX, src.OriginY, ax, ay, hx, hy)
 	if g == nil {
 		return nil
 	}
@@ -427,13 +556,49 @@ func (c *Client) silhouetteShadowGeometry(body *drawlist.ModelGeometry, draw *pr
 // frame by frame and the doubled lane's half-pixel offset follows with it, so
 // both are supplied by the rebase, exactly as they are for the retained body.
 func (c *Client) replaceCachedShadow(body *cachedModelBody, draw *presentationrender.UnitDraw, in cachedShadowInputs) {
-	body.shadow = body.shadowStore.retain(c.shadowGeometryAt(draw, 0, 0, 0, 0))
+	projected := c.shadowGeometryAt(draw, 0, 0, 0, 0)
+	// A pose change that moves no shadow corner — a piece that casts nothing,
+	// a turn the projection does not resolve — reprojects exactly the retained
+	// packet under the same inputs. That is literally the same raster, so its
+	// revision and key stand.
+	same := body.shadowValid && body.shadowInputs == in && body.shadowRevision != 0 &&
+		body.shadow == &body.shadowStore.g && c.sameModelPacket(body.shadow, projected)
 	body.shadowInputs, body.shadowValid = in, true
 	body.shadowPose = append(body.shadowPose[:0], drawPieceStates(draw)...)
+	if same {
+		return
+	}
+	body.shadow = body.shadowStore.retain(projected, c.modelFrameSerial)
 	// A new projection is a new raster: the executor keys a persistent slot on
 	// this revision and must not keep the one it already holds (§13.12).
 	body.takeSerial()
 	body.shadowRevision++
+}
+
+// sameModelPacket reports whether two plain face packets are identical: every
+// header field, and every face and corner in order, on both lanes. The headers
+// are compared through two copies the client keeps, so the comparison does not
+// allocate.
+func (c *Client) sameModelPacket(a, b *drawlist.ModelGeometry) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	ha, hb := &c.packetHeaders[0], &c.packetHeaders[1]
+	*ha, *hb = *a, *b
+	ha.Faces, hb.Faces, ha.Supersample, hb.Supersample = nil, nil, nil, nil
+	same := reflect.DeepEqual(ha, hb)
+	*ha, *hb = drawlist.ModelGeometry{}, drawlist.ModelGeometry{}
+	if !same || len(a.Faces) != len(b.Faces) {
+		return false
+	}
+	for i := range a.Faces {
+		fa, fb := &a.Faces[i], &b.Faces[i]
+		if fa.Texture != fb.Texture || fa.Color != fb.Color || fa.Shaded != fb.Shaded ||
+			fa.Normal != fb.Normal || fa.Material != fb.Material || !slices.Equal(fa.Vertices, fb.Vertices) {
+			return false
+		}
+	}
+	return c.sameModelPacket(a.Supersample, b.Supersample)
 }
 
 // shadowPoseComplete reports whether this draw's pose is the one its piece
@@ -560,7 +725,7 @@ func (c *Client) replaceCachedGeometry(id uint64, v frame.UnitView, draw *presen
 	// identity cannot inherit that tag: the next classic consumer must rebuild
 	// its own physical-index plane.
 	body.image = nil
-	body.geometry = body.retainGeometry(geometry)
+	body.geometry = body.retainGeometry(geometry, c.modelFrameSerial)
 	// New retained faces are a new raster: the modern executor keys a persistent
 	// slot on this pair and must not keep the one it already holds (§13.12).
 	body.takeSerial()

@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	compiledmodel "github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -63,6 +64,18 @@ type Client struct {
 	// invoked only after the frame recorder has joined, outside simulation.
 	debugDeviceCapture func(string) error
 	modelScratch       modelScratch
+	// modelFrameSerial numbers composed frames. A retained lane's arenas record
+	// the serial of the last frame whose packets address them, so a second
+	// write to them inside that frame takes fresh storage instead of moving
+	// faces a recorded packet still reads (cachedGeometryStore).
+	modelFrameSerial uint64
+	// fragmentTransform and fragmentCompose are collectFragmentPolys' reused
+	// composition storage; fragments are recorded on the recording goroutine.
+	fragmentTransform compiledmodel.Transform
+	fragmentCompose   compiledmodel.ComposeScratch
+	// packetHeaders are sameModelPacket's two header copies. Each stage-one
+	// worker compares through its own client copy.
+	packetHeaders [2]drawlist.ModelGeometry
 	// projectileDraws retains the projectile dispatch list across frames; it
 	// is rewound and rewritten by every DrawProjectileViews call.
 	projectileDraws []presentationrender.ProjectileDraw

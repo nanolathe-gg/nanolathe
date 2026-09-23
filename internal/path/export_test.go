@@ -75,3 +75,11 @@ func (ix *cellIndex) len() int {
 	}
 	return ix.n + len(ix.overflow)
 }
+
+// NeighborsForDir returns the centered fan by value, for tests that state its
+// shape. The search fills a fan it keeps on its session (fillFan).
+func NeighborsForDir(cur Cell, dir uint8, first bool) Fan {
+	var fan Fan
+	fillFan(&fan, cur, dir, first)
+	return fan
+}

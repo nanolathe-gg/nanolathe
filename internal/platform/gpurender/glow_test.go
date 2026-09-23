@@ -35,35 +35,52 @@ func TestGlowWeightsAreNormalized(t *testing.T) {
 	}
 }
 
-// A run's indices are relative to the vertex slice its draw hands the device,
-// and a change of image bindings opens a new run; the same bindings continue
-// the open one (§19).
+// A run's indices are relative to the vertex slice its draw hands the device.
+// The emission plane is an order-independent sum, so a quad joins any run that
+// can bind what it reads: bindings that conflict open a new run, the same
+// bindings rejoin an earlier one even after another run opened, and a slot a
+// quad leaves nil (reads nothing from) never splits (§19).
 func TestGlowBatchIndicesAreRunRelative(t *testing.T) {
 	var g glowLayer
-	a := [4]*ebiten.Image{}
-	b := [4]*ebiten.Image{0: &ebiten.Image{}}
+	pa, pb, lut := &ebiten.Image{}, &ebiten.Image{}, &ebiten.Image{}
+	a := [4]*ebiten.Image{0: pa, 1: lut}
+	b := [4]*ebiten.Image{0: pb, 1: lut}
+	stroke := [4]*ebiten.Image{1: lut}
 	custom := [4]float32{0, 0, 0, glowOpSolid}
 	g.rect(a, 0, 0, 1, 1, 0, 0, 0, 0, [4]float32{}, custom)
 	g.rect(a, 2, 0, 3, 1, 0, 0, 0, 0, [4]float32{}, custom)
 	g.rect(b, 4, 0, 5, 1, 0, 0, 0, 0, [4]float32{}, custom)
 	g.rect(a, 6, 0, 7, 1, 0, 0, 0, 0, [4]float32{}, custom)
-	if g.quads != 4 || len(g.verts) != 16 || len(g.idx) != 24 {
-		t.Fatalf("batch holds %d quads, %d vertices, %d indices; want 4, 16, 24", g.quads, len(g.verts), len(g.idx))
+	g.rect(stroke, 8, 0, 9, 1, 0, 0, 0, 0, [4]float32{}, custom)
+	if len(g.runs) != 2 {
+		t.Fatalf("batch opened %d runs, want 2 (a, b)", len(g.runs))
 	}
-	if len(g.runs) != 3 {
-		t.Fatalf("batch opened %d runs, want 3 (a, b, a)", len(g.runs))
+	if v, ok := g.lastVertex(); !ok || v.DstX != 9 {
+		t.Fatalf("last vertex %+v, want the stroke's far corner", v)
 	}
+	quads := 0
 	for i := range g.runs {
 		run := &g.runs[i]
-		for _, ix := range g.idx[run.iOff : run.iOff+run.iLen] {
-			if int32(ix) >= run.vLen {
-				t.Fatalf("run %d index %d is not below its own vertex count %d", i, ix, run.vLen)
+		if len(run.idx) != 6*len(run.verts)/4 {
+			t.Fatalf("run %d holds %d vertices and %d indices", i, len(run.verts), len(run.idx))
+		}
+		quads += len(run.verts) / 4
+		for _, ix := range run.idx {
+			if int(ix) >= len(run.verts) {
+				t.Fatalf("run %d index %d is not below its own vertex count %d", i, ix, len(run.verts))
 			}
 		}
 	}
+	if g.quads != 5 || quads != 5 || len(g.runs[0].verts) != 16 || g.runs[0].imgs != a || g.runs[1].imgs != b {
+		t.Fatalf("batch holds %d quads (%d in runs), run 0 %d vertices; want 5 quads, a's three and the stroke together", g.quads, quads, len(g.runs[0].verts))
+	}
 	g.resetFrame()
-	if g.quads != 0 || len(g.runs) != 0 || len(g.verts) != 0 || g.resolved {
+	if g.quads != 0 || len(g.runs) != 0 || g.resolved {
 		t.Fatalf("resetFrame left the batch non-empty: %+v", g)
+	}
+	g.rect(b, 0, 0, 1, 1, 0, 0, 0, 0, [4]float32{}, custom)
+	if len(g.runs) != 1 || len(g.runs[0].verts) != 4 || g.runs[0].imgs != b {
+		t.Fatalf("a reused run kept stale storage or bindings: %+v", g.runs)
 	}
 }
 
@@ -415,14 +432,14 @@ func TestGlowFamiliesScaleOnlyTheirOwnFamily(t *testing.T) {
 		r.SetGlowFamilies(weapons, nanolathe, ground)
 		var out reading
 		r.glowLine(drawlist.Line{X0: 10, Y0: 10, X1: 60, Y1: 10, Index: 255, Emissive: true})
-		if n := len(r.glow.verts); n > 0 {
-			out.weaponQuad, out.weapon = true, r.glow.verts[n-1].ColorG
+		if v, ok := r.glow.lastVertex(); ok {
+			out.weaponQuad, out.weapon = true, v.ColorG
 		}
-		before := len(r.glow.verts)
+		before := r.glow.quads
 		spray := drawlist.Fill{Nano: true, Rect: drawlist.Rect{X: 100, Y: 80, W: 2, H: 2}, Index: 163, WorldHeight: 16}
 		r.glowNano(spray)
-		if n := len(r.glow.verts); n > before {
-			out.nanoQuad, out.nanoGlow = true, r.glow.verts[n-1].ColorG
+		if v, ok := r.glow.lastVertex(); ok && r.glow.quads > before {
+			out.nanoQuad, out.nanoGlow = true, v.ColorG
 		}
 		var list drawlist.List
 		for i := 0; i < 10; i++ {
@@ -491,4 +508,13 @@ func TestGlowFamiliesContentReachesRendererThroughClient(t *testing.T) {
 	if w, n, g := r.families.scale(glowFamilyWeapons), r.families.scale(glowFamilyNanolathe), r.families.scale(glowFamilyGround); w != 1 || n != 0.5 || g != 1 {
 		t.Fatalf("nanolathe=50 gave family scales %v/%v/%v, want 1/0.5/1", w, n, g)
 	}
+}
+
+// lastVertex is the final vertex of the most recently appended quad.
+func (g *glowLayer) lastVertex() (ebiten.Vertex, bool) {
+	if g.quads == 0 || g.last >= len(g.runs) || len(g.runs[g.last].verts) == 0 {
+		return ebiten.Vertex{}, false
+	}
+	v := g.runs[g.last].verts
+	return v[len(v)-1], true
 }

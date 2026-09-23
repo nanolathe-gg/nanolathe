@@ -38,6 +38,16 @@ type Workspace struct {
 	slots  []cellSlot
 	gen    uint32
 	lent   bool
+	// The node array and the open set's two rows of the search that holds the
+	// lending. They travel with the table for the same reason the table is
+	// owned here: every search used to grow its own from empty, and that
+	// growth was the largest allocation in the authoritative tick. A search
+	// takes them with the table and hands them back, emptied, on release;
+	// only their capacity outlives it, and every element a search reads it
+	// has written first, so the retained contents are never observed.
+	nodes         []Node
+	heapEntries   []heapEntry
+	heapPositions []int32
 }
 
 // workspaceSlotLimit caps the table a workspace will size itself to. No retail
@@ -65,7 +75,7 @@ func (w *Workspace) lend(bounds Rect, hasBounds bool) bool {
 	if width <= 0 || height <= 0 || width*height > workspaceSlotLimit {
 		return false
 	}
-	if w.origin != min || w.w != int32(width) || w.h != int32(height) {
+	if !w.covers(min, int32(width), int32(height)) {
 		w.origin, w.w, w.h = min, int32(width), int32(height)
 		w.slots = make([]cellSlot, width*height)
 		w.gen = 0
@@ -79,6 +89,19 @@ func (w *Workspace) lend(bounds Rect, hasBounds bool) bool {
 	}
 	w.lent = true
 	return true
+}
+
+// covers reports whether the current table addresses every cell of the
+// requested rectangle. A table that already covers it is kept rather than
+// reallocated: which cells land in the table and which in the overflow map is
+// storage only, and both answer identically.
+func (w *Workspace) covers(min Cell, width, height int32) bool {
+	if w.slots == nil {
+		return false
+	}
+	return min.X >= w.origin.X && min.Z >= w.origin.Z &&
+		int64(min.X)+int64(width) <= int64(w.origin.X)+int64(w.w) &&
+		int64(min.Z)+int64(height) <= int64(w.origin.Z)+int64(w.h)
 }
 
 // release returns the table. The slots keep whatever the search left; the next

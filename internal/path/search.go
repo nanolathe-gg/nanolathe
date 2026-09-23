@@ -75,14 +75,14 @@ type Fan struct {
 	Len   int
 }
 
-// NeighborsForDir fills the centered fan. The first fan has nine entries, with
-// the reverse direction repeated at both ends; later fans have five
-// [04 §7.1].
-//
-// It returns the fan by value rather than two slices because it is called once
-// per expanded node, and two heap allocations per node dominated a search.
+// fillFan fills the centered fan. The first fan has nine entries, with the
+// reverse direction repeated at both ends; later fans have five [04 §7.1].
 // Order is unchanged: off runs from -width to +width about dir.
-func NeighborsForDir(cur Cell, dir uint8, first bool) Fan {
+//
+// It writes the fan into storage the caller keeps. The search expands
+// through a fan held on its session, so the per-node result is not copied out
+// of a return value.
+func fillFan(fan *Fan, cur Cell, dir uint8, first bool) {
 	width := 2
 	if first {
 		width = 4
@@ -90,14 +90,13 @@ func NeighborsForDir(cur Cell, dir uint8, first bool) Fan {
 			dir = DirN
 		}
 	}
-	var fan Fan
+	fan.Len = 0
 	for off := -width; off <= width; off++ {
 		d := uint8((int(dir) + off + 8) & 7)
 		fan.Cells[fan.Len] = Cell{cur.X + dirDelta[d].X, cur.Z + dirDelta[d].Z}
 		fan.Dirs[fan.Len] = d
 		fan.Len++
 	}
-	return fan
 }
 
 type rayResult struct {
@@ -289,8 +288,13 @@ type SearchConfig struct {
 type entry struct {
 	status uint8
 	dir    uint8
-	node   NodeID
+	// node is the cell's node identity in the open set's four-byte form,
+	// which keeps a workspace slot at twelve bytes rather than twenty-four.
+	node heapID
 }
+
+// id is the cell's node identity, invalidNodeID when it has none.
+func (e entry) id() NodeID { return NodeID(e.node) }
 
 // Session is one search in progress. The scheduler drives it in bounded
 // increments through Resume, so a search that exceeds a tick's work share
@@ -299,7 +303,6 @@ type Session struct {
 	cfg          SearchConfig
 	scale        int32
 	entries      cellIndex
-	goalSet      map[Cell]struct{}
 	nearest      Cell
 	nearestDist  int64
 	haveNearest  bool
@@ -315,12 +318,13 @@ type Session struct {
 	ns           *NodeStore
 	heap         Heap
 	expanded     bool
+	fan          Fan
 }
 
 // NewSession opens a search for cfg and seeds it. A zero Scale means the
 // unweighted heuristic, 1.0 in 16.16.
 func NewSession(cfg SearchConfig) *Session {
-	s := &Session{cfg: cfg, entries: newMapIndex(), goalSet: make(map[Cell]struct{})}
+	s := &Session{cfg: cfg}
 	s.scale = cfg.Scale
 	if s.scale == 0 {
 		s.scale = 65536
@@ -328,9 +332,13 @@ func NewSession(cfg SearchConfig) *Session {
 	s.cfg.Scale = s.scale
 	// The scheduler's table, when it is free and this request is bounded
 	// [04 §7.2]. A search that does not get it keeps the map and answers
-	// identically; Release hands it back.
+	// identically; Release hands it back. The map is made only when it is
+	// the storage the search keeps.
 	if cfg.Workspace != nil {
 		s.entries.bindWorkspace(cfg.Workspace, cfg.Bounds, cfg.HasBounds)
+	}
+	if s.entries.ws == nil {
+		s.entries = newMapIndex()
 	}
 	s.init()
 	return s
@@ -351,10 +359,24 @@ func (s *Session) touch(c Cell, e entry) { s.entries.set(c, e) }
 // Release hands the scheduler's per-cell table back. Every path that drops a
 // session owes this call; a session that is dropped without it leaves the
 // table lent, which costs the next search the table and nothing else.
+//
+// A session that held the table also hands back the node array and open-set
+// rows it took with it. The session is finished with after release: its node
+// store and open set are left empty, so a stray resume reports rejection
+// rather than reading storage the next search now owns.
 func (s *Session) Release() {
-	if s != nil {
-		s.entries.release()
+	if s == nil {
+		return
 	}
+	// Only a session that reached its node store took the storage; one that
+	// finished during setup leaves the workspace's rows where they are.
+	if ws := s.entries.ws; ws != nil && s.ns != nil {
+		ws.nodes = s.ns.nodes[:0]
+		ws.heapEntries, ws.heapPositions = s.heap.entries[:0], s.heap.positions[:0]
+		s.ns.nodes = nil
+		s.heap = Heap{}
+	}
+	s.entries.release()
 }
 
 func (s *Session) init() {
@@ -373,7 +395,6 @@ func (s *Session) init() {
 		}
 		if !s.cfg.HasBounds || InBounds(c, s.cfg.Bounds) {
 			s.touch(c, entry{status: 4, dir: DirNone})
-			s.goalSet[c] = struct{}{}
 		}
 	}
 	if s.cfg.Goal.StartSatisfied(s.cfg.Start) {
@@ -411,7 +432,16 @@ func (s *Session) init() {
 			}
 		}
 	}
-	s.ns = newSessionNodeStore(s.scale, &s.entries)
+	// A search that holds the scheduler's table also takes the node array and
+	// open-set rows that travel with it, so its growth reuses the capacity of
+	// the searches before it rather than starting from empty.
+	var nodes []Node
+	if ws := s.entries.ws; ws != nil {
+		nodes = ws.nodes
+		s.heap.entries, s.heap.positions = ws.heapEntries, ws.heapPositions
+		ws.nodes, ws.heapEntries, ws.heapPositions = nil, nil, nil
+	}
+	s.ns = newSessionNodeStore(s.scale, &s.entries, nodes)
 	s.heap.Clear()
 	startDir := s.cfg.StartDir
 	if startDir > 7 {
@@ -424,7 +454,7 @@ func (s *Session) init() {
 	startID := s.ns.Alloc(s.cfg.Start, 0, startH, invalidNodeID, startDir)
 	s.ns.Get(startID).Run = StartRun
 	s.ns.SetOpen(startID, true)
-	s.touch(s.cfg.Start, entry{status: 1, dir: startDir, node: startID})
+	s.touch(s.cfg.Start, entry{status: 1, dir: startDir, node: heapID(startID)})
 	s.heap.Push(startID, s.ns.Get(startID).F)
 	s.seeded = true
 }
@@ -492,7 +522,8 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		n.Open, n.Closed = false, true
 		e.status = 2
 		s.touch(n.Cell, e)
-		fan := NeighborsForDir(n.Cell, n.Dir, !s.expanded)
+		fan := &s.fan
+		fillFan(fan, n.Cell, n.Dir, !s.expanded)
 		s.expanded = true
 		for i := 0; i < fan.Len; i++ {
 			c, d := fan.Cells[i], fan.Dirs[i]
@@ -539,16 +570,16 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 				short = ShortRunPenalty
 			}
 			gNew := n.G + turn + step + terrain + short
-			if e.node != invalidNodeID {
+			if e.node != heapID(invalidNodeID) {
 				// The first allocation owns the terrain term. A later
 				// relaxation reuses it rather than probing/recomputing the
 				// node's heuristic-side terrain field [04 R-PATH-01 §3].
-				terrain = int32(s.ns.Get(e.node).TerrainTerm)
+				terrain = int32(s.ns.Get(e.id()).TerrainTerm)
 				gNew = n.G + turn + step + terrain + short
-				if state == 1 && s.ns.TryRelax(e.node, gNew, id, d) {
-					node := s.ns.Get(e.node)
+				if state == 1 && s.ns.TryRelax(e.id(), gNew, id, d) {
+					node := s.ns.Get(e.id())
 					node.Run = run
-					s.heap.Fix(e.node, node.F)
+					s.heap.Fix(e.id(), node.F)
 				}
 				continue
 			}
@@ -558,14 +589,16 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			s.heap.Open(nid, node.F)
 			// Opening ORs the state into the existing flags, preserving both
 			// ray visitation and enumerated terminals [04 R-PATH-01 §1].
-			e = entry{status: e.status | 1, dir: d, node: nid}
+			e = entry{status: e.status | 1, dir: d, node: heapID(nid)}
 			hs := ScaledHeuristic(node.H, s.scale)
 			if s.hasTolerance && hs <= s.tolerance {
 				e.status |= 4
 			}
-			if s.isGoal(c) {
-				e.status |= 4
-			}
+			// An enumerated in-bounds goal cell needs no test here: setup
+			// stamped its terminal bit, every later write to an unopened
+			// cell preserves it, and the OR above carries it into the opened
+			// entry. Looking the cell up in a goal set on every opening
+			// answered what the entry already holds.
 			s.touch(c, e)
 		}
 	}
@@ -574,11 +607,6 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		return nil, s.resultStatus, true
 	}
 	return nil, 0, false
-}
-
-func (s *Session) isGoal(c Cell) bool {
-	_, ok := s.goalSet[c]
-	return ok
 }
 
 func (s *Session) finish(points []Point) {

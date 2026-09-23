@@ -544,12 +544,13 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			source := s.Vis.PresentationIdentity()
 			if !published.RestoreFog(source, version) {
 				w, h := fc.Dimensions()
-				ch0, ch1 := fc.Channels()
 				published.Fog.W = w
 				published.Fog.H = h
 				published.Fog.OriginX, published.Fog.OriginZ = fc.Origin()
-				published.Fog.Ch0 = copyBytesInto(published.Fog.Ch0, ch0)
-				published.Fog.Ch1 = copyBytesInto(published.Fog.Ch1, ch1)
+				// One copy, from the cache straight into this frame slot's
+				// own storage; the published bytes never alias the cache the
+				// next rebuild writes [I6].
+				published.Fog.Ch0, published.Fog.Ch1 = fc.CopyChannelsInto(published.Fog.Ch0, published.Fog.Ch1)
 				published.Fog.Version = version
 				published.Fog.Source = source
 			}
@@ -570,7 +571,10 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			if i < 0 || i >= len(s.Combat.Records) {
 				continue
 			}
-			p := s.Combat.Records[i]
+			// Read the record in place. A copy was moved to the heap by the
+			// marker query below taking its address, one allocation per live
+			// projectile per tick; the query only reads it.
+			p := &s.Combat.Records[i]
 			owner, ownerKnown := projectileOwnerFromRecord(s, p.Shooter, p.ShooterSide)
 			pv := frame.ProjectileView{
 				PresentationID: s.Combat.PresentationID(h),
@@ -667,7 +671,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 					// [03 §3.9] layer 6 [06 §11.3]. Resolving it once here is
 					// what keeps presentation off the compiled catalog [I6].
 					switch {
-					case !s.Combat.MapWeaponMarker(&p, w):
+					case !s.Combat.MapWeaponMarker(p, w):
 						pv.RadarArt = frame.RadarProjectileHidden
 					case w.Targetable || w.Interceptor:
 						pv.RadarArt = frame.RadarProjectileMarker
@@ -680,7 +684,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			}
 			// The cached average floor height the ground shadow is anchored
 			// against [06 §8.1][03 §5.4].
-			publishProjectileFloorHeight(&pv, &s.Combat.Records[i])
+			publishProjectileFloorHeight(&pv, p)
 			published.Projectiles = append(published.Projectiles, pv)
 		}
 	}

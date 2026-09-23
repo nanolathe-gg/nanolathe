@@ -230,6 +230,7 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	c.stripStats = StripDrawStats{}
 	c.modelScratch.reset()
 	c.modelScratch.active = true
+	c.modelFrameSerial++
 	defer func() { c.modelScratch.active = false }()
 	// Retained model-local bodies are client presentation state. Prune them at
 	// the composed-frame boundary from the immutable publication, so an old

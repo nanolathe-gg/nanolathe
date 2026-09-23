@@ -79,8 +79,12 @@ func (s *modelScratch) reset() {
 		// Preserve the previous face length so refill can clear only the removed
 		// tail. The rest of each packet is frame-local, including the doubled
 		// packet's outline, reveal and shadow references.
-		p.g = drawlist.ModelGeometry{Faces: p.g.Faces}
-		p.supersample = drawlist.ModelGeometry{Faces: p.supersample.Faces}
+		// The face arena is the slot's own fill arena, never the faces the
+		// packet last addressed: a rebased packet addresses its copy arena or
+		// a retained lane's own faces (rebaseRetained), and a refill writes
+		// through the slice it is given.
+		p.g = drawlist.ModelGeometry{Faces: p.faces}
+		p.supersample = drawlist.ModelGeometry{}
 	}
 	for _, p := range s.polys {
 		p.polys = p.polys[:0]
@@ -127,9 +131,9 @@ func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 	p.lanes = resizeScratch(p.lanes, corners*(polyLanes+spanAttrs))
 	p.odd = resizeScratch(p.odd, corners)
 	p.heights = resizeScratch(p.heights, corners)
-	clear(p.lanes)
-	clear(p.odd)
-	clear(p.heights)
+	// Corner lanes are erased as next hands them out: a slot is sized for every
+	// face the subject has, and a lane walk (the live pieces, the front faces)
+	// usually takes a small part of it.
 	p.corner = 0
 	return p
 }
@@ -152,6 +156,9 @@ func (s *polyScratch) next(n int) *screenPoly {
 	p.x2, p.y2 = buf[2*n:3*n:3*n], buf[3*n:4*n:4*n]
 	p.oddHeight = s.odd[start:s.corner:s.corner]
 	p.heights = s.heights[start:s.corner:s.corner]
+	clear(buf)
+	clear(p.oddHeight)
+	clear(p.heights)
 	for k := 0; k < spanAttrs; k++ {
 		lo := (polyLanes + k) * n
 		p.attr[k] = buf[lo : lo+n : lo+n]
@@ -229,6 +236,8 @@ type packetScratch struct {
 	supersample      drawlist.ModelGeometry
 	supersampleFaces []drawlist.ModelFace
 	supersampleVerts []drawlist.ModelVertex
+	// faces is the arena fillModelPacket writes this slot's faces into.
+	faces []drawlist.ModelFace
 }
 
 func (c *Client) borrowPacketScratch() *packetScratch {
@@ -251,7 +260,9 @@ func (c *Client) borrowModelPacket(polys []screenPoly, width, height, ox, oy, ax
 		count += len(f.x)
 	}
 	p.vertices = resizeScratch(p.vertices, count)
-	return fillModelPacket(&p.g, p.vertices, polys, width, height, ox, oy, ax, ay, scale, key, fallback, nil)
+	g := fillModelPacket(&p.g, p.vertices, polys, width, height, ox, oy, ax, ay, scale, key, fallback, nil)
+	p.faces = g.Faces
+	return g
 }
 
 // borrowModelPacketDoubled fills a scale-2 packet from unplaced polygons with
@@ -270,7 +281,9 @@ func (c *Client) borrowModelPacketDoubled(polys []screenPoly, width, height int,
 		count += len(f.x)
 	}
 	p.vertices = resizeScratch(p.vertices, count)
-	return fillModelPacket(&p.g, p.vertices, polys, w, h, 2*ox, 2*oy, 2*ox, 2*oy, 2, key, drawlist.ModelFallbackNone, &place)
+	g := fillModelPacket(&p.g, p.vertices, polys, w, h, 2*ox, 2*oy, 2*ox, 2*oy, 2, key, drawlist.ModelFallbackNone, &place)
+	p.faces = g.Faces
+	return g
 }
 
 // borrowProjectileScratch hands out one standalone model call's slot for the

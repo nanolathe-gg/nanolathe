@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"testing"
@@ -188,6 +189,9 @@ func checkWaterReflectionDevicePixels() error {
 	if err := checkSurfaceImpactReflection(r, ter); err != nil {
 		return err
 	}
+	if err := checkBillboardReflectionFrameBounds(r, ter); err != nil {
+		return err
+	}
 	r.ResetSources()
 	if r.reflections.source != nil || r.reflections.height != nil || len(r.reflections.verts) != 0 {
 		return fmt.Errorf("reflection storage survived source reset")
@@ -251,6 +255,54 @@ func checkSurfaceImpactReflection(r *Renderer, ter *world.Terrain) error {
 	// change a single byte of that frame.
 	if !bytes.Equal(read(false, true), read(true, true)) {
 		return fmt.Errorf("dry-ground impact was admitted as a reflection source")
+	}
+	return nil
+}
+
+// Billboard reflections sample the scene atlas, where a frame's rectangle is
+// surrounded by a padded copy of its own edge. A reflection whose half-pixel
+// height puts a pixel centre exactly on the mirrored quad's far edge samples
+// one row past the frame; that row must read transparent, as it did from a
+// texture of the frame alone, not the pad. Here the frame's top row is keyed
+// out and its bottom row opaque, so the pad row would land, uncovered, on the
+// sprite's own transparent top row. Two frames also share one source draw per
+// target (§26.4).
+func checkBillboardReflectionFrameBounds(r *Renderer, ter *world.Terrain) error {
+	const w, h = 160, 240
+	const anchorX, anchorY, side = 40, 120, 16
+	frame := func(bottom bool) *formats.GAFFrame {
+		f := &formats.GAFFrame{Width: side, Height: side, XOffset: side / 2, YOffset: side / 2,
+			Pixels: make([]byte, side*side), Transparent: make([]bool, side*side)}
+		for i := range f.Pixels {
+			f.Pixels[i] = 240
+			f.Transparent[i] = i/side == 0 || (i/side == side-1) != bottom
+		}
+		return f
+	}
+	f, other := frame(true), frame(false)
+	read := func(on bool) []byte {
+		var l drawlist.List
+		l.RecordClear()
+		l.RecordTerrain(drawlist.Terrain{Terrain: ter, DstW: 214, DstH: 320, Scale: camera.ViewScaleNative, Water: drawlist.WaterSurface{Enabled: true, Tick: 30, Energy: .7}})
+		l.RecordSprite(drawlist.Sprite{Frame: f, X: anchorX, Y: anchorY, Kind: drawlist.BlitKeyed, Anchored: true, ReflectWater: true, ReflectionHeight: .5})
+		l.RecordSprite(drawlist.Sprite{Frame: other, X: anchorX + 40, Y: anchorY, Kind: drawlist.BlitKeyed, Anchored: true, ReflectWater: true, ReflectionHeight: .5})
+		l.RecordExpand()
+		r.setWaterReflections(on)
+		img := r.Execute(&l, w, h)
+		p := make([]byte, w*h*4)
+		img.ReadPixels(p)
+		return p
+	}
+	off, on := read(false), read(true)
+	if n := len(r.reflections.runs); n != 1 {
+		return fmt.Errorf("two billboard frames on one atlas page took %d source runs, want 1", n)
+	}
+	y := anchorY - side/2
+	for x := anchorX - side/2; x < anchorX+side/2; x++ {
+		i := (y*w + x) * 4
+		if !bytes.Equal(off[i:i+4], on[i:i+4]) {
+			return fmt.Errorf("billboard reflection sampled past its frame onto row %d at x=%d", y, x)
+		}
 	}
 	return nil
 }
@@ -518,5 +570,49 @@ func TestReflectionSourceUniformsAreRetained(t *testing.T) {
 	}
 	if got := op.Uniforms["Metadata"].([]float32); len(got) != 1 || got[0] != 1 {
 		t.Fatalf("Metadata lane %v", got)
+	}
+}
+
+// The softening grid rounds with floorInt and ceilInt, which must agree with
+// math.Floor and math.Ceil of the float32's widening wherever the grid reads.
+func TestSoftTileRoundingMatchesFloat64(t *testing.T) {
+	for _, v := range []float32{-3.5, -1, -0.25, -0, 0, 0.25, 0.5, 1, 63.999996, 64, 64.00001, 1919.5, 1e6 + 0.5} {
+		if got, want := floorInt(v), int(math.Floor(float64(v))); got != want {
+			t.Fatalf("floorInt(%v) = %d, want %d", v, got, want)
+		}
+		if got, want := ceilInt(v), int(math.Ceil(float64(v))); got != want {
+			t.Fatalf("ceilInt(%v) = %d, want %d", v, got, want)
+		}
+	}
+}
+
+// The metadata pass draws only triangles whose filter reach touches a marked
+// cell: an elevated source, a low hull inside its reach and a stroke in the
+// same cell are kept in record order; a hull a whole cell away is not (§26.6).
+func TestReflectionSoftenSubsetKeepsReachOnly(t *testing.T) {
+	tri := func(x, y, height float32) []ebiten.Vertex {
+		return []ebiten.Vertex{{DstX: x, DstY: y, Custom0: height}, {DstX: x + 4, DstY: y, Custom0: height}, {DstX: x + 4, DstY: y + 4, Custom0: height}}
+	}
+	var verts []ebiten.Vertex
+	verts = append(verts, tri(20, 20, 150)...) // aircraft: marks cell 0
+	verts = append(verts, tri(60, 20, 10)...)  // hull in the same cell
+	verts = append(verts, tri(150, 20, 10)...) // hull two cells away
+	verts = append(verts, tri(66, 30, 10)...)  // hull just past the cell edge, inside the reach
+	s := waterReflections{
+		runs:        []reflectionRun{{page: 0, scenePage: -1, occlusionPage: -1, count: 12, indexCount: 12}, {page: -1, scenePage: -1, occlusionPage: -1, first: 12, firstIndex: 12, count: 3, indexCount: 3}},
+		indices:     []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 1, 2},
+		transformed: append(verts, tri(30, 40, 20)...),
+	}
+	if !s.markSofteningTiles(256, 128, 1, 1, .7, 0, 0) || !s.softTiles[0] || s.softTiles[2] {
+		t.Fatalf("marked cells %v, want the aircraft's cell only near the origin", s.softTiles)
+	}
+	s.softenSubset(256, 128, 1, 1, .7, 0, 0)
+	if len(s.softRuns) != 2 || s.softRuns[0].indexCount != 9 || s.softRuns[1].indexCount != 3 || s.softRuns[1].first != 9 {
+		t.Fatalf("subset runs %+v, want the three near model triangles then the stroke", s.softRuns)
+	}
+	for i, want := range []float32{20, 60, 66} {
+		if got := s.softVerts[3*i].DstX; got != want {
+			t.Fatalf("subset triangle %d starts at x=%v, want %v in record order", i, got, want)
+		}
 	}
 }

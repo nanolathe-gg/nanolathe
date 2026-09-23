@@ -302,6 +302,9 @@ type UnitDraw struct {
 	SonarContact bool
 	// UnderConstruction overrides the cached/live filter [03 R-REN-03A §4].
 	UnderConstruction bool
+	// lazy is the scratch whose pending pieces Materialize still has to build
+	// (BuildUnitDrawDeferredInto); nil once every piece is built.
+	lazy *DrawScratch
 }
 
 // buildPieceDrawsInto is the one per-piece traversal: it produces the draw
@@ -311,9 +314,19 @@ type UnitDraw struct {
 // include it [03 §5.2][03 §2.4] C24. UnitDraw constructors take the returned
 // transform slice directly rather than composing the chain a second time.
 func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool, scratch *DrawScratch) ([]PieceDraw, []model.Transform) { // [03 §2.4] C21 [03 §5.2] C13
+	return buildPieceDrawsDeferrable(m, states, worldPos, dirty, shaded, false, scratch)
+}
+
+// buildPieceDrawsDeferrable is buildPieceDrawsInto that, with deferGeometry,
+// stops after the transforms, the hidden verdicts and the record headers and
+// leaves every visible piece's geometry pending (UnitDraw.Materialize).
+func buildPieceDrawsDeferrable(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded, deferGeometry bool, scratch *DrawScratch) ([]PieceDraw, []model.Transform) {
 	if m == nil {
 		return nil, nil
 	}
+	scratch.pending = reuseDrawSlice(scratch.pending, len(m.Pieces))
+	clear(scratch.pending)
+	scratch.shaded = shaded
 	scratch.transforms = reuseDrawSlice(scratch.transforms, len(m.Pieces))
 	transforms := scratch.transforms
 	// Every composition below reads one model and one state slice, so the
@@ -332,7 +345,6 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 	resolveHidden(m, states, scratch.hidden, scratch.hiddenState, scratch.hiddenStack[:0])
 	for i := range m.Pieces {
 		piece := &m.Pieces[i]
-		store := &scratch.storage[i]
 		tr := &transforms[i]
 		// The slot carries the previous subject's record, so every field is
 		// written here; a suppressed piece keeps its index and drops the rest.
@@ -352,118 +364,136 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 			record.WorldVertices, record.Primitives, record.IsLeafAttachment = nil, nil, false
 			continue
 		}
-		// World vertices: transform each authored vertex via the same chain then offset by worldPos [03 §2.4] C21
-		store.world = reuseDrawSlice(store.world, len(piece.Vertices))
-		worldVerts := store.world
-		// [03 §2.4] C21 from pristine vertices ancestor-after-descendant.
-		tr.ApplyOffsetInto(worldVerts, piece.Vertices, worldPos)
-		var rows []int
-		if shaded {
-			// The shaded renderer builds smooth normals from transformed piece
-			// geometry. The average remains unnormalized [03 §2.4.1]. The
-			// unshaded renderer does not read the per-piece shade bit [R-RND-02A].
-			store.normals = reuseDrawSlice(store.normals, len(piece.Vertices))
-			clear(store.normals)
-			normals := store.normals
-			for primitiveIndex := range piece.Primitives {
-				pr := &piece.Primitives[primitiveIndex]
-				if piece.Selection && primitiveIndex == 0 {
-					continue // selection plate is not part of model lighting [03 §2.4.1]
-				}
-				if len(pr.VertexIndices) < 3 {
-					continue
-				}
-				a, b, c := pr.VertexIndices[0], pr.VertexIndices[1], pr.VertexIndices[2]
-				if int(a) >= len(worldVerts) || int(b) >= len(worldVerts) || int(c) >= len(worldVerts) {
-					continue
-				}
-				n := faceNormal(worldVerts[a], worldVerts[b], worldVerts[c])
-				for _, vi := range pr.VertexIndices {
-					if int(vi) >= len(normals) {
-						continue
-					}
-					normals[vi].sum[0] += n[0]
-					normals[vi].sum[1] += n[1]
-					normals[vi].sum[2] += n[2]
-					normals[vi].count++
-				}
-			}
-			store.rows = reuseDrawSlice(store.rows, len(normals))
-			rows = store.rows
-			dontShade := i < len(states) && states[i].DontShade
-			for vi := range normals {
-				if normals[vi].count == 0 {
-					rows[vi] = SHDIdentityRow
-					continue
-				}
-				avg := normals[vi].sum
-				count := float64(normals[vi].count)
-				avg[0] /= count
-				avg[1] /= count
-				avg[2] /= count
-				rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, dontShade)
-			}
+		if deferGeometry {
+			// The piece's corners, shading and primitive records are filled on
+			// demand (UnitDraw.Materialize); until then the piece carries none.
+			record.WorldVertices, record.Primitives, record.IsLeafAttachment = nil, nil, false
+			scratch.pending[i] = true
+			continue
 		}
-		// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
-		store.prims = reuseDrawSlice(store.prims, len(piece.Primitives))
-		prims := store.prims
-		if shaded {
-			corners := 0
-			for pi := range piece.Primitives {
-				corners += len(piece.Primitives[pi].VertexIndices)
-			}
-			// Every corner lane below is assigned, including the unresolvable
-			// ones, so the arena needs no blanket erase.
-			store.shades = reuseDrawSlice(store.shades, corners)
-		}
-		shadeOffset := 0
-		for pi := range piece.Primitives {
-			pr := &piece.Primitives[pi]
-			pd := &prims[pi]
-			pd.ColorIndex = pr.ColorIndex
-			pd.TextureName = pr.TextureName
-			pd.IsColored = pr.IsColored
-			pd.VertexIndices = pr.VertexIndices
-			pd.ShadeRow = NoShadeRow
-			pd.ShadeRows = nil
-			if shaded {
-				// Default to the DONT_SHADE pin (row 15) rather than an invented
-				// mid row: row 15 is the one retail value this field can hold
-				// before its real per-corner row is known below, and it is
-				// overwritten by the first corner's trunc(dot*5)&31 result
-				// whenever that corner is resolvable [03 R-RAST-01 §5].
-				pd.ShadeRow = SHDIdentityRow
-				end := shadeOffset + len(pr.VertexIndices)
-				pd.ShadeRows = store.shades[shadeOffset:end:end]
-				shadeOffset = end
-				for k, vi := range pr.VertexIndices {
-					if int(vi) >= len(rows) {
-						pd.ShadeRows[k] = 0
-						continue
-					}
-					pd.ShadeRows[k] = rows[vi]
-				}
-				if len(pr.VertexIndices) > 0 && int(pr.VertexIndices[0]) < len(rows) {
-					pd.ShadeRow = rows[pr.VertexIndices[0]] // [03 R-RAST-01 §5] real trunc(dot*5)&31 row
-				}
-			}
-		}
-		isLeaf := len(piece.Primitives) == 0 && len(piece.Vertices) > 0 // [03 §2.4] C23
-		// Also leaf in hierarchy sense: sibling/child links depth-first [fmt 3do] — a piece with no primitives but with children is not a leaf;
-		// the spec says leaf pieces with vertex but no primitive are valid attachments, so require no children as well.
-		if isLeaf && len(piece.Children) != 0 {
-			// Still allow: spec says "Leaf pieces" meaning no children; honor that strictly.
-			isLeaf = false
-		}
-		// If leaf check above is too strict, also consider any piece with vertex but no primitive as emit-capable;
-		// retain isLeaf true for those cases per [03 §2.4] wording that allows leaf interpretation.
-		// For determinism preserve both: treat as leaf when primitives==0 && vertices>0 regardless of children?
-		// Re-evaluate: earlier we cleared isLeaf when children !=0; but spec says leaf implies no children,
-		// so a non-leaf with vertex+no primitive is not counted as leaf attachment by the strict leaf definition.
-		// Keep the strict interpretation: the flag marks strict leaves only.
-		record.WorldVertices, record.Primitives, record.IsLeafAttachment = worldVerts, prims, isLeaf
+		materializePiece(m, i, states, worldPos, shaded, scratch)
 	}
 	return out, transforms
+}
+
+// materializePiece fills one visible piece's world corners, shading rows and
+// primitive records from its already composed transform. Pieces are
+// independent here: each reads only its own transform and authored vertices.
+func materializePiece(m *model.Model, i int, states []model.PieceState, worldPos [3]numeric.Fixed, shaded bool, scratch *DrawScratch) {
+	piece := &m.Pieces[i]
+	store := &scratch.storage[i]
+	tr := &scratch.transforms[i]
+	record := &scratch.pieces[i]
+	// World vertices: transform each authored vertex via the same chain then offset by worldPos [03 §2.4] C21
+	store.world = reuseDrawSlice(store.world, len(piece.Vertices))
+	worldVerts := store.world
+	// [03 §2.4] C21 from pristine vertices ancestor-after-descendant.
+	tr.ApplyOffsetInto(worldVerts, piece.Vertices, worldPos)
+	var rows []int
+	if shaded {
+		// The shaded renderer builds smooth normals from transformed piece
+		// geometry. The average remains unnormalized [03 §2.4.1]. The
+		// unshaded renderer does not read the per-piece shade bit [R-RND-02A].
+		store.normals = reuseDrawSlice(store.normals, len(piece.Vertices))
+		clear(store.normals)
+		normals := store.normals
+		for primitiveIndex := range piece.Primitives {
+			pr := &piece.Primitives[primitiveIndex]
+			if piece.Selection && primitiveIndex == 0 {
+				continue // selection plate is not part of model lighting [03 §2.4.1]
+			}
+			if len(pr.VertexIndices) < 3 {
+				continue
+			}
+			a, b, c := pr.VertexIndices[0], pr.VertexIndices[1], pr.VertexIndices[2]
+			if int(a) >= len(worldVerts) || int(b) >= len(worldVerts) || int(c) >= len(worldVerts) {
+				continue
+			}
+			n := faceNormal(worldVerts[a], worldVerts[b], worldVerts[c])
+			for _, vi := range pr.VertexIndices {
+				if int(vi) >= len(normals) {
+					continue
+				}
+				normals[vi].sum[0] += n[0]
+				normals[vi].sum[1] += n[1]
+				normals[vi].sum[2] += n[2]
+				normals[vi].count++
+			}
+		}
+		store.rows = reuseDrawSlice(store.rows, len(normals))
+		rows = store.rows
+		dontShade := i < len(states) && states[i].DontShade
+		for vi := range normals {
+			if normals[vi].count == 0 {
+				rows[vi] = SHDIdentityRow
+				continue
+			}
+			avg := normals[vi].sum
+			count := float64(normals[vi].count)
+			avg[0] /= count
+			avg[1] /= count
+			avg[2] /= count
+			rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, dontShade)
+		}
+	}
+	// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
+	store.prims = reuseDrawSlice(store.prims, len(piece.Primitives))
+	prims := store.prims
+	if shaded {
+		corners := 0
+		for pi := range piece.Primitives {
+			corners += len(piece.Primitives[pi].VertexIndices)
+		}
+		// Every corner lane below is assigned, including the unresolvable
+		// ones, so the arena needs no blanket erase.
+		store.shades = reuseDrawSlice(store.shades, corners)
+	}
+	shadeOffset := 0
+	for pi := range piece.Primitives {
+		pr := &piece.Primitives[pi]
+		pd := &prims[pi]
+		pd.ColorIndex = pr.ColorIndex
+		pd.TextureName = pr.TextureName
+		pd.IsColored = pr.IsColored
+		pd.VertexIndices = pr.VertexIndices
+		pd.ShadeRow = NoShadeRow
+		pd.ShadeRows = nil
+		if shaded {
+			// Default to the DONT_SHADE pin (row 15) rather than an invented
+			// mid row: row 15 is the one retail value this field can hold
+			// before its real per-corner row is known below, and it is
+			// overwritten by the first corner's trunc(dot*5)&31 result
+			// whenever that corner is resolvable [03 R-RAST-01 §5].
+			pd.ShadeRow = SHDIdentityRow
+			end := shadeOffset + len(pr.VertexIndices)
+			pd.ShadeRows = store.shades[shadeOffset:end:end]
+			shadeOffset = end
+			for k, vi := range pr.VertexIndices {
+				if int(vi) >= len(rows) {
+					pd.ShadeRows[k] = 0
+					continue
+				}
+				pd.ShadeRows[k] = rows[vi]
+			}
+			if len(pr.VertexIndices) > 0 && int(pr.VertexIndices[0]) < len(rows) {
+				pd.ShadeRow = rows[pr.VertexIndices[0]] // [03 R-RAST-01 §5] real trunc(dot*5)&31 row
+			}
+		}
+	}
+	isLeaf := len(piece.Primitives) == 0 && len(piece.Vertices) > 0 // [03 §2.4] C23
+	// Also leaf in hierarchy sense: sibling/child links depth-first [fmt 3do] — a piece with no primitives but with children is not a leaf;
+	// the spec says leaf pieces with vertex but no primitive are valid attachments, so require no children as well.
+	if isLeaf && len(piece.Children) != 0 {
+		// Still allow: spec says "Leaf pieces" meaning no children; honor that strictly.
+		isLeaf = false
+	}
+	// If leaf check above is too strict, also consider any piece with vertex but no primitive as emit-capable;
+	// retain isLeaf true for those cases per [03 §2.4] wording that allows leaf interpretation.
+	// For determinism preserve both: treat as leaf when primitives==0 && vertices>0 regardless of children?
+	// Re-evaluate: earlier we cleared isLeaf when children !=0; but spec says leaf implies no children,
+	// so a non-leaf with vertex+no primitive is not counted as leaf attachment by the strict leaf definition.
+	// Keep the strict interpretation: the flag marks strict leaves only.
+	record.WorldVertices, record.Primitives, record.IsLeafAttachment = worldVerts, prims, isLeaf
 }
 
 // resolveHidden fills one hidden flag per piece: a piece is suppressed when it
@@ -532,6 +562,79 @@ func resolveHidden(m *model.Model, states []model.PieceState, hidden []bool, sta
 // The result borrows scratch until its next use; this only changes ownership
 // of the presentation result, never base or committed state.
 func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache, scratch *DrawScratch) *UnitDraw { // [03 §2.4] C24 [03 §5.2] C13
+	return buildUnitDraw(m, base, heading, pitch, bank, current, cache, scratch, false)
+}
+
+// BuildUnitDrawDeferredInto is BuildUnitDrawInto with every visible piece's
+// world corners, shading rows and primitive records left unbuilt: the draw's
+// transforms, hidden verdicts, piece headers and flags are complete, and
+// Materialize fills the pieces of a lane on demand. A consumer that needs only
+// some pieces — a retained body's live lane — then pays for those alone. Until
+// a piece is materialized it carries no corners and no primitives, so the
+// caller must materialize every lane it reads before reading it.
+func BuildUnitDrawDeferredInto(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache, scratch *DrawScratch) *UnitDraw {
+	return buildUnitDraw(m, base, heading, pitch, bank, current, cache, scratch, true)
+}
+
+// Materialize builds the pending pieces of lane (BuildUnitDrawDeferredInto).
+// Each piece is built exactly as the eager traversal builds it; a draw with
+// nothing pending is unchanged.
+func (d *UnitDraw) Materialize(lane PieceLane) {
+	s := d.lazy
+	if s == nil {
+		return
+	}
+	all := true
+	for i := range d.Pieces {
+		if i >= len(s.pending) || !s.pending[i] {
+			continue
+		}
+		if !lane.Includes(d.Pieces[i].DontCache, d.UnderConstruction) {
+			all = false
+			continue
+		}
+		materializePiece(d.Model, i, d.PieceStates, d.WorldPos, s.shaded, s)
+		s.pending[i] = false
+	}
+	if all {
+		d.lazy = nil
+	}
+}
+
+// HasFaces reports whether any visible piece carries a primitive, counting
+// pieces not yet materialized by their authored primitives. A hidden piece
+// keeps its index and drops its primitives.
+func (d *UnitDraw) HasFaces() bool {
+	for i := range d.Pieces {
+		if len(d.Pieces[i].Primitives) != 0 {
+			return true
+		}
+		if s := d.lazy; s != nil && i < len(s.pending) && s.pending[i] && i < len(d.Model.Pieces) && len(d.Model.Pieces[i].Primitives) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ShadedFaces reports whether any visible primitive carries a shade row,
+// which is whether the shaded renderer drew any face of this pose. A piece not
+// yet materialized counts by its authored primitives and the draw's shading
+// verdict, which is exactly what materializing it would record.
+func (d *UnitDraw) ShadedFaces() bool {
+	for i := range d.Pieces {
+		for _, primitive := range d.Pieces[i].Primitives {
+			if primitive.ShadeRow != NoShadeRow {
+				return true
+			}
+		}
+		if s := d.lazy; s != nil && s.shaded && i < len(s.pending) && s.pending[i] && i < len(d.Model.Pieces) && len(d.Model.Pieces[i].Primitives) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func buildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache, scratch *DrawScratch, deferGeometry bool) *UnitDraw {
 	if m == nil {
 		return nil
 	}
@@ -564,7 +667,7 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 	// BMcode=0 selects the shaded piece renderer only while the global
 	// display option is enabled; all other units take the no-SHD path
 	// [R-RND-02A].
-	pieces, transforms := buildPieceDrawsInto(m, states, worldPos, needsRebuild, !current.BMCode && Shading, scratch) // [03 §2.4] C20
+	pieces, transforms := buildPieceDrawsDeferrable(m, states, worldPos, needsRebuild, !current.BMCode && Shading, deferGeometry, scratch) // [03 §2.4] C20
 	scratch.draw = UnitDraw{
 		Model:        m,
 		PieceStates:  states,
@@ -577,6 +680,9 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 		// view, so nothing here reads live sensor state [I6].
 		SonarContact:      current.UnderwaterExempt,
 		UnderConstruction: current.BuildRemaining > 0,
+	}
+	if deferGeometry {
+		scratch.draw.lazy = scratch
 	}
 	return &scratch.draw
 }

@@ -59,9 +59,12 @@ type NodeStore struct {
 // newSessionNodeStore binds node lookup to the search's existing per-cell
 // entry table. The table already carries status, direction and node identity,
 // so a second Cell-keyed index would duplicate every touched coordinate.
-func newSessionNodeStore(scale int32, index *cellIndex) *NodeStore {
+//
+// nodes is reused storage; its contents are discarded and only its capacity is
+// kept. A nil slice allocates.
+func newSessionNodeStore(scale int32, index *cellIndex, nodes []Node) *NodeStore {
 	return &NodeStore{
-		nodes: make([]Node, 1),
+		nodes: append(nodes[:0], Node{}), // reserve 0
 		index: index,
 		scale: scale,
 	}
@@ -119,10 +122,10 @@ func (ns *NodeStore) Len() int { return len(ns.nodes) - 1 }
 // Find locates the NodeID for a cell.
 func (ns *NodeStore) Find(cell Cell) (NodeID, bool) {
 	e := ns.index.get(cell)
-	if e.node == invalidNodeID {
+	if e.id() == invalidNodeID {
 		return invalidNodeID, false
 	}
-	return e.node, true
+	return e.id(), true
 }
 
 // Get returns the node for id. Caller must ensure id is valid.
@@ -143,8 +146,8 @@ func hScaled(h, scale int32) int32 {
 // even if goal now returns a different h — the caller can mutate
 // goal between calls to verify the write-once contract.
 func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal Goal) NodeID {
-	if e := ns.index.get(cell); e.node != invalidNodeID {
-		return e.node
+	if e := ns.index.get(cell); e.id() != invalidNodeID {
+		return e.id()
 	}
 	var h int32
 	if goal != nil {
@@ -163,7 +166,7 @@ func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal G
 		hSet:   true,
 	})
 	e := ns.index.get(cell)
-	e.node = id
+	e.node = heapID(id)
 	ns.index.set(cell, e)
 	return id
 }
@@ -173,8 +176,8 @@ func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal G
 // is returned without modifying H, G, F, or parent. Use TryRelax
 // to update G/F.
 func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) NodeID {
-	if e := ns.index.get(cell); e.node != invalidNodeID {
-		return e.node
+	if e := ns.index.get(cell); e.id() != invalidNodeID {
+		return e.id()
 	}
 	hs := hScaled(h, ns.scale)
 	f := g + hs
@@ -189,7 +192,7 @@ func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) Node
 		hSet:   true,
 	})
 	e := ns.index.get(cell)
-	e.node = id
+	e.node = heapID(id)
 	ns.index.set(cell, e)
 	return id
 }
@@ -226,9 +229,14 @@ func (ns *NodeStore) IsClosed(id NodeID) bool { return ns.nodes[id].Closed }
 
 // heapEntry is a heap element keyed on F.
 type heapEntry struct {
-	id NodeID
+	id heapID
 	f  int32
 }
+
+// heapID is a node identity as the open set stores it. Node identities are
+// dense and a search allocates far fewer than 2^31, so four bytes hold every
+// one; an eight-byte entry keeps twice the heap in each cache line.
+type heapID = int32
 
 // Heap is the binary open heap. An expansion marks its root spent but leaves
 // it in place until neighbour work decides whether to reuse or discard it
@@ -309,7 +317,7 @@ func (h *Heap) Clear() {
 // Push inserts a new open node with key f. Every open node has one heap entry;
 // strictly improving paths use Fix rather than a stale duplicate.
 func (h *Heap) Push(id NodeID, f int32) {
-	h.entries = append(h.entries, heapEntry{id: id, f: f})
+	h.entries = append(h.entries, heapEntry{id: heapID(id), f: f})
 	index := len(h.entries) - 1
 	h.setPosition(id, index)
 	h.up(index)
@@ -326,7 +334,7 @@ func (h *Heap) Pop() (NodeID, int32, bool) {
 	}
 	top := h.entries[0]
 	h.removeAtDown(0)
-	return top.id, top.f, true
+	return NodeID(top.id), top.f, true
 }
 
 // BeginExpand selects the current root but deliberately retains it in the
@@ -340,8 +348,8 @@ func (h *Heap) BeginExpand() (NodeID, int32, bool) {
 		return invalidNodeID, 0, false
 	}
 	top := h.entries[0]
-	h.spent = top.id
-	return top.id, top.f, true
+	h.spent = NodeID(top.id)
+	return NodeID(top.id), top.f, true
 }
 
 // Open records one newly opened neighbour. The first after BeginExpand
@@ -352,7 +360,7 @@ func (h *Heap) Open(id NodeID, f int32) {
 		return
 	}
 	h.clearPosition(h.spent)
-	h.entries[0] = heapEntry{id: id, f: f}
+	h.entries[0] = heapEntry{id: heapID(id), f: f}
 	h.setPosition(id, 0)
 	h.spent = invalidNodeID
 	h.down(0)
@@ -364,7 +372,7 @@ func (h *Heap) Peek() (NodeID, int32, bool) {
 		return 0, 0, false
 	}
 	e := h.entries[0]
-	return e.id, e.f, true
+	return NodeID(e.id), e.f, true
 }
 
 // Fix records F for a relaxation that NodeStore already accepted on strictly
@@ -392,23 +400,28 @@ func (h *Heap) Contains(id NodeID) bool {
 	return ok
 }
 
-func (h *Heap) less(i, j int) bool {
-	return h.entries[i].f < h.entries[j].f
-}
-
+// up and down move the sifted entry through a hole rather than by pairwise
+// swaps: each level copies one entry instead of exchanging two and rewriting
+// both positions, and the entry is written once where it stops. The
+// comparisons, and so the final arrangement, are exactly the swap form's.
 func (h *Heap) up(i int) {
+	x := h.entries[i]
 	for i > 0 {
 		p := (i - 1) / 2
-		if !h.less(i, p) {
+		if !(x.f < h.entries[p].f) {
 			break
 		}
-		h.swap(i, p)
+		h.entries[i] = h.entries[p]
+		h.positions[h.entries[i].id] = int32(i)
 		i = p
 	}
+	h.entries[i] = x
+	h.positions[x.id] = int32(i)
 }
 
 func (h *Heap) down(i int) {
 	n := len(h.entries)
+	x := h.entries[i]
 	for {
 		l := 2*i + 1
 		r := l + 1
@@ -420,18 +433,15 @@ func (h *Heap) down(i int) {
 		if r < n && h.entries[r].f < h.entries[l].f {
 			child = r
 		}
-		if h.entries[i].f <= h.entries[child].f {
+		if x.f <= h.entries[child].f {
 			break
 		}
-		h.swap(i, child)
+		h.entries[i] = h.entries[child]
+		h.positions[h.entries[i].id] = int32(i)
 		i = child
 	}
-}
-
-func (h *Heap) swap(i, j int) {
-	h.entries[i], h.entries[j] = h.entries[j], h.entries[i]
-	h.setPosition(h.entries[i].id, i)
-	h.setPosition(h.entries[j].id, j)
+	h.entries[i] = x
+	h.positions[x.id] = int32(i)
 }
 
 func (h *Heap) removeSpent() {
@@ -449,7 +459,7 @@ func (h *Heap) removeSpent() {
 func (h *Heap) removeAtDown(index int) {
 	last := len(h.entries) - 1
 	removed := h.entries[index]
-	h.clearPosition(removed.id)
+	h.clearPosition(NodeID(removed.id))
 	if index == last {
 		h.entries = h.entries[:last]
 		return
@@ -457,6 +467,6 @@ func (h *Heap) removeAtDown(index int) {
 	replacement := h.entries[last]
 	h.entries[index] = replacement
 	h.entries = h.entries[:last]
-	h.setPosition(replacement.id, index)
+	h.setPosition(NodeID(replacement.id), index)
 	h.down(index)
 }

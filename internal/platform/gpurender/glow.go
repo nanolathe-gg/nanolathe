@@ -163,11 +163,11 @@ func (r *Renderer) SetGlowFamilies(weapons, nanolathe, ground int) {
 }
 
 // glowRun is one device draw of the batch: the image bindings it needs and its
-// vertex and index span.
+// own vertex and index storage, which is retained with the run across frames.
 type glowRun struct {
-	imgs             [4]*ebiten.Image
-	vOff, vLen, iOff int32
-	iLen             int32
+	imgs  [4]*ebiten.Image
+	verts []ebiten.Vertex
+	idx   []uint32
 }
 
 // glowLayer is the renderer's glow state: the switch, the batch, the planes and
@@ -190,9 +190,12 @@ type glowLayer struct {
 	// view.
 	viewScale float32
 
+	// runs are the batch's device draws. The emission plane is a saturating
+	// sum, so a quad may join ANY run that can bind what it reads, not only the
+	// last one opened (see selectRun). last is the run the most recent quad
+	// joined.
 	runs  []glowRun
-	verts []ebiten.Vertex
-	idx   []uint32
+	last  int
 	quads int
 
 	// source is the full-frame emission plane; half, quarter and eighth its
@@ -280,42 +283,83 @@ func (r *Renderer) noteGlowViewScale() float32 {
 func (g *glowLayer) resetFrame() {
 	g.resolved = false
 	g.viewScale = 0
+	g.dropRuns()
+}
+
+// dropRuns empties the batch, keeping every run's storage for the next frame.
+func (g *glowLayer) dropRuns() {
+	for i := range g.runs {
+		g.runs[i].verts, g.runs[i].idx = g.runs[i].verts[:0], g.runs[i].idx[:0]
+	}
 	g.runs = g.runs[:0]
-	g.verts = g.verts[:0]
-	g.idx = g.idx[:0]
+	g.last = 0
 	g.quads = 0
 }
 
-// selectRun opens a run for imgs unless the open run already binds them and has
-// room for one more quad.
+// selectRun returns a run that can bind imgs and has room for one more quad,
+// opening one when none can.
+//
+// Every source quad is added onto the emission plane with a saturating add
+// (BlendLighter into an 8-bit plane), and each fragment's contribution is
+// quantized on its own, so the plane is the same whatever order the quads are
+// drawn in: draw order is not a constraint and a quad may join any run. Callers
+// bind exactly the slots their op reads and leave the rest nil (a stroke reads
+// only the palette, a halo the palette and the composite, a sprite its atlas
+// page and the palette), so a nil slot is one nothing in the quad reads: a
+// quad joins a run whose bound slots agree with its own non-nil ones, and the
+// run adopts whatever slots it newly needs. A frame's strokes, halos, flash
+// discs and sprites then leave in a draw per distinct texture rather than one
+// per change of source kind in record order (§19).
 func (g *glowLayer) selectRun(imgs [4]*ebiten.Image) *glowRun {
-	if n := len(g.runs); n > 0 {
-		run := &g.runs[n-1]
-		if run.imgs == imgs && int(run.vLen)+quadVertices <= glowRunVertexLimit {
-			return run
+	for i := range g.runs {
+		run := &g.runs[i]
+		if len(run.verts)+quadVertices > glowRunVertexLimit {
+			continue
 		}
+		ok := true
+		for j := range imgs {
+			if imgs[j] != nil && run.imgs[j] != nil && imgs[j] != run.imgs[j] {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		for j := range imgs {
+			if imgs[j] != nil {
+				run.imgs[j] = imgs[j]
+			}
+		}
+		g.last = i
+		return run
 	}
-	g.runs = append(g.runs, glowRun{imgs: imgs, vOff: int32(len(g.verts)), iOff: int32(len(g.idx))})
-	return &g.runs[len(g.runs)-1]
+	n := len(g.runs)
+	if n < cap(g.runs) {
+		g.runs = g.runs[:n+1]
+		g.runs[n].imgs = imgs
+	} else {
+		g.runs = append(g.runs, glowRun{imgs: imgs})
+	}
+	g.last = n
+	return &g.runs[n]
 }
 
 // quad appends one quad with explicit corners to the batch, in the scheduler's
 // vertex order. Corner positions are already in screen pixels.
 func (g *glowLayer) quad(imgs [4]*ebiten.Image, xs, ys, sxs, sys [4]float32, col [4]float32, custom [4][4]float32) {
 	run := g.selectRun(imgs)
-	// Indices are relative to the run's own vertex span, which is the slice
+	// Indices are relative to the run's own vertex storage, which is the slice
 	// its draw hands the device.
-	base := uint32(len(g.verts)) - uint32(run.vOff)
+	base := uint32(len(run.verts))
 	for i := 0; i < 4; i++ {
-		g.verts = append(g.verts, ebiten.Vertex{
+		run.verts = append(run.verts, ebiten.Vertex{
 			DstX: xs[i], DstY: ys[i], SrcX: sxs[i], SrcY: sys[i],
 			ColorR: col[0], ColorG: col[1], ColorB: col[2], ColorA: col[3],
 			Custom0: custom[i][0], Custom1: custom[i][1], Custom2: custom[i][2], Custom3: custom[i][3],
 		})
 	}
-	g.idx = append(g.idx, base, base+1, base+2, base+1, base+2, base+3)
-	run.vLen += quadVertices
-	run.iLen += 6
+	run.idx = append(run.idx, base, base+1, base+2, base+1, base+2, base+3)
 	g.quads++
 }
 
@@ -478,7 +522,7 @@ func (r *Renderer) resolveGlow() {
 	fill := r.placeholderImage()
 	for i := range g.runs {
 		run := &g.runs[i]
-		if run.iLen == 0 {
+		if len(run.idx) == 0 {
 			continue
 		}
 		for j := 0; j < 4; j++ {
@@ -489,11 +533,8 @@ func (r *Renderer) resolveGlow() {
 			g.shaderOpts.Images[j] = img
 		}
 		g.shaderOpts.Blend = ebiten.BlendLighter
-		r.recordSubmission(int(run.vLen), int(run.iLen))
-		g.source.DrawTrianglesShader32(
-			g.verts[run.vOff:run.vOff+run.vLen],
-			g.idx[run.iOff:run.iOff+run.iLen],
-			g.sourceShader, &g.shaderOpts)
+		r.recordSubmission(len(run.verts), len(run.idx))
+		g.source.DrawTrianglesShader32(deviceVertexSpan(run.verts, 0, len(run.verts)), run.idx, g.sourceShader, &g.shaderOpts)
 		r.frameDraws++
 	}
 
@@ -520,10 +561,7 @@ func (r *Renderer) resolveGlow() {
 	r.glowAdd(r.surfaces[0], g.quarter, glowOctaveNear, near)
 	r.glowAdd(r.surfaces[0], g.eighth, glowOctaveFar, far)
 	r.modelStats.GlowPasses += 9
-	g.runs = g.runs[:0]
-	g.verts = g.verts[:0]
-	g.idx = g.idx[:0]
-	g.quads = 0
+	g.dropRuns()
 }
 
 // glowBlurStep is the separable blur's tap spacing, in texels of the octave

@@ -478,3 +478,8 @@ func TestSelectionPickingStable(t *testing.T) {
 	_ = um
 	_ = view
 }
+
+type modelCorner struct {
+	x, y, z float64
+	u, v    float64
+}

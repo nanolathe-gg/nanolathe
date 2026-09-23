@@ -78,6 +78,19 @@ type tickCandidateProvider interface {
 	SetPathTick(tick uint32)
 }
 
+// idleCandidateProvider is an optional batching boundary. A provider that can
+// tell, without polling, that a player's next polls will be idle lets the
+// scheduler charge a whole block of them at once. It changes the cost of the
+// admission loop and nothing it computes: see skipIdleRounds.
+type idleCandidateProvider interface {
+	// IdleRun reports how many of the player's next polls, up to limit, are
+	// certain to admit nothing and change nothing but the provider's own
+	// cursor for that player. It may under-report; it must never over-report.
+	IdleRun(player int, limit int32) int32
+	// SkipIdle performs n polls that IdleRun reported idle.
+	SkipIdle(player int, n int32)
+}
+
 // PollResult is what one poll of a player's candidate provider produced.
 type PollResult uint8
 
@@ -547,6 +560,12 @@ func (s *Scheduler) Tick(tick uint32) {
 			// Heap exhaustion itself has no charge [04 R-PATH-01 §6].
 			continue
 		}
+		if idle, ok := s.provider.(idleCandidateProvider); ok {
+			total = s.skipIdleRounds(idle, total)
+			if total <= 0 {
+				break
+			}
+		}
 		player := s.nextPlayer()
 		if player < 0 {
 			break
@@ -590,6 +609,61 @@ func (s *Scheduler) Tick(tick uint32) {
 			break
 		}
 	}
+}
+
+// skipIdleRounds charges whole rounds of idle polls at once and returns the
+// remaining total.
+//
+// With no request latched, each iteration of the admission loop visits the
+// next player in cursor order whose accumulator is at least one and polls one
+// of its candidates; an idle poll charges one unit to that player's service
+// count, its accumulator and the total, and moves only that player's cursor.
+// The players the loop visits, and their order, stay the same from round to
+// round for as long as every poll is idle, every accumulator stays positive and
+// the total stays positive: nothing in an idle poll can change eligibility or
+// raise an accumulator. So m such rounds end in exactly the state the loop
+// reaches by polling them one at a time -- each visited player's cursor m
+// polls on, its service count m higher and its accumulator m lower, the total
+// m times the round's size lower, and the player cursor just past the round's
+// last member. m is bounded so that every one of those polls happens with the
+// total and the polled player's accumulator still positive, and so that none
+// of them reaches a poll the provider cannot vouch for; the loop takes the
+// next poll itself. Under a large step allowance almost every poll is idle,
+// and this is what keeps the loop's cost proportional to the requests it
+// finds rather than to the allowance [04 R-PATH-01 §6].
+func (s *Scheduler) skipIdleRounds(idle idleCandidateProvider, total int32) int32 {
+	var round [10]int
+	n := 0
+	for k := 0; k < 10; k++ {
+		p := (s.playerCursor + k) % 10
+		if s.accumulator[p] >= 1 && s.provider.Eligible(p) {
+			round[n] = p
+			n++
+		}
+	}
+	if n == 0 {
+		return total
+	}
+	m := total / int32(n)
+	for _, p := range round[:n] {
+		m = min(m, s.accumulator[p])
+	}
+	for _, p := range round[:n] {
+		if m <= 0 {
+			return total
+		}
+		m = min(m, idle.IdleRun(p, m))
+	}
+	if m <= 0 {
+		return total
+	}
+	for _, p := range round[:n] {
+		idle.SkipIdle(p, m)
+		s.serviceCount[p] += m
+		s.accumulator[p] -= m
+	}
+	s.playerCursor = (round[n-1] + 1) % 10
+	return total - m*int32(n)
 }
 
 func (s *Scheduler) nextPlayer() int {

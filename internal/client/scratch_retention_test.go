@@ -118,3 +118,33 @@ func BenchmarkScratchRetentionFaceCopy(b *testing.B) {
 		dst, vertices = copyModelFaces(dst, vertices, large, 2, 3)
 	}
 }
+
+// A packet may address a retained lane's own faces (rebaseRetained), so no
+// later write in the same frame may move them: a second offset falls back to
+// the frame's scratch, and new retained faces take fresh storage. A later
+// frame reuses the lane's arenas.
+func TestRetainedLaneFacesDoNotMoveUnderAPacketOfTheSameFrame(t *testing.T) {
+	var s cachedGeometryStore
+	src := s.retain(&drawlist.ModelGeometry{Faces: retentionFaces(2, 3)}, 1)
+	retained := src.Faces
+	lent, _, ok := s.rebasedFaces(src, 3, 4, 0, 0, 2)
+	if !ok || lent[1].Vertices[2].X != 1+2+3 || lent[1].Vertices[2].Y != 2+4 {
+		t.Fatal("the rebased corner is not the retained corner offset by (3, 4)")
+	}
+	if again, _, ok := s.rebasedFaces(src, 3, 4, 0, 0, 2); !ok || &again[0] != &lent[0] {
+		t.Fatal("the same offset did not reuse the rebased faces")
+	}
+	if faces, _, ok := s.rebasedFaces(src, 0, 0, 0, 0, 2); !ok || &faces[0] != &retained[0] {
+		t.Fatal("a zero offset did not address the retained faces")
+	}
+	if _, _, ok := s.rebasedFaces(src, 5, 5, 0, 0, 2); ok {
+		t.Fatal("a second offset in one frame rewrote faces a packet addresses")
+	}
+	next := s.retain(&drawlist.ModelGeometry{Faces: retentionFaces(2, 3)[1:]}, 2)
+	if retained[0].Vertices[0].X != 0 || lent[1].Vertices[2].X != 6 || &next.Faces[0] == &retained[0] {
+		t.Fatal("new retained faces overwrote faces lent in the same frame")
+	}
+	if faces, _, ok := s.rebasedFaces(next, 5, 5, 0, 0, 3); !ok || faces[0].Vertices[0].X != 1+5 {
+		t.Fatal("a later frame did not rebase the new faces")
+	}
+}

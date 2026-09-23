@@ -104,3 +104,25 @@ func bodyShadowRevision(b *cachedModelBody) uint64 {
 	}
 	return b.shadowRevision
 }
+
+// A pose change that moves no shadow corner reprojects exactly the retained
+// packet, which is literally the same raster, so the revision and key stand
+// (replaceCachedShadow); the pose is still taken as the new reference.
+func TestShadowReprojectionThatMovesNothingKeepsItsKey(t *testing.T) {
+	c, v := cachedLiveRegressionSubject(t)
+	c.geometryOnlyModels = true
+	c.shadows, c.vehicleShadows = true, true
+	c.pal = &palette.Tables{}
+
+	first, _ := recordShadowSubject(t, c, v)
+	key := first.Cache
+	want := first.Clone()
+	v.Pieces[0].DontShade = true
+	second, body := recordShadowSubject(t, c, v)
+	if !body.shadowPose[0].DontShade {
+		t.Fatal("the fixture's pose change did not reach the retained shadow pose")
+	}
+	if second.Cache != key || body.shadowRevision != 1 || !sameShadowFaces(want, second) {
+		t.Fatalf("an unmoved reprojection gave key %+v revision %d, want %+v", second.Cache, body.shadowRevision, key)
+	}
+}

@@ -1,6 +1,7 @@
 package render
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -50,4 +51,43 @@ func TestBuildUnitDrawDoesNotAdvanceOrientationBeforeBodyRebuild(t *testing.T) {
 	if cache.Heading != 0 {
 		t.Fatal("pose construction refreshed the cache before the consumer rebuilt")
 	}
+}
+
+// A deferred draw reports the eager draw's face and shading verdicts before any
+// piece is built, builds only the lane it is asked for, and once every lane is
+// materialized carries exactly the eager pieces: the client decides its lanes
+// from those verdicts and must not see a different pose.
+func TestDeferredUnitDrawMaterializesTheEagerPieces(t *testing.T) {
+	previous := Shading
+	Shading = true
+	t.Cleanup(func() { Shading = previous })
+
+	mdl := otaRND02BModel()
+	states := []model.PieceState{{}, {DontCache: true}, {}}
+	view := frame.UnitView{BMCode: false}
+	eager := BuildUnitDrawInto(mdl, states, 900, 30, 0, view, nil, &DrawScratch{})
+	lazy := BuildUnitDrawDeferredInto(mdl, states, 900, 30, 0, view, nil, &DrawScratch{})
+	if lazy.HasFaces() != hasAnyPrimitive(eager) || lazy.ShadedFaces() != eager.ShadedFaces() {
+		t.Fatalf("deferred verdicts faces=%v shaded=%v, eager %v/%v", lazy.HasFaces(), lazy.ShadedFaces(), hasAnyPrimitive(eager), eager.ShadedFaces())
+	}
+	lazy.Materialize(PieceLaneLive)
+	if !reflect.DeepEqual(lazy.Pieces[1], eager.Pieces[1]) {
+		t.Fatal("the live piece differs from the eager build")
+	}
+	if len(lazy.Pieces[2].WorldVertices) != 0 || len(lazy.Pieces[2].Primitives) != 0 {
+		t.Fatal("materializing the live lane built cached pieces")
+	}
+	lazy.Materialize(PieceLaneAll)
+	if !reflect.DeepEqual(lazy.Pieces, eager.Pieces) || !lazy.HasFaces() {
+		t.Fatal("a fully materialized deferred draw differs from the eager build")
+	}
+}
+
+func hasAnyPrimitive(d *UnitDraw) bool {
+	for i := range d.Pieces {
+		if len(d.Pieces[i].Primitives) != 0 {
+			return true
+		}
+	}
+	return false
 }

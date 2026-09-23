@@ -214,3 +214,14 @@ func TestBlastMetadataUsesAdmissionAgeAndAuthoredSize(t *testing.T) {
 		}
 	}
 }
+
+// borrowRebasedModelGeometry copies the retained cached lane into this frame's
+// packet arena. The retained entry remains immutable while the output can move
+// into the current union box and acquire its current live lane.
+//
+// hx and hy are this frame's half-pixel offset (modelAnchorDoubled); the
+// retained doubled lane carries none, so it is added to the doubled corners
+// here.
+func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, height, originX, originY, anchorX, anchorY, hx, hy int32) *drawlist.ModelGeometry {
+	return c.rebaseRetained(nil, src, width, height, originX, originY, anchorX, anchorY, hx, hy)
+}

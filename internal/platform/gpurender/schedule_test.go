@@ -372,3 +372,23 @@ func TestSchedulerForgottenCellOwnerStillConstrains(t *testing.T) {
 		t.Fatalf("the write over the forgotten destination read landed in phase %d, want 1", got)
 	}
 }
+
+// A device draw's vertex slice is rounded up to a size class so Ebitengine's
+// per-destination conversion buffer is not reallocated for every few vertices a
+// growing batch adds; the class never exceeds the storage's capacity and adds
+// at most an eighth.
+func TestDeviceVertexSpanClasses(t *testing.T) {
+	for n := 0; n < 1<<16; n += 7 {
+		c := deviceVertexClass(n)
+		if c < n || (n > 64 && c > n+n/8) || (n > 64 && deviceVertexClass(n+1) < c) {
+			t.Fatalf("class of %d is %d", n, c)
+		}
+	}
+	verts := make([]ebiten.Vertex, 1000, 1100)
+	if got := len(deviceVertexSpan(verts, 0, 1000)); got != deviceVertexClass(1000) {
+		t.Fatalf("span with headroom has %d vertices, want %d", got, deviceVertexClass(1000))
+	}
+	if got := len(deviceVertexSpan(verts, 100, 1000)); got != 1000 {
+		t.Fatalf("span without headroom has %d vertices, want exactly 1000", got)
+	}
+}

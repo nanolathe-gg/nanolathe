@@ -60,9 +60,12 @@ func (c *Client) collectFragmentPolys(v frame.FragmentView, texture *formats.GAF
 	// Fragment lanes retain the initializer's raw order: Z, Y, X. The
 	// standalone helper rotates Z, then X, then Y [04 R-COB-04 §3].
 	states := [1]model.PieceState{{RotX: v.Angles[2], RotY: v.Angles[1], RotZ: v.Angles[0]}}
-	transform := model.Compose(&m, states[:], 0)
+	// The transform is composed into storage the client keeps: it is read only
+	// by the ApplyOffsetInto below, and a one-off Compose allocated its node
+	// storage for every fragment of every frame.
+	c.fragmentTransform = model.ComposeInto(&m, states[:], 0, c.fragmentTransform, &c.fragmentCompose)
 	var vertices [8][3]numeric.Fixed
-	transform.ApplyOffsetInto(vertices[:], v.Vertices[:], v.Position)
+	c.fragmentTransform.ApplyOffsetInto(vertices[:], v.Vertices[:], v.Position)
 	scratch := c.borrowPolys(len(fragmentFaces), 4*len(fragmentFaces))
 	u := [4]int32{0, int32(texture.Width) - 1, int32(texture.Width) - 1, 0}
 	vv := [4]int32{0, 0, int32(texture.Height) - 1, int32(texture.Height) - 1}

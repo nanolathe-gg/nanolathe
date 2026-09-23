@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"encoding/binary"
 	"image"
 	"slices"
 
@@ -97,13 +98,19 @@ func (q *modelQuadParams) add(v []drawlist.ModelVertex, dx, dy int, keyDelta int
 	}
 	// A ring whose corners all share one Y has no row to own; the two-chain
 	// walk paints nothing there and neither does this path.
-	mm := (bot - top + 4) % 4
+	mm := (bot - top) & 3
 	if mm == 0 {
 		return 0
 	}
-	var packed [modelQuadBytes]byte
+	// The entry is packed straight into its place in the buffer; a face that
+	// does not fit leaves count where it was, so the bytes are never read.
+	need := (q.count + 1) * modelQuadBytes
+	if cap(q.buf) < need {
+		q.buf = slices.Grow(q.buf, need-len(q.buf))
+	}
+	packed := (*[modelQuadBytes]byte)(q.buf[q.count*modelQuadBytes : need])
 	for j := 0; j < 4; j++ {
-		c := v[(top+j)%4]
+		c := &v[(top+j)&3]
 		x, y := int(c.X)+dx, int(c.Y)+dy
 		key := int(modelDirectShiftKey(c.Key, keyDelta)) + modelQuadKeyBias
 		if !fitsQuadLane(x) || !fitsQuadLane(y) || !fitsQuadLane(int(c.U)) || !fitsQuadLane(int(c.V)) || !fitsQuadLane(key) {
@@ -117,12 +124,7 @@ func (q *modelQuadParams) add(v []drawlist.ModelVertex, dx, dy int, keyDelta int
 	// The bottom corner's rotated index rides the first corner's spare byte;
 	// the shader needs it to split the ring into its left and right chains.
 	packed[35] = byte(mm)
-	need := (q.count + 1) * modelQuadBytes
-	if cap(q.buf) < need {
-		q.buf = slices.Grow(q.buf, need-len(q.buf))
-	}
 	q.buf = q.buf[:need]
-	copy(q.buf[q.count*modelQuadBytes:], packed[:])
 	q.count++
 	return q.count
 }
@@ -133,8 +135,7 @@ func fitsQuadLane(v int) bool { return v >= 0 && v <= 0xFFFF }
 // The image is only ever sampled by the shader, so the alpha byte is data:
 // WritePixels keeps a value that is invalid as a premultiplied colour.
 func putQuadLane(b []byte, hi, lo int) {
-	b[0], b[1] = byte(hi>>8), byte(hi)
-	b[2], b[3] = byte(lo>>8), byte(lo)
+	binary.BigEndian.PutUint32(b, uint32(uint16(hi))<<16|uint32(uint16(lo)))
 }
 
 // appendBlock appends a retained run of n packed entries — one subject's

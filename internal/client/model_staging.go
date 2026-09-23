@@ -522,6 +522,16 @@ func wrapKeyByte(v int32) uint8 {
 // gates the composer reads, and the nanoframe inputs. It is the part of
 // drawUnitModel that precedes composition.
 func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bool) {
+	return c.buildUnitDraw(v, false)
+}
+
+// unitDrawDeferred is unitDrawFor with the pieces' geometry left for the
+// caller to materialize by lane (render.BuildUnitDrawDeferredInto).
+func (c *Client) unitDrawDeferred(v frame.UnitView) (*presentationrender.UnitDraw, bool) {
+	return c.buildUnitDraw(v, true)
+}
+
+func (c *Client) buildUnitDraw(v frame.UnitView, deferred bool) (*presentationrender.UnitDraw, bool) {
 	if c == nil || c.cam == nil {
 		return nil, false
 	}
@@ -534,7 +544,11 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 		return nil, false
 	}
 	states := c.modelStates(m, v.Pieces)
-	draw := presentationrender.BuildUnitDrawInto(m.compiled, states, v.Heading, v.Pitch, v.Bank, v, c.orientationCache(unitPresentationID(v)), c.borrowDrawScratch())
+	build := presentationrender.BuildUnitDrawInto
+	if deferred {
+		build = presentationrender.BuildUnitDrawDeferredInto
+	}
+	draw := build(m.compiled, states, v.Heading, v.Pitch, v.Bank, v, c.orientationCache(unitPresentationID(v)), c.borrowDrawScratch())
 	// BMcode=0 is the structure class [R-RND-02A]; a unit under construction
 	// always gets the height plane because the nanoframe reveal reads it
 	// [R-REN-03A §2].

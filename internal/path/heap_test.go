@@ -235,7 +235,7 @@ func TestHeapPopOrderHandBuiltGraph(t *testing.T) {
 func heapFrom(entries []heapEntry) Heap {
 	h := Heap{entries: append([]heapEntry(nil), entries...)}
 	for i, entry := range h.entries {
-		h.setPosition(entry.id, i)
+		h.setPosition(NodeID(entry.id), i)
 	}
 	return h
 }
@@ -243,7 +243,7 @@ func heapFrom(entries []heapEntry) Heap {
 func heapIDs(h Heap) []NodeID {
 	ids := make([]NodeID, len(h.entries))
 	for i, entry := range h.entries {
-		ids[i] = entry.id
+		ids[i] = NodeID(entry.id)
 	}
 	return ids
 }

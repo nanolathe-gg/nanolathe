@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"strings"
+	"sync/atomic"
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -26,14 +27,23 @@ import (
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
-type modelCorner struct {
-	x, y, z float64
-	u, v    float64
-}
-
 type unitModel struct {
 	compiled    *compiledmodel.Model
 	pieceByName map[string]int // lower-case name → piece index
+	// scriptPieces memoizes modelStates' name resolution for the first
+	// script piece list seen with this model: entry i is the model piece the
+	// list's i-th name resolved to. A published name that is the same string
+	// resolves the same way, so the memo only skips the lookups. It is
+	// written once, atomically, because stage one resolves on several
+	// goroutines (docs/DESIGN_GPU_RENDERER.md §13.9).
+	scriptPieces atomic.Pointer[[]scriptPiece]
+}
+
+// scriptPiece is one resolved script piece name; index is -1 when the model
+// has no piece of that name.
+type scriptPiece struct {
+	name  string
+	index int
 }
 
 func (c *Client) orientationCache(id uint64) *presentationrender.OrientationCache {
@@ -163,14 +173,24 @@ func (c *Client) modelStates(m *unitModel, pieces []frame.PieceView) []compiledm
 		return nil
 	}
 	states := c.borrowModelStates(len(m.compiled.Pieces))
-	for _, pv := range pieces {
+	memo := m.scriptPieces.Load()
+	missed := false
+	for i, pv := range pieces {
 		idx := pv.Index
 		if pv.Name != "" {
-			found, ok := m.pieceByName[c.modelNameKey(pv.Name)]
-			if !ok {
+			if memo != nil && i < len(*memo) && (*memo)[i].name == pv.Name {
+				idx = (*memo)[i].index
+			} else {
+				missed = true
+				found, ok := m.pieceByName[c.modelNameKey(pv.Name)]
+				if !ok {
+					continue
+				}
+				idx = found
+			}
+			if idx < 0 {
 				continue
 			}
-			idx = found
 		}
 		if idx < 0 || idx >= len(states) {
 			continue
@@ -181,7 +201,28 @@ func (c *Client) modelStates(m *unitModel, pieces []frame.PieceView) []compiledm
 			DontShade: pv.DontShade, Hidden: pv.Hidden, DontShadow: pv.DontShadow, DontCache: pv.DontCache,
 		}
 	}
+	if missed && memo == nil {
+		c.memoizeScriptPieces(m, pieces)
+	}
 	return states
+}
+
+// memoizeScriptPieces records how one script piece list resolves against m
+// (unitModel.scriptPieces). Only the first list is kept, so a model shared by
+// two scripts resolves the second one by lookup rather than replacing the memo
+// back and forth.
+func (c *Client) memoizeScriptPieces(m *unitModel, pieces []frame.PieceView) {
+	memo := make([]scriptPiece, len(pieces))
+	for i, pv := range pieces {
+		memo[i] = scriptPiece{name: pv.Name, index: -1}
+		if pv.Name == "" {
+			continue
+		}
+		if found, ok := m.pieceByName[c.modelNameKey(pv.Name)]; ok {
+			memo[i].index = found
+		}
+	}
+	m.scriptPieces.CompareAndSwap(nil, &memo)
 }
 
 // unitNanoframeReveal builds the reveal for an unfinished unit, or nil when

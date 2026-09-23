@@ -503,7 +503,7 @@ func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 				continue
 			}
 			r.recordSubmission(int(run.vLen), int(run.iLen))
-			pg.key.DrawTrianglesShader32(d.verts[run.vOff:run.vOff+run.vLen], d.idx[run.iOff:run.iOff+run.iLen], d.keyShader, &d.opts)
+			pg.key.DrawTrianglesShader32(deviceVertexSpan(d.verts, int(run.vOff), int(run.vLen)), d.idx[run.iOff:run.iOff+run.iLen], d.keyShader, &d.opts)
 			r.frameDraws++
 		}
 		// The colour plane: faces that pass the key test, at their texel, with
@@ -524,7 +524,7 @@ func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 				}
 			}
 			r.recordSubmission(int(run.vLen), int(run.iLen))
-			pg.colour.DrawTrianglesShader32(d.verts[run.vOff:run.vOff+run.vLen], d.idx[run.iOff:run.iOff+run.iLen], d.colourShader, &d.opts)
+			pg.colour.DrawTrianglesShader32(deviceVertexSpan(d.verts, int(run.vOff), int(run.vLen)), d.idx[run.iOff:run.iOff+run.iLen], d.colourShader, &d.opts)
 			r.frameDraws++
 		}
 		r.modelStats.DirectPasses += 2
@@ -997,7 +997,7 @@ func modelFaceTexFor(f *drawlist.ModelFace, slot modelTextureSlot) modelFaceTex 
 func (d *modelDirectLane) colourRun(imgs [2]*ebiten.Image, need int) *modelDirectRun {
 	if n := len(d.runs); n > 0 {
 		run := &d.runs[n-1]
-		if run.imgs == imgs && run.page == d.page && int(run.vLen)+need <= schedRunVertexLimit {
+		if run.imgs[0] == imgs[0] && run.imgs[1] == imgs[1] && run.page == d.page && int(run.vLen)+need <= schedRunVertexLimit {
 			return run
 		}
 	}
@@ -1027,10 +1027,14 @@ func (r *Renderer) appendSoloFace(f *drawlist.ModelFace, slot modelTextureSlot, 
 	if n < 3 {
 		return
 	}
+	// The ring's doubled signed area, summed edge by edge from the closing
+	// edge (last corner to first) onward.
 	var area int64
+	a := &f.Vertices[n-1]
 	for i := range f.Vertices {
-		a, b := f.Vertices[i], f.Vertices[(i+1)%n]
+		b := &f.Vertices[i]
 		area += int64(a.X)*int64(b.Y) - int64(a.Y)*int64(b.X)
+		a = b
 	}
 	if area <= 0 {
 		r.modelStats.DirectCulled++
@@ -1089,10 +1093,14 @@ func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, o
 	if n < 3 {
 		return
 	}
+	// The ring's doubled signed area, summed edge by edge from the closing
+	// edge (last corner to first) onward.
 	var area int64
+	a := &f.Vertices[n-1]
 	for i := range f.Vertices {
-		a, b := f.Vertices[i], f.Vertices[(i+1)%n]
+		b := &f.Vertices[i]
 		area += int64(a.X)*int64(b.Y) - int64(a.Y)*int64(b.X)
+		a = b
 	}
 	if area <= 0 {
 		r.modelStats.DirectCulled++
@@ -1135,19 +1143,17 @@ func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, o
 			}
 		}
 	}
-	var cx, cy float32
-	for _, v := range f.Vertices {
-		cx += float32(v.X)
-		cy += float32(v.Y)
-	}
-	cx /= float32(n)
-	cy /= float32(n)
-	fat := float32(modelDirectFatten)
-	if run == nil {
-		fat = 0.5
-	}
-	if run != nil && !shadow {
-		r.reflectModelFace(f, ox, oy, s, cx, cy, fat, quad, run.page)
+	if run != nil && !shadow && r.reflections.active != nil {
+		// The centroid and the fattening feed the reflection alone, so a
+		// subject that does not reflect this frame skips them.
+		var cx, cy float32
+		for _, v := range f.Vertices {
+			cx += float32(v.X)
+			cy += float32(v.Y)
+		}
+		cx /= float32(n)
+		cy /= float32(n)
+		r.reflectModelFace(f, ox, oy, s, cx, cy, float32(modelDirectFatten), quad, run.page)
 	}
 	base := uint32(len(d.verts))
 	if run != nil {
@@ -1178,9 +1184,16 @@ func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, o
 	if run == nil {
 		custom2, custom3 = lighting, sceneOpModelDirect
 	}
-	for _, v := range f.Vertices {
+	// The face's corners and its fan are written in place after one growth
+	// each, rather than appended corner by corner.
+	vi := len(d.verts)
+	d.verts = slices.Grow(d.verts, n)[:vi+n]
+	dst := d.verts[vi : vi+n]
+	shaded := f.Shaded && !shadow
+	for i := range f.Vertices {
+		v := &f.Vertices[i]
 		k := float32(1)
-		if f.Shaded && !shadow {
+		if shaded {
 			k = shadeScale(int(v.Shade))
 			if k > rowScaleMax {
 				k = rowScaleMax
@@ -1193,16 +1206,20 @@ func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, o
 		if run == nil {
 			custom1 = d.fallbackOpacity
 		}
-		d.verts = append(d.verts, ebiten.Vertex{
+		dst[i] = ebiten.Vertex{
 			DstX: ox + modelSamplePos(v.X, s), DstY: oy + modelSamplePos(v.Y, s),
 			SrcX: float32(tex.x + v.U), SrcY: float32(tex.y + v.V),
 			ColorR: k, ColorG: colorG, ColorB: colorB,
 			ColorA:  colorA,
 			Custom0: float32(mode), Custom1: custom1, Custom2: custom2, Custom3: custom3,
-		})
+		}
 	}
+	ii := len(d.idx)
+	d.idx = slices.Grow(d.idx, 3*(n-2))[:ii+3*(n-2)]
+	fan := d.idx[ii:]
 	for i := 1; i+1 < n; i++ {
-		d.idx = append(d.idx, base, base+uint32(i), base+uint32(i+1))
+		fan[0], fan[1], fan[2] = base, base+uint32(i), base+uint32(i+1)
+		fan = fan[3:]
 	}
 	if run != nil {
 		run.vLen += int32(n)

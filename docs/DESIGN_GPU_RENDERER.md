@@ -1137,7 +1137,13 @@ frame has already handed out plus the new request*, so it converges in one step
 instead of once per request. And a constant reaches a shader as a literal rather
 than a uniform, because a uniform map is a per-frame allocation for a value that
 never changes. The same rule is why a value read after a call returns must not be
-borrowed from per-frame scratch. §11.2 "Allocation policy" states the standing
+borrowed from per-frame scratch. It also reaches into Ebitengine: each
+destination image converts a draw's vertices into a buffer of its own that is
+reallocated at exactly the draw's size whenever a draw outgrows it, so a batch
+growing by a few vertices a frame reallocated hundreds of kilobytes every few
+frames. The executor's draws hand over a vertex slice rounded up to a size class
+of at most an eighth more (`deviceVertexSpan`); the extra vertices are storage
+no index references. §11.2 "Allocation policy" states the standing
 policy and §11.5 "CPU" says where the frame's remaining allocation actually
 lives.
 
@@ -1525,6 +1531,21 @@ excluded, because it loads and binds models on first use and that is a write to
 shared registry maps; a battle registry has every model bound before the first
 frame. A parity trace sink is excluded as a diagnostic path.
 
+**Deferred pieces and retained lanes by reference.** A job builds only the
+pieces its frame reads: `render.BuildUnitDrawDeferredInto` composes every
+piece's transform but materializes a lane's world vertices on first read
+(`UnitDraw.Materialize`), so a frame that only rebases a retained cached lane
+builds the live pieces alone; a rebuild, a nanoframe and a structure-shadow
+reprojection still build every piece. The rebase itself hands the packet the
+retained faces rather than a copy when the offset is zero, and otherwise reuses
+a rebased copy kept on the store while the box and half-pixel offset hold; a
+rebuilt doubled lane is stored with its frame's half-pixel offset already
+applied. This is safe because a recorded list is dead once the next frame starts
+recording — the pipeline of §13.10 starts a pre-record only after `Execute` has
+consumed the previous list — and a per-frame stamp on each retained store makes a
+second write inside the same frame take fresh storage instead of moving faces a
+packet of that frame already addresses.
+
 ### 13.10 The record/submit pipeline
 
 Ebitengine runs Update and Draw on the game goroutine and encodes to the device
@@ -1820,7 +1841,9 @@ below; the retired design and its measurements are in the history file.
   raster for.
 * `Revision` — incremented on every `replaceCachedGeometry`, which is the one
   place the cached lane is stored. An equal `(Body, Revision)` means literally
-  the same retained faces.
+  the same retained faces. A structure shadow whose reprojection comes out
+  identical to the retained one keeps its revision (about three quarters of the
+  coastal battle's reprojections), so the executor can replay it.
 * `HalfX`, `HalfY` — the frame's half-pixel offset, which the rebase adds to the
   **doubled** corners alone (§17), so the packet's own origin does not imply it.
 * `Lane` — which of the retained object's rasters this is, body or shadow. The
@@ -3190,6 +3213,14 @@ treat the light sources themselves — or the close of the world region, so a fr
 recorded without a fog composite still resolves before the chrome is painted over
 the world. A front-end frame has no emissive commands and drops nothing.
 
+Because the emission plane is a saturating sum of 8-bit contributions, draw order
+does not reach a single texel, and a quad joins ANY run whose bound slots agree
+with the slots it reads, not only the last one opened; callers bind exactly the
+slots their op reads and leave the others nil, and a run adopts a slot a later
+quad needs. Strokes, halos and flash discs share one run and each scene atlas
+page of sprites another, so a battle frame's emission is two or three device
+draws instead of one per change of source kind in record order.
+
 The resolve submits the scheduler first, so it is a barrier costing one segment,
 then: clears the full-frame emission plane and draws the runs into it under
 `BlendLighter`; shrinks it to a half and a quarter of the frame with linear
@@ -3335,7 +3366,7 @@ strength.
    it is clearly brighter, the brightening falls off with distance, and the far
    corner is the field to within the blur's last tap.
 2. **CI tier.** Unit tests lock the normalized kernel, run-relative indices and
-   run splitting of the batch, the stroke quad's geometry, and the recorder's
+   run selection of the batch (conflicting bindings split, compatible ones rejoin), the stroke quad's geometry, and the recorder's
    emissive marks on beam and segment strokes.
 3. **Byte-identical off.** The modern battle benchmark with `display.glow` 0
    against the build without the layer.
@@ -4308,6 +4339,14 @@ supersampled geometry included. `Sprite.ReflectWater/ReflectionHeight` and
 projectile bodies and endpoints. Ground-shadow sprites do not opt in; classic
 ignores these value fields; cloned lists retain them.
 
+The source pass draws in record order, one device draw per run of faces that can
+share bindings: the model faces of one atlas page (a face that tests no group key
+joins a run binding one), and billboards and strokes together per scene atlas
+page. A billboard samples its frame's scene atlas placement (§11.2), with the
+frame's own rectangle carried in its vertex lanes; a sample outside that
+rectangle reads transparent, exactly as a texture of the frame alone did, so the
+page's padded edge is never reflected.
+
 The model lane captures front-facing faces while preparing its atlas, and each
 reflected vertex samples that resolved colour at its original atlas position; the
 key plane and quad mapper reject source pixels belonging to an obscuring piece.
@@ -4382,7 +4421,11 @@ cells use separate compile-time shader variants in two non-overlapping groups, s
 ordinary water avoids the larger shader's register cost as well as its samples.
 Triangles entirely below 64 or above 320, and bounds outside the viewport, mark
 nothing; height-range intersection is conservative. A frame without marked cells
-skips the metadata render and retains the single resolve quad. The buffer
+skips the metadata render and retains the single resolve quad. The metadata
+render draws only the triangles, of any source, whose bounds widened by the same
+reach touch a marked cell, in record order: only marked cells read the buffer and
+their reads stay within that reach, so the omitted triangles cannot change a
+pixel. In the coastal benchmark that is about an eighth of the mesh. The buffer
 allocates lazily, is reused, is resized when next needed, and is retired on source
 reset. Top-surface reuse remains an intentional approximation: no underside,
 offscreen body or reflected depth is reconstructed.

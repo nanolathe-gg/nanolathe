@@ -211,7 +211,7 @@ func TestPathStorageSessionNodeStoreResetRebindsEntries(t *testing.T) {
 	if got, ok := s.ns.Find(s.Start()); !ok || got != id {
 		t.Fatalf("reset store lookup mismatch: got %d, want %d", got, id)
 	}
-	if got := s.entries.get(s.Start()).node; got != id {
+	if got := s.entries.get(s.Start()).id(); got != id {
 		t.Fatalf("reset store did not publish through session map: got %d, want %d", got, id)
 	}
 }
@@ -267,4 +267,42 @@ func TestPathStorageRetainedHeap(t *testing.T) {
 	}
 
 	t.Logf("retained HeapAlloc bytes: baseline=%d completed-held=%d completed-released=%d cancelled-held=%d cancelled-released=%d; completed-held-delta=%d completed-release-residual=%d cancelled-held-delta=%d cancelled-release-residual=%d", before.HeapAlloc, completedHeld.HeapAlloc, completedReleased.HeapAlloc, cancelledHeld.HeapAlloc, cancelledReleased.HeapAlloc, int64(completedHeld.HeapAlloc)-int64(before.HeapAlloc), int64(completedReleased.HeapAlloc)-int64(before.HeapAlloc), int64(cancelledHeld.HeapAlloc)-int64(completedReleased.HeapAlloc), int64(cancelledReleased.HeapAlloc)-int64(completedReleased.HeapAlloc))
+}
+
+// The node array and open-set rows travel with the scheduler's table, so a
+// search that follows another — completed, abandoned mid-search, or finished
+// during setup — reuses their capacity. Reuse is storage only: every search in
+// the sequence must answer exactly what a search with fresh storage answers.
+func TestPathStorageWorkspaceReuseMatchesFreshStorage(t *testing.T) {
+	var ws Workspace
+	scenarios := pathStorageScenarios()
+	for round := 0; round < 3; round++ {
+		for i, sc := range scenarios {
+			cfg := storageConfig(sc, sc.pass)
+			want := RunSearch(cfg)
+			if i == 1 {
+				// An abandoned search leaves grown rows behind it.
+				cfg.Workspace = &ws
+				abandoned := NewSession(cfg)
+				abandoned.Resume(5)
+				abandoned.Release()
+			}
+			cfg.Workspace = &ws
+			s := NewSession(cfg)
+			if s.entries.ws == nil {
+				t.Fatalf("%s: the free workspace was not lent", sc.name)
+			}
+			for !s.IsDone() {
+				s.Resume(11)
+			}
+			got := SearchResult{Points: s.resultPoints, Status: s.resultStatus, Notified: s.notified, Popped: s.popped, SetupSteps: s.setupSteps, Seeded: s.seeded}
+			s.Release()
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("round %d %s: reused storage answered %+v, fresh storage %+v", round, sc.name, got, want)
+			}
+			if cap(ws.nodes) == 0 {
+				t.Fatalf("round %d %s: the released search did not hand its node array back", round, sc.name)
+			}
+		}
+	}
 }

@@ -363,17 +363,15 @@ func (c *Client) featureGeometry(draw *presentationrender.UnitDraw, selector tea
 		}
 		ax, ay := c.modelAnchor(draw)
 		// As for a unit, the retained doubled lane carries no half-pixel
-		// offset; the rebase adds this frame's.
-		supersample := c.modelSupersampleGeometry(polys, draw.KeyPlane, w, h, c.doubledPlacement(ox, oy, 0, 0, false))
-		placeFaces(polys, ox, oy, 1)
-		base := c.borrowModelPacket(polys, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
-		base.Supersample = supersample
+		// offset; the rebase adds this frame's. The lane is projected straight
+		// into the body's retained arenas.
+		base := c.cachedBodyFor(key).store.fill(c, polys, w, h, ox, oy, ax, ay, draw.KeyPlane, c.doubledPlacement(ox, oy, 0, 0, false))
 		body = c.replaceFeatureGeometry(key, draw, in, base)
 	}
 	body.featureSeenTick = c.frameTick
 	src := body.geometry
 	ax, ay, hx, hy := c.modelPlacement(draw)
-	g := c.borrowRebasedModelGeometry(src, src.Width, src.Height, src.OriginX, src.OriginY, ax, ay, hx, hy)
+	g := c.rebaseRetained(&body.store, src, src.Width, src.Height, src.OriginX, src.OriginY, ax, ay, hx, hy)
 	if g == nil {
 		return nil, false
 	}
@@ -403,7 +401,9 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 			return pre.body, pre.live
 		}
 	}
-	draw, ok := c.unitDrawFor(v)
+	// The pieces' geometry is built below only for the lanes this frame reads
+	// (materializeUnitDraw).
+	draw, ok := c.unitDrawDeferred(v)
 	if !ok {
 		return nil, nil
 	}
@@ -413,6 +413,7 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	id := unitPresentationID(v)
 	reveal, outline := c.unitNanoframeReveal(v)
 	if id == 0 || !c.modelScratch.active {
+		draw.Materialize(presentationrender.PieceLaneAll)
 		g := c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline)
 		if g != nil {
 			g.Cloaked = v.Cloaked || c.developer.Mode != 0
@@ -433,7 +434,9 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	// classic composer applies at composeUnitModelState.
 	missing := body == nil || body.geometry == nil || body.cacheRevision != v.CacheRevision
 	required := draw.Structure || draw.KeyPlane
-	if c.cachedGeometryMustRebuild(body, v, draw, orient) || missing && required {
+	rebuild := c.cachedGeometryMustRebuild(body, v, draw, orient) || missing && required
+	c.materializeUnitDraw(draw, body, rebuild || missing, reveal != nil)
+	if rebuild {
 		w, h, ox, oy, visible := c.projectedModelExtent(draw, presentationrender.PieceLaneAll, false)
 		if !visible {
 			return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
@@ -443,15 +446,16 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 			return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
 		}
 		ax, ay := c.modelAnchor(draw)
-		// The retained doubled lane carries no half-pixel offset: the offset
-		// follows the subject's position frame by frame and is added when the
-		// lane is rebased into this frame's packet. A keyed subject whose pieces
-		// are all live still retains an (empty) doubled lane, so its live faces
+		// The half-pixel offset follows the subject's position frame by frame
+		// and is added when the lane is rebased into this frame's packet; the
+		// lane is projected straight into the body's retained arenas with this
+		// frame's offset already applied, which the store records so a later
+		// rebase adds only the difference. A keyed subject whose pieces are
+		// all live still retains an (empty) doubled lane, so its live faces
 		// have a doubled raster to join.
-		supersample := c.modelSupersampleGeometry(cached, draw.KeyPlane, w, h, c.doubledPlacement(ox, oy, 0, 0, false))
-		placeFaces(cached, ox, oy, 1)
-		base := c.borrowModelPacket(cached, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
-		base.Supersample = supersample
+		_, _, hx, hy := c.modelPlacement(draw)
+		store := &c.cachedBodyFor(id).store
+		base := store.fill(c, cached, w, h, ox, oy, ax, ay, draw.KeyPlane, c.doubledPlacement(ox, oy, hx, hy, false))
 		c.replaceCachedGeometry(id, v, draw, base)
 		missing = false
 		if draw.NeedsRebuild {
@@ -462,7 +466,7 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	if missing || body == nil || body.geometry == nil {
 		return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
 	}
-	if !drawHasFaces(draw) {
+	if !draw.HasFaces() {
 		return nil, nil
 	}
 	// The box is the commit rectangle: the retained lane's envelope, which
@@ -470,14 +474,17 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	// live pieces reach this frame. Measuring the current pose of the cached
 	// pieces too would project every face again for a box the retained
 	// raster cannot fill.
+	// Only a keyed packet carries a local live lane: the one-plane branch
+	// below drops it and draws its live pieces through the direct projection,
+	// which walks the same primitives, so it is not collected for that branch.
 	var live []screenPoly
-	if !draw.UnderConstruction {
+	if !draw.UnderConstruction && body.geometry.KeyPlane {
 		live = c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
 	}
 	w, h, ox, oy, _ := c.projectedModelExtent(draw, presentationrender.PieceLaneLive, false)
-	w, h, ox, oy = retainedModelExtent(body.geometry, w, h, ox, oy)
+	w, h, ox, oy = retainedModelExtent(&body.store, body.geometry, w, h, ox, oy)
 	ax, ay, hx, hy := c.modelPlacement(draw)
-	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay, hx, hy)
+	g := c.rebaseRetained(&body.store, body.geometry, int32(w), int32(h), ox, oy, ax, ay, hx, hy)
 	if g == nil {
 		return nil, nil
 	}
@@ -523,68 +530,110 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (arrival
 	return g, c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneLive)
 }
 
-// drawHasFaces reports whether any visible piece carries a primitive: a
-// hidden piece keeps its index and drops its primitives.
-func drawHasFaces(draw *presentationrender.UnitDraw) bool {
-	for i := range draw.Pieces {
-		if len(draw.Pieces[i].Primitives) != 0 {
-			return true
-		}
+// materializeUnitDraw builds the piece geometry unitGeometryPair will read
+// from a deferred draw. A frame that only rebases the retained cached lane
+// reads the live pieces alone: the rebase, the box, the live lane and the
+// direct live packet take nothing from a cached piece. Every other frame reads
+// the whole model — a rebuild or the direct projection of all pieces, a
+// nanoframe (its outline rings walk every piece, and under construction every
+// piece is in both lanes anyway), and a structure shadow whose retained
+// projection is about to be redone from the current pose (§13.12 "Shadows —
+// contract P4") — so all pieces are built. Materializing more than is read
+// changes nothing, so any doubt here resolves to all.
+func (c *Client) materializeUnitDraw(draw *presentationrender.UnitDraw, body *cachedModelBody, rebuildOrDirect, reveal bool) {
+	lane := presentationrender.PieceLaneLive
+	if rebuildOrDirect || reveal || draw.UnderConstruction || body == nil || body.geometry == nil || !c.retainedShadowReusable(body, draw) {
+		lane = presentationrender.PieceLaneAll
 	}
-	return false
+	draw.Materialize(lane)
+}
+
+// retainedShadowReusable reports whether configureModelGeometryFor's shadow for
+// this draw reads no piece geometry: a silhouette, or a structure shadow whose
+// retained projection is current (retainedShadowGeometry).
+func (c *Client) retainedShadowReusable(body *cachedModelBody, draw *presentationrender.UnitDraw) bool {
+	if draw.DiggerClip || !draw.Structure {
+		return true
+	}
+	if body == nil || !c.modelScratch.active || !shadowPoseComplete(draw) {
+		return false
+	}
+	return body.shadowValid && body.shadowInputs == c.cachedShadowInputs(draw) &&
+		slices.Equal(body.shadowPose, drawPieceStates(draw))
 }
 
 // retainedModelExtent is the retained cached envelope unioned with the
 // current live pieces' box. A packet's declared box is its commit rectangle,
-// so rebasing cached corners into only the live box would crop them.
-func retainedModelExtent(retained *drawlist.ModelGeometry, width, height int, originX, originY int32) (int, int, int32, int32) {
+// so rebasing cached corners into only the live box would crop them. store,
+// when it holds retained, keeps the retained half of the union between frames
+// (cachedGeometryStore.envelope): it is a pure function of faces that do not
+// change until the lane is stored again.
+func retainedModelExtent(store *cachedGeometryStore, retained *drawlist.ModelGeometry, width, height int, originX, originY int32) (int, int, int32, int32) {
 	if retained == nil {
 		return width, height, originX, originY
 	}
-	minX, minY := -originX, -originY
-	maxX, maxY := int32(width)-originX, int32(height)-originY
-	include := func(x, y int32) {
-		if x < minX {
-			minX = x
+	var env modelEnvelope
+	if store != nil && retained == &store.g {
+		if !store.envelopeValid {
+			store.env, store.envelopeValid = retainedEnvelope(retained), true
 		}
-		if y < minY {
-			minY = y
-		}
-		if x > maxX {
-			maxX = x
-		}
-		if y > maxY {
-			maxY = y
-		}
+		env = store.env
+	} else {
+		env = retainedEnvelope(retained)
 	}
-	include(-retained.OriginX, -retained.OriginY)
-	include(retained.Width-retained.OriginX, retained.Height-retained.OriginY)
-	for _, face := range retained.Faces {
-		for _, vertex := range face.Vertices {
-			include(vertex.X-retained.OriginX, vertex.Y-retained.OriginY)
-			include(vertex.X-retained.OriginX+1, vertex.Y-retained.OriginY+1)
-		}
-	}
+	minX, minY := min(-originX, env.minX), min(-originY, env.minY)
+	maxX, maxY := max(int32(width)-originX, env.maxX), max(int32(height)-originY, env.maxY)
 	originX, originY = -minX, -minY
 	return int(maxX - minX), int(maxY - minY), originX, originY
 }
 
-// borrowRebasedModelGeometry copies the retained cached lane into this frame's
-// packet arena. The retained entry remains immutable while the output can move
-// into the current union box and acquire its current live lane.
-//
-// hx and hy are this frame's half-pixel offset (modelAnchorDoubled); the
-// retained doubled lane carries none, so it is added to the doubled corners
-// here.
-func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, height, originX, originY, anchorX, anchorY, hx, hy int32) *drawlist.ModelGeometry {
+// modelEnvelope is an origin-relative box: the retained packet's own box and
+// every corner of its faces, each also one pixel down and right.
+type modelEnvelope struct {
+	minX, minY, maxX, maxY int32
+}
+
+func retainedEnvelope(retained *drawlist.ModelGeometry) modelEnvelope {
+	x0, y0 := -retained.OriginX, -retained.OriginY
+	x1, y1 := retained.Width-retained.OriginX, retained.Height-retained.OriginY
+	env := modelEnvelope{minX: min(x0, x1), minY: min(y0, y1), maxX: max(x0, x1), maxY: max(y0, y1)}
+	for _, face := range retained.Faces {
+		for _, vertex := range face.Vertices {
+			x, y := vertex.X-retained.OriginX, vertex.Y-retained.OriginY
+			env.minX, env.minY = min(env.minX, x), min(env.minY, y)
+			env.maxX, env.maxY = max(env.maxX, x+1), max(env.maxY, y+1)
+		}
+	}
+	return env
+}
+
+// rebaseRetained places the retained cached lane in this frame's packet, moved
+// into the current union box with this frame's half-pixel offset on the
+// doubled corners. For a lane retained in store the packet addresses the
+// store's own rebased faces (cachedGeometryStore rebasedFaces) instead of a
+// per-frame copy of every corner; with no store it copies into the frame arena. The faces are the
+// same values either way, so the recorded packet is unchanged.
+func (c *Client) rebaseRetained(store *cachedGeometryStore, src *drawlist.ModelGeometry, width, height, originX, originY, anchorX, anchorY, hx, hy int32) *drawlist.ModelGeometry {
 	if c == nil || src == nil || !c.modelScratch.active {
 		return nil
 	}
 	p := c.borrowPacketScratch()
 	p.g = *src
 	dx, dy := originX-src.OriginX, originY-src.OriginY
-	p.cachedFaces, p.cachedVertices = copyModelFaces(p.cachedFaces, p.cachedVertices, src.Faces, dx, dy)
-	p.g.Faces, p.g.LiveFaces, p.g.Outline = p.cachedFaces, nil, nil
+	// A lane filled in its store may already carry a half-pixel offset
+	// (cachedGeometryStore.fill); only the difference is added.
+	sdx, sdy := 2*dx+hx, 2*dy+hy
+	if store != nil && src == &store.g {
+		sdx, sdy = sdx-store.doubledHX, sdy-store.doubledHY
+	}
+	shared, sharedDoubled, ok := store.rebasedFaces(src, dx, dy, sdx, sdy, c.modelFrameSerial)
+	if ok {
+		p.g.Faces = shared
+	} else {
+		p.cachedFaces, p.cachedVertices = copyModelFaces(p.cachedFaces, p.cachedVertices, src.Faces, dx, dy)
+		p.g.Faces = p.cachedFaces
+	}
+	p.g.LiveFaces, p.g.Outline = nil, nil
 	p.g.Reveal, p.g.Shadow, p.g.Children = nil, nil, nil
 	p.g.Waterline, p.g.Digger = drawlist.ModelWaterlineNone, false
 	p.g.Width, p.g.Height, p.g.OriginX, p.g.OriginY, p.g.AnchorX, p.g.AnchorY = width, height, originX, originY, anchorX, anchorY
@@ -593,8 +642,12 @@ func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, 
 		return &p.g
 	}
 	p.supersample = *src.Supersample
-	p.supersampleFaces, p.supersampleVerts = copyModelFaces(p.supersampleFaces, p.supersampleVerts, src.Supersample.Faces, 2*dx+hx, 2*dy+hy)
-	p.supersample.Faces = p.supersampleFaces
+	if ok {
+		p.supersample.Faces = sharedDoubled
+	} else {
+		p.supersampleFaces, p.supersampleVerts = copyModelFaces(p.supersampleFaces, p.supersampleVerts, src.Supersample.Faces, sdx, sdy)
+		p.supersample.Faces = p.supersampleFaces
+	}
 	p.supersample.LiveFaces, p.supersample.Outline, p.supersample.Reveal, p.supersample.Shadow, p.supersample.Children = nil, nil, nil, nil, nil
 	p.supersample.Width, p.supersample.Height = 2*width, 2*height
 	p.supersample.OriginX, p.supersample.OriginY = 2*originX, 2*originY

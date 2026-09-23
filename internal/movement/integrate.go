@@ -208,6 +208,12 @@ type pathProvider struct {
 	// chooses the next candidate: Poll walks the bound world's physical unit
 	// slots, including holes and non-movers [04 R-PATH-01 §6].
 	requests [10]map[pool.Handle]path.Request
+	// staged marks, by handle, every unit that has an entry in some player's
+	// request map. It is a derived index of the maps' key sets and never
+	// chooses a candidate: it only lets IdleRun find, without polling slot by
+	// slot, the next slot a poll could possibly answer with anything but an
+	// idle visit.
+	staged   []uint64
 	cursor   [10]int
 	started  [10]bool
 	world    *units.World
@@ -321,7 +327,7 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 	if r.Activation != 0 {
 		binding := handleRow(p.system.activeOrders, h)
 		if binding == nil || binding.token != r.Activation || binding.order == nil {
-			delete(p.requests[player], h)
+			p.dropRequest(player, h)
 			return path.Request{}, path.PollVisited
 		}
 		// The request's target and committed start are read at the positive
@@ -329,7 +335,7 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 		// R-PATH-01 §4][04 R-PATH-01 §6].
 		start, goal, _, ok := p.system.pathCellsForOrder(u, binding.order)
 		if !ok {
-			delete(p.requests[player], h)
+			p.dropRequest(player, h)
 			return path.Request{}, path.PollVisited
 		}
 		fx, fz := p.system.pathFootprint(u)
@@ -340,8 +346,157 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 	// submission-time snapshot, and the flag stays armed until publication
 	// [04 R-MOV-01 §7][04 R-PATH-01 §6].
 	route.LastRequestTick = p.tick
-	delete(p.requests[player], h)
+	p.dropRequest(player, h)
 	return r, path.PollRequest
+}
+
+// dropRequest removes one player's entry for h and keeps the staged index in
+// step with the maps.
+func (p *pathProvider) dropRequest(player int, h pool.Handle) {
+	delete(p.requests[player], h)
+	p.setStaged(h, false)
+}
+
+func (p *pathProvider) setStaged(h pool.Handle, on bool) {
+	word, bit := int(h)>>6, uint64(1)<<(uint(h)&63)
+	if word >= len(p.staged) {
+		if !on {
+			return
+		}
+		p.staged = append(p.staged, make([]uint64, word+1-len(p.staged))...)
+	}
+	if on {
+		p.staged[word] |= bit
+	} else {
+		p.staged[word] &^= bit
+	}
+}
+
+func (p *pathProvider) isStaged(slot int) bool {
+	word := slot >> 6
+	return slot >= 0 && word < len(p.staged) && p.staged[word]&(uint64(1)<<(uint(slot)&63)) != 0
+}
+
+// pollSlice is the slice a poll of player walks, and whether a poll reaches
+// the slot walk at all. A poll that does not reach it answers "no unit"
+// without moving the cursor.
+func (p *pathProvider) pollSlice(player int) (start, end int, ok bool) {
+	if !p.Eligible(player) || p.world == nil || p.system == nil {
+		return 0, 0, false
+	}
+	start, end, ok = p.world.SliceForPlayer(player)
+	if !ok || end < start {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// nextSlot is the cursor step of one poll: forward one slot, wrapping from
+// the slice's end to its start.
+func nextSlot(c, start, end int) int {
+	c++
+	if c > end {
+		c = start
+	}
+	return c
+}
+
+// IdleRun reports how many of player's next polls, up to limit, are certain
+// to be idle visits: polls that change nothing but the player's cursor and
+// admit no request. A poll is idle when it never reaches the slot walk, and
+// when the slot it reaches holds no staged request -- every such poll ends in
+// "no unit" or "visited" before any lookup that could have an effect. A slot
+// that does hold a staged request ends the run even if its poll would also be
+// idle; the scheduler polls that one itself.
+func (p *pathProvider) IdleRun(player int, limit int32) int32 {
+	start, end, ok := p.pollSlice(player)
+	if !ok || len(p.requests[player]) == 0 {
+		// No entry means no poll of this player can find one: the map lookup
+		// is the gate every request passes.
+		return limit
+	}
+	c := p.cursor[player]
+	if !p.started[player] {
+		c = start - 1
+	}
+	if c < start-1 {
+		// A cursor below the slice (never the case for a slice that has not
+		// moved) walks slot by slot.
+		for i := int32(0); i < limit; i++ {
+			c = nextSlot(c, start, end)
+			if p.isStaged(c) {
+				return i
+			}
+		}
+		return limit
+	}
+	// From here the polls visit the slice as a cycle beginning at first:
+	// first..end, then start..first-1, and around again. The run is the
+	// cyclic distance to the nearest staged slot.
+	first := nextSlot(c, start, end)
+	at := p.nextStaged(first, end)
+	distance := int64(at - first)
+	if at < 0 {
+		at = p.nextStaged(start, first-1)
+		if at < 0 {
+			return limit
+		}
+		distance = int64(end-first+1) + int64(at-start)
+	}
+	if distance < int64(limit) {
+		return int32(distance)
+	}
+	return limit
+}
+
+// nextStaged returns the first staged slot in [from, to], or -1.
+func (p *pathProvider) nextStaged(from, to int) int {
+	if from < 0 {
+		from = 0
+	}
+	if to < from {
+		return -1
+	}
+	for w := from >> 6; w <= to>>6 && w < len(p.staged); w++ {
+		word := p.staged[w]
+		if w == from>>6 {
+			word &= ^uint64(0) << (uint(from) & 63)
+		}
+		if word == 0 {
+			continue
+		}
+		slot := w<<6 + bits.TrailingZeros64(word)
+		if slot > to {
+			return -1
+		}
+		return slot
+	}
+	return -1
+}
+
+// SkipIdle performs n polls of player that IdleRun reported idle. Only the
+// cursor moves, exactly as n polls would move it.
+func (p *pathProvider) SkipIdle(player int, n int32) {
+	start, end, ok := p.pollSlice(player)
+	if !ok || n <= 0 {
+		return
+	}
+	if !p.started[player] {
+		p.cursor[player] = start - 1
+		p.started[player] = true
+	}
+	c := p.cursor[player]
+	// A cursor below the slice walks up to it slot by slot; from inside the
+	// slice (or past its end) the walk is a cycle of the slice's length.
+	for n > 0 && (c < start || c > end) {
+		c = nextSlot(c, start, end)
+		n--
+	}
+	if n > 0 {
+		length := int64(end - start + 1)
+		c = start + int((int64(c-start)+int64(n))%length)
+	}
+	p.cursor[player] = c
 }
 func (p *pathProvider) Submit(r path.Request) {
 	if int(r.Player) >= len(p.requests) {
@@ -356,11 +511,12 @@ func (p *pathProvider) Submit(r path.Request) {
 		p.requests[r.Player] = make(map[pool.Handle]path.Request)
 	}
 	p.requests[r.Player][r.Unit] = r
+	p.setStaged(r.Unit, true)
 }
 func (p *pathProvider) Cancel(unit pool.Handle) bool {
 	for player := range p.requests {
 		if _, ok := p.requests[player][unit]; ok {
-			delete(p.requests[player], unit)
+			p.dropRequest(player, unit)
 			return true
 		}
 	}

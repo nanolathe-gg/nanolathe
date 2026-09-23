@@ -2,6 +2,7 @@ package gpurender
 
 import (
 	"math"
+	"math/bits"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
@@ -1133,11 +1134,42 @@ func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int) {
 		r.modelStats.Vertices += int(run.vLen)
 		r.recordSubmission(int(run.vLen), int(run.iLen))
 		dst.DrawTrianglesShader32(
-			b.verts[run.vOff:run.vOff+run.vLen],
+			deviceVertexSpan(b.verts, int(run.vOff), int(run.vLen)),
 			b.idx[run.iOff:run.iOff+run.iLen],
 			shader, &r.sceneOpts)
 		r.frameDraws++
 	}
+}
+
+// deviceVertexSpan is the vertex slice a device draw of count vertices starting
+// at first hands Ebitengine, lengthened to a coarse size class when the
+// storage's capacity allows.
+//
+// Ebitengine converts every draw's vertices into a scratch buffer its
+// destination image owns, and reallocates that buffer at exactly the draw's
+// size whenever a draw exceeds the largest one the image has taken. A batch
+// that grows by a few vertices a frame — a battle's reflection mesh or the
+// composite's model run — therefore reallocated a buffer of hundreds of
+// kilobytes every few frames. Rounding the slice up to a class of at most one
+// eighth more vertices makes a new maximum rare. The extra vertices are
+// storage beyond the draw's own (a later run's, or stale capacity) that no
+// index references, so they are converted and never rasterized.
+func deviceVertexSpan(verts []ebiten.Vertex, first, count int) []ebiten.Vertex {
+	n := deviceVertexClass(count)
+	if first+n > cap(verts) {
+		n = count
+	}
+	return verts[first : first+n : first+n]
+}
+
+// deviceVertexClass rounds n up to a multiple of an eighth of its leading
+// power of two: at most 12.5 percent more, and 1, 2, 4 ... classes per octave.
+func deviceVertexClass(n int) int {
+	if n <= 64 {
+		return n
+	}
+	step := 1 << (bits.Len(uint(n)) - 4)
+	return (n + step - 1) &^ (step - 1)
 }
 
 // copyComposite copies the clipped rectangle of the composite into the same

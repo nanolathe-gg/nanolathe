@@ -17,6 +17,10 @@ type DrawScratch struct {
 	hidden      []bool
 	hiddenState []uint8
 	hiddenStack []int
+	// pending marks the visible pieces a deferred draw has not built yet, and
+	// shaded is the shading verdict they are built with (UnitDraw.Materialize).
+	pending []bool
+	shaded  bool
 }
 type pieceScratch struct {
 	world        [][3]numeric.Fixed

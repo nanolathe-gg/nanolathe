@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
@@ -15,20 +15,29 @@ import (
 // They add no scene camera or simulation state (GPU design §26.4).
 const reflectionVertexLimit = 32768
 
+// reflectionRun is one device draw of the reflection source pass. page is the
+// model lane atlas page a model face samples, or -1 for billboards and strokes;
+// scenePage is the scene atlas page a billboard samples (-1 when the run holds
+// only strokes, which sample no source texture); occlusionPage is the group key
+// page an isolated construction child also tests, or -1 when none does.
 type reflectionRun struct {
-	page, occlusionPage                  int32
-	frame                                *formats.GAFFrame
+	page, scenePage, occlusionPage       int32
 	first, count, firstIndex, indexCount int
 }
 
 type waterReflections struct {
-	disabled                                       bool
-	active                                         *drawlist.ModelGeometry
-	region                                         modelDirectRegion
-	verts, transformed                             []ebiten.Vertex
-	indices                                        []uint32
-	softTiles                                      []bool
-	runs                                           []reflectionRun
+	disabled           bool
+	active             *drawlist.ModelGeometry
+	region             modelDirectRegion
+	verts, transformed []ebiten.Vertex
+	indices            []uint32
+	softTiles          []bool
+	runs               []reflectionRun
+	// softVerts, softIndices and softRuns are the metadata pass's subset of
+	// the mesh: only triangles the softening filter can read (softenSubset).
+	softVerts                                      []ebiten.Vertex
+	softIndices                                    []uint32
+	softRuns                                       []reflectionRun
 	source, height                                 *ebiten.Image
 	sourceShader, resolveShader, softResolveShader *ebiten.Shader
 	// The source pass is the only Enhanced shader that takes uniforms, and it
@@ -70,11 +79,28 @@ func (s *waterReflections) resetFrame() {
 	s.verts, s.indices, s.runs = s.verts[:0], s.indices[:0], s.runs[:0]
 }
 
-func (s *waterReflections) run(page int32, f *formats.GAFFrame, occlusionPage int32) *reflectionRun {
-	if n := len(s.runs); n > 0 && s.runs[n-1].page == page && s.runs[n-1].frame == f && s.runs[n-1].occlusionPage == occlusionPage {
-		return &s.runs[n-1]
+// run returns the open run when it can bind what the next face needs, and opens
+// a new one otherwise. Runs only ever continue the one last opened, so the
+// source pass still draws every face in record order; what lets consecutive
+// sources share a draw is that a binding nothing in the run reads is free. A
+// stroke reads no source texture, so it joins any billboard run; a face that
+// tests no group key (mode 0) reads no occlusion page, so it joins a run that
+// binds one and a run without one adopts the first page a later face needs.
+// Billboards sample the scene atlas rather than a texture per frame, so one
+// page of explosions and projectiles is one draw rather than one per frame
+// (§26.4).
+func (s *waterReflections) run(page, scenePage, occlusionPage int32) *reflectionRun {
+	if n := len(s.runs); n > 0 {
+		last := &s.runs[n-1]
+		if last.page == page &&
+			(last.scenePage == scenePage || scenePage < 0 || last.scenePage < 0) &&
+			(last.occlusionPage == occlusionPage || occlusionPage < 0 || last.occlusionPage < 0) {
+			last.scenePage = max(last.scenePage, scenePage)
+			last.occlusionPage = max(last.occlusionPage, occlusionPage)
+			return last
+		}
 	}
-	s.runs = append(s.runs, reflectionRun{page: page, occlusionPage: occlusionPage, frame: f, first: len(s.verts), firstIndex: len(s.indices)})
+	s.runs = append(s.runs, reflectionRun{page: page, scenePage: scenePage, occlusionPage: occlusionPage, first: len(s.verts), firstIndex: len(s.indices)})
 	return &s.runs[len(s.runs)-1]
 }
 
@@ -115,7 +141,7 @@ func (r *Renderer) reflectModelFace(f *drawlist.ModelFace, ox, oy, scale, cx, cy
 		groupY = float32(group.y-s.region.y) + 2*float32(s.region.bounds.Min.Y-group.bounds.Min.Y)
 		occlusionPage, mode = group.page, -1
 	}
-	run := s.run(page, nil, occlusionPage)
+	run := s.run(page, -1, occlusionPage)
 	for _, v := range f.Vertices {
 		sx, sy := ox+fattenBy(float32(v.X), cx, scale, fat), oy+fattenBy(float32(v.Y), cy, scale, fat)
 		height := g.WorldHeight + v.Height - g.ReflectionSea
@@ -187,9 +213,20 @@ func (r *Renderer) prepareProjectileReflections(l *drawlist.List) {
 		// water-plane projection. Only model packets can clip individual pieces.
 		pivot := float32(sp.Y) + sp.ReflectionHeight*.5
 		y0, y1 := 2*pivot-y, 2*pivot-(y+h)
-		run := s.run(-1, f, -1)
-		for _, v := range [4][4]float32{{x, y0, 0, 0}, {x + w, y0, w, 0}, {x + w, y1, w, h}, {x, y1, 0, h}} {
-			s.verts = append(s.verts, ebiten.Vertex{DstX: v[0], DstY: v[1], SrcX: v[2], SrcY: v[3], ColorA: 1, Custom0: sp.ReflectionHeight, Custom3: 1})
+		// The frame is sampled from its scene atlas placement (atlas.go), so a
+		// page of billboards is one draw. Its own rectangle on the page rides the
+		// free colour lanes and Custom2, and the shader treats a sample outside
+		// it as transparent, exactly as a texture of the frame alone read
+		// outside its bounds; the page's padded edge is never reflected.
+		e := r.sceneFrameFor(f)
+		if !e.ok || r.scene.pageImage(e) == nil {
+			return
+		}
+		ex, ey := float32(e.x), float32(e.y)
+		run := s.run(-1, e.page, -1)
+		for _, v := range [4][4]float32{{x, y0, ex, ey}, {x + w, y0, ex + w, ey}, {x + w, y1, ex + w, ey + h}, {x, y1, ex, ey + h}} {
+			s.verts = append(s.verts, ebiten.Vertex{DstX: v[0], DstY: v[1], SrcX: v[2], SrcY: v[3],
+				ColorR: ex, ColorG: ey, ColorB: ex + w, ColorA: 1, Custom0: sp.ReflectionHeight, Custom2: ey + h, Custom3: 1})
 		}
 		s.fan(run, 4)
 	})
@@ -204,7 +241,7 @@ func (r *Renderer) prepareProjectileReflections(l *drawlist.List) {
 			dx, dy, length = 1, 0, 1
 		}
 		nx, ny := -dy/length, dx/length
-		run := s.run(-1, nil, -1)
+		run := s.run(-1, -1, -1)
 		for _, v := range [4][3]float32{{x0 + nx, y0 + ny, l.ReflectionHeight0}, {x1 + nx, y1 + ny, l.ReflectionHeight1}, {x1 - nx, y1 - ny, l.ReflectionHeight1}, {x0 - nx, y0 - ny, l.ReflectionHeight0}} {
 			s.verts = append(s.verts, ebiten.Vertex{DstX: v[0], DstY: v[1], ColorA: 1, Custom0: v[2], Custom1: float32(l.Index), Custom3: 2})
 		}
@@ -227,6 +264,10 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 	scale := float32(c.Scale.Float())
 	time := (float32(c.Water.Tick) + float32(c.Water.Fraction16)/65536) / 30
 	s.transformed = append(s.transformed[:0], s.verts...)
+	// Leave the headroom deviceVertexSpan rounds the last run into.
+	if spare := deviceVertexClass(len(s.transformed)) - len(s.transformed); cap(s.transformed)-len(s.transformed) < spare {
+		s.transformed = slices.Grow(s.transformed, spare)
+	}
 	for i := range s.transformed {
 		v := &s.transformed[i]
 		// Displace only the reflected mesh, retaining its original atlas samples.
@@ -260,6 +301,7 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 	targets := [2]*ebiten.Image{s.source, nil}
 	if soften {
 		targets[1] = s.height
+		s.softenSubset(w, h, scale, effective, c.Water.Energy, r.sched.txx(0), r.sched.txy(0))
 	}
 	op := s.sourceOptions(scale, ox, oy, 1/effective, time)
 	for metadata, target := range targets {
@@ -267,7 +309,11 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			continue
 		}
 		s.metadata[0] = float32(metadata)
-		for _, run := range s.runs {
+		runs, verts, indices := s.runs, s.transformed, s.indices
+		if metadata == 1 {
+			runs, verts, indices = s.softRuns, s.softVerts, s.softIndices
+		}
+		for _, run := range runs {
 			var imgs [4]*ebiten.Image
 			if run.page >= 0 {
 				pg := &r.modelDirect.pages[run.page]
@@ -278,8 +324,8 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			} else {
 				imgs[0] = r.placeholderImage()
 				imgs[1] = r.tables.atlas
-				if run.frame != nil {
-					imgs[0] = r.gafImageFor(run.frame)
+				if run.scenePage >= 0 {
+					imgs[0] = r.scene.pageImage(sceneEntry{page: run.scenePage, ok: true})
 				}
 			}
 			if imgs[0] == nil {
@@ -292,7 +338,7 @@ func (r *Renderer) drawWaterReflections(c drawlist.Terrain) {
 			}
 			op.Images = imgs
 			r.beginPass(target)
-			target.DrawTrianglesShader32(s.transformed[run.first:run.first+run.count], s.indices[run.firstIndex:run.firstIndex+run.indexCount], s.sourceShader, op)
+			target.DrawTrianglesShader32(deviceVertexSpan(verts, run.first, run.count), indices[run.firstIndex:run.firstIndex+run.indexCount], s.sourceShader, op)
 			r.frameDraws++
 			r.recordSubmission(run.count, run.indexCount)
 		}
@@ -359,8 +405,6 @@ func (s *waterReflections) markSofteningTiles(w, h int, scale, effective, energy
 		s.softTiles = s.softTiles[:n]
 		clear(s.softTiles)
 	}
-	toRecord := scale / effective
-	margin := 2 + effective*(.65+energy*.65) + max(float32(4), effective)
 	any := false
 	for _, run := range s.runs {
 		if run.page < 0 {
@@ -371,13 +415,12 @@ func (s *waterReflections) markSofteningTiles(w, h int, scale, effective, energy
 			if max(a.Custom0, b.Custom0, c.Custom0) <= 64*scale || min(a.Custom0, b.Custom0, c.Custom0) >= 320*scale {
 				continue
 			}
-			x0, y0 := max(0, int(math.Floor(float64((min(a.DstX, b.DstX, c.DstX)-margin-ox)*toRecord)))), max(0, int(math.Floor(float64((min(a.DstY, b.DstY, c.DstY)-margin-oy)*toRecord))))
-			x1, y1 := min(w, int(math.Ceil(float64((max(a.DstX, b.DstX, c.DstX)+margin-ox)*toRecord)))), min(h, int(math.Ceil(float64((max(a.DstY, b.DstY, c.DstY)+margin-oy)*toRecord))))
-			if x0 >= x1 || y0 >= y1 {
+			tx0, ty0, tx1, ty1, ok := softTileSpan(a, b, c, w, h, scale, effective, energy, ox, oy)
+			if !ok {
 				continue
 			}
-			for y := y0 / reflectionSoftTile; y <= (y1-1)/reflectionSoftTile; y++ {
-				for x := x0 / reflectionSoftTile; x <= (x1-1)/reflectionSoftTile; x++ {
+			for y := ty0; y <= ty1; y++ {
+				for x := tx0; x <= tx1; x++ {
 					s.softTiles[y*cols+x] = true
 				}
 			}
@@ -385,6 +428,73 @@ func (s *waterReflections) markSofteningTiles(w, h int, scale, effective, energy
 		}
 	}
 	return any
+}
+
+// softTileSpan is the inclusive range of softening tiles a triangle's filter
+// footprint reaches: its screen bounds widened by the resolve's full gather
+// radius and water displacement, in record pixels, clipped to the w×h resolve.
+// ok is false when the widened bounds miss the resolve entirely.
+func softTileSpan(a, b, c ebiten.Vertex, w, h int, scale, effective, energy, ox, oy float32) (tx0, ty0, tx1, ty1 int, ok bool) {
+	toRecord := scale / effective
+	margin := 2 + effective*(.65+energy*.65) + max(float32(4), effective)
+	// floorInt and ceilInt round a float32 exactly as math.Floor and math.Ceil
+	// of its float64 widening do, without the conversion.
+	x0, y0 := max(0, floorInt((min(a.DstX, b.DstX, c.DstX)-margin-ox)*toRecord)), max(0, floorInt((min(a.DstY, b.DstY, c.DstY)-margin-oy)*toRecord))
+	x1, y1 := min(w, ceilInt((max(a.DstX, b.DstX, c.DstX)+margin-ox)*toRecord)), min(h, ceilInt((max(a.DstY, b.DstY, c.DstY)+margin-oy)*toRecord))
+	if x0 >= x1 || y0 >= y1 {
+		return 0, 0, 0, 0, false
+	}
+	return x0 / reflectionSoftTile, y0 / reflectionSoftTile, (x1 - 1) / reflectionSoftTile, (y1 - 1) / reflectionSoftTile, true
+}
+
+// softenSubset gathers the metadata pass's mesh: every triangle, of every run,
+// whose filter footprint reaches a softening tile, in record order and with the
+// run's bindings. The metadata plane is read only by the softening resolve,
+// whose fragments are exactly the softening tiles and whose taps stay inside
+// the same gather radius softTileSpan widens by; a triangle that reaches no
+// such tile cannot change a texel that filter reads, so leaving it out of the
+// plane changes no pixel. The colour pass still draws the whole mesh. Most of a
+// battle's reflected faces are hulls near the waterline, below the softening
+// ramp and away from elevated sources, so this is a small share of the mesh
+// (§26.6).
+func (s *waterReflections) softenSubset(w, h int, scale, effective, energy, ox, oy float32) {
+	s.softVerts, s.softIndices, s.softRuns = s.softVerts[:0], s.softIndices[:0], s.softRuns[:0]
+	cols := (w + reflectionSoftTile - 1) / reflectionSoftTile
+	for _, run := range s.runs {
+		out := run
+		out.first, out.firstIndex, out.count, out.indexCount = len(s.softVerts), len(s.softIndices), 0, 0
+		for i := run.firstIndex; i < run.firstIndex+run.indexCount; i += 3 {
+			a, b, c := s.transformed[run.first+int(s.indices[i])], s.transformed[run.first+int(s.indices[i+1])], s.transformed[run.first+int(s.indices[i+2])]
+			tx0, ty0, tx1, ty1, ok := softTileSpan(a, b, c, w, h, scale, effective, energy, ox, oy)
+			if !ok {
+				continue
+			}
+			hit := false
+			for y := ty0; y <= ty1 && !hit; y++ {
+				for x := tx0; x <= tx1; x++ {
+					if s.softTiles[y*cols+x] {
+						hit = true
+						break
+					}
+				}
+			}
+			if !hit {
+				continue
+			}
+			base := uint32(out.count)
+			s.softVerts = append(s.softVerts, a, b, c)
+			s.softIndices = append(s.softIndices, base, base+1, base+2)
+			out.count += 3
+			out.indexCount += 3
+		}
+		if out.indexCount > 0 {
+			s.softRuns = append(s.softRuns, out)
+		}
+	}
+	// Leave the headroom deviceVertexSpan rounds the last run into.
+	if spare := deviceVertexClass(len(s.softVerts)) - len(s.softVerts); cap(s.softVerts)-len(s.softVerts) < spare {
+		s.softVerts = slices.Grow(s.softVerts, spare)
+	}
 }
 
 func newReflectionSourceShader() (*ebiten.Shader, error) {
@@ -418,6 +528,9 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  } else {
   idx:=custom.y
   if custom.w<1.5 {
+   // A billboard's frame rectangle on its atlas page: colour.rgb and custom.z.
+   f:=src-imageSrc0Origin()
+   if f.x<color.r || f.y<color.g || f.x>=color.b || f.y>=custom.z { return vec4(0) }
    tex:=imageSrc0At(src)
    if tex.g<.5 { return vec4(0) }
    idx=floor(tex.r*255+.5)
