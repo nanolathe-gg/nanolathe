@@ -504,5 +504,9 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		if b.shell != nil {
 			b.shell.display.FeatureShadows = boolInt(value)
 		}
+	default:
+		// Retail offers unmatched first words to a unit-name default handler
+		// [07 R-CAM-01 §6]; the Modern shorthand stands in for it here.
+		b.unitNameChatCommand(words)
 	}
 }

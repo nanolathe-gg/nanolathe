@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -322,4 +324,67 @@ func TestUnitInfoClearedByBattleTeardown(t *testing.T) {
 	if unitInfoOpen() {
 		t.Fatal("battle teardown left the unit information screen open")
 	}
+}
+
+// F1's opener requests the window initializer's "centre in the view"
+// placement, so the authored root origin never survives: the screen is centred
+// in the surface width right of the 128-pixel rail and in the full height, at
+// the live logical surface — which a wide window at a non-1 view scale makes
+// far larger than 640x480 [07 R-HUD-03 §8][07 R-HUD-05 "Centred in the view"].
+func TestUnitInfoOpensCentredInTheViewAtAWideScaledSurface(t *testing.T) {
+	resetUnitInfoState(t)
+	root := t.TempDir()
+	guiPath := filepath.Join(root, "guis", "unitinfox.gui")
+	if err := os.MkdirAll(filepath.Dir(guiPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An authored root away from any centred position, so a surviving
+	// authored origin cannot pass for a centred one.
+	text := "[GADGET0]{[COMMON]{id=0;name=HEADER;xpos=203;ypos=105;width=325;height=190;}}\n" +
+		"[GADGET1]{[COMMON]{id=1;name=DONE;xpos=10;ypos=160;width=60;height=20;active=1;}text=Done;}\n"
+	if err := os.WriteFile(guiPath, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 0); err != nil {
+		t.Fatal(err)
+	}
+	cat := unitInfoTestCatalog()
+	buf := frame.NewBuffer()
+	w := buf.BeginWrite()
+	w.Units = append(w.Units, frame.UnitView{Slot: 1, Owner: 0, DefName: "armstump"})
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	h := &retailBattleHUD{cat: cat, fs: fs}
+	// A 3440x1440 window at view scale 2 presents a 1720x720 logical surface.
+	h.applyDisplaySize(1720, 720)
+	b := &battleSession{sess: &session.Session{Snapshot: buf, LocalOwner: 0}, cat: cat, hud: h,
+		fs: fs, footerHoverUnit: 1}
+	b.openUnitInfo()
+	if !unitInfoOpen() {
+		t.Fatal("F1 over a unit opened nothing")
+	}
+	window := unitInfoUI.window
+	check := func(surfaceW, surfaceH int32) {
+		t.Helper()
+		wantX := (surfaceW-128-325)/2 + 128
+		wantY := (surfaceH - 190) / 2
+		if window.Rect.X != wantX || window.Rect.Y != wantY {
+			t.Fatalf("%dx%d: window at (%d,%d), want view-centred (%d,%d)",
+				surfaceW, surfaceH, window.Rect.X, window.Rect.Y, wantX, wantY)
+		}
+		// The children follow the placed root.
+		done := window.PlacedRect(window.GadgetIndex("DONE"))
+		if done.X != wantX+10 || done.Y != wantY+160 {
+			t.Fatalf("%dx%d: DONE at (%d,%d), want (%d,%d)", surfaceW, surfaceH,
+				done.X, done.Y, wantX+10, wantY+160)
+		}
+	}
+	check(1720, 720)
+	// The same window at view scale 1.5 is a 2293x960 surface; the standing
+	// screen follows the resize at its next draw placement.
+	h.applyDisplaySize(2293, 960)
+	h.placeUnitInfoWindow(window)
+	check(2293, 960)
 }

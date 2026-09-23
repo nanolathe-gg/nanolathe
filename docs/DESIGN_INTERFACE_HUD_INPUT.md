@@ -2208,6 +2208,37 @@ Verification locks submission-time coordinates, local rather than viewing
 ownership, creation state, repeated-site rejection, no resource charge, ordinary
 creation RNG effects and the Strict bypass, including a mode switch after enqueue.
 
+**Shorthand `+<unit>` (Nanolathe Modern policy).** A command line of exactly
+one word that matches no registered command and names a catalog unit
+(case-insensitive) queues the same request as `+spawn <unit>`, with the same
+submission-time pointer capture, validation and feedback. Retail's analogue is
+the developer-only mask-4 default handler, which offers any unmatched first
+word as a unit name, spawns one unit per matching definition for the
+*viewing* player at the pointer and steps 32 world units per unit
+`[07 R-CAM-01 §6]` `[07 R-CAM-01 §9]`. The shorthand deliberately keeps the
+`+spawn` contract instead: no developer access, one unit, local ownership.
+A word naming no unit, a line with arguments, and every Strict 3.1 line remain
+plain chat with no feedback, exactly as an unregistered command would. The
+retail default handler itself is not implemented: its creation state,
+per-definition matching rule, wrap arithmetic and RNG effects are untraced
+(`TODO(question)` in `cmd/nanolathe/battle_spawn.go`).
+
+**Retail cheat and visibility commands.** The mask-2 set (`Radar`, `ATM`,
+`View`, `LOS`, `Mapping`, `DoubleShot`, `HalfShot`, `NowISee`, `Meteor`) and
+the mask-1 settings commands are dispatched in
+`cmd/nanolathe/battle_chat_commands.go` per `[07 R-CAM-01 §6]`; mask-2
+commands are inert in campaign `[08 R-OOS-01 §5]`. `LOS` and `Mapping` are
+pure toggles of live mode bits 1 and 0 starting from the skirmish setup record
+`[03 R-VIS-01 §1]`: from a `Permanent` line-of-sight start the first `+LOS`
+turns current-sight tracking **on** (unseen ground greys), and from `True` or
+`Circular` it turns tracking off. The research command table records no posted text for either, so none is shown.
+Neither rewrites the setup record; their settings write-all re-serializes the
+unchanged triple. Not implemented: `MakePoster` (argument grammar Unknown),
+`ShootAll` (needs a session-owned seam into `combat.Acquisition.ShootAll`),
+the network-only share/compression/`NetStats` commands, `SFX`, `Drop` (its
+flag's consumer is not documented), and the mask-4 developer commands such as
+`Kill`, `IWin` and `ILose` whose deeper effects the census does not specify.
+
 ### 3.10 Modern resource double-click construction
 
 **Established implementation policy (user-requested departure, not retail

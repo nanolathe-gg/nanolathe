@@ -4704,6 +4704,15 @@ product when the hovered-gadget index is not `-1` (resolved by the same name
 lookup as the build card, [R-HUD-03 §3]); otherwise the hovered world unit,
 if alive and passing the visibility predicate; otherwise nothing opens.
 
+**Established — placement.** The opener requests the window initializer's
+"centre in the view" placement, the same flag `EXITMENU` and the Tab-options
+`YESORNO` opener pass, so the file's authored root origin is discarded and the
+screen is centred in the view right of the 128-pixel rail and in the full
+surface height at the live surface size ([R-HUD-05 "Centred in the view"]).
+At 640×480 this places the 325×190 window at (221, 145), not at the file's
+(203, 105). *Correction 2026-09-22: an earlier revision listed this screen
+under "Fixed in authored coordinates".*
+
 **Established — content.** The screen's `HOTR` gadget receives the picture
 `unitpics/<internal name>.PCX` and a click callback; the `NAME` gadget's text
 is the definition's display name (a 128-byte limit argument). Eight label gadgets are appended
@@ -5486,8 +5495,8 @@ handle in the image.
 | Anchored to the bottom edge `H` | the footer's `y` anchors through `dy = H − baseheight` ([R-HUD-03 §1]); the §6 slide strip; the `Send` throughput meter at `(129, H−95)`; the frozen-frame `Click to continue` line at `y = H−20` |
 | Anchored to the right edge `W` | the Space-held score panel, `x = W − slide` ([R-HUD-04 §1]); both strip stamp loops; the pointer clamp and edge-scroll tests at `W−1` / `H−1` (§10) |
 | Centred on the surface | a window opened with the "centre" placement flag: `x = (W − w) / 2`, `y = (H − h) / 2` |
-| Centred in the view | a window opened with the "centre in the view" flag — `EXITMENU`, `YESORNO` ("Tab options menu and manual exit"): `x = (W − 128 − w) / 2 + 128`, `y = (H − h) / 2`; the in-game title frames `igpaused` / `igvictory` / `igdefeat` (§11), whose draw origin is the view centre `((W + 128) / 2, H / 2)` less the frame's authored offsets; the camera clamp's maximum, `PlayRight − (W − 128)` and `PlayBottom − (H − 64)` ([R-CAM-01 §13]) |
-| Fixed in authored coordinates | the top strip's anchors (`LOGO`, the bars and their numbers — no `dy`); the radar canvas, a 126-pixel square at the surface's top-left corner letterboxed by map aspect, with `RADAR FINAL` blitted at its pad offsets; the message column at `x = 138`, first line `y = 52` ([R-HUD-03 §14.4]); every rail window and gadget rectangle; the unit information screen ([R-HUD-03 §8]) |
+| Centred in the view | a window opened with the "centre in the view" flag — `EXITMENU`, `YESORNO` ("Tab options menu and manual exit"), `UNITINFOx` (F1, [R-HUD-03 §8]): `x = (W − 128 − w) / 2 + 128`, `y = (H − h) / 2`; the in-game title frames `igpaused` / `igvictory` / `igdefeat` (§11), whose draw origin is the view centre `((W + 128) / 2, H / 2)` less the frame's authored offsets; the camera clamp's maximum, `PlayRight − (W − 128)` and `PlayBottom − (H − 64)` ([R-CAM-01 §13]) |
+| Fixed in authored coordinates | the top strip's anchors (`LOGO`, the bars and their numbers — no `dy`); the radar canvas, a 126-pixel square at the surface's top-left corner letterboxed by map aspect, with `RADAR FINAL` blitted at its pad offsets; the message column at `x = 138`, first line `y = 52` ([R-HUD-03 §14.4]); every rail window and gadget rectangle |
 
 All divisions above are truncating integer divides.
 

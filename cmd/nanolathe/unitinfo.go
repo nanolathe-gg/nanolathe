@@ -180,6 +180,7 @@ func (b *battleSession) openUnitInfoScreen() {
 	}
 	if b.hud != nil {
 		b.hud.installWindow(window, nil)
+		b.hud.placeUnitInfoWindow(window)
 	}
 	screen := &unitInfoScreen{window: window, panel: ui.NewPanel(window), def: def, values: unitInfoValues(def)}
 	// The `HOTR` gadget receives the picture `unitpics/<internal name>.PCX`
@@ -342,6 +343,7 @@ func (h *retailBattleHUD) drawUnitInfo(c *client.Client) {
 	}
 	screen := unitInfoUI
 	window := screen.window
+	h.placeUnitInfoWindow(window)
 	// The `NAME` gadget's text is the definition's display name, written with
 	// a 128-byte limit argument [07 R-HUD-03 §8]. The authored label carries
 	// no text of its own, so the runtime binds it before the window draws.
@@ -355,6 +357,21 @@ func (h *retailBattleHUD) drawUnitInfo(c *client.Client) {
 	h.drawGUIWindow(c, window, nil, "")
 	h.drawUnitInfoPicture(c, screen)
 	h.drawUnitInfoRows(c, screen)
+}
+
+// placeUnitInfoWindow applies the placement F1's opener requests. The screen
+// is opened with the window initializer's "centre in the view" flag, the same
+// one EXITMENU and YESORNO carry, so the authored root origin is replaced by
+// the view-centred one at the live surface size: centred in the width right of
+// the 128-pixel rail and in the full height [07 R-HUD-03 §8][07 R-HUD-05
+// "Centred in the view"]. Re-placing at draw time follows a surface resize
+// while the screen stands, as the other centred battle windows do; before the
+// first negotiated size the authored origin stands.
+func (h *retailBattleHUD) placeUnitInfoWindow(window *gui.Window) {
+	if h == nil || window == nil || h.screenW <= 0 || h.screenH <= 0 {
+		return
+	}
+	placeBattleModal(window, int(h.screenW), int(h.screenH))
 }
 
 // drawUnitInfoPicture stamps `unitpics/<internal name>.PCX` into the authored
