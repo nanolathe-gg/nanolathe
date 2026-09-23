@@ -2511,8 +2511,10 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 
 	victim.Health = ApplyDamage(victim.Health, amount)
 	if victim.Health <= 0 && s.DeathLatchAdmitted(victim.Owner) {
-		// Preserve the modular signed word for the later severity calculation.
-		w.DestroyBy(victim.Handle, units.DeathCauseFromKind(in.Kind), in.Attacker)
+		// Preserve the modular health and stored provenance for the later
+		// death packet. A null damage attacker leaves the prior link intact
+		// [06 §9.1]; the death packet reads that stored link [06 §12.1].
+		w.DestroyBy(victim.Handle, units.DeathCauseFromKind(in.Kind), victim.EngagementTarget)
 		result.DeathLatched = true
 		if s.deathNotified == nil {
 			s.deathNotified = make(map[pool.Handle]*units.Unit)

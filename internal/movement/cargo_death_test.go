@@ -100,35 +100,31 @@ func TestCarrierDeathCascadeCause(t *testing.T) {
 	}
 }
 
-// TestCarrierDeathCascadeNeutralSideWithoutKiller locks the null-attacker half
-// of the side snapshot: a packet with no attacker carries the neutral side 10,
-// so no kill clause of [06 §12.1] can credit player 0 for a killerless
-// carrier's cargo.
+// TestCarrierDeathCascadeNeutralSideWithoutKiller locks the fresh-cargo case:
+// a null-attacker damage packet leaves its initial null link and neutral side
+// unchanged [06 §9.1], so the later death cannot credit a player [06 §12.1].
 func TestCarrierDeathCascadeNeutralSideWithoutKiller(t *testing.T) {
 	w, system, carrier, cargo, _ := newCarrierWithCargo(t)
 	carrier.LastDamageCause = uint8(combat.CauseOrdinary)
 	system.HandleDeath(w, carrier.Handle, 0, 0)
-	if cargo.LastDamageSide != units.NeutralAttackerSide {
-		t.Fatalf("cargo attacker-side snapshot = %d after a killerless carrier death, want the neutral side %d [06 R-WPN-04 §2]",
-			cargo.LastDamageSide, units.NeutralAttackerSide)
+	if cargo.EngagementTarget != 0 || cargo.LastDamageSide != units.NeutralAttackerSide {
+		t.Fatalf("fresh cargo provenance = %d/%d after a killerless carrier death, want null/%d [06 §9.1]",
+			cargo.EngagementTarget, cargo.LastDamageSide, units.NeutralAttackerSide)
 	}
 	if got := combat.Cause(cargo.LastDamageCause); got != combat.CauseCargo {
 		t.Fatalf("cascaded cause %d, want 6 [06 §12.1]", got)
 	}
 }
 
-// TestCarrierDeathCascadeCreditsTheCarriersKiller locks the attribution edge of
-// [06 §12.1]: "cargo killed by carrier death credits the carrier's killer ...
-// the cascade applies its 30000 damage per cargo with the attacker argument set
-// to the carrier's killer". The attacker argument is what the death handler's
-// row writes into each cargo's recorded-attacker link [04 R-UNIT-06 §5], so the
-// link is the observable — and it is the carrier's killer, never the carrier.
-//
-// The killer handle was already a parameter of the cascade and was discarded
-// before WU-19-49b, so every cargo died attributed to nobody.
+// TestCarrierDeathCascadeCreditsTheCarriersKiller locks the attribution edge:
+// the cascade passes the carrier's killer into ordinary damage intake
+// [06 §12.1]. A nonzero attacker replaces the cargo's provenance; null keeps
+// its earlier link and side [06 §9.1]. The later death packet reads that stored
+// provenance, not the cascade packet's attacker argument [06 §12.1].
 func TestCarrierDeathCascadeCreditsTheCarriersKiller(t *testing.T) {
-	t.Run("KillerIsCredited", func(t *testing.T) {
+	t.Run("KillerReplacesEarlierCargoAttacker", func(t *testing.T) {
 		w, system, carrier, cargo, killer := newCarrierWithCargo(t)
+		cargo.EngagementTarget, cargo.LastDamageSide = carrier.Handle, carrier.Owner
 		carrier.LastDamageCause = uint8(combat.CauseOrdinary)
 		system.HandleDeath(w, carrier.Handle, killer.Handle, 0)
 		if !cargo.Dying {
@@ -138,22 +134,22 @@ func TestCarrierDeathCascadeCreditsTheCarriersKiller(t *testing.T) {
 			t.Fatalf("cargo recorded attacker = %d, want the CARRIER's killer %d [06 §12.1][04 R-UNIT-06 §5]",
 				cargo.EngagementTarget, killer.Handle)
 		}
-		if cargo.EngagementTarget == carrier.Handle {
-			t.Fatal("the cascade credited the carrier itself; the attacker argument is the carrier's killer [06 §12.1]")
+		if cargo.LastDamageSide != killer.Owner {
+			t.Fatalf("cargo side = %d, want the carrier killer's side %d [06 §9.1]", cargo.LastDamageSide, killer.Owner)
 		}
 	})
 
-	t.Run("NoKillerPassesTheNullThrough", func(t *testing.T) {
+	t.Run("NoKillerPreservesEarlierCargoAttacker", func(t *testing.T) {
 		w, system, carrier, cargo, killer := newCarrierWithCargo(t)
-		cargo.EngagementTarget = killer.Handle // an earlier attacker of the cargo itself
+		cargo.EngagementTarget, cargo.LastDamageSide = killer.Handle, killer.Owner
 		carrier.LastDamageCause = uint8(combat.CauseOrdinary)
 		system.HandleDeath(w, carrier.Handle, 0, 0)
 		if !cargo.Dying {
 			t.Fatalf("the cascade's 30000 did not kill the cargo: health %d", cargo.Health)
 		}
-		if cargo.EngagementTarget != 0 {
-			t.Fatalf("cargo recorded attacker = %d after a killerless carrier death, want null: the death row writes the packet's attacker unconditionally [04 R-UNIT-06 §5]",
-				cargo.EngagementTarget)
+		if cargo.EngagementTarget != killer.Handle || cargo.LastDamageSide != killer.Owner {
+			t.Fatalf("cargo provenance = %d/%d after a killerless carrier death, want earlier attacker %d/%d [06 §9.1][06 §12.1]",
+				cargo.EngagementTarget, cargo.LastDamageSide, killer.Handle, killer.Owner)
 		}
 	})
 }

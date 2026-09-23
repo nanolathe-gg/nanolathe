@@ -2137,11 +2137,13 @@ func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
 // finalizer so later phases can observe the marked unit without running
 // destruction side effects [01 §4.4][04 R-MOV-03 §1].
 //
-// This is the arm for a death that carries no damage packet — a reclaimed
-// unit, a cancelled factory product, a captured victim's old record. The
-// recorded-attacker link is written null for those, which is what
+// This is the arm for a death that carries no damage packet — a cancelled
+// factory product or a captured victim's old record. The recorded-attacker
+// link is written null for those, which is what
 // [04 R-UNIT-06 §5]'s death row means by "may be null". A death that does
-// carry a packet goes through DestroyBy with that packet's attacker.
+// carry a death packet goes through DestroyBy with that packet's attacker.
+// Lethal damage passes the stored link that will populate the later death
+// packet, which can differ from the damage packet's attacker [06 §12.1].
 func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 	w.DestroyBy(h, cause, 0)
 }
@@ -2153,11 +2155,10 @@ func (w *World) Destroy(h pool.Handle, cause DeathCause) {
 // dispatcher's row, which writes only for a non-heal packet with a nonzero
 // attacker id.
 //
-// "Always" is the load-bearing half. A unit that had been shot, and then dies
-// with no attacker behind the killing blow — drowning, a meteor, a cancelled
-// build — does not keep the stale link from the earlier hit: the death handler
-// overwrites it with the packet's null. Retail has no clear anywhere else, so
-// this write is the only thing that can erase a link [04 R-UNIT-06 §5 part 1].
+// The damage dispatcher must pass the stored link after its conditional
+// provenance write: a null attacker on a lethal damage packet preserves the
+// earlier attacker, which populates the later death packet [06 §9.1][06 §12.1].
+// An explicit null death-packet attacker still clears the link.
 //
 // The killer is stored as the pool slot the packet names, live or not; §5's
 // readers are required to tolerate a dead or reused slot, and the guard's

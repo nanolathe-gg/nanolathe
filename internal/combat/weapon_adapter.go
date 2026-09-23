@@ -250,7 +250,7 @@ func gateEndForUnit(u *units.Unit) unitGateEnd {
 	if u == nil {
 		return unitGateEnd{}
 	}
-	end := unitGateEnd{Y: wholeY(u), MoverMode: u.Move.Mode, UnitMode: u.Move.ModeMirror & 3}
+	end := unitGateEnd{Y: wholeY(u), MoverMode: u.Move.ModeMirror & 3, UnitMode: u.Move.ModeMirror & 3}
 	if u.Def != nil {
 		end.ModelTop = u.Def.ModelTop
 		end.Floater = u.Def.Floater

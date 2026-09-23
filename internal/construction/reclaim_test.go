@@ -40,7 +40,7 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 	}
 	builder, target := w.Unit(bh), w.Unit(th)
 	builder.InBuildStance = true
-	target.Move.Mode = 1
+	target.Move.Mode, target.Move.ModeMirror = 1, 1
 	target.Health = targetHealth
 	target.MaxHealth = targetDef.MaxDamage
 	id := orders.Lookup("ReclaimUnit")
@@ -291,7 +291,7 @@ func TestUnitReclaimRefusesACommanderAndAnAircraft(t *testing.T) {
 	})
 	t.Run("airborne target", func(t *testing.T) {
 		s, builder, target, _ := reclaimFixture(t, 100, 10)
-		target.Move.Mode = 2 // airborne [04 R-MOV-01 §8]
+		target.Move.Mode, target.Move.ModeMirror = 2, 2 // airborne [04 R-MOV-01 §8]
 		orders.QueueForUnit(builder).Head().Phase = 0
 		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
 		if orders.QueueForUnit(builder).LenPrimary() != 0 {
@@ -300,7 +300,7 @@ func TestUnitReclaimRefusesACommanderAndAnAircraft(t *testing.T) {
 	})
 	t.Run("grounded ordinary target stays admitted", func(t *testing.T) {
 		s, builder, target, _ := reclaimFixture(t, 100, 10)
-		target.Move.Mode = 1
+		target.Move.Mode, target.Move.ModeMirror = 1, 1
 		s.StepUnit(TickContext{Tick: 0, World: s.World, Economy: s.Economy, Catalog: s.Catalog}, builder.Handle)
 		if orders.QueueForUnit(builder).LenPrimary() != 1 {
 			t.Fatalf("an ordinary grounded target was refused")
@@ -314,7 +314,7 @@ func TestUnitReclaimRefusesACommanderAndAnAircraft(t *testing.T) {
 // seven of every eight visits drew nothing.
 func TestUnitReclaimEmitsOneSegmentPerVisit(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 100, 10)
-	target.Move.Mode = 1
+	target.Move.Mode, target.Move.ModeMirror = 1, 1
 	sink := &countingNanoSink{}
 	s.Presentation = sink
 	bindConstructionFixture(builder, trivialModel(1, nil), true)

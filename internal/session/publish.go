@@ -1282,10 +1282,10 @@ func publishVisibilityView(vis *visibility.Service, local uint8, dst *frame.Fram
 }
 
 // publishedMoverMode is the selector the composer's two unit passes split on:
-// the low two bits of the unit record's own flags word — the mover-mode
-// *mirror* of [04 R-MOV-01 §8], not the mover object's copy. Pass A takes the
-// units whose mirror is `1` and pass B, which runs after the nanolathe strip,
-// the projectile pool and the fixed effect pool, takes the rest
+// the low two bits of the unit record's own flags word — the committed
+// mover-mode *mirror* of [04 R-MOV-01 §8], not the mover's pending request.
+// Pass A takes the units whose mirror is `1`. Pass B runs after the nanolathe
+// strip, projectile pool and fixed effect pool, and takes the rest
 // [03 R-RAST-01 §7].
 //
 // Every unit is created with the mirror at `1` (units.CreatedMoverMode), a
@@ -1303,6 +1303,13 @@ func publishVisibilityView(vis *visibility.Service, local uint8, dst *frame.Fram
 // defect PT3-01. See the 2026-08-30 correction under [03 R-RAST-01 §7], which
 // retracts that section's "structures (no mover, mode `0`) … This is the
 // retail order; it is not a bug to fix".
+func publishedMoverMode(u *units.Unit) uint8 {
+	if u == nil {
+		return 0
+	}
+	return u.Move.ModeMirror & 3
+}
+
 // publishedCarriedPiece narrows the carrier hang piece to the committed copy.
 // Retail stores it as one byte and reads it back signed, so the reserved
 // no-piece index is a negative value on the read side [04 R-FAC-02 §1]; the
@@ -1314,13 +1321,6 @@ func publishedCarriedPiece(piece int) int16 {
 		return -1
 	}
 	return int16(piece)
-}
-
-func publishedMoverMode(u *units.Unit) uint8 {
-	if u == nil {
-		return 0
-	}
-	return u.Move.Mode & 3
 }
 
 // SetEffectTimingResolver installs the authored-timing resolver the

@@ -357,18 +357,11 @@ func TestSlotAutonomyBitPreconditions(t *testing.T) {
 	}
 }
 
-// TestDeathWritesTheDeathPacketsAttacker locks the death row of
-// [04 R-UNIT-06 §5 part 1]'s writer table for the recorded-attacker link: on a
-// unit's death the death handler writes the death packet's attacker, and it
-// writes it ALWAYS — the row carries no condition, unlike the damage
-// dispatcher's row above it, which writes only for a non-heal packet with a
-// nonzero attacker id.
-//
-// "Always" is the half worth a test, because it is the only thing in retail
-// that can erase a link: §5 states there is no per-tick clear and no clear on
-// the attacker's death. A unit that was shot and then dies to something with no
-// attacker behind it must NOT keep the earlier shooter.
-func TestDeathWritesTheDeathPacketsAttacker(t *testing.T) {
+// TestDeathAttackerProvenance distinguishes damage intake from an explicit
+// death packet. Damage only replaces a nonzero attacker [06 §9.1]; the later
+// local death packet reads that stored link [06 §12.1]. An explicit death
+// packet writes its attacker unconditionally [04 R-UNIT-06 §5 part 1].
+func TestDeathAttackerProvenance(t *testing.T) {
 	weapon := &content.WeaponDef{ID: 1, Range: 400, DamageDefault: 10}
 
 	// 1. Killed by damage: the link is the killing packet's shooter.
@@ -386,10 +379,9 @@ func TestDeathWritesTheDeathPacketsAttacker(t *testing.T) {
 		}
 	})
 
-	// 2. Shot first, then killed by a packet with no attacker: the death row
-	// overwrites the earlier link with the packet's null. The dispatcher's own
-	// row cannot express this — it skips a null attacker id entirely.
-	t.Run("KilledWithNoAttackerClearsTheEarlierLink", func(t *testing.T) {
+	// 2. A lethal damage packet with no attacker preserves the earlier link
+	// for the later death packet, just as a nonlethal null-attacker hit does.
+	t.Run("ShooterlessLethalDamageKeepsEarlierLink", func(t *testing.T) {
 		f := newReactionFixture(t)
 		hit := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}
 		applyDamageToUnit(f.svc, f.victim, hit, weapon, 1, 0, f.w, 5)
@@ -401,9 +393,9 @@ func TestDeathWritesTheDeathPacketsAttacker(t *testing.T) {
 		if !f.victim.Dying {
 			t.Fatalf("the victim did not latch death: health %d", f.victim.Health)
 		}
-		if f.victim.EngagementTarget != 0 {
-			t.Fatalf("recorded attacker = %d after a shooterless death, want null: the death row writes the packet's attacker unconditionally [04 R-UNIT-06 §5]",
-				f.victim.EngagementTarget)
+		if f.victim.EngagementTarget != f.attacker.Handle {
+			t.Fatalf("recorded attacker = %d after shooterless lethal damage, want earlier shooter %d [06 §9.1][06 §12.1]",
+				f.victim.EngagementTarget, f.attacker.Handle)
 		}
 	})
 
@@ -430,8 +422,8 @@ func TestDeathWritesTheDeathPacketsAttacker(t *testing.T) {
 		}
 	})
 
-	// 4. A death that carries no packet at all — a reclaimed unit, a cancelled
-	// factory product — is the plain Destroy arm and writes the null.
+	// 4. A direct packetless removal uses the plain Destroy arm and writes
+	// null; it does not pass through damage intake.
 	t.Run("PacketlessDeath", func(t *testing.T) {
 		f := newReactionFixture(t)
 		hit := &Projectile{Pos: Vec3{X: f.victim.X, Y: f.victim.Y, Z: f.victim.Z}, Shooter: f.attacker.Handle}

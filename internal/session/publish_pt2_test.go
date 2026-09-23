@@ -24,7 +24,11 @@ func TestPublishSnapshotCarriesCommittedMoverMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create unit: %v", err)
 	}
-	w.Unit(h).Move.Mode = 2
+	// A landing request may precede its accepted position commit. Publication
+	// follows the committed unit-side mirror, so the request can already be
+	// grounded while the unit remains airborne [04 R-MOV-01 §8].
+	w.Unit(h).Move.Mode = 1
+	w.Unit(h).Move.ModeMirror = 2
 	w.Unit(h).Group = 3
 	s := &Session{Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0}
 	s.publishSnapshot(1)

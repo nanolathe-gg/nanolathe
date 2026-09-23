@@ -162,8 +162,10 @@ func reclaimInRange(builder, target *units.Unit) bool {
 // own capture capability and demands it be clear, which is why a unit authored
 // `cancapture=1` is both un-capturable and un-reclaimable, and in stock content
 // that is exactly the commanders. The mover-mode clause is the low two bits of
-// the target's status word, which units.Unit mirrors as Move.Mode
-// [04 R-MOV-01 §8]: 0 none, 1 grounded, 2 airborne.
+// the target's status word, which units.Unit mirrors as Move.ModeMirror
+// [04 R-MOV-01 §8]: 0 none, 1 grounded, 2 airborne. Move.Mode is the request;
+// a refused touchdown leaves the committed mirror airborne until a position
+// commit accepts it [04 R-AIR-01 §6][04 R-COLL-01 §1].
 //
 // The command resolver's code-12 unit branch still imposes no owner comparison
 // [04 §3.4], so an own unit is a legal reclaim target; that half is unchanged.
@@ -177,7 +179,7 @@ func reclaimTargetEligible(builder, target *units.Unit) bool {
 	if !builder.Def.CanReclamate {
 		return false
 	}
-	if target.Move.Mode&0x3 == 2 {
+	if target.Move.ModeMirror&0x3 == 2 {
 		return false // airborne [05 R-WORK-01 §4]
 	}
 	if target.Def.CanCapture {
