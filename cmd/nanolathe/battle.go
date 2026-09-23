@@ -90,6 +90,10 @@ type battleSession struct {
 	// in the classic executor, which has no free zoom.
 	zoom     camera.ZoomController
 	gestures battleGestures
+	// executorSeen and executorEnhanced remember the executor the previous
+	// viewer step saw, so a switch to classic can return the view to 1x
+	// (DESIGN_GPU_RENDERER §14.6).
+	executorSeen, executorEnhanced bool
 	// communityPlacement owns the host-only CP-CON-5/6 cursor choice. The
 	// selected facing deliberately survives disarming and product changes;
 	// each definition is clamped only when previewed or issued.
@@ -865,6 +869,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
 	}
+	b.followExecutor(cl.Enhanced())
 	if b.stepArrival(delta, cl) {
 		return
 	}

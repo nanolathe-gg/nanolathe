@@ -2165,8 +2165,10 @@ geometry arrives in screen space and rasterizes as at 1×.
 * **F10** toggles the executor between classic and modern. The client publishes
   the requested executor; the adapter switches at the next Update, turning
   interpolation and the synthesized art off when classic takes over (§14.3), and
-  the retained screen bridges the swap. Neither key is a retail binding. F10
-  also updates the shell preference and persists only the renderer field. The
+  the retained screen bridges the swap. When classic takes over from modern,
+  by F10 or the options page, the battle returns to native 1× about the
+  viewport centre: classic cannot change or always present a modern free
+  factor. Neither key is a retail binding. F10 also updates the shell preference and persists only the renderer field. The
   Nanolathe options page uses the same swap cleanup for live previews and Cancel
   restoration (DESIGN_INTERFACE_HUD_INPUT §3.4.1).
 * `--zoom` sets the scale at battle entry and applies to captures too. Classic

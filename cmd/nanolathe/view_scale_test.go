@@ -237,3 +237,31 @@ func TestResolutionChangeRefitsClampedOverview(t *testing.T) {
 		}
 	}
 }
+
+// Classic taking over from modern returns the view to 1x, whatever free factor
+// modern left (issue #5). Classic's own F9 detail step is not undone on later
+// classic steps, and a battle that starts in classic is left alone (§14.6).
+func TestClassicTakeoverReturnsToNativeZoom(t *testing.T) {
+	b := zoomTestBattle()
+	b.followExecutor(true)
+	jumpBattleZoom(b, 320, 240, camera.ZoomSteps[0], true)
+	b.followExecutor(false)
+	if got := b.cam.EffectiveZoom(); got != camera.ZoomUnit {
+		t.Fatalf("classic takeover left zoom %s, want %s", got, camera.ZoomUnit)
+	}
+	if got := b.cam.EffectiveScale(); got != camera.ViewScaleNative {
+		t.Fatalf("classic takeover left record step %s, want native", got)
+	}
+	b.toggleViewScale(false)
+	b.followExecutor(false)
+	if got := b.cam.EffectiveScale(); got != camera.ViewScaleDetail {
+		t.Fatalf("a classic step undid classic F9: scale %s", got)
+	}
+
+	fresh := zoomTestBattle()
+	jumpBattleZoom(fresh, 320, 240, camera.ZoomMax, false)
+	fresh.followExecutor(false)
+	if got := fresh.cam.EffectiveScale(); got != camera.ViewScaleDetail {
+		t.Fatalf("first classic step reset the entry scale to %s", got)
+	}
+}

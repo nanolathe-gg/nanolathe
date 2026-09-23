@@ -109,14 +109,14 @@ func TestTrackpadCameraPassOwnership(t *testing.T) {
 			}
 			cl.SetCamera(b.cam)
 			cl.SetFocused(true)
-			cl.SetEnhanced(true)
+			// Classic runs from the start: a modern-to-classic switch would
+			// itself return the view to 1x (DESIGN_GPU_RENDERER §14.6).
+			cl.SetEnhanced(gate != "classic")
 			m := cl.Input().Mouse
 			m.SetPosition(320, 240)
 			b.viewerStep(0, cl)
 			b.cam.X, b.cam.Z, b.cam.Zoom = 1000, 1000, camera.ZoomMax
 			switch gate {
-			case "classic":
-				cl.SetEnhanced(false)
 			case "unfocused":
 				cl.SetFocused(false)
 			case "chrome":

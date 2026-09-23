@@ -170,6 +170,23 @@ func (b *battleSession) toggleViewScale(modern bool) {
 	fmt.Fprintf(os.Stderr, "nanolathe: view scale %s\n", next)
 }
 
+// followExecutor returns the view to native 1x when the classic executor takes
+// over from modern, by F10 or the options page. Classic has neither the wheel
+// nor modern's free factors, so a modern zoom left in place would strand the
+// player on a factor classic cannot change and may not present (§14.6).
+func (b *battleSession) followExecutor(enhanced bool) {
+	if b == nil || b.cam == nil {
+		return
+	}
+	switched := b.executorSeen && b.executorEnhanced && !enhanced
+	b.executorSeen, b.executorEnhanced = true, enhanced
+	if !switched {
+		return
+	}
+	mx, my := battleViewCentre(b.cam)
+	jumpBattleZoom(b, mx, my, camera.ZoomUnit, false)
+}
+
 // nextZoomTarget is the modern F9 cycle, 1x -> 2x -> 0.25x -> 1x (§16.8).
 // It shares the wheel's targets; a free factor goes to the first step above
 // it, wrapping to the lowest step when there is none.
