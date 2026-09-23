@@ -150,6 +150,9 @@ func aiE2ESkirmishAtMode(t *testing.T, mapName string, seed uint32, difficulty i
 // TestAIVehicleRetailSlopeProbe in ai_terrain_pocket_probe_test.go re-measures
 // all four numbers on demand.
 func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long AI acceptance trajectory: run tools/check-retail --full")
+	}
 	// 2 is Hard; SkirmishDefaultDifficulty is the lobby default, 1 Medium
 	// [08 "Skirmish configuration"].
 	for _, tc := range []struct {
@@ -258,6 +261,9 @@ func idleHumanEliminationRetail(t *testing.T, difficulty int) {
 // [08 R-P0-04 §3 "Wave merge"][08 R-AI-01 §4]. When the long test above fails,
 // this one says whether the classifier or the engagement is at fault.
 func TestComputerPlayerFormsAnAttackWaveRetail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long AI acceptance trajectory: run tools/check-retail --full")
+	}
 	// The 24000-tick bound was established with retail's entry path allowance
 	// and unit-limit divisor. Community and Modern intentionally replace both
 	// parameters [DESIGN_COMMUNITY_PATCH §4.1].

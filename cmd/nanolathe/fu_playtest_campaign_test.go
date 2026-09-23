@@ -226,6 +226,9 @@ func fuRouteResult(f *fuShell, b *battleSession, note *fuBattleNote) {
 }
 
 func TestFUPlaytestCampaignSequence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	f := fuNewShell(t, 7)
 	shell := f.shell
 	dir := fuOutDir(t)

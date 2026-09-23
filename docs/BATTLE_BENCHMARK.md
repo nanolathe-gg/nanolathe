@@ -6,7 +6,16 @@ no audio device — use the displayless
 [simulation-cost benchmark](SIM_BENCHMARK.md) instead; it takes the same host
 lock, so the two never run at once.
 
-Run from a worktree with the retail installation available. The default scene
+Run from a worktree with the retail installation available. The wrapper bounds
+Go runtime workers and build jobs to two, honoring `GOMAXPROCS` and
+`NANOLATHE_TEST_P`. Compilation and native benchmark execution each take the
+same host lock used by verification gates across worktrees. Match the runtime
+worker setting as well as scene metadata when comparing runs. The existing
+180-frame measurement is already six seconds at 30 draws/s; retain its warm-up
+and census rather than shortening it for every change. Authoritative-tick-only
+changes use the quick simulation benchmark instead of both windowed renderers.
+
+ The default scene
 is Great Divide, seed 7, 1920×1080, 160 armed mobile units and 16 buildings per side,
 plus the normal starting commanders. Labs queue ten Peewees/AKs through normal
 factory production. Units receive movement orders; COB, pathfinding, combat,

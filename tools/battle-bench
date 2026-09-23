@@ -2,4 +2,10 @@
 # Live simulation plus rendering, retail assets required. Output directory must be new.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
-exec go run ./cmd/nanolathe "$@"
+. tools/go-budget
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+tools/host-run go build -o "$work/nanolathe" ./cmd/nanolathe
+"$work/nanolathe" "$@"

@@ -1,0 +1,8 @@
+# Sourced by local verification and benchmark tools. These are host limits,
+# never simulation settings. Explicit caller settings take precedence.
+: "${GOMAXPROCS:=2}"
+: "${NANOLATHE_TEST_P:=2}"
+export GOMAXPROCS NANOLATHE_TEST_P
+# Also bound nested go commands (architecture guards and analyzer builds).
+GOFLAGS="${GOFLAGS:-} -p=$NANOLATHE_TEST_P"
+export GOFLAGS

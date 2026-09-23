@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Cheap process checks for shared locking, inherited ownership and crash release."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+runner = str(Path(__file__).with_name("host-run").resolve())
+with tempfile.TemporaryDirectory() as tmp:
+    env = dict(os.environ, HOME=tmp, XDG_CACHE_HOME=tmp)
+    env.pop("NANOLATHE_HOST_LOCK_FD", None)
+    processes = []
+    try:
+        holder = subprocess.Popen(
+            [runner, sys.executable, "-c",
+             "import sys; print('held', flush=True); sys.stdin.read()"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env,
+        )
+        processes.append(holder)
+        assert holder.stdout.readline().strip() == "held"
+        waiter = subprocess.Popen(
+            [runner, runner, sys.executable, "-c", "print('nested acquired')"],
+            stdout=subprocess.PIPE, text=True, env=env, cwd=tmp,
+        )
+        processes.append(waiter)
+        assert "waiting for another" in waiter.stdout.readline()
+        assert waiter.poll() is None
+        holder.kill()
+        holder.wait(timeout=5)
+        assert waiter.communicate(timeout=5)[0].strip() == "nested acquired"
+        assert waiter.returncode == 0
+        # A command's failure must remain a failure at the gate boundary.
+        result = subprocess.run(
+            [runner, sys.executable, "-c", "raise SystemExit(7)"], env=env,
+            timeout=5,
+        )
+        assert result.returncode == 7
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+print("host-run: exclusion, nested ownership, crash release and exit status passed")

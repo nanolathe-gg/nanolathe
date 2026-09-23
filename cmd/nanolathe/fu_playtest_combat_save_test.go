@@ -41,6 +41,9 @@ func fuHandleAfter(msg, key string) (pool.Handle, bool) {
 }
 
 func TestFUPlaytestSaveDuringCombat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	root := probeRetail(t)
 	opts := Options{Root: root, Map: fuSkirmishMap, Seed: 7}
 	cs, err := openContent(opts)

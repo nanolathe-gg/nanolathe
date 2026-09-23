@@ -25,6 +25,11 @@
 # Usage: tools/lint [--update-baseline]
 set -e
 
+if [ -z "${NANOLATHE_HOST_LOCK_FD:-}" ]; then
+	exec "$(dirname "$0")/host-run" "$0" "$@"
+fi
+. "$(dirname "$0")/go-budget"
+
 STATICCHECK_VERSION=2025.1.1
 DEADCODE_VERSION=v0.36.0
 

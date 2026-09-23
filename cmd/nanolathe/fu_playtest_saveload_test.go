@@ -207,6 +207,9 @@ func fuStartSkirmish(f *fuShell, seed int64) *battleSession {
 }
 
 func TestFUPlaytestSaveLoadSequence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	f := fuNewShell(t, 7)
 	shell := f.shell
 	dir := fuOutDir(t)

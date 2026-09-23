@@ -89,11 +89,8 @@ func TestQueueOverflowCap_Secondary(t *testing.T) {
 // ([04 R-FAC-02 §4]), so a queue of holds runs out instead of spinning. The wedging case therefore runs in a SUBPROCESS (this
 // test binary re-exec'd with -test.run and a short -test.timeout) so the
 // suite waits seconds, not forever; the child only exits cleanly if some cap
-// rescued the walk, which is a failure. Skipped in -short mode.
+// rescued the walk, which is a failure. This focused guard also runs in short mode.
 func TestPumpWedgeIsNotRescued(t *testing.T) {
-	if testing.Short() {
-		t.Skip("-short: wedge subprocess test skipped")
-	}
 	if os.Getenv("NANOLATHE_PUMP_WEDGE_CHILD") == "1" {
 		sim := rng.NewSimulation(2)
 		q := &Queue{binding: &QueueBinding{SimRNG: &sim}}

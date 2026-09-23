@@ -143,6 +143,9 @@ func fuRunSkirmishCensus(t *testing.T, name string, cfg session.SkirmishConfig, 
 // sibling three-player and mapped runs keep their 54000 budget: they assert no
 // terminal state, so the shift does not reach them.
 func TestFUPlaytestSkirmishSeed7Census(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	report := fuRunSkirmishCensus(t, "skirmish-seed7-census", session.DirectSkirmishConfig(fuSkirmishMap), 7, 108000)
 	if report.State != session.StatePostBattle.String() {
 		t.Fatalf("seed 7 did not reach the post-battle state by tick %d: state %s", report.Tick, report.State)
@@ -156,6 +159,9 @@ func TestFUPlaytestSkirmishSeed7Census(t *testing.T) {
 // its own alliance so two expanding sides fight each other while the local
 // commander idles; the two-player run has only one side that expands.
 func TestFUPlaytestSkirmishTwoComputerSides(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	cfg := fuThreePlayerConfig()
 	if err := cfg.Normalize(); err != nil {
 		t.Fatalf("normalize: %v", err)
@@ -167,6 +173,9 @@ func TestFUPlaytestSkirmishTwoComputerSides(t *testing.T) {
 // Mapped + Permanent rule pair, the pair the frame captures use, so the
 // frames can be read against a run that records whether an attack ever came.
 func TestFUPlaytestSkirmishMappedRules(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	fuRunSkirmishCensus(t, "skirmish-seed7-mapped-census", fuMappedRules(session.DirectSkirmishConfig(fuSkirmishMap)), 7, 54000)
 	cfg := fuMappedRules(fuThreePlayerConfig())
 	if err := cfg.Normalize(); err != nil {
@@ -341,6 +350,9 @@ func fuFrameRun(t *testing.T, prefix string, cfg session.SkirmishConfig, seed in
 // pair, where the attack wave reaches the local commander, and the Mapped
 // pair with two computer sides, where the bases are drawn.
 func TestFUPlaytestSkirmishBusyFrames(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long acceptance trajectory: run tools/check-retail --full")
+	}
 	fuFrameRun(t, "skirmish-frames-default", session.DirectSkirmishConfig(fuSkirmishMap), 7, 27000)
 	cfg := fuMappedRules(fuThreePlayerConfig())
 	if err := cfg.Normalize(); err != nil {

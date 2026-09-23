@@ -39,6 +39,9 @@ func TestEnemyCommanderKilledByWeaponEndsSkirmishRetail(t *testing.T) {
 	for _, buildUntil := range []uint32{6000, 12000, 18000, 24000} {
 		buildUntil := buildUntil
 		t.Run(fmt.Sprint(buildUntil), func(t *testing.T) {
+			if testing.Short() && buildUntil != 6000 {
+				t.Skip("extended commander-death matrix: run tools/check-retail --full")
+			}
 			t.Parallel()
 			enemyCommanderWeaponKillIn(t, aiE2ESkirmish(t, "ashap plateau", aiE2ESeed), buildUntil)
 		})
@@ -186,6 +189,10 @@ func TestEnemyCommanderKilledByWeaponEndsUserSkirmishRetail(t *testing.T) {
 		for _, buildUntil := range []uint32{6000, 15000} {
 			seed, buildUntil := seed, buildUntil
 			t.Run(fmt.Sprintf("seed%d-%d", seed, buildUntil), func(t *testing.T) {
+				// Keep the original cancellation/live-count leak reproducer above.
+				if testing.Short() && (seed != 1234 || buildUntil != 15000) {
+					t.Skip("extended commander-death matrix: run tools/check-retail --full")
+				}
 				t.Parallel()
 				enemyCommanderWeaponKillIn(t, userReportedSkirmish(t, seed), buildUntil)
 			})

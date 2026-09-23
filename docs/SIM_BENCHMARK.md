@@ -17,13 +17,27 @@ one comparison can never mix two runs' artifacts. Runs serialize with each
 other and with the windowed benchmark through the shared benchmark lock
 (`internal/platform/benchlock`); wait time is outside every measurement.
 
-Build the binary once and run it directly when comparing, so compilation is not
-inside the lock and not inside the numbers:
+`tools/sim-bench` defaults to a quick sample: the same 1,200 warm-up ticks,
+then 300 measured ticks with profiles disabled. That is 1,500 total ticks
+instead of 4,200 (64% fewer steps), measuring combat onset rather than the full
+sustained battle. Inspect its census; a shorter window is not evidence about
+late combat. `tools/sim-bench --full OUT` retains the 3,000-tick profiled window.
+Explicit options after OUT override the quick defaults. The native command's
+defaults remain unchanged.
+
+The wrapper defaults to two Go runtime workers and two build jobs (override
+`GOMAXPROCS` / `NANOLATHE_TEST_P`). Compilation takes the host lock also used by
+verification; the native benchmark acquires it again for setup and measurement.
+Record and match the runtime worker setting when comparing. These limits reduce
+contention; they do not guarantee quiet-machine timings.
+
+Build the binary once and run it directly when comparing; use `tools/host-run`
+for compilation so it cannot overlap participating gates or benchmarks:
 
 ```
-go build -o /tmp/nanolathe-headless ./cmd/nanolathe-headless
-/tmp/nanolathe-headless --sim-benchmark=/tmp/sim-a --seed=7
-/tmp/nanolathe-headless --sim-benchmark=/tmp/sim-b --seed=7
+GOMAXPROCS=2 tools/host-run go build -p 2 -o /tmp/nanolathe-headless ./cmd/nanolathe-headless
+GOMAXPROCS=2 /tmp/nanolathe-headless --sim-benchmark=/tmp/sim-a --seed=7
+GOMAXPROCS=2 /tmp/nanolathe-headless --sim-benchmark=/tmp/sim-b --seed=7
 ```
 
 ## The scene
@@ -108,7 +122,7 @@ One `Step` call per authoritative tick, so the once-per-pump executor tail runs
 on the same cadence as the tick it follows. Warm-up is 1200 unmeasured ticks —
 the AI's first classification, construction, resource and wave deadlines, and
 the march that brings the armies into contact around tick one thousand. The
-measured window is then 3000 ticks (100 s of game time) from battle onset
+native/full measured window is then 3000 ticks (100 s of game time) from battle onset
 through sustained engagement, while all three armies are still at full
 strength. `--warmup-ticks` and `--benchmark-ticks` move both.
 

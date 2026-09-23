@@ -367,20 +367,64 @@ document; none is replaced by a plausible default [I9].
 
 ## 6. Verification
 
-**Two test tiers.** `tools/check` is the fast tier and the one CI runs:
-`gofmt` on tracked files, `go build`, `go vet`, and `go test ./...` with the
-retail-asset variables cleared, so asset-gated tests skip and the run means the
-same thing on every machine. `tools/check-retail` is the pre-merge tier: it
-exports `NANOLATHE_RETAIL_ASSETS` (defaulting to `~/TotalAnnihilation`,
-honouring the older `NANOLATHE_TA_ROOT`), fails loudly if the directory is
-missing, and runs `go vet` and `go test` with `-tags retail`, which adds the
-tagged whole-corpus files — catalog compiles, map and mission censuses, long
-headless sessions — to the untagged set. It runs `tools/lint` first: pinned
-`staticcheck` and `deadcode` over the retail-tagged build, because the corpus
-tests are the only callers of some production code and the untagged build
-would report their targets as unused. A retail diagnostic string that trips
-`ST1005` carries `//lint:ignore ST1005 retail text` with its citation. `internal/testsupport.RetailRoot` is
-the single place a test consults those variables and skips.
+**Verification cost.** During iteration, run `tools/check ./internal/changed-package`
+(or a focused `go test -run` with `GOMAXPROCS=2` and `-p 2`). Use the whole-tree
+`tools/check` and `tools/check-retail` once on the integrated landing candidate,
+then again after landing; do not repeat them after each edit or delegate the
+same whole-tree run to every reviewer. Reviewers run the affected contracts in
+the assigned worktree; the landing owner runs the integrated gates. Documentation
+changes need diff/link review and `go test ./internal/docs` when citations change.
+
+The scripts default to `GOMAXPROCS=2` and `NANOLATHE_TEST_P=2`. This bounds
+runtime/GC workers as well as package builds and nested Go commands; it is not
+a strict aggregate CPU quota. Explicit caller values override these defaults.
+`tools/host-run` uses Python 3's standard library on macOS/Linux to hold the
+same per-user advisory lock as native benchmarks. Whole gates, standalone lint,
+GPU benchmarks and benchmark compilation therefore wait rather than compete
+across worktrees. The inherited descriptor releases on process exit, including
+crashes; never delete the lock file. Already-running older scripts and raw
+commands do not participate. Keep the machine quiet when comparing timings.
+
+**Test tiers.** `tools/check` clears retail-asset variables and runs tracked-file
+`gofmt`, build, vet and cached short synthetic tests. Package arguments narrow
+build/vet/test during iteration. `tools/check-retail` exports
+`NANOLATHE_RETAIL_ASSETS` (default `~/TotalAnnihilation`, also honouring
+`NANOLATHE_TA_ROOT`), checks the install, runs pinned staticcheck and both
+deadcode ratchets, then retail-tagged vet and short tests, plus device fixtures.
+Package arguments narrow vet/test; lint and device coverage stay whole-tree.
+Both tiers reuse Go's test cache. The reference retail install is treated as
+immutable during normal development. `tools/check-retail --fresh` bypasses the
+cache for one invocation and combines with `--full`; it does not replace older
+cached results. After deliberately replacing/modifying assets in place, run
+`go clean -testcache` once before returning to cached gates. Code/dependency changes still invalidate Go's
+normal test cache; no custom pass-result cache is introduced. Device fixtures
+remain uncached because they exercise the current graphics device.
+`internal/testsupport.RetailRoot` is the shared asset admission helper.
+
+`tools/check-retail --full` additionally runs the long acceptance tier. Short
+mode omits the seven extended FU skirmish/capture, campaign-sequence,
+combat-save and save/load-sequence probes and each mode's 54,000-tick fingerprint
+trajectory. It also omits the two full AI match/wave acceptance tests and the
+extended commander-death seed/tick matrix. The short tier keeps Ashap at 6,000
+ticks and the original Great Divide seed-1234, 15,000-tick cancellation bug
+reproducer; the full matrix retains every original assertion and seed.
+Focused save/restore,
+campaign, all three 6,000-tick fingerprints and all three combat fingerprint
+sequences remain in the normal landing gate. Use `--full` when a change affects
+late-game AI, termination, long save/load/campaign sequences, or when investigating
+a long-run failure; an unrelated landing does not require it. For a selected
+acceptance test, use bounded `go test -tags retail -count=1 -run ...` with the
+retail root exported. Never describe short-tier success as full acceptance.
+
+New tests should lock an ordering, arithmetic boundary, resource/RNG effect or
+other regression contract using the smallest fixture that exercises it. Prefer
+a focused fixture to another whole match. Long trajectories belong in the
+explicit full tier. Investigate a test that routinely takes over a second before
+adding more scenarios; that is a review budget, not a flaky wall-clock assertion.
+Use `go test -json` on the affected package when locating cost, preserving the
+output outside the repository. Benchmarks are opt-in and run only for affected
+behavior; use the quick simulation sample for iteration and a sustained sample
+when the claim concerns sustained combat. See the benchmark documents.
 
 **Fusion guard.** `internal/architecture.TestAuthoritativeArithmeticIsNotFused`
 is the one fast-tier test that runs the compiler itself: it builds the
@@ -452,25 +496,18 @@ need their own contract tests. A change to an included value must explain the
 difference. Compare only the same fingerprint version; changing its field set
 or encoding requires a new version.
 
-**The rule-set fingerprint lock.** `internal/headless`'s
-`TestStrictFingerprintIsLocked` and `TestModernFingerprintIsLocked` are the
-retail-tier guard that keeps a gameplay rule change honest: each runs two fixed
-scenes under one mode and compares the digests with constants checked into
-`rules_lock_retail_test.go`. The scenes are the reference run above at 6,000
-and 54,000 ticks, where Strict 3.1 and Modern agree, and the simulation
-benchmark's own three-army composition at 600 and 1,500 steps, where they do
-not — a third test asserts that separation, so a Modern policy that quietly
-stopped applying fails instead of passing on plausible-looking constants. Both
-scenes pin their per-player unit limit explicitly, because the displayless
-command otherwise takes an unset `-unit-limit` from the host profile and the
-digest would follow the machine rather than the change. The whole lock costs
-about fifteen seconds. To update a constant, run the failing subtest, take the
-reported value, and say in the commit message which behaviour changed: a Strict
-constant moving is a retail-baseline change and needs the research citation
-that justifies it, and a Modern constant moving is an approved-policy change
-and needs its design section [I11]. "The fingerprint moved" is not an
-explanation, and re-recording a value without one is how this guard would be
-lost.
+**The rule-set fingerprint lock.** `internal/headless` locks Strict 3.1,
+Community 3.9 and Modern separately against constants in
+`rules_lock_retail_test.go`. Each normal retail check runs the Ashap scene at
+6,000 ticks and the benchmark composition at its initial state, 600 and 1,500
+steps. The full tier also runs the Ashap scene to its 54,000-tick bound or
+locked terminal tick. A separate assertion checks that the combat scenes
+distinguish all three rule sets. Limits are explicit so host profile preferences
+cannot move the digest. These are partial fingerprints, not whole-state proofs.
+To update a constant, run the failing subtest and explain the changed behavior
+in the commit: Strict changes need their research citation, and intentional
+Community/Modern changes need their owning design contract [I11]. A changed
+fingerprint alone is never justification for replacing an expected value.
 
 **Visual evidence.** `nanolathe --shot` renders a frame headlessly; a
 screenshot is reviewed, an assertion that it should look right is not. Retail

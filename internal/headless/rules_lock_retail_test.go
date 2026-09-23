@@ -4,6 +4,7 @@ package headless
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -111,28 +112,33 @@ func runFingerprintLock(t *testing.T, mode gameplay.Mode, want6000, want54000 st
 		{ticks: 6000, end: 6000, want: want6000},
 		{ticks: 54000, end: wantEnd, want: want54000},
 	} {
-		start := time.Now()
-		report, err := RunWithContent(Request{
-			Gameplay:       mode,
-			Map:            lockAshapMap,
-			Difficulty:     lockDifficulty,
-			SimulationSeed: lockAshapSeed,
-			CRTSeed:        lockAshapSeed,
-			TickLimit:      scene.ticks,
-			UnitLimit:      lockAshapUnitLimit,
-		}, fs, catalog)
-		// A scene either reaches its bound or ends the battle at its locked tick.
-		if err != nil && !errors.Is(err, ErrTickLimit) {
-			t.Fatalf("%s %q for %d ticks: %v", mode, lockAshapMap, scene.ticks, err)
-		}
-		if report.Tick != scene.end {
-			t.Errorf("%s %q stopped at tick %d, want %d: the locked constant describes the full run", mode, lockAshapMap, report.Tick, scene.end)
-		}
-		if report.StateHash != scene.want {
-			t.Errorf("%s %q after %d ticks fingerprints %s, want the locked %s: a diff that intends this must say which behaviour changed",
-				mode, lockAshapMap, scene.ticks, report.StateHash, scene.want)
-		}
-		t.Logf("%s %q %d ticks: %s in %s", mode, lockAshapMap, report.Tick, report.StateHash, time.Since(start).Round(time.Millisecond))
+		t.Run(fmt.Sprintf("ashap-%d", scene.ticks), func(t *testing.T) {
+			if testing.Short() && scene.ticks > 6000 {
+				t.Skip("long fingerprint trajectory: run tools/check-retail --full")
+			}
+			start := time.Now()
+			report, err := RunWithContent(Request{
+				Gameplay:       mode,
+				Map:            lockAshapMap,
+				Difficulty:     lockDifficulty,
+				SimulationSeed: lockAshapSeed,
+				CRTSeed:        lockAshapSeed,
+				TickLimit:      scene.ticks,
+				UnitLimit:      lockAshapUnitLimit,
+			}, fs, catalog)
+			// A scene either reaches its bound or ends the battle at its locked tick.
+			if err != nil && !errors.Is(err, ErrTickLimit) {
+				t.Fatalf("%s %q for %d ticks: %v", mode, lockAshapMap, scene.ticks, err)
+			}
+			if report.Tick != scene.end {
+				t.Errorf("%s %q stopped at tick %d, want %d: the locked constant describes the full run", mode, lockAshapMap, report.Tick, scene.end)
+			}
+			if report.StateHash != scene.want {
+				t.Errorf("%s %q after %d ticks fingerprints %s, want the locked %s: a diff that intends this must say which behaviour changed",
+					mode, lockAshapMap, scene.ticks, report.StateHash, scene.want)
+			}
+			t.Logf("%s %q %d ticks: %s in %s", mode, lockAshapMap, report.Tick, report.StateHash, time.Since(start).Round(time.Millisecond))
+		})
 	}
 
 	start := time.Now()

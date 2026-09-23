@@ -1,11 +1,28 @@
 #!/bin/sh
-# Simulation-cost benchmark: authoritative ticks only, no window, no renderer,
-# no audio device. Retail assets required. Output directory must be new.
-# See docs/SIM_BENCHMARK.md.
+# Quick combat-cost probe by default; --full keeps the sustained profiled window.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
-# A binary built inside a git worktree carries no VCS stamp of its own, so the
-# revision is passed for the report's provenance block.
+. tools/go-budget
+full=false
+if [ "${1:-}" = "--full" ]; then
+	full=true
+	shift
+fi
+if [ "$#" -eq 0 ]; then
+	echo "usage: tools/sim-bench [--full] OUTPUT_DIRECTORY [OPTIONS ...]" >&2
+	exit 2
+fi
+output=$1
+shift
+if [ "$full" = false ]; then
+	# Keep 1200 warm-up ticks: reducing them would measure the march, not combat.
+	set -- --benchmark-ticks=300 --benchmark-profiles=false "$@"
+fi
 NANOLATHE_BENCH_REVISION="$(git rev-parse --short HEAD)$(git diff --quiet || echo -dirty)"
 export NANOLATHE_BENCH_REVISION
-exec go run ./cmd/nanolathe-headless --sim-benchmark "$@"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+tools/host-run go build -o "$work/nanolathe-headless" ./cmd/nanolathe-headless
+"$work/nanolathe-headless" --sim-benchmark "$output" "$@"

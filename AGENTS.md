@@ -184,7 +184,14 @@ worktrees; an unmerged one may be live.
   control asset selection, tracked-file formatting, and test concurrency.
   Missing retail assets block the integration gate; report it as unrun.
 - Include visual inspection and the performance checks below when applicable.
-  Reviewers run the required checks themselves in the assigned worktree.
+  Reviewers run affected contract checks themselves in the assigned worktree;
+  the landing owner runs the whole-tree gates once on the integrated candidate.
+  Use `tools/check-retail --full` for changes affecting long-match AI, termination,
+  or extended campaign/save sequences; ordinary landings use the short retail tier.
+  Retail assets are a fixed reference install: reuse the normal test cache and
+  use `tools/check-retail --fresh` for an uncached diagnostic run. After changing
+  assets in place, clear old results once with `go clean -testcache`.
+  See `docs/ARCHITECTURE.md` §6 for budgets and host coordination.
 
 ---
 
@@ -240,7 +247,8 @@ cross-package refactors** (report upstream needs), and **one unit, one commit**.
 is accountable for the diff it lands:
 
 1. Read the diff, not the summary (`git diff main...HEAD`).
-2. Follow Verification above, including the required checks after landing.
+2. Run affected contract checks; the landing owner runs the whole-tree gates
+   before and after landing, per Verification above.
 3. Verify two of the most arithmetic-heavy contracts against their cited
    research section — constants, order of operations, comparison strictness.
    This is where wrong constants get caught.
@@ -358,8 +366,10 @@ client     — Ebitengine window loop presents a software framebuffer from the c
 
 For simulation, movement, construction, model/effect rendering or renderer
 storage changes, use the opt-in [live battle benchmark](docs/BATTLE_BENCHMARK.md)
-with both `classic` and `modern` renderers when retail assets and a display are
-available. It exercises moving armies and factory construction. Inspect the
+with both `classic` and `modern` renderers for presentation-affecting changes
+when retail assets and a display are available. For authoritative-tick-only
+changes, use the displayless simulation benchmark instead of also running both
+windowed renderers. It exercises moving armies and factory construction. Inspect the
 feature census and captures as well as frame times; keep artifacts outside the
 repository. Run benchmarks sequentially and compare matching scene metadata.
 
