@@ -33,8 +33,8 @@ func publishPaletteFrame(t *testing.T, b *battleSession, change func(*frame.Fram
 
 func TestPaletteAcceptanceTokenKeyEdgeAndDynamicOrder(t *testing.T) {
 	b, cl, w := paletteViewer(t, []gui.Gadget{
-		{Kind: gui.KindButton, Name: "MOVE", Active: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
-		{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: 'A', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "MOVE", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'A', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
 	})
 
 	// Native input supplies both a text token and the matching physical edge.
@@ -80,7 +80,7 @@ func TestPaletteAcceptanceTokenClaimSuppressesNAndTResiduals(t *testing.T) {
 		{"follow T", input.KeyT, 't', func(b *battleSession) bool { return b.cam.Tracked() != 0 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b, cl, _ := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: byte(tc.token), Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
+			b, cl, _ := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: byte(tc.token), Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
 			cl.Input().Kbd.SetKey(tc.key, true)
 			cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: tc.token})
 			b.viewerStep(0, cl)
@@ -96,7 +96,7 @@ func TestPaletteAcceptanceTokenClaimSuppressesNAndTResiduals(t *testing.T) {
 }
 
 func TestPaletteAcceptanceUnitInfoDoneOwnsWholeHostFrame(t *testing.T) {
-	b, cl, _ := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
+	b, cl, _ := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
 	info := &gui.Window{Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel},
 		{Kind: gui.KindButton, Name: "DONE", Active: 1, QuickKey: 'D'},
@@ -122,7 +122,7 @@ func TestPaletteAcceptanceUnitInfoDoneOwnsWholeHostFrame(t *testing.T) {
 }
 
 func TestPaletteAcceptanceCaptureClearsAcrossWindowIdentity(t *testing.T) {
-	b, cl, first := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
+	b, cl, first := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
 	in := cl.Input()
 	in.Mouse.SetPosition(5, 5)
 	in.Mouse.SetButton(input.MouseButtonLeft, true)

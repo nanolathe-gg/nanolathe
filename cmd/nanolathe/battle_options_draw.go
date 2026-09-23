@@ -48,7 +48,9 @@ func (h *retailBattleHUD) drawBattleOptionsWindow(c *client.Client, b *battleSes
 		case gui.KindButton:
 			g.drawRetailButton(c, p, i, gad, r)
 		case gui.KindScrollBar:
-			g.drawRetailScrollbar(c, p, i, gad, r)
+			// The option sliders are built bars with appended arrows
+			// [07 R-WGT-01 §5]; the panel dispatch sends them to their painter.
+			g.drawRetailPanelScrollbar(c, p, i, gad, r)
 		case gui.KindPicture:
 			if f := battleOptionsPictureFrame(g, gad); f != nil {
 				blitRetailFrame(c, f, int(r.X), int(r.Y))

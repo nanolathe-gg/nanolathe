@@ -55,8 +55,8 @@ func paletteViewer(t *testing.T, gadgets []gui.Gadget) (*battleSession, *client.
 // [07 R-WGT-01 §§1-3][07 R-WGT-02 §5].
 func TestPaletteViewerTokensReachTheRetainedService(t *testing.T) {
 	b, cl, _ := paletteViewer(t, []gui.Gadget{
-		{Kind: gui.KindButton, Name: "DEFEND", Active: 1, QuickKey: 'F', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
-		{Kind: gui.KindButton, Name: "MOVE", Active: 1, QuickKey: 'V', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "DEFEND", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'F', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "MOVE", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'V', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
 		{Kind: gui.KindButton, Name: "STOP", Active: 1, QuickKey: 'S', Rect: gui.Rect{X: 47, Y: 1, W: 20, H: 12}},
 	})
 	for _, tc := range []struct {
@@ -84,7 +84,7 @@ func TestPaletteViewerTokensReachTheRetainedService(t *testing.T) {
 }
 
 func TestPaletteViewerHonorsLowGreyAndSharedCapture(t *testing.T) {
-	b, cl, w := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
+	b, cl, w := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
 	// Only bit zero greys a button. An upper status bit remains eligible.
 	w.Gadgets[1].GrayedOut = 2
 	cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'a'})
@@ -92,7 +92,10 @@ func TestPaletteViewerHonorsLowGreyAndSharedCapture(t *testing.T) {
 	if got := b.battleState().Input.Latch; got != input.LatchAttack {
 		t.Fatalf("upper-bit grey latch=%v, want attack", got)
 	}
+	// Return both halves to idle: the toggle's down-state is the dispatcher's
+	// gate, so a still-down button would flip up on the next press [07 §9].
 	b.battleState().Input.Latch = input.LatchNormal
+	b.hud.palettePanels[w].SetStatusAt(1, 0)
 	w.Gadgets[1].GrayedOut = 1
 	cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'a'})
 	b.viewerStep(0, cl)
@@ -127,7 +130,7 @@ func TestPaletteViewerHonorsLowGreyAndSharedCapture(t *testing.T) {
 
 func TestPaletteViewerUsesLinkedAndSpecialTokens(t *testing.T) {
 	b, cl, w := paletteViewer(t, []gui.Gadget{
-		{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: 0xf2, Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
+		{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 0xf2, Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}},
 		{Kind: gui.KindLabel, Name: "ATTACKLABEL", Active: 1, Link: "ATTACK", QuickKey: 'L', Rect: gui.Rect{X: 24, Y: 1, W: 20, H: 12}},
 		{Kind: gui.KindTextBox, Name: "EDITOR", Active: 1, Attribs: 1, MaxChars: 12, Rect: gui.Rect{X: 47, Y: 1, W: 20, H: 12}},
 	})
@@ -161,7 +164,7 @@ func TestPaletteViewerUsesLinkedAndSpecialTokens(t *testing.T) {
 }
 
 func TestPaletteViewerUnitInfoAndSelectionOpenOwnTokens(t *testing.T) {
-	b, cl, _ := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
+	b, cl, _ := paletteViewer(t, []gui.Gadget{{Kind: gui.KindButton, Name: "ATTACK", Active: 1, Attribs: 0x40, Assoc: 1, QuickKey: 'A', Rect: gui.Rect{X: 1, Y: 1, W: 20, H: 12}}})
 	info := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {Kind: gui.KindButton, Name: "DONE", Active: 1, QuickKey: 'A'}}}
 	unitInfoUI = &unitInfoScreen{window: info, panel: ui.NewPanel(info)}
 	cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'a'})

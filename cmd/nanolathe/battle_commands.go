@@ -76,7 +76,7 @@ func (b *battleSession) prevBuildPage() {
 // handleHudOrderButton binds named order buttons to the session command path
 // [R-P0-03][07 §9]. It is used by the retail HUD click pass.
 func (b *battleSession) handleHudOrderButton(name string) {
-	latch := hud.ParseButtonLatch(name, 1)
+	latch := hud.ParseButtonLatch(name, b.orderButtonGate(name))
 	// STOP is a distinct immediate command. It must never dispatch contextual
 	// code 1 at the map origin before the Stop descriptor [04 §3.4][07 §9].
 	// STOP is the one arm that ignores the gate and always writes the idle
@@ -98,6 +98,33 @@ func (b *battleSession) handleHudOrderButton(name string) {
 	}
 	// A name matching none of the chain's tests is not handled: no latch
 	// write, no cue [07 §9].
+}
+
+// orderButtonGate is the fired order button's down-state word, read after the
+// widget's own press mutation [07 §9][07 R-WGT-01 §3]. Both stock orders
+// windows author their order buttons as toggles (attribute 0x40), so a second press of an armed button
+// flips it back up and the dispatcher writes the idle latch instead of the
+// button's own value. Passing a constant 1 here kept RECLAIM armed after the
+// player toggled E off: the button art went up while the latch, the reclaim
+// cursor and the Community wreck-snap preview all stayed armed.
+//
+// A caller with no retained command-window widget — a direct test call, or a
+// window that does not author the named button — has no down-state to read,
+// and keeps the armed answer the button name asks for.
+func (b *battleSession) orderButtonGate(name string) uint32 {
+	if b == nil || b.hud == nil {
+		return 1
+	}
+	ctx, ok := b.hud.paletteContext(b)
+	if !ok {
+		return 1
+	}
+	panel := b.hud.palettePanels[ctx.window]
+	index := ctx.window.GadgetIndex(name)
+	if panel == nil || index <= 0 {
+		return 1
+	}
+	return uint32(uint16(panel.StatusAt(index)))
 }
 
 func containsStop(s string) bool {
@@ -258,6 +285,22 @@ func (b *battleSession) playUICue(cl *client.Client, alias string) {
 // handler's branch-3 tail. Until then the latch retires, which is this
 // build's existing behaviour.
 func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) bool {
+	// An armed Community wreck-snap preview consumes the reclaim click and
+	// re-issues it at the snapped feature (community patch engine CP-CON-6).
+	// It is taken here, in the one armed-click producer, so the plain click
+	// and the Modern command drag's short release both honour it. Before, only
+	// the plain click path did: with the Enhanced client the press became a
+	// command drag whose release reclaimed at the raw pointer, which the shape
+	// gate below then refused wherever the snap marker sat on a nearby feature
+	// rather than under the pointer — the marker promised a reclaim and the
+	// click issued nothing. The preview is armed only for the RECLAIM latch
+	// under resolved community features with WreckSnap set, which Strict 3.1
+	// never resolves, so a Strict code 12 never reaches it. A minimap order keeps its lens point: the minimap
+	// click never took the snap, and the extension's snap is a game-view
+	// gesture.
+	if code == hud.LatchToCode(input.LatchReclaim) && b.classifyPointer(sx, sy) != battlePointerMinimap && b.issueCommunityReclaimSnap(queued) {
+		return true
+	}
 	targetHandle, target, pos := b.pickTarget(sx, sy)
 	if pos == nil {
 		return false

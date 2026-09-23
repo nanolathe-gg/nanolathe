@@ -118,7 +118,7 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 			}
 			g.drawRetailListRows(c, p, i, gad, r)
 		case gui.KindScrollBar:
-			g.drawRetailScrollbar(c, p, i, gad, r)
+			g.drawRetailPanelScrollbar(c, p, i, gad, r)
 		case gui.KindSurface:
 			g.drawRetailSurface(c, p, i, gad, r)
 		case gui.KindLabel, gui.KindPicture:
@@ -543,4 +543,58 @@ func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, 
 
 func pointInRect(x, y int32, r gui.Rect) bool {
 	return x >= r.X && y >= r.Y && x < r.X+r.W && y < r.Y+r.H
+}
+
+// drawRetailPanelScrollbar paints one kind-4 gadget, sending the options
+// sliders to their own painter and every other bar to the shared one.
+func (g *gameShell) drawRetailPanelScrollbar(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
+	if s := g.retailOptionsSliderAt(index); s != nil {
+		g.drawRetailOptionsSlider(c, s, gad, r)
+		return
+	}
+	g.drawRetailScrollbar(c, p, index, gad, r)
+}
+
+// drawRetailOptionsSlider paints a horizontal options slider after the
+// builder's synthesis: `r` is already the shrunken bar and the two arrows are
+// separate appended buttons drawn by the button painter, so nothing here
+// reaches outside the bar. Track: frame base, base+1 tiled, base+2 at the end.
+// Knob: frames base+3/4/5 (cap, body tiles, cap) at `x + 3 + knob`, capped at
+// `right - knobW - 2`, vertically centred on the track, length
+// `min(knobsize, w - 6)` and clipped inside the bar [07 R-WGT-01 §5
+// "painting"]. The stock horizontal knob frames are each a full 10-pixel
+// block and `knobsize` is frame base+5's width, so the three pieces land on
+// one another and the knob is a single block.
+func (g *gameShell) drawRetailOptionsSlider(c *client.Client, s *retailSliderState, gad gui.Gadget, r gui.Rect) {
+	if g.assets == nil || g.assets.common == nil || r.W <= r.H {
+		return
+	}
+	e, ok := g.assets.common.Find("SLIDERS")
+	if !ok || len(e.Frames) < 20 {
+		return
+	}
+	const base = 10
+	track0, track1, track2 := e.Frames[base].Frame, e.Frames[base+1].Frame, e.Frames[base+2].Frame
+	thumb0, thumb1, thumb2 := e.Frames[base+3].Frame, e.Frames[base+4].Frame, e.Frames[base+5].Frame
+	if track0 == nil || track1 == nil || track2 == nil || thumb0 == nil || thumb1 == nil || thumb2 == nil {
+		return
+	}
+	x, y := int(r.X), int(r.Y)
+	drawRetailScrollbarTrack(c, track0, track1, track2, x, y, x+int(r.W), true)
+	thumbX, length := retailOptionsKnobSpan(r, s.knob, s.knobSize, int(thumb0.Width))
+	thumbY := y + int(track0.Height)/2 - int(thumb0.Height)/2
+	drawRetailScrollbarThumbClipped(c, thumb0, thumb1, thumb2, thumbX, thumbY, length, true, r)
+	// A locked kind-4 gadget, or one carrying attribute 0x10, is inert and
+	// drawn darkened by 20 steps [07 R-WGT-01 §5][07 R-WGT-01 §13].
+	if (gad.GrayedOut != 0 || gad.Attribs&gui.AttribInert != 0) && g.assets.pal != nil {
+		c.UIShadeRect(g.assets.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
+	}
+}
+
+// retailOptionsKnobSpan is the horizontal knob's painted start and length
+// within the bar `r` [07 R-WGT-01 §5 "painting"]. The clip in the thumb
+// painter then keeps the final column inside `right - 3`.
+func retailOptionsKnobSpan(r gui.Rect, knob, knobSize, knobW int) (x, length int) {
+	x = min(int(r.X)+3+knob, int(r.X+r.W)-knobW-2)
+	return x, min(knobSize, int(r.W)-6)
 }

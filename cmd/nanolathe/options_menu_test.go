@@ -1296,3 +1296,11 @@ func (g *gameShell) activateEscape() {
 		g.activateGadgetAt(p, index)
 	}
 }
+
+// retailDisplayModes builds the VIDSLDR table for a monitor whose
+// device-independent and physical sizes agree; the tests above pin the
+// single-size form of retailMonitorDisplayModes.
+func retailDisplayModes(desktopW, desktopH int, selected retailDisplayMode) []retailDisplayMode {
+	desktop := retailDisplayMode{desktopW, desktopH}
+	return retailMonitorDisplayModes(desktop, desktop, selected)
+}

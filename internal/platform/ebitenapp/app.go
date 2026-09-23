@@ -2,6 +2,7 @@ package ebitenapp
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -683,6 +684,60 @@ func DesktopSize() (int, int) {
 		return 0, 0
 	}
 	return monitor.Size()
+}
+
+// DesktopPixelSize reports the current monitor's size in physical pixels, or
+// (0, 0) under the same conditions as DesktopSize. It is the Nanolathe host
+// query behind the options page's native-resolution choice
+// (DESIGN_PRESENTATION_CLIENT §2.1): under desktop display scaling (Windows
+// 125%, a Retina panel) DesktopSize's device-independent size is smaller than
+// the panel, so a 3440x1440 monitor at 125% reports 2752x1152.
+//
+// Ebitengine exposes the device-independent size and the device scale factor,
+// not the monitor's pixel bounds, and on Windows and Linux the size it reports
+// is the pixel count divided by the scale factor and then truncated. The pixel
+// count is recovered from those two by monitorPixels.
+func DesktopPixelSize() (int, int) {
+	if !windowOwned.Load() {
+		return 0, 0
+	}
+	monitor := ebiten.Monitor()
+	if monitor == nil {
+		return 0, 0
+	}
+	w, h := monitor.Size()
+	scale := monitor.DeviceScaleFactor()
+	return monitorPixels(w, scale), monitorPixels(h, scale)
+}
+
+// monitorPixels recovers one physical monitor dimension from its truncated
+// device-independent size. Every pixel count p with trunc(p / scale) == dip lies
+// in [dip*scale, (dip+1)*scale); at a scale factor up to 2 that interval holds
+// at most two consecutive integers, and monitor panels have even dimensions,
+// so the even candidate is taken. On macOS the device-independent size is
+// exact and the interval starts at the answer, which is then also even. A
+// missing or unit scale leaves the size as reported.
+//
+// TODO(question): Ebitengine does not expose a monitor's pixel bounds; if a
+// later release does, read them directly instead of reconstructing them. A
+// scale factor above 2 can leave more than one even candidate, and this takes
+// the first.
+func monitorPixels(dip int, scale float64) int {
+	if dip <= 0 {
+		return 0
+	}
+	if !(scale > 1) {
+		return dip
+	}
+	const slack = 1e-6
+	lo := int(math.Ceil(float64(dip)*scale - slack))
+	hi := max(lo, int(math.Ceil(float64(dip+1)*scale-slack))-1)
+	for p := lo; p <= hi; p++ {
+		if p%2 == 0 {
+			return p
+		}
+	}
+	return lo
 }
 
 // Run starts the desktop main loop and blocks until the window closes. It

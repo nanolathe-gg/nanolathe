@@ -6524,7 +6524,14 @@ switch key that no writer in the image ever stores.
 The GUI order-button dispatcher arms the latch by parsing the button name in
 a fixed chain, writing the parsed value only when the button's runtime gate
 value is nonzero, else writing `1`. Every matched arm clears latch-flag bit
-`0x08` and plays one of two cues.
+`0x08` and plays one of two cues. **Established:** the gate is the fired
+button's own down-state word, read after the widget's press handling of
+[R-WGT-01 §3] has already mutated it; the dispatcher itself performs no group
+reset. In both stock orders windows (`ARMGEN.GUI`, `CORGEN.GUI`) every
+order button other than `STOP` is authored as a toggle (attribute `0x40`), so a second press — click or quickkey — of an armed button
+flips it up and returns the latch to `1`: pressing `e` twice disarms RECLAIM,
+and with it every reader of the latch (the RECLAIM cursor row of §8, the
+armed click).
 
 **The chain and the cue column.** `MOVE` is the first test and there is
 **no default**: a name matching none of the eleven returns "not handled",

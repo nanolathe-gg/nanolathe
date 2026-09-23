@@ -203,33 +203,44 @@ func retailDefaultCategories() [retailMusicCategoryCount]int {
 // retailDisplayMode is one row of the table `VIDSLDR` indexes.
 type retailDisplayMode struct{ W, H int }
 
-// retailDisplayModes builds that table.
+// retailMonitorDisplayModes builds the table `VIDSLDR` indexes.
 //
-// Retail's windowed list and desktop gates are established [07 R-FE-02 §9].
-// Nanolathe additionally offers 1280x720, 1600x900 and 1920x1080 as host
-// presentation choices (DESIGN_PRESENTATION_CLIENT §2.1). These logical render
-// sizes remain available on any desktop: fullscreen scales them to the monitor,
-// whose device-independent dimensions need not match its physical pixel count.
+// Retail's windowed list and desktop gates are established [07 R-FE-02 §9];
+// the gates read `logical`, the device-independent desktop size that screen
+// metrics query reports. Nanolathe additionally offers 1280x720, 1600x900 and
+// 1920x1080 as host presentation choices (DESIGN_PRESENTATION_CLIENT §2.1).
+// These logical render sizes remain available on any desktop: fullscreen
+// scales them to the monitor.
+//
+// The monitor-derived host choices follow `native`, the monitor's physical
+// pixel size: its own size, so a scaled desktop (a 3440x1440 panel at 125%
+// reports 2752x1152 device-independent pixels) still offers the panel's
+// native resolution, and the three widescreen widths at its proportions. The
+// device-independent size stays offered beside it, as it was before the
+// physical query existed.
 //
 // The options page still sorts by width then height and drops modes below
 // 640x480 [07 R-FE-01 §6]. The original list retains its desktop gates;
 // monitor-derived and saved sizes are additional host choices.
-func retailDisplayModes(desktopW, desktopH int, selected retailDisplayMode) []retailDisplayMode {
+func retailMonitorDisplayModes(logical, native, selected retailDisplayMode) []retailDisplayMode {
 	modes := []retailDisplayMode{{640, 480}, {800, 600}, {1024, 768}, {1280, 720}, {1600, 900}, {1920, 1080}}
-	if desktopW >= 1280 && desktopH >= 1024 {
+	if logical.W >= 1280 && logical.H >= 1024 {
 		modes = append(modes, retailDisplayMode{1280, 1024})
 	}
-	if desktopW >= 1600 && desktopH >= 1200 {
+	if logical.W >= 1600 && logical.H >= 1200 {
 		modes = append(modes, retailDisplayMode{1600, 1200})
 	}
 	// Host choices follow the monitor's proportions at the existing widescreen
-	// widths, rounded to the nearest logical pixel (DESIGN_PRESENTATION_CLIENT §2.1).
-	if desktopW > 0 && desktopH > 0 {
+	// widths, rounded to the nearest pixel (DESIGN_PRESENTATION_CLIENT §2.1).
+	if native.W > 0 && native.H > 0 {
 		for _, width := range []int{1280, 1600, 1920} {
-			height := int((int64(width)*int64(desktopH) + int64(desktopW)/2) / int64(desktopW))
+			height := int((int64(width)*int64(native.H) + int64(native.W)/2) / int64(native.W))
 			modes = append(modes, retailDisplayMode{width, height})
 		}
-		modes = append(modes, retailDisplayMode{desktopW, desktopH})
+		modes = append(modes, native)
+	}
+	if logical.W > 0 && logical.H > 0 {
+		modes = append(modes, logical)
 	}
 	// A monitor move must not change the saved selection when the page opens.
 	modes = append(modes, selected)
@@ -319,44 +330,87 @@ func retailSliderKnob(value, travel, max int) int {
 	return pos
 }
 
-// retailSliderMetrics is the kind-4 builder's synthesis for a horizontal
-// slider carrying SLIDERS art: two arrow buttons are appended, the bar shrinks
-// by twice the arrow width and shifts right by one arrow width, the knob takes
-// the width of frame base+5, and `travel := w' - knobsize - 4` over the
-// shrunken width [07 R-WGT-01 §5 "Synthesis at open"]. Frame base is 10 for a
-// horizontal gadget.
+// buildRetailOptionsSliders is the window builder's kind-4 arm for the merged
+// page's sliders [07 R-WGT-01 §5 "Synthesis at open"]: with SLIDERS art (the
+// window's own GAF, then the common GAF; the options family has no own GAF),
+// each horizontal bar takes the base frame's height, shrinks by twice the
+// arrow width and shifts right by one arrow width, adopts the width of frame
+// base+5 as `knobsize` and `w' - knobsize - 4` as its travel, and two arrow
+// buttons are appended to the window. Without art the bar keeps its rectangle
+// and travel is `max(w, h) - 6`.
 //
-// Vertical sliders keep their authored `range` as travel and are not built
-// here: the only vertical kind-4 gadgets in the front end are list scrollbars,
-// which take their travel from the list instead.
+// The synthesis is what keeps the painted knob off the arrows: the painter
+// places the knob inside the shrunken bar only, and the arrows are the two
+// appended buttons outside it. The arrows step the bar that shares their
+// `assoc` [07 R-WGT-01 §3]; every stock options page authors one slider per
+// assoc value, so each arrow steps its own bar.
+//
+// Only the tracked option sliders are built here. List-associated bars are
+// finished by the list path, and no stock options page authors another kind-4
+// gadget. The arrows inherit the bar's page source prefix, so the next page
+// merge discards them with the rest of the page. Running after the in-battle
+// `MAP`/`VID` hide means a hidden bar's arrows are hidden with it, since the
+// builder copies the bar's `active` byte into both arrows.
+func (g *gameShell) buildRetailOptionsSliders(window *gui.Window) {
+	if window == nil {
+		return
+	}
+	var entry *formats.GAFEntry
+	if g != nil && g.assets != nil && g.assets.common != nil {
+		entry, _ = g.assets.common.Find("SLIDERS")
+	}
+	count := len(window.Gadgets)
+	for i := 1; i < count; i++ {
+		bar := window.Gadgets[i]
+		if bar.Kind != gui.KindScrollBar || !retailOptionsPageGadget(bar) {
+			continue
+		}
+		if _, tracked := retailSliderKey(gui.CallbackName(bar.Name)); !tracked {
+			continue
+		}
+		built, arrows := gui.BuildSlider(bar, retailSliderArt(entry, bar.Rect))
+		window.Gadgets[i] = built
+		for j := range arrows {
+			arrows[j].ButtonArt = entry
+			arrows[j].ButtonArtResolved = true
+		}
+		window.Gadgets = append(window.Gadgets, arrows...)
+	}
+}
+
+// retailSliderArt reads the SLIDERS frame metrics the builder uses for one
+// kind-4 rectangle, or nil when the entry or a needed frame is missing
+// [07 R-WGT-01 §5].
+func retailSliderArt(entry *formats.GAFEntry, r gui.Rect) *gui.SliderArt {
+	base := int(gui.SliderFrameBase(r))
+	if entry == nil || len(entry.Frames) <= base+8 {
+		return nil
+	}
+	track, knob, arrow := entry.Frames[base].Frame, entry.Frames[base+5].Frame, entry.Frames[base+6].Frame
+	if track == nil || knob == nil || arrow == nil {
+		return nil
+	}
+	if base == 10 {
+		return &gui.SliderArt{BaseExtent: int32(track.Height), KnobExtent: int32(knob.Width), ArrowExtent: int32(arrow.Width), ArrowCrossExtent: int32(arrow.Height)}
+	}
+	return &gui.SliderArt{BaseExtent: int32(track.Width), KnobExtent: int32(knob.Width), ArrowExtent: int32(arrow.Height), ArrowCrossExtent: int32(arrow.Width)}
+}
+
+// retailSliderMetrics reads a built bar's travel and knob size, which the
+// builder above has already written into the record, together with the width
+// of the arrows beside it [07 R-WGT-01 §5 "Synthesis at open"].
 func (g *gameShell) retailSliderMetrics(gad gui.Gadget) (travel, knobSize, arrowW int, ok bool) {
-	if g == nil || g.assets == nil || g.assets.common == nil {
-		return 0, 0, 0, false
-	}
-	e, found := g.assets.common.Find("SLIDERS")
-	if !found || len(e.Frames) < 20 {
-		return 0, 0, 0, false
-	}
-	if gad.Rect.H >= gad.Rect.W {
-		return 0, 0, 0, false
-	}
-	const base = 10
-	knob := e.Frames[base+5].Frame
-	arrow0 := e.Frames[base+6].Frame
-	arrow1 := e.Frames[base+8].Frame
-	if knob == nil || arrow0 == nil || arrow1 == nil {
-		return 0, 0, 0, false
-	}
-	arrowW = int(arrow0.Width)
-	if int(arrow1.Width) > arrowW {
-		arrowW = int(arrow1.Width)
-	}
-	knobSize = int(knob.Width)
-	travel = int(gad.Rect.W) - 2*arrowW - knobSize - 4
+	travel = int(gad.Range)
 	if travel < 2 {
 		return 0, 0, 0, false
 	}
-	return travel, knobSize, arrowW, true
+	if g != nil && g.assets != nil && g.assets.common != nil {
+		entry, _ := g.assets.common.Find("SLIDERS")
+		if art := retailSliderArt(entry, gad.Rect); art != nil {
+			arrowW = int(art.ArrowExtent)
+		}
+	}
+	return travel, int(gad.KnobSize), arrowW, true
 }
 
 // retailOptionsSliderAt returns the tracked slider for the caller's
@@ -404,12 +458,16 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 		widenRetailBattleOptionsRoot(window)
 	}
 	addNanolatheOptionsCategory(window)
-	desktopW, desktopH := ebitenapp.DesktopSize()
+	logicalW, logicalH := ebitenapp.DesktopSize()
+	nativeW, nativeH := ebitenapp.DesktopPixelSize()
+	logical, native := retailDisplayMode{logicalW, logicalH}, retailDisplayMode{nativeW, nativeH}
 	optionsAssets = &retailPanelAssets{window: window, background: background}
 	optionsState = &retailOptionsState{
-		sliders:           map[int]*retailSliderState{},
-		modes:             retailDisplayModes(desktopW, desktopH, retailDisplayMode{g.display.Width, g.display.Height}),
-		desktop:           retailDisplayMode{desktopW, desktopH},
+		sliders: map[int]*retailSliderState{},
+		modes:   retailMonitorDisplayModes(logical, native, retailDisplayMode{g.display.Width, g.display.Height}),
+		// The monitor aspect label reads the physical size: a truncated
+		// device-independent size need not reduce to the panel's ratio.
+		desktop:           native,
 		categories:        retailDefaultCategories(),
 		inBattle:          inBattle,
 		serviceStageIndex: -1,
@@ -718,6 +776,7 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	if inBattle {
 		hideRetailBattleOptionsGadgets(root)
 	}
+	g.buildRetailOptionsSliders(root)
 	g.installRetailWindowButtonArt(root, nil)
 	optionsAssets.background = background
 	optionsState.page = page
@@ -834,6 +893,10 @@ func (g *gameShell) refreshRetailOptionsPage() {
 			max:      max,
 			knob:     retailSliderKnob(g.retailSliderStoredValue(key), travel, max),
 		}
+		// The painter and the pointer service read the panel's knob word, so
+		// the opened position is installed there at once rather than at the
+		// next service pass [07 R-WGT-01 §5].
+		p.SetSliderKnobAt(i, optionsState.sliders[i].knob)
 		order = append(order, i)
 	}
 	switch optionsState.page {
@@ -1378,6 +1441,7 @@ func applyVisualOptions(cl *client.Client, d settings.Display) {
 	cl.SetShadowOptions(d.Shadows != 0, d.VehicleShadows != 0, d.Shading != 0)
 	cl.SetDitheredFog(d.DitheredFogEnabled())
 	cl.SetGlow(d.Glow != 0)
+	cl.SetGlowStrength(d.GlowStrength)
 }
 
 // setRetailShadowBits is the `BSHADOWS` write: bit 4 takes the stage, bit 3
@@ -1707,6 +1771,9 @@ func (g *gameShell) moveRetailSliderAt(index int, s *retailSliderState, knob int
 		return
 	}
 	s.knob = knob
+	if optionsPanel != nil {
+		optionsPanel.SetSliderKnobAt(index, knob)
+	}
 	g.commitRetailSliderValue(index, s)
 }
 

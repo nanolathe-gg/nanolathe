@@ -25,6 +25,13 @@ func expandedSidebarFixture(t *testing.T) (*battleSession, *client.Client, []*gu
 	button := func(name string, x, y, w, height int32) gui.Gadget {
 		return gui.Gadget{Kind: gui.KindButton, Name: name, Active: 1, Rect: gui.Rect{X: x, Y: y, W: w, H: height}}
 	}
+	// Order buttons are toggles, as in both stock orders windows: the
+	// dispatcher arms from the fired button's down-state [07 §9].
+	order := func(name string, x, y, w, height int32) gui.Gadget {
+		g := button(name, x, y, w, height)
+		g.Attribs, g.Assoc = 0x40, 1
+		return g
+	}
 	newWindow := func() *gui.Window {
 		return &gui.Window{Rect: gui.Rect{Y: 128, W: 128, H: 352}, OriginY: 128, Gadgets: []gui.Gadget{
 			{Kind: gui.KindPanel}, {Kind: gui.KindFont, FileName: "source-font"},
@@ -45,14 +52,14 @@ func expandedSidebarFixture(t *testing.T) (*battleSession, *client.Client, []*gu
 			g.CommonAttribs, g.Assoc = 4, 7
 			w.Gadgets = append(w.Gadgets, g)
 		}
-		w.Gadgets = append(w.Gadgets, button("ORDERS", 3, 4, 59, 19), button("BUILD", 65, 4, 59, 19), button("MOVE", 5, 247, 55, 31), button("ATTACK", 5, 317, 55, 31))
+		w.Gadgets = append(w.Gadgets, button("ORDERS", 3, 4, 59, 19), button("BUILD", 65, 4, 59, 19), order("MOVE", 5, 247, 55, 31), order("ATTACK", 5, 317, 55, 31))
 		w.Gadgets[len(w.Gadgets)-2].QuickKey = 'm'
 		sources = append(sources, w)
 	}
 	orders := newWindow()
 	orders.Gadgets[2].Kind, orders.Gadgets[3].Kind = gui.KindFont, gui.KindFont
 	orders.Gadgets[2].Name, orders.Gadgets[3].Name = "FONT2", "FONT3"
-	orders.Gadgets = append(orders.Gadgets, button("ORDERS", 3, 4, 59, 19), button("BUILD", 65, 4, 59, 19), button("MOVE", 5, 247, 55, 31), button("ATTACK", 5, 317, 55, 31), button("REPAIR", 5, 35, 55, 31), button("CAPTURE", 64, 207, 55, 31))
+	orders.Gadgets = append(orders.Gadgets, button("ORDERS", 3, 4, 59, 19), button("BUILD", 65, 4, 59, 19), order("MOVE", 5, 247, 55, 31), order("ATTACK", 5, 317, 55, 31), order("REPAIR", 5, 35, 55, 31), order("CAPTURE", 64, 207, 55, 31))
 	orders.Gadgets[len(orders.Gadgets)-2].QuickKey = 'r'
 	sources = append(sources, orders)
 	b.cat.BuildMenus["armfav"] = menu

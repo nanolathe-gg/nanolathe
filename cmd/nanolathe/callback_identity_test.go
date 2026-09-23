@@ -132,11 +132,14 @@ func TestOptionsScrollbarPainterUsesFiredRecordIndex(t *testing.T) {
 	}
 	cl.SetUIStage(gameShellUIStage{shell: shell})
 	snapshot := cl.ComposeFrameSnapshot()
-	if got := snapshot.Indexed[3*snapshot.Width+1]; got != 14 {
-		t.Fatalf("first duplicate knob pixel = %d, want first record's knob at x=1", got)
+	// The knob paints at bar x + 3 + knob [07 R-WGT-01 §5 "painting"]. With a
+	// one-pixel knobsize the closing cap (frame 15, index 16) lands on the
+	// opening cap, so each record's knob reads 16 at its own position.
+	if got := snapshot.Indexed[0*snapshot.Width+3]; got != 16 {
+		t.Fatalf("first duplicate knob pixel = %d, want first record's knob at x=3", got)
 	}
-	if got := snapshot.Indexed[15*snapshot.Width+11]; got != 14 {
-		t.Fatalf("second duplicate knob pixel = %d, want second record's knob at x=11", got)
+	if got := snapshot.Indexed[12*snapshot.Width+13]; got != 16 {
+		t.Fatalf("second duplicate knob pixel = %d, want second record's knob at x=13", got)
 	}
 }
 

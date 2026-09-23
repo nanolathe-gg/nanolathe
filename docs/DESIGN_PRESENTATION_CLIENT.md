@@ -237,12 +237,20 @@ selecting a different aspect still letterboxes rather than stretching. The
 combined list remains sorted by width then height, with no duplicates.
 
 The user-requested monitor aspect options are also host policy. Each opening of
-Options queries the monitor containing the window through `DesktopSize`. Its
-reported desktop dimensions are offered directly, together with widths 1280,
-1600 and 1920 whose heights follow the desktop ratio rounded to the nearest
-logical pixel. A monitor-derived size is available even when the original list
-would gate that same size out on a smaller desktop. These are render sizes, not
-enumerated hardware display modes; the query uses device-independent pixels. Missing monitor metrics add no modes.
+Options queries the monitor containing the window twice: `DesktopSize` reports
+its device-independent size and `DesktopPixelSize` its physical pixel size
+(the device-independent size times the device scale factor). The physical size
+is offered directly, together with widths 1280, 1600 and 1920 whose heights
+follow the physical ratio rounded to the nearest pixel, so a scaled desktop (a
+3440×1440 monitor at 125% reports 2752×1152) still offers its native
+resolution. The device-independent size stays offered beside it. Ebitengine
+reports no pixel bounds, and on Windows and Linux its device-independent size
+is truncated, so the physical size is reconstructed as the even integer in
+`[dip·scale, (dip+1)·scale)`. The original desktop gates keep reading the
+device-independent size. A monitor-derived size is available even when the
+original list would gate that same size out on a smaller desktop. These are
+render sizes, not enumerated hardware display modes. Missing monitor metrics
+add no modes.
 The current stored size stays in the table when moving between monitors, so
 opening the page cannot silently replace it. All additions share the minimum
 640×480 filter and sorting/deduplication. The list stays fixed during an options

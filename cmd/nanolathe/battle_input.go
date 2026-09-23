@@ -347,9 +347,8 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if mouse.Pressed(input.MouseButtonLeft) && b.battleState().Input.Latch != input.LatchNormal {
 		issued := false
 		code := hud.LatchToCode(b.battleState().Input.Latch)
-		if code == 12 && b.issueCommunityReclaimSnap(pointerModifiers.Shift) {
-			issued = true
-		} else if code != 0 {
+		if code != 0 {
+			// A Community wreck-snap reclaim is resolved inside orderSelected.
 			issued = b.orderSelected(code, mx, my, pointerModifiers.Shift)
 		}
 		// Return latch to Normal after dispatch unless shift-queuing keeps it

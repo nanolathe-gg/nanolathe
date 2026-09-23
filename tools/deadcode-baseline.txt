@@ -43,6 +43,7 @@ github.com/nanolathe-gg/nanolathe/internal/docs indexResearch
 github.com/nanolathe-gg/nanolathe/internal/docs normHeading
 github.com/nanolathe-gg/nanolathe/internal/docs resolve
 github.com/nanolathe-gg/nanolathe/internal/docs scanGoFile
+github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp presentedCursorRect
 github.com/nanolathe-gg/nanolathe/internal/pool NewUnitsSliced
 github.com/nanolathe-gg/nanolathe/internal/session NewSkirmishWithProgress
 github.com/nanolathe-gg/nanolathe/internal/sim/numeric FixedFromRaw
