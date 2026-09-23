@@ -73,7 +73,7 @@ func TestReservedRuleSetsMatchTheModeVocabulary(t *testing.T) {
 		unitLimited bool
 	}{
 		{gameplay.Strict31, StrictRuleSetName, false},
-		{gameplay.Community39, CommunityRuleSetName, false},
+		{gameplay.Community39, CommunityRuleSetName, true},
 		{gameplay.Modern, ModernRuleSetName, true},
 		{"", ModernRuleSetName, true},
 	} {

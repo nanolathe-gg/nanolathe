@@ -270,9 +270,13 @@ parameters. A live rule switch changes future policy decisions but retains
 these allocated owners and their entry parameters, as DESIGN_GAMEPLAY_RULES §5
 retains other already-created state. Starting a new battle under Strict is
 required for retail capacities. Reports include the entry table separately
-from the current table so this distinction remains reproducible. A Modern
-save restore still preserves an authored saved unit limit through its existing
-save rule; campaign limits remain the mission's in every mode.
+from the current table so this distinction remains reproducible. Modern and
+Community 3.9 save restores preserve the saved unit layout through the existing
+`ModernUnitLimit` save rule, and their writers record the live layout. This is
+user-authorized Nanolathe Modern policy shared for save compatibility, not
+patch parity; see [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits).
+Strict retains its pre-load configured layout; campaign limits remain the
+mission's in every mode.
 
 The stockpile reload-word clamp is likewise a battle-entry operation, matching
 the patch's weapon loader. It derives a private catalog only when a reload word

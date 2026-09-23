@@ -1557,20 +1557,28 @@ is owned by DESIGN_ECONOMY_CONSTRUCTION `[08 R-AI-03 §7.4]`.
 
 ### Modern save unit limits
 
-**Nanolathe Modern policy (user-authorized).** For a skirmish battle load,
+**Nanolathe Modern policy (user-authorized).** Modern and Community 3.9
+share this save compatibility policy. For a skirmish battle load,
 read a present, nonzero `Summary.maxunits` before constructing the pool and
 use it for both the player-slice width and the session limit. This preserves
 saved slot identities when the current preference differs, including saves
-made at 250 before the default became 1000. The new Modern skirmish writer
-records the actual session limit in that same existing item so subsequent
+made at 250 before the default became 1000. The Modern and Community 3.9
+skirmish writers record the actual session limit in that same existing item so subsequent
 saves remain consistent even if the caller's configured word differs.
 
 **Strict baseline.** Strict 3.1 retains the configured-word writer and sizes
 skirmish pools from the pre-load setting; the saved word only affects the
-next battle `[08 R-SESS-01 §9]`. Both modes retain the existing successful-load
+next battle `[08 R-SESS-01 §9]`. All modes retain the existing successful-load
 update of the host's configured word. Campaign pools still use the mission
 OTA and campaign writers still record the configured word; continuation saves
 have no battle pool.
+
+Community 3.9 binds the same `ModernUnitLimit` implementation through the
+existing `RuleSet`. A saved layout takes precedence over its entry table's
+unit limit (including the shipped 1500), without changing the table or the
+selected gameplay rules. Resaving records the restored live width. This is
+Nanolathe save compatibility policy, not a claim about the Community patch.
+Selection occurs before allocation and consumes no RNG or resources.
 
 **Boundaries.** Missing or zero saved limits retain the pre-load setting
 (zero cannot describe a usable player slice; early Nanolathe writers emitted
@@ -1590,8 +1598,9 @@ than by testing the mode word at each site. `TestModernSaveUnitLimitSelection`
 locks presence, bounds, campaign exclusion and the Strict bypass at the load
 site, and `TestReservedRuleSetsMatchTheModeVocabulary` locks the two answers
 each reserved set gives. `TestModernSaveLoadsAcrossUnitLimits`
-writes both 250- and 1000-unit layouts with a deliberately different configured
-word, then loads each under the other preference. It checks saved identities
+writes both 250- and 1500-unit layouts in Modern and Community 3.9 with a
+deliberately different configured word, then loads each under both modes and
+the other preference, including resave metadata. It checks saved identities
 and the initial committed frame, compares resources, both RNG streams and the
 scheduler against a Strict load at the matching limit, and rejects the
 mismatched Strict load. These

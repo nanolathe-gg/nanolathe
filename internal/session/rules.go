@@ -147,7 +147,9 @@ func StrictRuleSet() RuleSet {
 
 // CommunityRuleSet is the reserved Community 3.9 compatibility layer. Each
 // package implementation embeds its Strict layer and overrides only the
-// answers owned by an adopted Community contract.
+// answers owned by an adopted Community contract. Save compatibility also uses
+// the approved Modern unit-limit policy (DESIGN_SESSIONS_AI_SAVE
+// "Modern save unit limits"), preserving slot identities across mode changes.
 func CommunityRuleSet() RuleSet {
 	return RuleSet{
 		Name:         CommunityRuleSetName,
@@ -156,7 +158,7 @@ func CommunityRuleSet() RuleSet {
 		Visibility:   visibility.CommunityRules{},
 		Orders:       &orders.CommunityRules{},
 		Construction: &construction.CommunityRules{},
-		UnitLimit:    StrictUnitLimit{},
+		UnitLimit:    ModernUnitLimit{},
 		ScriptPorts:  CommunityScriptPorts{},
 		Movement:     &movement.CommunityRules{},
 		Path:         path.RetailKernel{},
