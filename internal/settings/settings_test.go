@@ -45,6 +45,12 @@ func TestPresentationPreferencesLoadAndRoundTrip(t *testing.T) {
 			want("modern", 60, one, one, one, 0)},
 		{"negative effect repaired", `{"version":1,"presentation":{"renderer":"modern","fps":60,"marks":-3}}`,
 			want("modern", 60)},
+		{"trail strength zero", `{"version":1,"presentation":{"trailStrength":0}}`,
+			func() Presentation { p := want("modern", 60); p.TrailStrength = 0; return p }()},
+		{"trail strength capped", `{"version":1,"presentation":{"trailStrength":250}}`,
+			func() Presentation { p := want("modern", 60); p.TrailStrength = MaxTrailStrength; return p }()},
+		{"negative trail strength repaired", `{"version":1,"presentation":{"trailStrength":-1}}`,
+			want("modern", 60)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "settings.json")

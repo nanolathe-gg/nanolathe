@@ -96,6 +96,9 @@ const (
 	// switches in the presentation block (DESIGN_GPU_RENDERER §30). Like Glow
 	// they have no retail bit and start on.
 	DefaultEffectSwitch = 1
+	// TrailStrength scales the existing footprint and track darkening only.
+	DefaultTrailStrength = 50
+	MaxTrailStrength     = 100
 
 	DefaultGamma = 12
 	// `VISUALS` `GAMMA` is a kind-4 slider whose maximum is 20; the stored
@@ -490,6 +493,9 @@ type Presentation struct {
 	Distortion int `json:"distortion"`
 	// Marks is the scorch marks and the trail layer of footprints and tracks.
 	Marks int `json:"marks"`
+	// TrailStrength is a percentage of the trail layer's tuned peak opacity.
+	// Zero hides trails while leaving the Marks switch's scorch layer intact.
+	TrailStrength int `json:"trailStrength"`
 	// TeamNanospray selects player-coloured nanospray in the modern renderer.
 	// Zero preserves green, including in older files; Classic always stays
 	// green (DESIGN_GPU_RENDERER §30).
@@ -504,6 +510,7 @@ func DefaultPresentation() Presentation {
 		MexSnapRadius: -1, WreckSnapRadius: -1, BuildRotateKey: "/", ClickSnapOverrideKey: "alt", BuildRotationOverlay: 1,
 		Water: DefaultEffectSwitch, Lighting: DefaultEffectSwitch, Finish: DefaultEffectSwitch,
 		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
+		TrailStrength: DefaultTrailStrength,
 	}
 }
 
@@ -550,6 +557,11 @@ func (p *Presentation) Normalize() {
 		if *value < 0 {
 			*value = DefaultEffectSwitch
 		}
+	}
+	if p.TrailStrength < 0 {
+		p.TrailStrength = DefaultTrailStrength
+	} else if p.TrailStrength > MaxTrailStrength {
+		p.TrailStrength = MaxTrailStrength
 	}
 }
 

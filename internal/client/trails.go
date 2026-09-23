@@ -28,6 +28,26 @@ const (
 	trailTracks
 )
 
+// SetTrailStrength selects the player's ground-trail intensity. Existing marks
+// keep their age and dimensions; only their recorded opacity changes [I6].
+func (c *Client) SetTrailStrength(percent int) {
+	if c == nil {
+		return
+	}
+	percent = min(max(percent, 0), 100)
+	if c.trailStrength != percent {
+		c.trailStrength = percent
+		c.pausedWorldRevision++
+	}
+}
+
+func (c *Client) TrailStrength() int {
+	if c == nil {
+		return 0
+	}
+	return c.trailStrength
+}
+
 const (
 	// trailRingSize bounds the retained marks; the oldest is overwritten.
 	trailRingSize = 4096
@@ -323,7 +343,7 @@ func (c *Client) placeTrails(cur *frame.Frame) {
 // plane; the half-height shear of the projection [03 §2.5] only moves the
 // centre.
 func (c *Client) drawTrails() {
-	if c == nil || !c.enhanced || c.cam == nil || c.terrain == nil || len(c.trails.marks) == 0 {
+	if c == nil || !c.enhanced || c.trailStrength == 0 || c.cam == nil || c.terrain == nil || len(c.trails.marks) == 0 {
 		return
 	}
 	st := &c.trails
@@ -356,7 +376,7 @@ func (c *Client) drawTrails() {
 		if m.class == trailTracks {
 			peak = trailTrackStrength
 		}
-		strength := uint8(math.Round(255 * peak * fade))
+		strength := uint8(math.Round(255 * peak * fade * float64(c.trailStrength) / 100 * float64(c.trailFamilyStrength(m.class)) / 100))
 		if strength == 0 {
 			continue
 		}

@@ -93,6 +93,7 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 		s.Presentation.Finish = boolInt(e.Finish)
 		s.Presentation.Distortion = boolInt(e.Distortion)
 		s.Presentation.Marks = boolInt(e.Marks)
+		s.Presentation.TrailStrength = b.cl.TrailStrength()
 	}
 	s.Display.Gamma = b.gammaSetting
 	// A direct battle owns the live clock preference just as it owns the live
@@ -210,6 +211,11 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		b.setGammaCommand(localCommandInt(words, 1))
 	case "bps":
 		b.bpsVisible = !b.bpsVisible
+	case "fps":
+		b.fpsVisible = !b.fpsShown()
+		if b.shell != nil {
+			b.shell.fpsVisible = b.fpsVisible
+		}
 	case "clock":
 		value := !b.clockShown()
 		b.clockVisible = value

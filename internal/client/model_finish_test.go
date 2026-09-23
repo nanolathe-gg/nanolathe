@@ -207,7 +207,7 @@ func restoreGlowFamilies(t *testing.T) {
 	t.Cleanup(func() { glowFamilies.Store(before) })
 }
 
-// The annotation file's [effects] section sets the content pack's light family
+// The annotation file's [effects] section sets the content pack's effect family
 // strengths (DESIGN_GPU_RENDERER §19.4). A file with only [effects] keeps the
 // texture table in force; one with only [materials] restores the default
 // families; values clamp to 0..200 and a non-number rejects the whole file.
@@ -219,12 +219,15 @@ func TestMaterialOverrideEffectsSection(t *testing.T) {
 		t.Fatalf("embedded families %d/%d/%d, want 100 each", w, n, g)
 	}
 
-	effectsOnly := []byte("[effects]\n\t{\n\tNanolathe=35;\n\tground=250;\n\tweapons=-5;\n\tfuture=7;\n\t}\n")
+	effectsOnly := []byte("[effects]\n\t{\n\tNanolathe=35;\n\tground=250;\n\tweapons=-5;\n\tfootprints=40;\n\ttracks=250;\n\tfuture=7;\n\t}\n")
 	if err := SetMaterialTable("test", effectsOnly, "test"); err != nil {
 		t.Fatalf("an [effects]-only override was rejected: %v", err)
 	}
 	if w, n, g := cl.GlowFamilies(); w != 0 || n != 35 || g != GlowFamilyMax {
 		t.Fatalf("[effects]-only families %d/%d/%d, want 0/35/%d", w, n, g, GlowFamilyMax)
+	}
+	if feet, tracks := cl.trailFamilyStrength(trailFeet), cl.trailFamilyStrength(trailTracks); feet != 40 || tracks != 200 {
+		t.Fatalf("trail families %d/%d, want 40/200", feet, tracks)
 	}
 	if modelTextureMaterial("corsea6d") != drawlist.ModelMaterialMetal {
 		t.Fatal("an override without [materials] dropped the texture table in force")
@@ -247,6 +250,9 @@ func TestMaterialOverrideEffectsSection(t *testing.T) {
 	}
 	if w, n, g := cl.GlowFamilies(); w != 100 || n != 100 || g != 100 {
 		t.Fatalf("a [materials]-only override left families %d/%d/%d, want the defaults", w, n, g)
+	}
+	if feet, tracks := cl.trailFamilyStrength(trailFeet), cl.trailFamilyStrength(trailTracks); feet != 100 || tracks != 100 {
+		t.Fatalf("material-only override left trail families %d/%d, want defaults", feet, tracks)
 	}
 
 	bad := []byte("[effects]\n\t{\n\tnanolathe=lots;\n\t}\n")

@@ -172,7 +172,9 @@ type gameShell struct {
 	// options-page gadget; `+Clock` changes it during battle and the shell
 	// carries the result into later battles [07 R-CAM-01 §6].
 	clockVisible bool
-	showRanges   bool // process-only Shift overlay detail switch [07 R-CAM-01 §6]
+	// fpsVisible retains the opt-in modern FPS display across battles in this process.
+	fpsVisible bool
+	showRanges bool // process-only Shift overlay detail switch [07 R-CAM-01 §6]
 
 	campaigns       []mission.Campaign
 	campaignOptions []mission.Campaign

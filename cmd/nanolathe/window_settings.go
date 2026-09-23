@@ -25,7 +25,13 @@ func (g *gameShell) windowOptions() ebitenapp.RunOptions {
 	options.PresentationSettings = func() (ebitenapp.RendererMode, int) { return rendererMode(g.opts), g.presentation.FPS }
 	// The Enhanced effect switches are polled the same way, so an options-page
 	// edit previews on the next update (DESIGN_GPU_RENDERER §30).
-	options.Effects = func() drawlist.Effects { return presentationEffects(g.presentation) }
+	options.Effects = func() drawlist.Effects {
+		if clPtr != nil {
+			clPtr.SetTrailStrength(g.presentation.TrailStrength)
+		}
+		return presentationEffects(g.presentation)
+	}
+	options.ShowFPS = func() bool { return g.battle != nil && g.battle.fpsShown() }
 	options.RendererChanged = g.rendererChanged
 	g.commitWindowSize()
 	options.WindowSize = func() (int, int) { return g.windowSize.W, g.windowSize.H }

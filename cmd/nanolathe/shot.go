@@ -153,6 +153,7 @@ func runShot(opts Options, cs *contentSet) error {
 	// composes under the switches the window would use (§30). The executor is
 	// given the same selection where it is handed the display palette.
 	cl.SetEffects(presentationEffects(loadedSettings().Presentation))
+	cl.SetTrailStrength(loadedSettings().Presentation.TrailStrength)
 	// The capture route runs the load-time remaster inline — it has no loader
 	// goroutine and no bar to report against — so a 2x capture shows the same
 	// synthesized art the window would (DESIGN_GPU_RENDERER §14.4 "When"). At

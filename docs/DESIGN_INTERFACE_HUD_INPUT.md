@@ -2039,6 +2039,7 @@ as local chat. The implemented handlers are:
 | `Gamma n` | apply the command factor to the shared output palette and persist the signed integer; startup and slider callbacks use their distinct factor conversion |
 | `Clock` | toggle and persist the stand-alone battle-clock bit; draw the committed unsigned tick in the late HUD layer |
 | `ShowRanges` | toggle detailed terrain-following range rings and labels inside the existing Shift-held queue overlay; Modern placement reuses its weapon-ring renderer (DESIGN_GPU_RENDERER §20); initially off unless the content profile opts in, retained by the shell across battles, without settings or simulation writes |
+| `FPS` | toggle the process-local modern battle FPS counter (DESIGN_GPU_RENDERER §13.5); initially off, retained across battles, with no settings or simulation writes |
 | `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `MusicMode n` | set the signed desired category through the existing music controller; fade/delay timers use the busy presentation pump and do not write settings |

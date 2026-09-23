@@ -25,9 +25,11 @@
 //   weapons    the glow of beams, effect and projectile art, explosion flashes
 //   nanolathe  the nanolathe spray's glow and the light it casts
 //   ground     the pools every battle light casts on the terrain
+//   footprints  legged-unit ground marks (docs/DESIGN_GPU_RENDERER.md §15)
+//   tracks      tracked-unit ground marks (docs/DESIGN_GPU_RENDERER.md §15)
 // 0 turns a family off; an absent key, or an override without [effects],
-// keeps 100. The player's display.glowStrength scales the two glow families
-// on top.
+// keeps 100. The player's display.glowStrength scales the glow families;
+// presentation.trailStrength scales footprints and tracks on top.
 
 [materials]
 	{
@@ -92,4 +94,6 @@
 	weapons=100;
 	nanolathe=100;
 	ground=100;
+	footprints=100;
+	tracks=100;
 	}

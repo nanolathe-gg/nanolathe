@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
@@ -121,6 +122,9 @@ type app struct {
 	// sanity line: bodies per second must stay at the update rate however the
 	// deferral moves them.
 	bodies int64
+	// fpsCounter measures completed modern presentations, including paused
+	// foreground redraws, rather than Ebitengine's uncapped Draw callbacks.
+	fpsCounter fpsCounter
 }
 
 // RunOptions are the window's host-side settings, none of which the client or
@@ -143,6 +147,9 @@ type RunOptions struct {
 	// (DESIGN_GPU_RENDERER §30). Nil leaves the client's own selection alone,
 	// which is every effect on.
 	Effects func() drawlist.Effects
+	// ShowFPS enables a battle-only counter on the modern presentation surface.
+	// It is a host display preference and never reaches the client or session.
+	ShowFPS func() bool
 	// RendererChanged reports an F10 executor swap synchronously. The owner must
 	// update PresentationSettings before the next poll so it preserves the swap.
 	// Applying an external preference does not invoke this callback.
@@ -391,6 +398,7 @@ func (a *app) Draw(screen *ebiten.Image) {
 		a.drawModern(screen, width, height)
 		return
 	}
+	a.fpsCounter = fpsCounter{}
 	a.paused.clear()
 	if !a.consumePresentation() {
 		return
@@ -479,6 +487,18 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 			screen.DrawImage(img, &ebiten.DrawImageOptions{})
 			a.c.MarkArrivalPresented()
 		}
+	}
+	// The overlay is drawn after the GPU surface and outside the recorded list:
+	// screenshots and the simulation remain independent of host frame timing.
+	if a.options.ShowFPS != nil && a.options.ShowFPS() {
+		a.fpsCounter.observe(time.Now())
+		label := "FPS --"
+		if a.fpsCounter.ready {
+			label = fmt.Sprintf("FPS %.0f", a.fpsCounter.value)
+		}
+		ebitenutil.DebugPrintAt(screen, label, max(0, width-len(label)*6-9), 6)
+	} else {
+		a.fpsCounter = fpsCounter{}
 	}
 	// Execute has enqueued this frame and copied what the device needs, so the
 	// list and the recorder's scratch are free again. Spend the flush and the

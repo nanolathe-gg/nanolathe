@@ -414,6 +414,9 @@ type Client struct {
 	// halo (DESIGN_GPU_RENDERER §19.4); the settings file persists it as
 	// display.glowStrength and the executor clamps it.
 	glowStrength int
+	// trailStrength is the player's 0..100 percentage over the content pack's
+	// footprint and track strengths (DESIGN_GPU_RENDERER §15).
+	trailStrength int
 	// effects is the player's Enhanced effect selection
 	// (docs/DESIGN_GPU_RENDERER.md §30), persisted in the presentation block.
 	// The recorder gates the producers that cost work to record; the executor
@@ -550,7 +553,8 @@ func New(opts Options) (*Client, error) {
 		glow: true,
 		// The glow strength starts at the tuned halo: 100 percent, the
 		// renderer's GlowStrengthDefault and settings.DefaultGlowStrength.
-		glowStrength: 100,
+		glowStrength:  100,
+		trailStrength: 50,
 		// Every Enhanced effect is on until the player turns it off (§30).
 		effects: drawlist.AllEffects(),
 		// Restore-defaults sets the Shading bit, so shading is on unless the

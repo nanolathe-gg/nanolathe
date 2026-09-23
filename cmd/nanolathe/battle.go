@@ -176,6 +176,8 @@ type battleSession struct {
 	// copy here [07 R-CAM-01 §6][I6].
 	clockVisible bool
 	bpsVisible   bool
+	// fpsVisible is the direct-battle fallback for the host-only +fps display.
+	fpsVisible bool
 	// clockUsePrimaryFont records the stateful FNT selection at the retail
 	// clock draw site for a direct battle. A shell-backed battle reads its live
 	// text-line setting because MAXLINES may change it while battle is running.
@@ -244,6 +246,16 @@ type battleSession struct {
 	// the committed-frame walk advances past the cursor and wraps once.
 	communityBuilderCursor pool.Handle
 	communityFactoryCursor pool.Handle
+}
+
+func (b *battleSession) fpsShown() bool {
+	if b == nil {
+		return false
+	}
+	if b.shell != nil {
+		return b.shell.fpsVisible
+	}
+	return b.fpsVisible
 }
 
 // countedClickDelta is the signed count the counted build-page producer takes
@@ -517,6 +529,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	p := loadedSettings().Presentation
 	b.hostPresentation = &p
 	applyCommunityHUDOptions(cl, b.hostPreferences())
+	cl.SetTrailStrength(b.hostPreferences().TrailStrength)
 	b.placeEntryCamera(cl.Size())
 	// Every successful battle rebuild, including a load, empties the visible
 	// message span before old source handles can be reused [08 R-ENTRY-01 §3].

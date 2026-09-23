@@ -172,6 +172,37 @@ func TestTrailsFollowCommittedMotionOnlyWhileEnhanced(t *testing.T) {
 	}
 }
 
+func TestTrailStrengthScalesExistingMarks(t *testing.T) {
+	c := trailScene(t)
+	c.SetEnhanced(true)
+	publishWalker(t, c, 1, 40)
+	recordTrails(c)
+	publishWalker(t, c, 2, 65)
+	read := func() uint8 {
+		t.Helper()
+		sink := recordTrails(c)
+		if len(sink.batches) != 1 || len(sink.batches[0].Marks) == 0 {
+			t.Fatalf("missing retained trail at strength %d", c.TrailStrength())
+		}
+		return sink.batches[0].Marks[0].Strength
+	}
+	if got := read(); got != 51 { // 255 × 0.4 × 50%.
+		t.Fatalf("default footprint strength %d, want 51", got)
+	}
+	c.SetTrailStrength(100)
+	if got := read(); got != 102 {
+		t.Fatalf("full footprint strength %d, want 102", got)
+	}
+	c.SetTrailStrength(0)
+	if got := recordTrails(c); len(got.batches) != 0 {
+		t.Fatal("zero trail strength still recorded marks")
+	}
+	c.SetTrailStrength(200)
+	if c.TrailStrength() != 100 || read() != 102 {
+		t.Fatal("trail strength was not capped at 100")
+	}
+}
+
 func TestTrailsSkipAirborneWadingAndTeleported(t *testing.T) {
 	c := trailScene(t)
 	c.SetEnhanced(true)

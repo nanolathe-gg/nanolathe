@@ -24,19 +24,20 @@ import (
 const MaterialTablePath = "nanolathe/materials.tdf"
 
 // materialSection is the texture annotation's section, and effectsSection the
-// per-family light strengths a content pack may set beside it (§19.4).
+// per-family effect strengths a content pack may set beside it (§19.4, §15).
 const (
 	materialSection = "materials"
 	effectsSection  = "effects"
 )
 
-// GlowFamilies is a content pack's strength for each family of Enhanced light,
-// as a percentage of the tuned look (DESIGN_GPU_RENDERER §19.4): Weapons is the
+// GlowFamilies is a content pack's strength for Enhanced lights and ground trails,
+// as a percentage of the tuned look (DESIGN_GPU_RENDERER §19.4 and §15): Weapons is the
 // glow of beams, effect and projectile art and explosion flashes; Nanolathe is
 // the nanolathe spray's glow and the light it casts; Ground is the terrain
-// receiver of every battle light. Each is 0..GlowFamilyMax, 100 by default.
+// receiver of every battle light. Footprints and Tracks scale the two trail
+// families independently. Each is 0..GlowFamilyMax, 100 by default.
 type GlowFamilies struct {
-	Weapons, Nanolathe, Ground int
+	Weapons, Nanolathe, Ground, Footprints, Tracks int
 }
 
 // GlowFamilyDefault and GlowFamilyMax bound a family's percentage; they match
@@ -48,7 +49,7 @@ const (
 
 // DefaultGlowFamilies is every family at its tuned look.
 func DefaultGlowFamilies() GlowFamilies {
-	return GlowFamilies{Weapons: GlowFamilyDefault, Nanolathe: GlowFamilyDefault, Ground: GlowFamilyDefault}
+	return GlowFamilies{Weapons: GlowFamilyDefault, Nanolathe: GlowFamilyDefault, Ground: GlowFamilyDefault, Footprints: 100, Tracks: 100}
 }
 
 // glowFamilies is the content's family strengths in force, installed with the
@@ -110,6 +111,17 @@ func (c *Client) GlowFamilies() (weapons, nanolathe, ground int) {
 	return f.Weapons, f.Nanolathe, f.Ground
 }
 
+func (c *Client) trailFamilyStrength(class trailClass) int {
+	f := glowFamilies.Load()
+	if f == nil {
+		return 100
+	}
+	if class == trailTracks {
+		return f.Tracks
+	}
+	return f.Footprints
+}
+
 // findSection returns the root section named name, ignoring case, or nil.
 func findSection(doc *formats.Document, name string) *formats.Section {
 	for _, s := range doc.Root.Sections() {
@@ -150,8 +162,8 @@ func parseContentTable(data []byte) (map[string]uint8, GlowFamilies, error) {
 	return table, families, nil
 }
 
-// parseGlowFamilies reads the [effects] section: weapons=, nanolathe= and
-// ground= percentages, each clamped to 0..GlowFamilyMax, last write winning
+// parseGlowFamilies reads the [effects] section: light and trail percentages,
+// each clamped to 0..GlowFamilyMax, last write winning
 // [fmt tdf "Duplicate keys"]. An unknown key is ignored, so a later build's
 // family does not make an older build reject the file.
 func parseGlowFamilies(section *formats.Section) (GlowFamilies, error) {
@@ -165,6 +177,10 @@ func parseGlowFamilies(section *formats.Section) (GlowFamilies, error) {
 			field = &families.Nanolathe
 		case "ground":
 			field = &families.Ground
+		case "footprints":
+			field = &families.Footprints
+		case "tracks":
+			field = &families.Tracks
 		default:
 			continue
 		}
@@ -216,7 +232,7 @@ func materialDiagnostic(logical, providers string, cause error) error {
 
 // SetMaterialTable installs an authored annotation file. Its [materials]
 // section replaces the texture table whole; a file without one keeps the table
-// in force, so a pack may set only its light strengths. Its [effects] section
+// in force, so a pack may set only its effect strengths. Its [effects] section
 // replaces the family strengths, and a file without one restores the defaults.
 // Everything in force is kept when the supplied bytes cannot be read, so a
 // broken override falls back to the embedded annotation rather than to no

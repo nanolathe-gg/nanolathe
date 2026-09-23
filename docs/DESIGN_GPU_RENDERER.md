@@ -1288,6 +1288,15 @@ Explicit `--fps` overrides the saved preference at window startup, with zero
 retaining display-refresh presentation. Captures and benchmarks use their
 command-line settings independently of saved window preferences.
 
+**FPS counter — Nanolathe host presentation policy.** `+fps` toggles a small
+counter at the upper-right of the modern battle surface. It starts off and
+retains its state across battles in the same process, without changing saved
+settings. The value counts completed modern presentations over elapsed host
+time in one-second windows, so cap-skipped Draw callbacks do not inflate it.
+Classic shows no counter. The overlay is applied after modern replay, outside
+the recorded draw list and authoritative session; it has no RNG or resource
+effects. It is absent from F11's GPU-image capture.
+
 **Pointer latency — Nanolathe host presentation policy.** Modern positions the
 recorded software cursor immediately before GPU replay, after joining the
 recorder (`PositionPresentationCursor`), including the paused foreground path.
@@ -2317,8 +2326,15 @@ Record the whole frame as ONE `drawlist.Trails` batch between terrain and strip
 `drawlist.TrailSink` hook leaves other sinks unchanged. The modern executor draws
 the batch through the row families' scale blend (§13.3): each rotated quad's
 fragment is `1 − strength × coverage`, with a soft oval for a footprint and a
-soft-sided, hard-ended segment for a track. Peak darkening remains 0.4 for feet
-and 0.3 for tracks. Multiplies commute, so overlapping marks need no additional
+soft-sided, hard-ended segment for a track. The tuned peak darkening is 0.4 for
+feet and 0.3 for tracks. The player's `presentation.trailStrength` is a whole
+percentage from 0 to 100, default 50; a mod may set independent `footprints`
+and `tracks` percentages from 0 to 200 in `nanolathe/materials.tdf`'s
+`[effects]` section. The two percentages multiply the tuned peak, so the stock
+default is 0.2 for feet and 0.15 for tracks. Zero in either control hides that
+trail family without changing scorch marks or simulation. The JSON preference
+is decoded over defaults and clamped to 0..100; negative values restore 50.
+Multiplies commute, so overlapping marks need no additional
 phase ordering. `Client.ObserveCommittedTick` records every advanced capture
 tick so a `--shot` observes the same history as the window.
 
@@ -4542,8 +4558,8 @@ leaves the embedded table in force, because presentation art never fails a load.
 The retail executable carries no material classification for model textures, and
 nothing here reaches authoritative state.
 
-The same file carries a content pack's light strengths: an `[effects]` section
-of `weapons=`, `nanolathe=` and `ground=` whole percentages, 0..200, default 100
+The same file carries a content pack's effect strengths: an `[effects]` section
+of `weapons=`, `nanolathe=`, `ground=`, `footprints=` and `tracks=` whole percentages, 0..200, default 100
 (§19.4). A file may carry either section alone: one without `[materials]`
 keeps the texture table in force, and one without `[effects]` keeps every
 family at 100.
