@@ -183,10 +183,8 @@ type battleSession struct {
 	// showRanges is a process-lifetime presentation toggle, retained by the
 	// shell across battles and never written to settings [07 R-CAM-01 §6].
 	showRanges bool
-	// Shift tactical guides are presentation input only (GPU design §20).
-	tacticalRangesHeld      bool
-	tacticalRangesUnfocused bool
-	rangePreferences        contentprofiles.Presentation
+	// Placement guides are presentation preferences only (GPU design §20).
+	rangePreferences contentprofiles.Presentation
 
 	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
 	// frontend-backed battle reads the shell's live copy instead, so an
@@ -908,7 +906,6 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// return as well as the normal controller path [03 §1][R-SEL-02A].
 	defer b.syncSelectionDrag(cl)
 	in := cl.Input()
-	b.updateTacticalRangeInput(in, cl.IsFocused())
 	producerIn := in
 	// The command palette owns its ordered accelerator peek before the battle
 	// controller converts the host state into a sample. Samples deliberately

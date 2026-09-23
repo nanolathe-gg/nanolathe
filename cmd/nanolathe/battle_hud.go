@@ -811,9 +811,6 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			c.EndWorldOverlay()
 		}
 	}
-	if b != nil {
-		b.drawTacticalRangeLegend(c, cur)
-	}
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. All three panel
 	// entries are static at their authored origins — PANELTOP (129,0),
 	// PANELBOT (129,H-32), PANELSIDE (0,0) [07 §6 "Panel asset binding and

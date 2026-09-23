@@ -292,7 +292,7 @@ func (c *Client) PickPresentedUnit(f *frame.Frame, x, y int32, viewer uint8) (po
 	return 0, frame.UnitView{}, false
 }
 
-// indexUnits shares committed carrier lookup between icons and tactical guides.
+// indexUnits builds the committed carrier lookup for strategic icons.
 func (dst *strategicLayoutScratch) indexUnits(f *frame.Frame) {
 	largest := 0
 	for i := range f.Units {

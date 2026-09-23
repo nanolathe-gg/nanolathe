@@ -3258,108 +3258,71 @@ deliberately **not** one of the five `Effects` families of §30.
    their texture with a soft warm halo, the beam glows, burning trees glow, smoke
    does not, and the fogged half of the map shows the glow greyed.
 
-## 20. Shift tactical range guides (Enhanced)
+## 20. Placement weapon ranges (Enhanced)
 
 ### 20.1 Presentation policy
 
-The general range guides start **off**. `+showranges` toggles the existing
-process-only switch; while enabled, holding Shift at any modern-renderer zoom,
-including 1× and 2×, draws ranges for selected own units and the hovered
-identified unit. The classic renderer retains the retail Shift queue overlay
-[07 R-P0-11 §3]. The command never bypasses Shift for general ranges.
+General range rings start **off**. `+showranges` toggles the existing process-only
+switch. Its Shift-gated queue overlay is the single general range display in
+both renderers [07 R-P0-11 §3]. The former Enhanced overlay, category colours,
+dashes, legend and separate selection/hover walk have been removed.
 
-**Nanolathe Modern presentation policy:** an armed build product keeps its
-weapon range guide at the snapped site without requiring Shift or `+showranges`,
-including an invalid site while the player repositions it. Interceptor weapons
-use their authored coverage guide. Sensor, jammer and builder guides require
-`+showranges` and Shift, including during placement. This is a Modern renderer
-preference, independent of the Modern / Strict 3.1 simulation rule set; the
-classic renderer has no automatic placement guide.
+**Nanolathe Modern presentation policy:** an armed build product shows its
+weapon ranges at the snapped site without requiring Shift or `+showranges`,
+including an invalid site while the player repositions it. This is a Modern
+renderer preference, independent of the simulation rule set; Classic has no
+automatic placement guide. Each active authored weapon slot uses its `Range`,
+including interceptors, matching the detailed `+showranges` weapon branch.
+NOWEAPON links are omitted. Equal radii retain their separate weapon-slot labels.
+Placement shows no sensor, jammer, build-distance or interception-coverage rings.
 
-A content profile's optional `presentation` block configures `show_ranges`
+The optional content-profile `presentation` block configures `show_ranges`
 (default false) and `placement_weapon_ranges` (default true when omitted).
-The former seeds the shell or direct battle once; subsequent `+showranges`
-toggles survive battles in that shell without settings writes. The latter
-controls only the automatic placement exception: an explicit `+showranges`
-with Shift still shows the full set. Shipped profiles use these defaults.
-These are Nanolathe UI defaults, not historical mod or retail claims.
+`show_ranges` seeds the shell or direct battle once; subsequent command toggles
+survive battles within that shell without settings writes. The placement flag
+controls the automatic exception; Shift with explicit `+showranges` still shows
+the product's weapon rings. Shipped profiles use these defaults, which are
+Nanolathe UI policy rather than historical mod or retail claims.
 
-The overlay uses the product definition, footprint centre and validated preview
-height; arming or displaying a guide never submits a construction order or
-changes RNG, resources or authoritative state. Losing focus, switching to
-classic, opening a modal or result screen, entering chat, or starting a modern
-drag hides the guides. Shift retains its selection and command-queue handling.
-A single-line on-screen legend names only the categories present, in their
-guide colours.
+Placement uses the prospective definition, footprint centre and validated site
+height. It never submits an order or changes RNG, resources or authoritative
+state. Losing focus, switching to Classic, opening a modal or result screen,
+entering chat, moving outside the world viewport, disarming placement or starting
+a Modern drag suppresses it. Shift retains its normal selection and queue input.
 
-| Guide | Ink | Radius source |
-|---|---|---|
-| Weapon | Orange, solid | each independently enabled, active weapon slot's `Range` |
-| Radar | Cyan, solid | `RadarDistance` |
-| Sonar | Blue, dashed | `SonarDistance` |
-| Radar jammer | Purple, dashed | `RadarDistanceJam` |
-| Sonar jammer | Pink, dashed | `SonarDistanceJam` |
-| Build | Green, dashed | builder's `BuildDistance` |
-| Interceptor | Yellow, dashed | interceptor weapon's `Coverage` |
+### 20.2 Shared rendering path
 
-Equal weapon radii on one unit collapse to one ring. Sonar is dashed so radar and
-sonar remain visible when their authored distances coincide. Preview products use
-all active authored slots; live units use the committed independently enabled
-slot bits. Record-zero NOWEAPON links are omitted even if they author a range.
-Stockpiling alone does not select interception coverage. Sensor guides for an
-inactive switchable unit become dashed; they describe its nominal capability.
+`hud.WeaponRangeOverlay` and the detailed queue weapon branch call the same
+weapon-ring helper. It supplies the established tick-parity GUI colour, the
+`weapon1 range` through `weapon3 range` labels, terrain-following chord walk,
+field narrowing and label placement [07 R-P0-11 §3]. The existing malformed-radius
+bounds guards apply. Runtime enabled-bit quirks stay with the live queue branch;
+a prospective product supplies its active authored slots independently.
 
-### 20.2 Data boundary and limits
+The placement adapter appends these primitives to `drawQueueOverlay`, using its
+projection, palette lookup, FNT labels and integer line rasterizer inside the
+same world-overlay region (§16.3). The standalone tactical renderer and its
+foreground-stage hook no longer exist. The product's ghost and ring therefore
+share the queue overlay's camera transform at every zoom.
 
-**Established source contracts:** ordinary `Range` is in whole world units
-[06 §3.3]; definition activity and independent slot bits are [06 R-WPN-05 §3].
-Sensor and jammer readers sign-extend their stored 16-bit fields, while
-construction reach zero-extends its 16-bit field [07 R-P0-11 §3]. No unit-name
-lookup table or invented weapon range is involved.
+These are authored planning radii, not guaranteed coverage: actual firing also
+tests terrain, target restrictions, arcs and ballistic feasibility [06 §3.3].
+No retail behavior has been redefined by the placement exception.
 
-**These are planning circles.** Actual firing also tests terrain, target
-restrictions, firing arcs and ballistic feasibility [06 §3.3]. Actual interceptor
-acquisition uses an inclusive X/Z square about the incoming projectile's stored
-aim point [06 §11.2]; its named coverage circle is a visual guide. Actual build
-and repair reach includes footprint terms and differs from reclaim reach
-[05 R-WORK-01 §2]. Sensor coverage also depends on activation, terrain, altitude,
-water and detection/jamming gates [03 §3.4][03 R-VIS-01 §4–5]. The HUD therefore
-calls these range guides, not guaranteed coverage.
+### 20.3 Verification
 
-At icon zoom the client admits targets through the committed strategic icon
-layout; at model zoom it applies the same committed visibility and carrier checks
-directly, using projected world anchors with the same screen margin, so that path
-needs no icon catalog and no nonzero marker alpha. Hidden units, radar-only
-contacts, carried passengers excluded by that layout, and off-screen unit anchors
-expose no definition to the overlay. Selected own units remain subject to the same
-friendly visibility policy as §18. Commander-looking enemy units are omitted so
-differences in truthful ranges cannot identify a decoy through otherwise
-identical icon art.
+Tests compare placement primitives with the existing detailed weapon branch on
+both tick parities and uneven terrain, preserving slot labels even for equal
+radii. Adapter tests cover the snapped invalid site, active-slot admission,
+interceptor range, the per-mod default and explicit-command override, focus,
+Classic, pointer bounds, disarming and drag suppression. Existing queue-overlay
+tests own the chord-count arithmetic, terrain lift, label position and bounds.
 
-### 20.3 Rendering and verification
-
-`TacticalOverlayStage` runs after the committed world, outside its scale region,
-before the icons and HUD. The same live zoom and camera origin as the icons
-project the ring. Each terrain endpoint uses the greater of centre height and
-sampled ground height [07 R-P0-11 §3]. One-pixel palette-coloured segments are
-clipped to the battle viewport before recording. Wide integer coordinates avoid
-long-range wrap; only clipping ratios use transient floating point.
-Screen-adaptive 32..512 chords per ring bound tessellation, including huge
-authored ranges. These bounds, the dash pattern and the colours are Enhanced
-presentation constants. With general ranges disabled and no enabled placement
-preview, the overlay does not resolve colours, visit targets or record range lines.
-
-Focused tests cover the default-off command gate, its shell lifetime, mod UI
-defaults, the weapon-only placement exception, inactive placeholder weapons,
-independent slot admission, interceptor versus stockpile data, deduplication, field narrowing, held-key
-release and focus loss, prospective product and site selection, invalid
-placement, classic fallback, all-zoom committed visibility, terrain projection,
-viewport clipping, bounded long-range geometry and pre-icon draw ordering.
-`--shot-shift --shot-select` captures selected ranges when the content profile
-sets `presentation.show_ranges` to true; `--shot-build <name>`
-previews a named product beside the first selection, or at the world viewport
-centre without a selection, without an order. The capture switches apply after
-simulation and zoom setup, so matched scenes retain the same simulation state.
+`--shot-build <name>` captures placement; `--shot-shift --shot-select` with a
+profile setting `presentation.show_ranges` true captures the ordinary queue
+ranges. These switches apply after simulation setup and submit no build order.
+Inspect matched captures at native, fractional and magnified zoom, plus disabled
+placement and Classic, to verify the shared draw path.
 
 ## 21. Modern resource construction input
 
@@ -3370,7 +3333,7 @@ construction. Modern drag construction, rectangular area work and free-form
 formation commands are specified in
 [DESIGN_INTERFACE_HUD_INPUT §3.11](DESIGN_INTERFACE_HUD_INPUT.md#311-modern-drag-commands);
 their previews share the world-overlay transform of §16.3 and ordinary indexed
-line and fill primitives. Alt grid capture takes precedence over tactical ranges.
+line and fill primitives. Alt grid capture suppresses the placement range preview.
 These are explicit input extensions beyond visual differences; no renderer state
 enters construction or movement, and there is no alternate economy, construction
 or simulation behavior.

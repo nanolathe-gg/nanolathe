@@ -340,15 +340,7 @@ func TestCommandDragAltMoveOverFeature(t *testing.T) {
 				if pos == nil || !pos.HasFeature {
 					t.Fatal("fixture must start on a reclaimable feature")
 				}
-				b.showRanges = true
-				b.tacticalRangesHeld = true
-				if !b.tacticalRangesActive(cl) {
-					t.Fatal("held Shift must show ranges before a drag")
-				}
 				dragInput(b, cl, x, y, input.MouseButtonLeft, "press", input.Modifiers{Alt: true, Shift: queued})
-				if b.tacticalRangesActive(cl) {
-					t.Fatal("range guides obscure the drag preview")
-				}
 				if b.modernDrag == nil || b.battleState().Input.DragActive || len(b.sess.PendingHumanCommands()) != 0 {
 					t.Fatal("Alt press did not exclusively capture movement")
 				}
@@ -360,10 +352,6 @@ func TestCommandDragAltMoveOverFeature(t *testing.T) {
 				cmds := b.sess.PendingHumanCommands()
 				if len(cmds) != 1 || cmds[0].Kind != session.HumanOrder || cmds[0].Order.Code != int(input.LatchMove) || cmds[0].Order.Queued != queued {
 					t.Fatalf("Alt gesture emitted contextual work or selection: %+v", cmds)
-				}
-				b.tacticalRangesHeld = true
-				if !b.tacticalRangesActive(cl) {
-					t.Fatal("completed gesture retained range suppression")
 				}
 				if drag && !slices.Equal(cmds[0].Order.Handles, []pool.Handle{builder}) {
 					t.Fatal("formation lost its explicit actor")

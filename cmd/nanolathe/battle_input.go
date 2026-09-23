@@ -126,7 +126,6 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		}
 	}()
 	kbd := in.Kbd
-	b.updateTacticalRangeInput(in, cl == nil || cl.IsFocused())
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	if b.serviceCommunityIncome(mouse) {

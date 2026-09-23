@@ -105,9 +105,10 @@ func queueIconFrame(entry *formats.GAFEntry, tick uint32) (int32, bool) {
 // It consumes only a published frame and input presentation state. Hidden
 // overlays return before constructing instructions. Modern resource feedback
 // reuses the same animation without changing Shift [07 §9][R-P0-11 §4]
-// (DESIGN_INTERFACE_HUD_INPUT §3.10).
+// (DESIGN_INTERFACE_HUD_INPUT §3.10). Modern placement appends its weapon rings
+// to this same pass without enabling the order walker (GPU design §20).
 func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick uint32, show bool, localOwner uint8, tracked, hovered pool.Handle) {
-	if c == nil || b == nil || f == nil || !show {
+	if c == nil || b == nil || f == nil || (!show && !b.placementRangesActive(c)) {
 		return
 	}
 	// The composed world surface is viewport-relative: every world drawer
@@ -159,7 +160,11 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 			return hud.QueueRect{Left: l, Top: t, Right: r, Bottom: btm}, true
 		},
 	}
-	chain := dashChainEntry(b.fs)
+	var ops []hud.QueuePrimitive
+	if show {
+		ops = hud.QueueOverlay(f, opts)
+	}
+	ops = append(ops, b.placementRangeOverlay(c, opts)...)
 	// The overlay's positions come through the projection and scale with it;
 	// its sprites do not, so a magnified view takes the resampled variant of
 	// the dash and icon art — the same nearest resampling the client applies
@@ -167,14 +172,14 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 	// (DESIGN_GPU_RENDERER §14.2, §14.3). At scale 1 this is the identity and
 	// nothing composed changes.
 	scale := viewScaleOf(b)
-	for _, op := range hud.QueueOverlay(f, opts) {
+	for _, op := range ops {
 		switch op.Kind {
 		case hud.QueuePrimitiveMarker:
 			for _, seg := range op.Segments {
 				drawQueueLine(c, hud.QueuePoint{X: seg.X0, Y: seg.Y0}, hud.QueuePoint{X: seg.X1, Y: seg.Y1}, c.GUIColor(seg.Color))
 			}
 		case hud.QueuePrimitiveDash:
-			drawDashChain(c, chain, op, project, scale)
+			drawDashChain(c, dashChainEntry(b.fs), op, project, scale)
 		case hud.QueuePrimitiveCircle:
 			// Chords carry the established GUI colour of their helper branch.
 			if op.ColorKnown {

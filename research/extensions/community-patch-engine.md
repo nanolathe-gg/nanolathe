@@ -1099,10 +1099,11 @@ falsified: the helper computes a cheats flag but returns the own-unit term
 alone, and the changelog records the cheat path as deliberately removed. The
 permission applies only while the prepared order is a build, and a one-byte
 enable is written into the engine's placement test so it reaches that branch
-at all. The placement preview's rectangle colour index is rewritten at the
-start of every placement test (logical colour 6, green) and again (to
-logical colour 10, yellow) when a
-square is accepted only because own units occupy it, and the engine's
+at all. The placement preview's colour selector resets to the clear-site
+state at the start of every placement test and changes to the clearance
+state when a square is accepted only because own units occupy it. These
+selector values are not GUI palette indices; the custom snap preview maps
+them to green and yellow explicitly (CP-CON-6). The engine's
 "target area blocked" wait limit is patched to 20 at the mobile and VTOL
 sites (**Established** by matching the two replacement operands to the retail
 mobile and VTOL blocked-site branches: each compares the current visit count
@@ -1373,6 +1374,15 @@ the member, so the previous value silently stays. The ordered position — and
 for reclaim the order type and height — differ from what the raw cursor would
 have produced; nothing in order execution is changed. Source: `tahook.cpp`,
 `dialog.cpp`, `config_*.h`; author text in `tdraw.txt`.
+
+**Established — snapped preview colours.** At the pinned revision,
+`tahook.cpp`'s `VisualizeMexSnapPreview` reruns the build-spot test at the
+snapped position. A rejected site draws with physical palette index 214
+(red). An accepted site draws with physical index 234 (green), or 240
+(yellow) when the construction-kickout test admitted own-unit occupants.
+These indices bypass the GUI logical-to-physical map. The patch's internal
+clear/clearance selector must not itself be treated as a GUI colour field.
+
 ### 5.7 Environment, visibility and climate
 
 **CP-ENV-1 (B, compile-time). Off-map aircraft margin.** Aircraft outside the

@@ -693,3 +693,32 @@ func TestQueueOverlaySelectedOnlySuppressesDashes(t *testing.T) {
 		})
 	}
 }
+
+func TestPlacementWeaponRangeMatchesDetailedQueueRange(t *testing.T) {
+	center := QueueWorldPoint{X: 80 << 16, Y: 40 << 16, Z: 96 << 16}
+	weapons := [3]RangeWeapon{{Enabled: true, Range: 32}, {Enabled: true, Range: 64}, {Enabled: true, Range: 64}}
+	for _, tick := range []uint32{20, 21} {
+		opt := QueueOverlayOptions{Tick: tick, ShowRanges: true, Project: queueTestProject,
+			GroundHeight: func(x, z numeric.Fixed) numeric.Fixed {
+				if x > center.X {
+					return 60 << 16
+				}
+				return 0
+			},
+		}
+		want := appendUnitRanges(nil, QueuePrimitive{}, center, false, RangeSet{Weapons: weapons}, opt)
+		got := WeaponRangeOverlay(center, weapons, opt)
+		if len(got) == 0 || !reflect.DeepEqual(got, want) {
+			t.Fatalf("tick %d: placement changed detailed range geometry or ink", tick)
+		}
+		labels := 0
+		for _, op := range got {
+			if op.Kind == QueuePrimitiveLabel {
+				labels++
+			}
+		}
+		if labels != 3 {
+			t.Fatal("equal radii lost their authored slot labels")
+		}
+	}
+}

@@ -265,8 +265,17 @@ func (b *battleSession) drawBuildGhost(c *client.Client) {
 	col := c.GUIColor(hud.GhostColorIllegal)
 	if b.battleState().Input.BuildOK {
 		col = c.GUIColor(hud.GhostColorLegal)
-		if b.sess != nil && b.sess.Community.ConstructionKickout && !b.battleState().Input.BuildNeedsClear {
-			col = c.GUIColor(6)
+	}
+	if b.sess != nil && b.sess.Community.ConstructionKickout {
+		// The patch's custom preview uses physical palette entries, not
+		// GUIPAL fields (community patch engine CP-CON-6). Its clear-site
+		// selector is not GUI colour 6, which is red in the retail assets.
+		col = 214 // Rejected.
+		if b.battleState().Input.BuildOK {
+			col = 234 // Clear.
+			if b.battleState().Input.BuildNeedsClear {
+				col = 240 // Accepted with own-unit clearance.
+			}
 		}
 	}
 	// Retail's adjacent strokes make one solid two-pixel border [07 §9].

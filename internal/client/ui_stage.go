@@ -24,13 +24,6 @@ type UIStage interface {
 	DrawUI(*Client, UIFrame)
 }
 
-// TacticalOverlayStage is an optional UI adapter boundary for live tactical
-// guides. It runs outside the world transform, before strategic icons and HUD,
-// with the current committed identity/visibility frame (GPU design §20, [I6]).
-type TacticalOverlayStage interface {
-	DrawTacticalOverlay(*Client, *frame.Frame)
-}
-
 // SetUIStage installs the one typed UI adapter used by the client. A nil stage
 // leaves the committed-world surface without authored UI, which is useful for
 // the loading hand-off and focused renderer tests.

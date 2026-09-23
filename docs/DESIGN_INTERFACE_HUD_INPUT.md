@@ -2012,7 +2012,7 @@ as local chat. The implemented handlers are:
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
 | `Gamma n` | apply the command factor to the shared output palette and persist the signed integer; startup and slider callbacks use their distinct factor conversion |
 | `Clock` | toggle and persist the stand-alone battle-clock bit; draw the committed unsigned tick in the late HUD layer |
-| `ShowRanges` | toggle detailed terrain-following range rings and labels inside the existing Shift-held queue overlay and the Modern tactical guides (DESIGN_GPU_RENDERER §20); initially off unless the content profile opts in, retained by the shell across battles, without settings or simulation writes |
+| `ShowRanges` | toggle detailed terrain-following range rings and labels inside the existing Shift-held queue overlay; Modern placement reuses its weapon-ring renderer (DESIGN_GPU_RENDERER §20); initially off unless the content profile opts in, retained by the shell across battles, without settings or simulation writes |
 | `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `MusicMode n` | set the signed desired category through the existing music controller; fade/delay timers use the busy presentation pump and do not write settings |
@@ -2395,10 +2395,11 @@ Alt continues to choose a construction grid, and R/E followed by left-drag keep
 their repair/reclaim areas. Ctrl prevents the idle formation shortcut. With
 right-click interface mode, idle right drag on empty ground also draws a
 formation. Ordinary left box selection and Shift-additive selection remain
-available; Shift at a command's release appends instead. Shift also shows
-tactical ranges; Alt+digit keeps the squad shortcut. Active command drags
-suppress range guides so their preview stays readable; releasing or cancelling
-the drag restores guides if Shift remains held. The traced polyline accepts
+available; Shift at a command's release appends instead and retains the ordinary
+queue overlay, including enabled `+showranges` rings. Alt+digit keeps the squad
+shortcut. Active command drags suppress placement ranges so their preview stays
+readable; releasing or cancelling the drag restores them if placement remains
+armed. The traced polyline accepts
 curves and zigzags;
 units receive individual destinations evenly spaced by arc length, including
 both endpoints (a single unit receives the midpoint); whole world destinations
@@ -3117,6 +3118,16 @@ and carries the terrain-derived click height raised to sea level when needed.
 All mutable terrain and feature reads occur through a read-only session query;
 the host owns only the deterministic scan and command substitution
 [community patch engine CP-CON-6][I6].
+
+When construction kickout is enabled, the shared placement rectangle uses
+the patch's custom preview palette: physical index 234 for a clear accepted
+site, 240 for an accepted site needing own-unit clearance, and 214 for a
+rejected site. This applies to both snapped and ordinary cursor placement.
+The indices bypass `GUIColor`; the patch's internal clear/clearance selector
+is not a GUIPAL field. Without kickout the retail logical legal/illegal
+colours remain in use. Regression checks exercise all three community states,
+the retail bypass, and a snapped Coast to Coast mex with the installed palette
+[community patch engine CP-CON-6].
 
 The authored instructions mention Shift+Q/E alternation and using `v` before a
 patrol route, but neither the pinned source nor those instructions settle a

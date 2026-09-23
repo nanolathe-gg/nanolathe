@@ -417,10 +417,6 @@ func appendUnitRanges(out []QueuePrimitive, base QueuePrimitive, center QueueWor
 		ordinal++
 	}
 
-	color := detailEvenColor
-	if opt.Tick&1 != 0 {
-		color = detailOddColor
-	}
 	for slot := range set.Weapons {
 		enabled := set.Weapons[slot].Enabled
 		if slot == 2 {
@@ -430,10 +426,32 @@ func appendUnitRanges(out []QueuePrimitive, base QueuePrimitive, center QueueWor
 			enabled = set.Weapons[0].Enabled
 		}
 		if enabled && set.Weapons[slot].Range != 0 {
-			out = appendRangeRing(out, base, center, set.Weapons[slot].Range, color, fmt.Sprintf("weapon%d range", slot+1), slot, opt)
+			out = appendWeaponRange(out, base, center, set.Weapons[slot].Range, slot, opt)
 		}
 	}
 	return out
+}
+
+// WeaponRangeOverlay renders prospective weapon slots through the same labelled
+// range helper as +showranges [07 R-P0-11 §3]. Placement has no runtime enabled
+// bits: its caller supplies active authored slots (Modern presentation policy,
+// DESIGN_GPU_RENDERER §20). It does not invoke the order walker or require Shift.
+func WeaponRangeOverlay(center QueueWorldPoint, weapons [3]RangeWeapon, opt QueueOverlayOptions) []QueuePrimitive {
+	var out []QueuePrimitive
+	for slot, weapon := range weapons {
+		if weapon.Enabled && weapon.Range != 0 {
+			out = appendWeaponRange(out, QueuePrimitive{}, center, weapon.Range, slot, opt)
+		}
+	}
+	return out
+}
+
+func appendWeaponRange(out []QueuePrimitive, base QueuePrimitive, center QueueWorldPoint, radius int32, slot int, opt QueueOverlayOptions) []QueuePrimitive {
+	color := detailEvenColor
+	if opt.Tick&1 != 0 {
+		color = detailOddColor
+	}
+	return appendRangeRing(out, base, center, radius, color, fmt.Sprintf("weapon%d range", slot+1), slot, opt)
 }
 
 func appendAttackRanges(out []QueuePrimitive, base QueuePrimitive, center QueueWorldPoint, set RangeSet, opt QueueOverlayOptions) []QueuePrimitive {
