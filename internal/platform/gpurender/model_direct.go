@@ -511,7 +511,10 @@ func (r *Renderer) prepareModelDirect(l *drawlist.List) {
 		// index.
 		r.beginPass(pg.colour)
 		pg.colour.SubImage(used).(*ebiten.Image).Clear()
-		d.opts.Blend = ebiten.BlendSourceOver
+		// Every colour fragment is opaque or discarded, so a copy blend stores
+		// exactly what source-over did, and keeps the submerged marker's alpha
+		// exact where two faces tie on the key (§26.5).
+		d.opts.Blend = ebiten.BlendCopy
 		for i := range d.runs {
 			run := &d.runs[i]
 			if run.iLen == 0 || int(run.page) != p {
@@ -1288,6 +1291,9 @@ func (r *Renderer) commitModelDirect(g *drawlist.ModelGeometry) {
 		r.drawModelDirectFallback(g)
 		return
 	}
+	if r.commitUnderwater(g, region) {
+		return
+	}
 	b := region.bounds
 	x0, y0 := max(b.Min.X, 0), max(b.Min.Y, 0)
 	x1, y1 := min(b.Max.X, r.clipW()), min(b.Max.Y, r.clipH())
@@ -1662,6 +1668,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		}
 		stored := floor(imageSrc2AtFromSrc0Pos(imageSrc0Origin()+at+vec2(0.5, 0.5)).r*255.0 + 0.5)
 		if key < stored {
+			discard()
 			return vec4(0.0)
 		}
 	}
@@ -1687,6 +1694,9 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		t := clamp(floor(srcPos-imageSrc0Origin()), lo, hi)
 		idx = floor(imageSrc0At(imageSrc0Origin()+t+vec2(0.5, 0.5)).r*255.0 + 0.5)
 	}
+	// submerged marks a texel the blue waterline tint claimed; the texel is
+	// written at alpha 254/255 so the underwater commit can find it (§26.5).
+	submerged := false
 	if entry > 0.5 && mode != ` + fmt.Sprint(modelDirectShadow) + ` {
 		base := (entry-1.0)*12.0
 		a := modelQuadTexel(base)
@@ -1724,20 +1734,31 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 				finish = 0.0
 			}
 		}
+		if idx != 1.0 && modelQuadU16(c.b, c.a) == 2.0 && own <= modelQuadU16(e.r, e.g) {
+			submerged = true
+		}
 		idx = clipIndex(idx, own, modelQuadU16(c.b, c.a), modelQuadU16(e.r, e.g), modelQuadU16(e.b, e.a), modelQuadU16(f.r, f.g))
 		gclip := modelQuadU16(g.b, g.a)
 		if gclip > 0.5 {
 			// The carrier's clip over the staging image, on the shifted key.
 			h := modelQuadTexel(base+6.0)
 			i := modelQuadTexel(base+7.0)
+			if idx != 1.0 && gclip == 3.0 && vkey <= modelQuadU16(h.r, h.g) {
+				submerged = true
+			}
 			idx = clipIndex(idx, vkey, gclip-1.0, modelQuadU16(h.r, h.g), modelQuadU16(h.b, h.a), modelQuadU16(i.r, i.g))
 		}
 	}
 	if idx == 1.0 {
+		discard()
 		return vec4(0.0)
 	}
 	albedo := palAt(idx)
-	return vec4(modelFinish(albedo, metalGlint(albedo, battleLit(albedo, k, custom.w), glint), finish), 1.0)
+	alpha := 1.0
+	if submerged {
+		alpha = 254.0 / 255.0
+	}
+	return vec4(modelFinish(albedo, metalGlint(albedo, battleLit(albedo, k, custom.w), glint), finish), alpha)
 }
 `
 }

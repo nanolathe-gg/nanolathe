@@ -90,12 +90,8 @@ func (r *Renderer) commitAircraftShadow(g *drawlist.ModelGeometry, body modelDir
 	// parameters are installed on it here, before the segment is submitted. The
 	// frame has one terrain command, so every aircraft compiled into a
 	// submission was compiled against the values this writes.
-	if st.uniforms == nil {
-		st.water = make([]float32, 4)
-		st.uniforms = map[string]any{"AircraftWater": st.water}
-	}
+	r.sceneOpts.Uniforms = r.sceneWaterUniforms()
 	st.water[0], st.water[1], st.water[2], st.water[3] = phase, driftX, driftZ, step
-	r.sceneOpts.Uniforms = st.uniforms
 	wb := modelWorldBounds(g)
 	rx := float32(body.x) + 2*float32(wb.Min.X-bb.Min.X)
 	ry := float32(body.y) + 2*float32(wb.Min.Y-bb.Min.Y)

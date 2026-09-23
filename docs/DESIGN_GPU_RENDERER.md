@@ -4179,7 +4179,8 @@ mask is cached in painted map coordinates through the terrain inverse projection
 [07 §8][03 §2.5]; a negative height sentinel is never water; painted colours are
 preserved; the treatment draws before objects and fog, except admitted seabed
 sprites are part of its terrain input; wake fragments clip to the
-matching wet/dry mask. No postprocess displaces units, HUD or fog. Cache resources
+matching wet/dry mask. No postprocess displaces units, HUD or fog; the submerged
+part of a blue-tinted hull is refracted inside its own commit (§26.5). Cache resources
 are released on map replacement and disposal.
 
 ### 26.3 Surface treatment and cost bounds
@@ -4398,6 +4399,59 @@ zero. The source plane is allocated only when needed and released on source rese
 Nothing here reconstructs offscreen or hidden surfaces, traces rays or solves
 inter-unit reflected depth ordering; overlapping reflected subjects remain an
 approximation. Shore foam has its own selected opacity (§26.3).
+
+### 26.5 Underwater refraction
+
+Retail tints the part of a model at and below the waterline through BLUE TABLE
+when the viewer holds sonar contact, and erases it otherwise
+[03 R-WATER-01 §2]; the tinted part then sits on top of a water surface that
+refracts the seabed around it. In Enhanced with Water on, that part is refracted
+and shaded by the same field. This is authored presentation: the tint, the
+erase, the key test and every simulation value are unchanged.
+
+**Field.** `water_field.go` owns one Kage definition of the surface field —
+the noise lattice, `waterField` (broad and fine lattices and the gust
+envelope), `waterOffset` (the displacement in world pixels) and `waterShade`
+(the ripple shade and crest highlight). The water pass and the underwater
+commit both splice it in, so a hull moves in phase with the water around it.
+
+**Marker.** The model lane's colour pass writes a texel the blue clip claimed —
+the subject's own on its key or the carrier's on the shifted key (§22) — at
+alpha 254/255 instead of 1. Every coverage reader tests alpha against 0.5, so
+nothing else changes. The colour pass draws with a copy blend and discards its
+transparent fragments; every fragment it keeps is opaque, so this stores what
+source-over stored, and keeps the marker exact where two faces tie on a key.
+
+**Commit.** A subject whose waterline mode is blue, with no wreck emission, on a
+non-lava map whose water record is enabled and not switched off, commits
+through scene op `sceneOpUnderwaterCommit` instead of the plain resolve. Its
+page binds slot 2 as the ordinary commit does and the water mask binds slot 3,
+which no model command uses, so the subject joins the open opaque run and adds
+no device draw. The frame's phase, tidal drift and mask step are the
+`UnderwaterWater` uniform in the scene runs' one shared map (with the aircraft
+shadows' `AircraftWater`, §34). Per pixel:
+
+- texels at full alpha resolve in place exactly as the ordinary commit;
+- marked texels are gathered at the pixel's position plus the water offset,
+  scaled by the water pass's own depth ramp and coast fade and by
+  `modelRefraction` = 0.5 (hull silhouettes read the field far more strongly
+  than painted terrain), with an area-weighted two-texel box over three
+  texels per axis so the hull slides rather than stepping a texel at a time;
+  taps outside the subject's page rectangle are transparent;
+- the gathered colour takes the water's shade and crest at the surface
+  opacity, and fills whatever the above-water texels leave uncovered.
+
+The quad is padded by the bounded offset (`underwaterMaxOffset` × 0.5, 1.32
+world pixels) plus one, so displaced edges are not clipped. Erased hulls, lava,
+Original and Water off take the ordinary commit. Shadows of submerged subjects
+and glow do not follow the displacement.
+
+**Verification and cost.** `checkUnderwaterDevicePixels` locks, on a device,
+that the marked part changes with the phase, the above-water quarter is
+byte-identical to the ordinary commit, every change lies inside the padded
+bound, an erased hull is untouched and the draw count is unchanged. In the
+battle benchmark (about ten underwater subjects a frame) device draws stayed
+at 120 and Submit, Record and DrawWork medians stayed inside run-to-run noise.
 
 ### 26.6 Aircraft and boat reflections
 
@@ -4635,7 +4689,7 @@ integers, so `internal/settings` remains a leaf.
 
 | Switch | Recorder gate | Executor gate |
 |---|---|---|
-| Water | the water phase (§26.1), the wake, foam and water-motion producers, and reflection site admission (§26.4) | the water surface and the screen-space reflections |
+| Water | the water phase (§26.1), the wake, foam and water-motion producers, and reflection site admission (§26.4) | the water surface, the screen-space reflections and the underwater refraction (§26.5) |
 | Lighting | none — lighting kinds are always recorded | the battle light pass and its ground pools (§23, §31) |
 | Finish | none — face material and normals are always recorded | the metallic glint (§23.7) and the metal/paint finishes (§29.1) |
 | Distortion | blast ring metadata (§25), the burning-feature heat tag (§27), and the fresh-wreck emission and shimmer (§28) | the blast rings and the vegetation heat shimmer |

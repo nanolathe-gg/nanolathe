@@ -420,7 +420,7 @@ func checkWaterSurfaceAdditions() error {
 		return err
 	}
 	defer full.Deallocate()
-	noGust, err := variant("smoothstep(0.30,0.80,noise((pattern-drift*22.0)*0.0055+vec2(3.0,7.0)))", "0.0*noise(world)")
+	noGust, err := variant("smoothstep(0.30,0.80,noise((pattern-drift*22.0)*0.0055+vec2(3.0,7.0)))", "0.0*noise(pattern)")
 	if err != nil {
 		return err
 	}

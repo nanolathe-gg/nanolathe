@@ -39,6 +39,9 @@ type ModelStats struct {
 	// ReflectionVertices is the bounded coastal reflection source geometry.
 	ReflectionVertices int
 	BlastWaves         int
+	// UnderwaterCommits counts subjects committed through the underwater
+	// refraction (§26.5).
+	UnderwaterCommits int
 	// HeatPlumes is all heat; WreckHeatPlumes is its wreck subset.
 	HeatPlumes      int
 	WreckHeatPlumes int

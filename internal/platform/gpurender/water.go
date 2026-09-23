@@ -427,35 +427,9 @@ const waterShaderSource = `//kage:unit pixels
 package main
 
 // Selected presentation values (GPU design §26.3).
-const patternSize = 0.5
-const surfaceOpacity = 0.5
-const currentScale = 3.0
-const rippleDeformation = 5.0
 const shoreFoamOpacity = 0.6
 const edgeFadePixels = 11.2
-const surfaceEnergy = 0.5
-
-func noise(p vec2) float {
- f := fract(p)
- // Time and the integrated wind drift scroll this lattice without bound, so
- // the hashed cell index has to be wrapped before it reaches the sine: an
- // unbounded argument loses all float precision over a long game and the
- // pattern degrades. Wrapping every corner on one period keeps the lattice
- // continuous instead of jumping — the field simply repeats every 289 cells,
- // which at the scales used here (0.0055 gust, 0.0161 warp, 0.07 broad,
- // 0.166 fine and 0.025 shore cells per world pixel) is about 1,700 world
- // pixels for the finest layer and tens of thousands for the coarse ones
- // (GPU design §26.3).
- a := floor(p)
- a = a-floor(a/289.0)*289.0
- b := a+vec2(1.0)
- b = b-floor(b/289.0)*289.0
- f = f*f*(3.0-2.0*f)
- h := vec4(dot(a,vec2(43.17,97.53)),dot(vec2(b.x,a.y),vec2(43.17,97.53)),dot(vec2(a.x,b.y),vec2(43.17,97.53)),dot(b,vec2(43.17,97.53)))
- h = fract(sin(h)*17341.23)
- return mix(mix(h.x,h.y,f.x),mix(h.z,h.w,f.x),f.y)
-}
-
+` + waterFieldSource + `
 func terrainLinear(p vec2) vec4 {
  a := floor(p-vec2(0.5))
  f := fract(p-vec2(0.5))
@@ -490,7 +464,6 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  pattern := world/patternSize
  shoreDistance := mask.y
  original := base
- strength := surfaceEnergy
  // Damp shoreline band (§32). Ground the water has just washed keeps a darker
  // tone, so dry pixels within about eight world pixels of water lose up to
  // twelve percent of their brightness, pulsing on the phase the shore foam
@@ -516,32 +489,13 @@ func Fragment(dst vec4, src vec2, color vec4, custom vec4) vec4 {
  // Current translates a fixed world-space lattice; it never rotates the
  // texture when wind changes. Three drift multiples give surface parallax.
  // The current is integrated from tidal speed and eased wind direction (§26).
- gust := smoothstep(0.30,0.80,noise((pattern-drift*22.0)*0.0055+vec2(3.0,7.0)))
- // Bounded in-place deformation keeps zero-tidal surfaces alive without
- // introducing a directional scroll unrelated to the current.
- p := (pattern-drift*6.0)*0.07
- a := noise(pattern*0.018+vec2(7.0,13.0))*6.283185
- b := noise(pattern*0.023+vec2(31.0,3.0))*6.283185
- warp := vec2(0.5)+vec2(sin(t*0.65+a),sin(t*0.83+b))*0.5*rippleDeformation
- p += (warp-vec2(0.5))*1.6
- broad := noise(p)
- // The fine lattice is rotated 37 degrees about the map origin — a fixed
- // rotation, applied once, not a wind-following one — so its cell rows never
- // line up with the broad lattice and the pair stops reading as a grid.
- q := (pattern-drift*11.0)*0.166
- q = vec2(q.x*0.7986-q.y*0.6018,q.x*0.6018+q.y*0.7986)+(warp-vec2(0.5))*0.9
- fine := noise(q)
- ripple := broad*0.65+fine*0.35-0.5
+ broad, fine, gust := waterField(pattern, drift, t)
  deep := smoothstep(0.05,0.55,mask.y)
- offset := vec2(broad-0.5,fine-0.5)*custom.y*(3.2+strength*2.4)*(0.7+0.5*gust)*deep*coverage
+ offset := waterOffset(broad, fine, gust)*custom.y*deep*coverage
  sample := clamp(screen+offset,vec2(0.5),imageSrc0Size()-vec2(0.5))
  // Subpixel filtering prevents nearest-neighbour displacement from snapping.
  warped := terrainLinear(sample)
- shade := 1.0+(ripple*(0.112+strength*0.08)*(0.7+0.5*gust)*deep-0.05*strength*gust*deep)
- // Moving highlights make the surface readable even when the painted detail
- // is too fine to reveal displacement. Their broken shape follows both fields.
- crest := smoothstep(0.10,0.32,ripple)
- result := mix(warped.rgb*shade,vec3(0.40,0.67,0.78),clamp(custom.w*crest*(0.04+strength*0.04)*deep,0,1))
+ result := waterShade(warped.rgb, broad, fine, gust, deep, custom.w)
  // Shore foam keeps the original world-space pattern and clock. Surface
  // current, in-place deformation, size and opacity must not change its pace
  // or base opacity. The common soft edge still fades it at the shoreline.

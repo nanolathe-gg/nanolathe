@@ -146,6 +146,7 @@ type Renderer struct {
 	// disc per battle light, drawn at the end of the terrain pass.
 	ground         groundLighting
 	aircraftShadow aircraftShadowLayer
+	underwater     underwaterLayer
 	water          waterLayer
 	reflections    waterReflections
 	distortion     worldDistortion

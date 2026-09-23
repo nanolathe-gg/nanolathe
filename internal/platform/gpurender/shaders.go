@@ -105,6 +105,9 @@ const (
 	// already relies on for two overlapping opaque writes (§11.2 "The scheduler").
 	// Custom0 set carries the smoke light modulation of §23 in the colour lanes.
 	sceneOpTint = 11
+	// sceneOpUnderwaterCommit is the underwater refraction's model commit
+	// (underwater.go, §26.5): the page in source 2, the water mask in source 3.
+	sceneOpUnderwaterCommit = 12
 )
 
 // The destination shader's op selector, carried in Custom3.
@@ -244,7 +247,7 @@ func scene2DShaderSource() string {
 	return `//kage:unit pixels
 
 package main
-` + modelQuadMapperSource + battleLightShaderSource + metalGlintShaderSource + modelFinishShaderSource + `
+` + modelQuadMapperSource + battleLightShaderSource + metalGlintShaderSource + modelFinishShaderSource + underwaterCommitSource + `
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 
@@ -366,6 +369,8 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			opacity = 0.5
 		}
 		return vec4(sum/4.0, cover/4.0)*opacity
+	} else if op == ` + fmt.Sprint(sceneOpUnderwaterCommit) + ` {
+		return underwaterCommit(srcPos, color, custom)
 	} else if op == ` + fmt.Sprint(sceneOpCopyColor) + ` {
 		// The fog run's read copy: the composite is already colour here, so it is
 		// copied through unchanged (§13.3).
