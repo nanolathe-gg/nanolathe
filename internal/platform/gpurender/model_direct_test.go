@@ -292,8 +292,8 @@ func directSubject(ax, ay, w, h int32, faces ...drawlist.ModelFace) *drawlist.Mo
 //     the body's texels under one pixel — the endpoint is tested once against
 //     the pixel's nearest key and draws whole, not as half a pixel; an
 //     endpoint under a higher body key is rejected.
-//   - Coverage: the far-edge fattening half-covers the pixel past a face's
-//     right edge, which resolves at half alpha over the field.
+//   - Coverage: a face covers its last column and row whole and nothing
+//     past its right or bottom edge [03 R-RAST-01 §1].
 func checkModelDirectDevicePixels() error {
 	if err := checkModelDirectDevicePixelsOn(false); err != nil {
 		return err
@@ -312,7 +312,7 @@ func checkModelDirectDevicePixelsOn(secondPage bool) error {
 		return err
 	}
 	// Packets carry retail's two-pixel margin past their faces
-	// [03 R-REN-03A §1], which is where the fattened far edge resolves.
+	// [03 R-REN-03A §1]; no face reaches into it.
 	a := directSubject(8, 8, 26, 18,
 		directFace(8, 0, 24, 16, 200, 20, 20),
 		directFace(0, 0, 16, 16, 100, 10, 10))
@@ -492,12 +492,16 @@ func checkModelDirectDevicePixelsOn(secondPage bool) error {
 			return err
 		}
 	}
-	// Coverage: the pixel past A's right edge is half covered by the fattened
-	// far edge and resolves at half alpha over the field.
-	if got, want := at(32, 12), (200+field)/2; got < want-4 || got > want+4 {
-		return fmt.Errorf("half-covered edge pixel reads %d, want about %d", got, want)
+	// Coverage: the span writer's right and bottom edges are exclusive
+	// [03 R-RAST-01 §1], so A's last column is whole and the pixel past its
+	// right edge, and the row below its bottom edge, are the field.
+	if err := exact("A's last column is whole", 31, 12, 200); err != nil {
+		return err
 	}
-	if err := exact("two past the edge is the field", 33, 12, field); err != nil {
+	if err := exact("the pixel past the right edge is the field", 32, 12, field); err != nil {
+		return err
+	}
+	if err := exact("the row below the bottom edge is the field", 28, 24, field); err != nil {
 		return err
 	}
 	return nil

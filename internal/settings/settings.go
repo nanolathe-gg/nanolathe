@@ -87,6 +87,11 @@ const (
 	// DefaultGlow is the Enhanced glow layer switch, a Nanolathe option with no
 	// retail bit: on until the player turns it off (DESIGN_GPU_RENDERER §19).
 	DefaultGlow = 1
+	// DefaultGlowStrength and MaxGlowStrength bound the glow layer's strength,
+	// a percentage of the tuned halo: 100 is the default look, 0 draws no glow
+	// and 200 is the most the preference stores (DESIGN_GPU_RENDERER §19.4).
+	DefaultGlowStrength = 100
+	MaxGlowStrength     = 200
 	// DefaultEffectSwitch is the shared default of the five Enhanced effect
 	// switches in the presentation block (DESIGN_GPU_RENDERER §30). Like Glow
 	// they have no retail bit and start on.
@@ -574,6 +579,11 @@ type Display struct {
 	// retail bit and is persisted only here; a file that omits it keeps the
 	// default, because the loader decodes over the defaults.
 	Glow int `json:"glow"`
+	// GlowStrength is the glow layer's strength as a percentage of the tuned
+	// halo, 0..MaxGlowStrength, applied while Glow is on. It is a separate key
+	// rather than a meaning of `glow` because `glow` is a stored on/off value
+	// its options button and chat command write as 0 or 1.
+	GlowStrength int `json:"glowStrength"`
 	// Gamma retains the signed command integer; the slider writes 0..20.
 	// Load alone maps 10 to 12 [07 R-FE-01 §11][07 R-CAM-01 §6].
 	Gamma int `json:"gamma"`
@@ -592,6 +602,7 @@ func DefaultDisplay() Display {
 		Shading:        DefaultShading,
 		DitheredFog:    DefaultDitheredFog,
 		Glow:           DefaultGlow,
+		GlowStrength:   DefaultGlowStrength,
 		Gamma:          DefaultGamma,
 	}
 }
@@ -618,6 +629,10 @@ func (d *Display) Normalize() {
 	if d.Glow < 0 {
 		d.Glow = DefaultGlow
 	}
+	if d.GlowStrength < 0 {
+		d.GlowStrength = DefaultGlowStrength
+	}
+	d.GlowStrength = min(d.GlowStrength, MaxGlowStrength)
 	d.Gamma = int(int32(d.Gamma)) // retain the signed DWORD [07 R-FE-01 §11]
 }
 

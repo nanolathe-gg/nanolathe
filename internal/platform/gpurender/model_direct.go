@@ -82,8 +82,9 @@ const (
 	modelDirectAtlasW   = 4096
 	modelDirectAtlasH   = 4096
 	modelDirectMaxPages = 2
-	// modelDirectMargin is the atlas margin around a region in 2× texels: the
-	// fattened corners reach one texel past the subject's box.
+	// modelDirectMargin is the atlas margin around a region in 2× texels. The
+	// body's biased corners stay inside the subject's box; the margin keeps a
+	// neighbour's texels out of the commit's two-by-two resolve.
 	modelDirectMargin = 2
 	// modelDirectParamMaxRows bounds the lane's parameter image: 1024 texels a
 	// row, twelve per entry, holding every mapped four-corner face and the
@@ -91,11 +92,23 @@ const (
 	// frame past the bound draws its remaining faces linearly.
 	modelDirectParamMaxRows = 2048
 	modelDirectParamCap     = modelDirectParamMaxRows * modelQuadParamWidth / modelQuadTexels
-	// modelDirectFatten is how far a corner is pushed from its face's centroid,
-	// in atlas texels: retail's span writer fills its rows inclusively, so
-	// touching faces overlap by a pixel, and the device's centre-sample rule
-	// would otherwise leave hairline cracks between them.
+	// modelDirectFatten is how far the water reflection pushes a face corner
+	// from its centroid, in atlas texels (water_reflections.go). The body
+	// raster no longer fattens: see modelDirectSampleBias.
 	modelDirectFatten = 1.0
+	// modelDirectSampleBias moves every body corner half a texel right and
+	// down on the raster it is drawn into. The span writer covers the texel
+	// whose top-left corner (col, row) lies inside the ring — left and top
+	// inclusive, right and bottom exclusive, so faces that share an edge
+	// neither overlap nor leave a gap [03 R-RAST-01 §1] — while the device
+	// samples texel centres. The bias makes the device's centre test the span
+	// writer's corner test, so a face covers exactly the texels whose two-chain
+	// mapping (model_shaders.go) has a span. Pushing the far corners a whole
+	// texel instead, as the lane once did, covered one texel row and column
+	// past the ring, where the mapping has no span and falls back to the top
+	// corner's lanes: a flat line of one texel under and right of every
+	// model's silhouette.
+	modelDirectSampleBias = 0.5
 )
 
 // Face modes in Custom0 of the colour pass and the fallback. A mapped mode
@@ -682,7 +695,7 @@ func (r *Renderer) placeModelDirectShadow(sg *drawlist.ModelGeometry) {
 }
 
 // allocRegion places a region for a world rectangle: twice its size plus the
-// margin that keeps the fattened corners inside it.
+// margin that keeps neighbouring regions apart.
 func (d *modelDirectLane) allocRegion(bounds image.Rectangle) (modelDirectRegion, bool) {
 	if bounds.Empty() {
 		return modelDirectRegion{}, false
@@ -952,9 +965,9 @@ func (r *Renderer) appendLaneFace(f *drawlist.ModelFace, index int, slot modelTe
 // body index keeps across a subject's revisions (model_retain.go): the slot
 // origin its corners' texel coordinates are offset by, and the ColorA/ColorB
 // lanes in both forms — the slot for a mapped face, the face's texel bounds
-// for a linear textured one, which the fragment clamps to because a
-// fattened corner's interpolated texel can reach one texel past the authored
-// ring into a neighbouring texture on the page. The bounds are the texture's
+// for a linear textured one, which the fragment clamps to so that a lane
+// interpolated to a covered texel's edge never reaches one texel past the
+// authored ring into a neighbouring texture on the page. The bounds are the texture's
 // own dimensions in corner order, as the recorder authors them.
 type modelFaceTex struct {
 	x, y       int32
@@ -996,7 +1009,7 @@ func (d *modelDirectLane) colourRun(imgs [2]*ebiten.Image, need int) *modelDirec
 // the shadow commits read for COVERAGE, and for KEYS when a clip applies
 // [03 R-REN-03D §1]. Its colour is never sampled — the silhouette composites
 // the half-colour of index 0 — so the face carries only what decides whether a
-// texel is covered: its fattened corners, its key lane, its flat index (index 1
+// texel is covered: its biased corners, its key lane, its flat index (index 1
 // is the composition transparent one and leaves a hole, as it does in the group
 // image) or its texture's texel, and the subject's verdict entry, whose reveal
 // and clip erases are part of the finished image. It skips the shade row, the
@@ -1023,13 +1036,6 @@ func (r *Renderer) appendSoloFace(f *drawlist.ModelFace, slot modelTextureSlot, 
 		r.modelStats.DirectCulled++
 		return
 	}
-	var cx, cy float32
-	for _, v := range f.Vertices {
-		cx += float32(v.X)
-		cy += float32(v.Y)
-	}
-	cx /= float32(n)
-	cy /= float32(n)
 	// A textured face keeps the linear texel path, clamped to its own authored
 	// bounds, because a transparent texel is a hole in the finished image and so
 	// a hole in its shadow.
@@ -1048,7 +1054,7 @@ func (r *Renderer) appendSoloFace(f *drawlist.ModelFace, slot modelTextureSlot, 
 	base := uint32(len(d.verts)) - uint32(run.vOff)
 	for _, v := range f.Vertices {
 		d.verts = append(d.verts, ebiten.Vertex{
-			DstX: ox + fattenBy(float32(v.X), cx, s, modelDirectFatten), DstY: oy + fattenBy(float32(v.Y), cy, s, modelDirectFatten),
+			DstX: ox + modelSamplePos(v.X, s), DstY: oy + modelSamplePos(v.Y, s),
 			SrcX: float32(slot.x + int(v.U)), SrcY: float32(slot.y + int(v.V)),
 			ColorR: 1, ColorG: float32(f.Color), ColorB: colorB, ColorA: colorA,
 			Custom0: float32(mode), Custom1: d.laneKey(v.Key), Custom2: float32(entry), Custom3: 0,
@@ -1188,7 +1194,7 @@ func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, o
 			custom1 = d.fallbackOpacity
 		}
 		d.verts = append(d.verts, ebiten.Vertex{
-			DstX: ox + fattenBy(float32(v.X), cx, s, fat), DstY: oy + fattenBy(float32(v.Y), cy, s, fat),
+			DstX: ox + modelSamplePos(v.X, s), DstY: oy + modelSamplePos(v.Y, s),
 			SrcX: float32(tex.x + v.U), SrcY: float32(tex.y + v.V),
 			ColorR: k, ColorG: colorG, ColorB: colorB,
 			ColorA:  colorA,
@@ -1234,10 +1240,17 @@ func (r *Renderer) appendDirectGPUFace(f modelGPUFace, ox, oy, s float32, entry 
 	r.modelStats.DirectFaces++
 }
 
+// modelSamplePos is a corner coordinate scaled about the origin and biased
+// onto the span writer's sampling grid (modelDirectSampleBias). The bias is in
+// the texels of the raster being drawn, whatever the scale, because the
+// two-chain mapping evaluates the scaled corners at that raster's texels.
+func modelSamplePos(v int32, s float32) float32 {
+	return float32(v)*s + modelDirectSampleBias
+}
+
 // fattenBy scales a corner coordinate about the origin and pushes a corner on
-// the far side of the face centroid fat texels further: the span writer's
-// inclusive right and bottom ends, and nothing on the near side, so the
-// silhouette grows the way retail's does instead of shifting.
+// the far side of the face centroid fat texels further, and nothing on the
+// near side. Only the water reflection's geometry uses it now.
 func fattenBy(v, c, s, fat float32) float32 {
 	v *= s
 	c *= s

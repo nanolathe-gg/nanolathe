@@ -1,17 +1,21 @@
 package gpurender
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/png"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // The blur kernel is a normalized Gaussian: the centre plus twice each
@@ -137,6 +141,54 @@ func TestGlowNeedsPaletteAndSurface(t *testing.T) {
 	}
 }
 
+// The strength percentage reaches the composite through the two octave
+// weights alone: 100 percent is the tuned look, the weights scale linearly with
+// the percentage up to its cap, and 0 turns the layer off so no source batches
+// and the resolve spends no pass (§19.4).
+func TestGlowStrengthScalesOctaveWeightsAndZeroDisables(t *testing.T) {
+	r := &Renderer{}
+	r.tables.atlas = &ebiten.Image{}
+	r.surfaces[0] = &ebiten.Image{}
+	r.SetGlow(true)
+	for _, tc := range []struct {
+		percent    int
+		near, far  float32
+		wantActive bool
+	}{
+		{GlowStrengthDefault, glowNearWeight, glowFarWeight, true},
+		{50, glowNearWeight / 2, glowFarWeight / 2, true},
+		{GlowStrengthMax, glowNearWeight * 2, glowFarWeight * 2, true},
+		{GlowStrengthMax + 100, glowNearWeight * 2, glowFarWeight * 2, true},
+		{0, 0, 0, false},
+		{-20, 0, 0, false},
+	} {
+		r.SetGlowStrength(tc.percent)
+		near, far := r.glow.octaveWeights()
+		if math.Abs(float64(near-tc.near)) > 1e-6 || math.Abs(float64(far-tc.far)) > 1e-6 {
+			t.Fatalf("strength %d weights near %v far %v, want %v and %v", tc.percent, near, far, tc.near, tc.far)
+		}
+		if got := r.glowActive(); got != tc.wantActive {
+			t.Fatalf("strength %d glowActive %v, want %v", tc.percent, got, tc.wantActive)
+		}
+	}
+	// At 0 an emissive stroke batches nothing, and a batch left from before the
+	// strength dropped is not resolved: no shader is compiled, no pass counted.
+	r.SetGlowStrength(GlowStrengthDefault)
+	r.glowLine(drawlist.Line{X0: 1, Y0: 1, X1: 9, Y1: 1, Index: 255, Emissive: true})
+	if r.glow.quads != 1 {
+		t.Fatalf("at the default strength a stroke batched %d quads, want 1", r.glow.quads)
+	}
+	r.SetGlowStrength(0)
+	r.glowLine(drawlist.Line{X0: 1, Y0: 3, X1: 9, Y1: 3, Index: 255, Emissive: true})
+	if r.glow.quads != 1 {
+		t.Fatalf("at strength 0 a stroke still batched (%d quads)", r.glow.quads)
+	}
+	r.resolveGlow()
+	if r.glow.compiled || r.modelStats.GlowPasses != 0 {
+		t.Fatalf("strength 0 resolved the batch: compiled %v, %d passes", r.glow.compiled, r.modelStats.GlowPasses)
+	}
+}
+
 // glowFixtureList is one frame: a flat dark field with one bright emissive
 // stroke across its middle, inside a world region at the rest factor.
 func glowFixtureList(w, h int32, field, bright uint8) drawlist.List {
@@ -198,6 +250,16 @@ func checkGlowDevicePixels() error {
 	}
 	if r.modelStats.GlowQuads != 1 || r.modelStats.GlowPasses == 0 {
 		return fmt.Errorf("glow on counted %d quads and %d passes, want 1 quad and a resolve", r.modelStats.GlowQuads, r.modelStats.GlowPasses)
+	}
+	// Strength 0 is off: the frame is the exact frame with the switch off.
+	r.SetGlowStrength(0)
+	zero, err := read(true)
+	r.SetGlowStrength(GlowStrengthDefault)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(zero, off) {
+		return fmt.Errorf("glow at strength 0 differs from glow off")
 	}
 	at := func(x, y int) int { return int(on[(y*w+x)*4]) }
 	if err := checkExactIndex("the stroke itself with glow on", on, (32*w+64)*4, &pal, bright); err != nil {
@@ -300,5 +362,30 @@ func TestGlowDeviceFixture(t *testing.T) {
 	}
 	if deviceFixtureResult != nil {
 		t.Fatalf("device fixture loop: %v", deviceFixtureResult)
+	}
+}
+
+// A stored display.glowStrength of 50 reaches the renderer the way every host
+// hands it over: the settings loader repairs it, the client carries it, and the
+// executor site copies the client's value before Execute, which halves both
+// octave weights (§19.4).
+func TestGlowStrengthSettingReachesRendererThroughClient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	body := `{"version":` + strconv.Itoa(settings.FileVersion) + `,"display":{"glowStrength":50}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	loaded, err := settings.LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	cl := &client.Client{}
+	cl.SetGlowStrength(loaded.Display.GlowStrength)
+	r := &Renderer{}
+	r.SetGlowStrength(cl.GlowStrength())
+	near, far := r.glow.octaveWeights()
+	if near != glowNearWeight/2 || far != glowFarWeight/2 {
+		t.Fatalf("a stored strength of 50 gave octave weights %v and %v, want %v and %v",
+			near, far, glowNearWeight/2, glowFarWeight/2)
 	}
 }

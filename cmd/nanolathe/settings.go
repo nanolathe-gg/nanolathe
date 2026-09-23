@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
+	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
@@ -31,7 +32,19 @@ func (g *gameShell) attachSettings() {
 	// The display-option bits reach the presentation as soon as they are
 	// read; retail's own loader installs them the same way [07 R-FE-01 §6].
 	g.applyRetailVisualOptions(clPtr)
+	applyGlowStrength(clPtr, g.display)
 	applyGammaOption(clPtr, g.display.Gamma)
+}
+
+// applyGlowStrength hands the persisted glow strength to a client, whose
+// executor sites copy it to the renderer before every frame
+// (DESIGN_GPU_RENDERER §19.4). It is a host preference beside the glow switch
+// and never reaches the simulation [I6].
+func applyGlowStrength(cl *client.Client, d settings.Display) {
+	if cl == nil {
+		return
+	}
+	cl.SetGlowStrength(d.GlowStrength)
 }
 
 // applySettings installs a loaded block over the shell's default setup.

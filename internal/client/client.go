@@ -397,6 +397,10 @@ type Client struct {
 	// (docs/DESIGN_GPU_RENDERER.md §19). It is a Nanolathe display option with
 	// no retail bit; the settings file persists it as display.glow.
 	glow bool
+	// glowStrength is the glow layer's strength as a percentage of its tuned
+	// halo (DESIGN_GPU_RENDERER §19.4); the settings file persists it as
+	// display.glowStrength and the executor clamps it.
+	glowStrength int
 	// effects is the player's Enhanced effect selection
 	// (docs/DESIGN_GPU_RENDERER.md §30), persisted in the presentation block.
 	// The recorder gates the producers that cost work to record; the executor
@@ -531,6 +535,9 @@ func New(opts Options) (*Client, error) {
 		// The glow layer is on until the player turns it off; it costs nothing
 		// under the classic executor, which never sees it (§19).
 		glow: true,
+		// The glow strength starts at the tuned halo: 100 percent, the
+		// renderer's GlowStrengthDefault and settings.DefaultGlowStrength.
+		glowStrength: 100,
 		// Every Enhanced effect is on until the player turns it off (§30).
 		effects: drawlist.AllEffects(),
 		// Restore-defaults sets the Shading bit, so shading is on unless the
@@ -991,6 +998,26 @@ func (c *Client) SetGlow(v bool) {
 
 // Glow returns the Enhanced glow layer switch.
 func (c *Client) Glow() bool { return c != nil && c.glow }
+
+// SetGlowStrength selects the glow layer's strength as a percentage of its tuned
+// halo (docs/DESIGN_GPU_RENDERER.md §19.4). Like the switch it only reaches the
+// executor, through GlowStrength, and a changed strength is a different paused
+// world raster (§13.10).
+func (c *Client) SetGlowStrength(percent int) {
+	if c == nil || c.glowStrength == percent {
+		return
+	}
+	c.glowStrength = percent
+	c.pausedWorldRevision++
+}
+
+// GlowStrength returns the glow layer's strength percentage.
+func (c *Client) GlowStrength() int {
+	if c == nil {
+		return 0
+	}
+	return c.glowStrength
+}
 
 // SetEffects selects the player's Enhanced effects (§30). A changed selection
 // retires the transient histories the same way an executor swap does: the

@@ -211,6 +211,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	// defaults to (§30). The host applies the player's selection through the
 	// same single entry point on its first present.
 	r.SetEffects(drawlist.AllEffects())
+	// The glow layer starts at its default strength, which is also the
+	// player preference's default (§19.4).
+	r.SetGlowStrength(GlowStrengthDefault)
 	if pal != nil {
 		r.displayPalette = pal.Base
 	}

@@ -45,7 +45,7 @@ func (r *Renderer) mergeModelGroups() {
 	m := &d.groups
 	for _, merge := range m.merges {
 		parent, child := merge.parent, merge.child
-		// Touch only the child's box (including the fattened raster margin).
+		// Touch only the child's box (including the atlas margin).
 		// This is also the source guard against reading a neighbouring atlas slot.
 		box := child.bounds.Inset(-modelDirectMargin / 2).Intersect(parent.bounds.Inset(-modelDirectMargin / 2))
 		if box.Empty() {

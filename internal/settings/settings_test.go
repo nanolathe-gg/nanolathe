@@ -403,3 +403,33 @@ func TestSavePreservesUnrecognizedSettings(t *testing.T) {
 		}
 	}
 }
+
+// The glow strength is a percentage beside the glow switch: a file that omits
+// it keeps the default, a stored 0 is kept (no glow), and a hand-edited value
+// is repaired into 0..MaxGlowStrength (DESIGN_GPU_RENDERER §19.4).
+func TestGlowStrengthLoadsAndClamps(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"absent", `{}`, DefaultGlowStrength},
+		{"zero kept", `{"glowStrength":0}`, 0},
+		{"half", `{"glowStrength":50}`, 50},
+		{"capped", `{"glowStrength":350}`, MaxGlowStrength},
+		{"negative repaired", `{"glowStrength":-4}`, DefaultGlowStrength},
+	} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		body := `{"version":` + strconv.Itoa(FileVersion) + `,"display":` + tc.body + `}`
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		got, err := LoadFrom(path)
+		if err != nil {
+			t.Fatalf("%s: LoadFrom: %v", tc.name, err)
+		}
+		if got.Display.GlowStrength != tc.want || got.Display.Glow != DefaultGlow {
+			t.Errorf("%s: glowStrength %d glow %d, want %d and the default switch", tc.name, got.Display.GlowStrength, got.Display.Glow, tc.want)
+		}
+	}
+}

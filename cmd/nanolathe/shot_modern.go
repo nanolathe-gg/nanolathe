@@ -165,6 +165,7 @@ func (g *modernShotGame) Draw(screen *ebiten.Image) {
 	}
 	g.gpu.SetDisplayPalette(g.cl.DisplayPalette())
 	g.gpu.SetGlow(g.cl.Glow())
+	g.gpu.SetGlowStrength(g.cl.GlowStrength())
 	g.gpu.SetEffects(g.cl.Effects())
 	img := g.gpu.Execute(g.list, g.w, g.h)
 	if img == nil {

@@ -3228,14 +3228,20 @@ planes are unmanaged"). Steady-state frames allocate no options, no uniform map
 and no geometry here.
 
 The knobs (`glowLineWidth` 4 world px, `glowGain` 1, `glowThreshold` 0.65,
-`glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.65,
-`glowFarWeight` 0.5, `glowSigma` 2 over `glowTapCount` 4 taps a side,
+`glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.325,
+`glowFarWeight` 0.25, `glowSigma` 2 over `glowTapCount` 4 taps a side,
 `glowNearSigmaWorld` = `glowSigma` × `glowOctaveNear` = 8 world px, which is the
 eight framebuffer pixels the layer was tuned at when the view scale is 1) are
 presentation choices tuned by eye on
 the battle benchmark capture; a first pass at 0.8/0.5 with an additive composite
 and no sprite gain blew every fireball to a white blob, which is the case the
-screen blend and the sprite threshold exist for.
+screen blend and the sprite threshold exist for. The octave weights were 0.65
+and 0.5 until a play-test on a naval map (2026-09-22) found the halo washing
+out bright grey hulls and a shipyard's nanolathe emitters; both were halved,
+which halves the halo's energy and keeps its size and colour. On the staged
+naval and factory film scenes the mean light the layer adds to the frame fell
+from 0.52 to 0.26 and from 1.00 to 0.50 levels per channel. A strength of 200
+percent (§19.4) reproduces the earlier look exactly.
 
 ### 19.4 The switch
 
@@ -3248,6 +3254,44 @@ next to the display palette and the effect selection. A settings file that omits
 the key keeps the default because the loader decodes over the defaults
 [02 "Settings"]. Off, no source appends and the resolve is a no-op. It is
 deliberately **not** one of the five `Effects` families of §30.
+
+**Strength.** `settings.Display.GlowStrength` (`display.glowStrength`, default
+100, stored 0..200) is the halo's strength as a percentage of the tuned look,
+applied while the switch is on. `Renderer.SetGlowStrength(percent)` clamps it to
+`0..GlowStrengthMax` (200) and multiplies both octave weights by
+`percent / GlowStrengthDefault`; that is the only value it reaches, so the
+halo's size, colour and threshold never change with it. 0 is off exactly as the
+switch is: no source appends, the resolve spends no pass, and the frame is the
+frame with the switch off. `New` starts at `GlowStrengthDefault`, so a host that
+never sets the strength draws the default look. It is a separate key rather
+than a new meaning of `glow` because `glow` is stored as 0 or 1 by its options
+button, the `+glow` command and every file already written; read as a
+percentage those would be a 1 percent halo. The loader repairs a negative value
+to the default and caps a larger one at 200.
+
+A content pack's strength is to compose with the player's as a product of
+percentages, `pack × player / 100`, clamped to 0..200, so a pack sets the
+baseline and the player scales it. The pack's value is authored beside the
+material annotation of §29.1 as `glow=<percent>;` in an `[effects]` section of
+`nanolathe/materials.tdf`.
+
+The host carries it the way it carries the switch: `Client.SetGlowStrength` /
+`Client.GlowStrength` beside `Client.Glow` (a changed strength advances the
+paused-world revision, as the switch does), and every executor site that copies
+`Client.Glow` to `Renderer.SetGlow` — the window, the paused world, `--shot`,
+`--shot-debris` and `--film` — copies the strength beside it. The settings
+loader (`attachSettings`) hands `display.glowStrength` to a client that already
+exists when the file is read. The battle
+benchmark keeps the renderer's default strength, so two runs measure the same
+work. A film builds its own client and draws the default strength, so footage
+stays reproducible whatever the player's preference.
+
+Owed: `applyVisualOptions` copying `display.glowStrength` into the client, which
+is what reaches the windowed shell's client (created after the settings load)
+and the `--shot` routes; the `[effects]` parse beside the `[materials]` one in
+`internal/client/model_finish.go` (whose parser today rejects a file without a
+`[materials]` section); and an options-page control. Until the first lands, the
+windowed game and `--shot` draw the default strength.
 
 ### 19.5 Verification
 
@@ -3448,7 +3492,7 @@ sprites and terrain are untouched, as terrain is authored to be drawn as is.
 | back faces culled by ring winding | same rule, same sign |
 | SHD row lookup per texel | `0.06875 × row` interpolated across the face (§13.2); the table's nearest-index rounding is the visible difference |
 | textured quad by two-chain span mapping | the same mapping, evaluated per fragment from the parameter image (§11.2 "Textured quads without strips"); flat quads mapped the same way for their key and shade |
-| inclusive span fill | corners on the far side of the face centroid pushed one 2× texel; a linear textured face clamps its texel to its authored bounds |
+| span fill inclusive on the left and top, exclusive on the right and bottom [03 R-RAST-01 §1] | body corners biased half a texel of the raster being drawn, so the device's centre test equals the span writer's corner test and a face covers exactly the texels its two-chain mapping has a span for (an earlier one-texel fattening drew a flat line under and right of every silhouette); a linear textured face still clamps its texel to its authored bounds |
 | composition transparent index 1 | dropped at the fragment |
 | reveal, waterline, Digger over the 1× image after the resolve | the same verdicts per texel on the pixel's nearest-sampled key |
 | outline endpoints written at 1× after the resolve, key-tested once | native rows drawn as pixel blocks, key-tested once against the pixel's key |
@@ -4419,6 +4463,11 @@ case; one that cannot be read is reported in the standard diagnostic shape and
 leaves the embedded table in force, because presentation art never fails a load.
 The retail executable carries no material classification for model textures, and
 nothing here reaches authoritative state.
+
+The same file is where a content pack is to set the glow layer's strength
+(§19.4): an `[effects]` section with `glow=<percent>;`, 0..200, default 100,
+composed with the player's `display.glowStrength` as a product of percentages.
+Its parse is owed with the rest of the strength's host wiring (§19.4).
 
 `ModelFace.Material` carries the annotation, resolved **once at texture bind**
 rather than per face: `resolveModelTexture` stamps the annotation and the

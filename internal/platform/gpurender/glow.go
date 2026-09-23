@@ -67,10 +67,19 @@ const (
 	// 1.0 for the brightest LHT rows.
 	glowLightGain = 0.35
 	// glowNearWeight and glowFarWeight are the two blurred octaves' shares of
-	// the composite: the quarter-resolution one is the tight core, the eighth
-	// the wide falloff.
-	glowNearWeight = 0.65
-	glowFarWeight  = 0.5
+	// the composite at the default strength: the quarter-resolution one is the
+	// tight core, the eighth the wide falloff. They were 0.65 and 0.5 until a
+	// play-test found the halo washing out bright hulls and the shipyard's
+	// nanolathe emitters; halving both halves the halo's energy and keeps its
+	// shape, so a strength of 200 percent reproduces the earlier look exactly.
+	glowNearWeight = 0.325
+	glowFarWeight  = 0.25
+	// GlowStrengthDefault and GlowStrengthMax are the strength percentages of
+	// SetGlowStrength: 100 is the tuned look above and 200 the most a
+	// preference or a content pack may ask for. The percentage scales both
+	// octaves' weights, and 0 turns the layer off.
+	GlowStrengthDefault = 100
+	GlowStrengthMax     = 200
 	// glowTapCount is the number of taps on each side of the centre of the
 	// separable blur, and glowSigma its standard deviation in steps of the tap
 	// spacing the blur is drawn with.
@@ -125,6 +134,10 @@ type glowLayer struct {
 	// on is the display switch (Renderer.SetGlow); off, no source appends and
 	// the resolve is a no-op.
 	on bool
+	// strength is the halo's scale as a fraction of the default look
+	// (Renderer.SetGlowStrength): 1 at 100 percent. Zero is off exactly as the
+	// switch is, so a strength of 0 costs nothing.
+	strength float32
 	// resolved is set once this frame's resolve has run, so a frame with both
 	// a fog composite and a world-region close resolves once.
 	resolved bool
@@ -167,10 +180,36 @@ func (r *Renderer) SetGlow(on bool) {
 	r.glow.on = on
 }
 
+// SetGlowStrength sets the glow layer's strength as a percentage of the default
+// look (docs/DESIGN_GPU_RENDERER.md §19.4): GlowStrengthDefault is the tuned
+// halo, 0 is off exactly as SetGlow(false) is, and the value is clamped to
+// 0..GlowStrengthMax. It scales the two octaves' weights and nothing else, so
+// the halo keeps its size and colour and only its energy changes. Like the
+// switch it is read as the frame replays and takes effect on the next Execute.
+func (r *Renderer) SetGlowStrength(percent int) {
+	if r == nil {
+		return
+	}
+	r.glow.strength = glowStrengthScale(percent)
+}
+
+// glowStrengthScale is a strength percentage as the fraction of the default look
+// the octave weights are scaled by.
+func glowStrengthScale(percent int) float32 {
+	return float32(min(max(percent, 0), GlowStrengthMax)) / GlowStrengthDefault
+}
+
+// octaveWeights are the two blurred octaves' shares of the composite at the
+// layer's strength: the only values the strength reaches.
+func (g *glowLayer) octaveWeights() (near, far float32) {
+	return glowNearWeight * g.strength, glowFarWeight * g.strength
+}
+
 // glowActive reports whether sources should append to the batch: the switch is
-// on and a palette (the table atlas) is installed to resolve colours through.
+// on, the strength is above zero, and a palette (the table atlas) is installed
+// to resolve colours through.
 func (r *Renderer) glowActive() bool {
-	return r.glow.on && r.tables.atlas != nil && r.surfaces[0] != nil
+	return r.glow.on && r.glow.strength > 0 && r.tables.atlas != nil && r.surfaces[0] != nil
 }
 
 // glowViewScale is the frame's screen pixels per world pixel: the record step
@@ -367,7 +406,7 @@ func (r *Renderer) resolveGlow() {
 	}
 	g := &r.glow
 	g.resolved = true
-	if !g.on || g.quads == 0 || r.surfaces[0] == nil {
+	if !g.on || g.strength <= 0 || g.quads == 0 || r.surfaces[0] == nil {
 		return
 	}
 	if !g.compiled {
@@ -430,8 +469,9 @@ func (r *Renderer) resolveGlow() {
 
 	// 3. Add the octaves back, magnified with linear filtering so the blur's
 	// texels do not show as blocks.
-	r.glowAdd(r.surfaces[0], g.quarter, glowOctaveNear, glowNearWeight)
-	r.glowAdd(r.surfaces[0], g.eighth, glowOctaveFar, glowFarWeight)
+	near, far := g.octaveWeights()
+	r.glowAdd(r.surfaces[0], g.quarter, glowOctaveNear, near)
+	r.glowAdd(r.surfaces[0], g.eighth, glowOctaveFar, far)
 	r.modelStats.GlowPasses += 9
 	g.runs = g.runs[:0]
 	g.verts = g.verts[:0]

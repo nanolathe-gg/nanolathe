@@ -466,6 +466,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		}
 		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 		a.gpu.SetGlow(a.c.Glow())
+		a.gpu.SetGlowStrength(a.c.GlowStrength())
 		a.gpu.SetEffects(a.c.Effects())
 		// Place only the cursor from a fresh host sample after the recorder
 		// joins. Command input remains on the ordinary host step [07 §8].
