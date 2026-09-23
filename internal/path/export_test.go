@@ -67,13 +67,19 @@ func straightRunLen(ns *NodeStore, id NodeID) int {
 }
 
 // len reports how many cells the table holds. The map answers with its own
-// length; the dense table counts what this lending wrote, because its slots
-// outlive the search that wrote them.
+// length; the dense table counts the slots this lending's generation stamped,
+// because its slots outlive the search that wrote them.
 func (ix *cellIndex) len() int {
 	if ix.ws == nil {
 		return len(ix.m)
 	}
-	return ix.n + len(ix.overflow)
+	n := len(ix.overflow)
+	for _, s := range ix.ws.slots {
+		if s.gen == ix.gen {
+			n++
+		}
+	}
+	return n
 }
 
 // NeighborsForDir returns the centered fan by value, for tests that state its

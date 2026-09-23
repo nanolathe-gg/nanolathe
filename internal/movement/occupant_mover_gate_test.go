@@ -59,8 +59,8 @@ func TestOccupantAgeGateBuildingBlocksAtEveryWatermark(t *testing.T) {
 
 	// A fresh commit tick clears the mover; it cannot clear the building,
 	// because the building never reaches the tick compare at all.
-	l.commits[mover] = 25
-	l.commits[building] = 25
+	l.NoteCommit(mover, 25)
+	l.NoteCommit(building, 25)
 	if got := l.classify(3, 3); got != LayerClear {
 		t.Fatalf("fresh mover occupant = %d, want clear", got)
 	}

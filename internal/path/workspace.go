@@ -128,7 +128,6 @@ func (w *Workspace) slot(c Cell) (int, bool) {
 type cellIndex struct {
 	ws       *Workspace
 	gen      uint32
-	n        int // cells this lending has written, workspace storage only
 	m        map[Cell]entry
 	overflow map[Cell]entry
 }
@@ -142,7 +141,7 @@ func (ix *cellIndex) bindWorkspace(ws *Workspace, bounds Rect, hasBounds bool) {
 	if !ws.lend(bounds, hasBounds) {
 		return
 	}
-	ix.ws, ix.gen, ix.m, ix.overflow, ix.n = ws, ws.gen, nil, nil, 0
+	ix.ws, ix.gen, ix.m, ix.overflow = ws, ws.gen, nil, nil
 }
 
 // release hands the workspace back and leaves the index on a fresh map, so an
@@ -152,7 +151,7 @@ func (ix *cellIndex) release() {
 		return
 	}
 	ix.ws.release()
-	ix.ws, ix.overflow, ix.n = nil, nil, 0
+	ix.ws, ix.overflow = nil, nil
 	ix.m = make(map[Cell]entry)
 }
 
@@ -166,35 +165,71 @@ func (ix *cellIndex) reset() {
 			ix.ws.gen = 1
 		}
 		ix.gen = ix.ws.gen
-		ix.overflow, ix.n = nil, 0
+		ix.overflow = nil
 		return
 	}
 	ix.m = make(map[Cell]entry)
 }
 
-func (ix *cellIndex) get(c Cell) entry {
-	if ix.ws == nil {
-		return ix.m[c]
+func (ix *cellIndex) get(c Cell) entry { return ix.load(ix.slotOf(c), c) }
+
+func (ix *cellIndex) set(c Cell, e entry) { ix.store(ix.slotOf(c), c, e) }
+
+// slotOf is the cell's table slot, or nil when the index keeps the cell in a
+// map (no workspace, or a cell the table does not address). The expansion
+// resolves a neighbour's slot once and then reads and writes it through load
+// and store, instead of recomputing the address on every access. A slot
+// pointer stays valid for the whole lending: the table is sized when it is
+// lent and never reallocated while a search holds it.
+//
+// The unsigned comparison is the same test as slot's two signed ones: a
+// negative offset converts to a value no width reaches.
+func (ix *cellIndex) slotOf(c Cell) *cellSlot {
+	ws := ix.ws
+	if ws == nil {
+		return nil
 	}
-	if i, ok := ix.ws.slot(c); ok {
-		if s := ix.ws.slots[i]; s.gen == ix.gen {
-			return s.e
+	x, z := uint32(c.X-ws.origin.X), uint32(c.Z-ws.origin.Z)
+	if x >= uint32(ws.w) || z >= uint32(ws.h) {
+		return nil
+	}
+	return &ws.slots[int(z)*int(ws.w)+int(x)]
+}
+
+// load reads the cell's entry through its resolved slot. A slot another
+// generation wrote reads as the zero entry, the answer a map read of an absent
+// key gave.
+func (ix *cellIndex) load(sl *cellSlot, c Cell) entry {
+	if sl != nil {
+		if sl.gen == ix.gen {
+			return sl.e
 		}
 		return entry{}
+	}
+	return ix.getMap(c)
+}
+
+// store writes the cell's entry through its resolved slot.
+func (ix *cellIndex) store(sl *cellSlot, c Cell, e entry) {
+	if sl != nil {
+		*sl = cellSlot{gen: ix.gen, e: e}
+		return
+	}
+	ix.setMap(c, e)
+}
+
+//go:noinline
+func (ix *cellIndex) getMap(c Cell) entry {
+	if ix.ws == nil {
+		return ix.m[c]
 	}
 	return ix.overflow[c]
 }
 
-func (ix *cellIndex) set(c Cell, e entry) {
+//go:noinline
+func (ix *cellIndex) setMap(c Cell, e entry) {
 	if ix.ws == nil {
 		ix.m[c] = e
-		return
-	}
-	if i, ok := ix.ws.slot(c); ok {
-		if ix.ws.slots[i].gen != ix.gen {
-			ix.n++
-		}
-		ix.ws.slots[i] = cellSlot{gen: ix.gen, e: e}
 		return
 	}
 	if ix.overflow == nil {

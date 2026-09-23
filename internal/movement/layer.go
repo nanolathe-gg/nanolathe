@@ -82,6 +82,13 @@ type ClassLayer struct {
 	cells                   []uint32
 	stampScratch, stampRows []uint8
 
+	// restampTiers holds the per-cell tiers of the rectangle a restamp is
+	// classifying, restampW wide from (restampX, restampZ); see
+	// fillRestampTiers. Scratch only: it is rewritten by every restamp before
+	// it is read.
+	restampTiers                 []uint8
+	restampX, restampZ, restampW int32
+
 	// mapping is the view of the visibility publisher's per-player mapping word
 	// grid the search's coarse test reads [04 R-PATH-01 §2][04 R-PATH-01 §14].
 	// Nil means "no grid bound", which makes Passable fall through to the
@@ -100,9 +107,10 @@ type ClassLayer struct {
 	watermark uint32
 
 	// commits records each unit's last occupancy-commit tick, the unit
-	// record's occupancy-commit field [04 §6.1 R-DOC04-B]. Lookup-only [I1];
-	// the revision pass walks the unit pool slot-ascending, never this map.
-	commits map[pool.Handle]uint32
+	// record's occupancy-commit field [04 §6.1 R-DOC04-B]. It is a dense row
+	// addressed by handle (see commitWord); the revision pass walks the unit
+	// pool slot-ascending and reads it by handle, never by iterating it [I1].
+	commits []commitWord
 
 	// fullStamps counts how many times this layer has been rebuilt end to end
 	// by stampAll. It is a HOST diagnostic and nothing else: no simulation
@@ -126,72 +134,12 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 		Terrain: t,
 		Grid:    grid,
 		cells:   make([]uint32, int(t.CellW)*int((t.CellH+15)>>4)),
-		commits: make(map[pool.Handle]uint32),
 	}
 	// No nil guard on t: the struct literal above reads four of its fields, so
 	// a nil terrain has already panicked by here. A guard that stands after the
 	// dereferences it claims to protect reads as if nil were a supported input.
 	l.stampAll()
 	return l
-}
-
-// classify stamps one candidate anchor for this movement class. Every covered
-// cell is classified on its own derived pair and the anchor takes the MINIMUM
-// tier over the footprint; a clear result is then demoted to steep when any
-// cell of the surrounding one-cell ring is non-clear [04 R-SLOPE-01 §3]
-// [04 R-PATH-01 §2][04 R-MOV-03 §3].
-//
-// This is the closed form of the map-load builder's two separable window
-// minima: 0 iff any footprint cell is 0, 3 iff every cell of the
-// (fx+2) × (fz+2) footprint-plus-ring rectangle is 3, 1 otherwise
-// [04 R-SLOPE-01 §3 item 1]. Corrected by WU-19-46: the footprint used to be
-// classified on one min-of-mins/max-of-maxes height span, a form that belongs
-// to the structure placement validator alone and that judged a 2×2 class on
-// the height range of a 3×3 corner window.
-//
-// The bound is the map-load builder's: 0 exactly when the footprint leaves the
-// map. RestampRect adds the restamp's stricter one on top [04 R-SLOPE-01 §3].
-func (l *ClassLayer) classify(cx, cz int32) uint8 {
-	fx, fz := l.footprintSize()
-	if l.Terrain == nil || cx < 0 || cz < 0 || cx+fx > l.W || cz+fz > l.H {
-		return LayerBlocked
-	}
-	result := l.classifyRect(cx, cz, cx+fx-1, cz+fz-1)
-	if result != LayerClear {
-		return result
-	}
-	// The four strips cover the complete ring. Overlapping corner reads do not
-	// change the all-clear predicate [04 R-MOV-03 §3].
-	if l.classifyRect(cx-1, cz-1, cx+fx, cz-1) != LayerClear ||
-		l.classifyRect(cx+fx, cz-1, cx+fx, cz+fz) != LayerClear ||
-		l.classifyRect(cx-1, cz+fz, cx+fx, cz+fz) != LayerClear ||
-		l.classifyRect(cx-1, cz-1, cx-1, cz+fz) != LayerClear {
-		return LayerSteep
-	}
-	return LayerClear
-}
-
-// classifyRect runs the per-cell chain on each cell of an inclusive rectangle
-// and returns the MINIMUM tier over those cells [04 R-SLOPE-01 §3 item 2]: a
-// blocked cell returns immediately, a steep cell lowers a running clear to
-// steep. Cells outside the map are tier 0, so a rectangle leaving the map is
-// blocked.
-func (l *ClassLayer) classifyRect(x1, z1, x2, z2 int32) uint8 {
-	if l.Terrain == nil || x2 < x1 || z2 < z1 {
-		return LayerBlocked
-	}
-	result := LayerClear
-	for z := z1; z <= z2; z++ {
-		for x := x1; x <= x2; x++ {
-			switch l.classifyCell(x, z) {
-			case LayerBlocked:
-				return LayerBlocked
-			case LayerSteep:
-				result = LayerSteep
-			}
-		}
-	}
-	return result
 }
 
 // classifyCell is the layer's per-cell chain: the profile's terrain chain
@@ -232,7 +180,7 @@ func (l *ClassLayer) classifyCell(x, z int32) uint8 {
 			if l.movers != nil && !l.movers.HasMover(h) {
 				return LayerBlocked
 			}
-			if l.commits[h] < l.watermark {
+			if l.commitTick(h) < l.watermark {
 				return LayerBlocked
 			}
 		}
@@ -288,15 +236,92 @@ func (l *ClassLayer) RestampRect(x1, z1, x2, z2 int32) {
 	// bounds agree on a loaded map because those strips are voided
 	// [03 R-TERR-01 §2].
 	fx, fz := l.footprintSize()
+	l.fillRestampTiers(x1, z1, x2, z2, fx, fz)
 	for z := z1; z <= z2; z++ {
 		for x := x1; x <= x2; x++ {
 			if x+fx >= l.W || z+fz >= l.H {
 				l.setValue(x, z, LayerBlocked)
 				continue
 			}
-			l.setValue(x, z, l.classify(x, z))
+			l.setValue(x, z, l.classifyTiers(x, z, fx, fz))
 		}
 	}
+}
+
+// fillRestampTiers runs the per-cell chain once over every cell a restamp's
+// classified anchors read — the anchor rectangle grown by the one-cell ring
+// on the low sides and by the footprint on the high sides — and keeps the
+// tiers in restampTiers.
+//
+// classify reads each of those cells once per anchor whose footprint or ring
+// covers it, up to (fx+2)·(fz+2) times. The chain is a pure read of the
+// terrain, the occupant word, the commit row and the watermark, none of which
+// a restamp writes, so reading each cell once gives every anchor the same
+// tiers; classifyTiers then applies classify's own rule to them. Only the
+// anchors the restamp bound leaves to the classifier are covered.
+func (l *ClassLayer) fillRestampTiers(x1, z1, x2, z2, fx, fz int32) {
+	ax2, az2 := min(x2, l.W-fx-1), min(z2, l.H-fz-1)
+	if ax2 < x1 || az2 < z1 {
+		l.restampW = 0
+		return
+	}
+	l.restampX, l.restampZ = x1-1, z1-1
+	l.restampW = ax2 + fx - l.restampX + 1
+	h := az2 + fz - l.restampZ + 1
+	size := int(l.restampW) * int(h)
+	if cap(l.restampTiers) < size {
+		l.restampTiers = make([]uint8, size)
+	}
+	l.restampTiers = l.restampTiers[:size]
+	i := 0
+	for z := l.restampZ; z < l.restampZ+h; z++ {
+		for x := l.restampX; x < l.restampX+l.restampW; x++ {
+			l.restampTiers[i] = l.classifyCell(x, z)
+			i++
+		}
+	}
+}
+
+// classifyTiers classifies one anchor fillRestampTiers covered, from the
+// tiers it kept. Every covered cell is classified on its own derived pair and
+// the anchor takes the MINIMUM tier over the footprint; a clear result is then
+// demoted to steep when any cell of the surrounding one-cell ring is non-clear
+// [04 R-SLOPE-01 §3][04 R-PATH-01 §2][04 R-MOV-03 §3]. That is the closed form
+// of the map-load builder's two separable window minima: 0 iff any footprint
+// cell is 0, 3 iff every cell of the (fx+2) × (fz+2) footprint-plus-ring
+// rectangle is 3, 1 otherwise [04 R-SLOPE-01 §3 item 1]. A clear footprint
+// cannot fail the all-clear test, so the ring test reads that whole rectangle.
+//
+// The per-anchor form of the same rule is kept as a test reference
+// (layer_reference_test.go), which this is tested against.
+func (l *ClassLayer) classifyTiers(x, z, fx, fz int32) uint8 {
+	stride := int(l.restampW)
+	// base addresses the ring's low corner, (x-1, z-1).
+	base := int(z-1-l.restampZ)*stride + int(x-1-l.restampX)
+	result := LayerClear
+	for dz := 1; dz <= int(fz); dz++ {
+		row := l.restampTiers[base+dz*stride+1 : base+dz*stride+1+int(fx)]
+		for _, v := range row {
+			switch v {
+			case LayerBlocked:
+				return LayerBlocked
+			case LayerSteep:
+				result = LayerSteep
+			}
+		}
+	}
+	if result != LayerClear {
+		return result
+	}
+	for dz := 0; dz < int(fz)+2; dz++ {
+		row := l.restampTiers[base+dz*stride : base+dz*stride+int(fx)+2]
+		for _, v := range row {
+			if v != LayerClear {
+				return LayerSteep
+			}
+		}
+	}
+	return LayerClear
 }
 
 // restampOccupantRect rewrites every requester anchor whose footprint or
@@ -338,8 +363,24 @@ func (l *ClassLayer) CommitTick(h pool.Handle) (uint32, bool) {
 	if l == nil {
 		return 0, false
 	}
-	c, ok := l.commits[h]
-	return c, ok
+	c := handleRow(l.commits, h)
+	return c.tick, c.set
+}
+
+// commitWord is one handle's slot in the commit row. The row replaced a
+// map[pool.Handle]uint32 read once per pool slot by every revision pass; set
+// keeps the map's presence answer, so an absent handle, a forgotten one and
+// one never noted all read (0, false) exactly as the absent key did, and a
+// tick noted as zero still reads present.
+type commitWord struct {
+	tick uint32
+	set  bool
+}
+
+// commitTick is the tick alone, zero for an absent handle — the unit record's
+// zero-initialized word, which is what a map read of an absent key answered.
+func (l *ClassLayer) commitTick(h pool.Handle) uint32 {
+	return handleRow(l.commits, h).tick
 }
 
 // NoteCommit records a unit's last occupancy-commit tick [04 §6.1 R-DOC04-B].
@@ -350,7 +391,7 @@ func (l *ClassLayer) NoteCommit(h pool.Handle, tick uint32) {
 	if l == nil || h == 0 {
 		return
 	}
-	l.commits[h] = tick
+	setHandleRow(&l.commits, h, commitWord{tick: tick, set: true})
 }
 
 // ForgetCommit drops a unit's mirrored occupancy-commit tick. Retail holds the
@@ -368,7 +409,9 @@ func (l *ClassLayer) ForgetCommit(h pool.Handle) {
 	if l == nil || h == 0 {
 		return
 	}
-	delete(l.commits, h)
+	if int(h) < len(l.commits) {
+		l.commits[h] = commitWord{}
+	}
 }
 
 // revisionWatermark is the request revision pass's watermark arithmetic: the
@@ -485,20 +528,19 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 	}
 	oldWatermark := l.watermark
 	newWatermark := revisionWatermark(tick)
-	requesterCommit, requesterHadCommit := l.commits[requester]
+	// The requester's word is saved whole, presence included, and put back
+	// as it was: a requester that had no entry has none again afterwards.
+	saved := handleRow(l.commits, requester)
+	requesterCommit := saved.tick
 	if requester != 0 {
-		l.commits[requester] = tick
+		setHandleRow(&l.commits, requester, commitWord{tick: tick, set: true})
 	}
 	l.watermark = newWatermark
 	defer func() {
 		if requester == 0 {
 			return
 		}
-		if requesterHadCommit {
-			l.commits[requester] = requesterCommit
-		} else {
-			delete(l.commits, requester)
-		}
+		l.commits[requester] = saved
 	}()
 	if w == nil || anchors == nil {
 		return
@@ -513,18 +555,24 @@ func (l *ClassLayer) Revise(tick uint32, requester pool.Handle, w *units.World, 
 	}
 	// Deterministic full physical unit-pool walk, slots ascending
 	// [I1][01 §6.1–§6.2][04 R-MOV-03 §3]. Capacity is the total usable
-	// record count excluding the null slot.
-	for h := pool.Handle(1); int(h) <= w.Capacity(); h++ {
+	// record count excluding the null slot; it is read once, since nothing
+	// in the walk allocates or frees a unit.
+	capacity := w.Capacity()
+	for h := pool.Handle(1); int(h) <= capacity; h++ {
 		if h == requester {
 			continue
+		}
+		// The window test runs before the liveness read. Both are pure reads
+		// and a slot is restamped only when it passes both, so the order is
+		// storage only; testing the row first skips the unit lookup for the
+		// many slots whose tick is outside the window.
+		c := l.commitTick(h) // absent is the unit record's zero-initialized tick
+		if c < oldWatermark || c >= newWatermark {
+			continue // outside the crossed [old,new) window [04 R-MOV-03 §3]
 		}
 		u := w.Unit(h)
 		if u == nil || !u.Alive {
 			continue // alive state bit not carried [R-DOC04-B]
-		}
-		c := l.commits[h] // absent is the unit record's zero-initialized tick
-		if c < oldWatermark || c >= newWatermark {
-			continue // outside the crossed [old,new) window [04 R-MOV-03 §3]
 		}
 		anchor, fx, fz, ok := anchors.CommittedFootprint(h)
 		if !ok {

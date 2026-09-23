@@ -173,7 +173,8 @@ request-initialization revision hook and the start direction. `Session` is one
 request's search across budget slices: the touched-entry table with its status
 and direction bytes — a dense generation-stamped table indexed by cell when the
 scheduler has one to lend, and a `map[Cell]entry` otherwise, answering
-identically either way — the goal-cell set, the write-once arrival tolerance, the
+identically either way, and resolved once per neighbour so the expansion
+reads and writes a cell through one slot — the goal-cell set, the write-once arrival tolerance, the
 notified status, the node store and the heap. The neighbour fan is a value —
 nine entries on the first expansion, a directed five-entry fan afterwards —
 so expanding a node allocates nothing `[04 §7.1]`. `walkRay` is the pre-search
@@ -238,7 +239,12 @@ passability image per movement class over the whole map, stamped once at map
 load by running the classifier chain over every attribute cell; `ClassLayers` is
 the per-class registry. A rectangle restamp re-runs the same chain over a
 rectangle, so a dynamic blocker, a building's occupancy or a feature change
-rewrites the same packing. A feature change reaches the layers where it
+rewrites the same packing. Storage: a restamp runs the chain once per cell of
+the rectangle its anchors read and classifies every anchor from those kept
+tiers, since the chain is a pure read that no restamp writes; the per-anchor
+form survives only as the test reference. The mirrored occupant-age clocks are
+a dense row indexed by handle whose entries keep the old map's presence answer.
+A feature change reaches the layers where it
 happens: `internal/features` writes the plot cells and calls the terrain's
 `NoteFootprintRestamp`, which `internal/movement` binds to
 `System.NoteFeatureFootprint` at map load, and every named class is restamped

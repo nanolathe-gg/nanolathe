@@ -197,6 +197,29 @@ func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) Node
 	return id
 }
 
+// allocFresh opens a node for a cell the caller has just read as having none,
+// with its run and terrain term, open. It is Alloc for the expansion loop,
+// which already holds the cell's entry and writes it once, complete, after
+// the allocation: Alloc's own lookup and its identity-only write are the two
+// table accesses that final write supersedes, so the stored entry is the same
+// [04 §7.2] C7.
+func (ns *NodeStore) allocFresh(cell Cell, g, h int32, parent NodeID, dir uint8, run, terrain uint16) NodeID {
+	id := NodeID(len(ns.nodes))
+	ns.nodes = append(ns.nodes, Node{
+		Cell:        cell,
+		G:           g,
+		H:           h,
+		F:           g + hScaled(h, ns.scale),
+		TerrainTerm: terrain,
+		Run:         run,
+		Parent:      parent,
+		Dir:         dir,
+		Open:        true,
+		hSet:        true,
+	})
+	return id
+}
+
 // TryRelax attempts to improve the path to id via newG/newParent.
 // It replaces only when newG < old G (strictly less); equal g does
 // not replace the parent [04 §7.2] C5. On success F is adjusted by

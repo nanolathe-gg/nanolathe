@@ -306,3 +306,25 @@ func TestPathStorageWorkspaceReuseMatchesFreshStorage(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkPathSearchWorkspace runs each storage scenario the way the
+// scheduler does — on its lent workspace, released after every search — and
+// reports the cost per popped node, the unit the scheduler charges.
+func BenchmarkPathSearchWorkspace(b *testing.B) {
+	for _, sc := range pathStorageScenarios() {
+		b.Run(sc.name, func(b *testing.B) {
+			var ws Workspace
+			cfg := storageConfig(sc, sc.pass)
+			cfg.Workspace = &ws
+			b.ReportAllocs()
+			pops := 0
+			for i := 0; i < b.N; i++ {
+				s := NewSession(cfg)
+				s.Resume(1 << 30)
+				pops += s.Popped()
+				s.Release()
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(pops), "ns/pop")
+		})
+	}
+}

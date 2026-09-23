@@ -502,41 +502,62 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		return nil, 0, false
 	}
 	startPopped := s.popped
+	// The loop reads the request, the node array and the per-cell table
+	// through locals; every read and write below is the one the loop made
+	// through the session's accessors, in the same order.
+	ix := &s.entries
+	ns := s.ns
+	goal := s.cfg.Goal
+	passable := s.cfg.PassableValue
+	hasBounds, bounds := s.cfg.HasBounds, s.cfg.Bounds
 	for s.heap.HasCandidate() && s.popped-startPopped < budget {
 		id, f, ok := s.heap.BeginExpand()
 		if !ok {
 			break
 		}
 		s.popped++
-		n := s.ns.Get(id)
+		n := &ns.nodes[id]
 		if n.Closed || !n.Open || f != n.F {
 			continue
 		}
 		// Terminal flags are consumed before closing; pop never probes the
 		// class layer again [04 R-PATH-01 §1].
-		e := s.entries.get(n.Cell)
+		cur := n.Cell
+		curSlot := ix.slotOf(cur)
+		e := ix.load(curSlot, cur)
 		if e.status&4 != 0 {
-			s.finish(reconstructRoute(s.cfg.Start, n.Cell, s.ns, routeFootPrint(s.cfg)))
+			s.finish(reconstructRoute(s.cfg.Start, cur, ns, routeFootPrint(s.cfg)))
 			return s.resultPoints, s.resultStatus, true
 		}
 		n.Open, n.Closed = false, true
 		e.status = 2
-		s.touch(n.Cell, e)
+		ix.store(curSlot, cur, e)
+		// The expanded node's fields are read once. Nothing in its own
+		// expansion writes them — it is closed, so no relaxation reaches it —
+		// and an allocation below may move the node array, so the loop keeps
+		// values rather than a pointer into it.
+		curDir, curRun, curG := n.Dir, n.Run, n.G
 		fan := &s.fan
-		fillFan(fan, n.Cell, n.Dir, !s.expanded)
+		fillFan(fan, cur, curDir, !s.expanded)
 		s.expanded = true
 		for i := 0; i < fan.Len; i++ {
 			c, d := fan.Cells[i], fan.Dirs[i]
-			e := s.entries.get(c)
+			sl := ix.slotOf(c)
+			e := ix.load(sl, c)
 			state := e.status & 3
 			if state != 0 && state != 1 {
 				continue
 			}
 			// Only untouched neighbors probe the live layer. An open node
 			// keeps its stored terrain term on relaxation [04 R-PATH-01 §1].
+			// An untouched cell outside the request's bounds probes as 0
+			// without asking the layer (passValue).
 			value := uint8(3)
 			if state == 0 {
-				value = s.passValue(c)
+				value = 0
+				if (!hasBounds || InBounds(c, bounds)) && passable != nil {
+					value = passable(c)
+				}
 			}
 			// A blocked cell is skipped unless the pre-search ray already
 			// stepped onto it. One that carries the ray-visited bit is costed
@@ -546,10 +567,10 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			// [04 R-PATH-01 §3].
 			if value == 0 && e.status&8 == 0 {
 				e.status = (e.status &^ 3) | 3
-				s.touch(c, e)
+				ix.store(sl, c, e)
 				continue
 			}
-			turn, step := TurnPenalty(n.Dir, d), StepCost(d)
+			turn, step := TurnPenalty(curDir, d), StepCost(d)
 			// terrainTerm = (passability > 1) ? 0 : 30 — blocked (0) and steep
 			// (1) both pay 30; unexplored (2) and clear (3) pay nothing
 			// [04 R-PATH-01 §3].
@@ -558,34 +579,33 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 				terrain = SteepCost
 			}
 			run := uint16(1)
-			if d == n.Dir {
-				run = n.Run + 1
+			if d == curDir {
+				run = curRun + 1
 			}
 			// The short-run 75 is gated by the parent's straight-run counter
 			// alone. No parent-identity test guards it: the start node is
 			// seeded with run 100, which is what keeps the 75 off the first
 			// step [04 R-PATH-01 §4] step 11.
 			short := int32(0)
-			if d != n.Dir && n.Run < ShortRunLimit {
+			if d != curDir && curRun < ShortRunLimit {
 				short = ShortRunPenalty
 			}
-			gNew := n.G + turn + step + terrain + short
 			if e.node != heapID(invalidNodeID) {
 				// The first allocation owns the terrain term. A later
 				// relaxation reuses it rather than probing/recomputing the
 				// node's heuristic-side terrain field [04 R-PATH-01 §3].
-				terrain = int32(s.ns.Get(e.id()).TerrainTerm)
-				gNew = n.G + turn + step + terrain + short
-				if state == 1 && s.ns.TryRelax(e.id(), gNew, id, d) {
-					node := s.ns.Get(e.id())
+				other := e.id()
+				node := &ns.nodes[other]
+				gNew := curG + turn + step + int32(node.TerrainTerm) + short
+				if state == 1 && ns.TryRelax(other, gNew, id, d) {
 					node.Run = run
-					s.heap.Fix(e.id(), node.F)
+					s.heap.Fix(other, node.F)
 				}
 				continue
 			}
-			nid := s.ns.Alloc(c, gNew, s.cfg.Goal.H(c), id, d)
-			node := s.ns.Get(nid)
-			node.Run, node.TerrainTerm, node.Open = run, uint16(terrain), true
+			gNew := curG + turn + step + terrain + short
+			nid := ns.allocFresh(c, gNew, goal.H(c), id, d, run, uint16(terrain))
+			node := &ns.nodes[nid]
 			s.heap.Open(nid, node.F)
 			// Opening ORs the state into the existing flags, preserving both
 			// ray visitation and enumerated terminals [04 R-PATH-01 §1].
@@ -599,7 +619,7 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			// cell preserves it, and the OR above carries it into the opened
 			// entry. Looking the cell up in a goal set on every opening
 			// answered what the entry already holds.
-			s.touch(c, e)
+			ix.store(sl, c, e)
 		}
 	}
 	if !s.heap.HasCandidate() {

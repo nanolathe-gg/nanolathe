@@ -183,7 +183,7 @@ func TestLayerOccupantAgeGate(t *testing.T) {
 		t.Fatalf("stale occupant want blocked got %d", got)
 	}
 	// Commit tick inside the window passes the gate.
-	l.commits[7] = 25
+	l.NoteCommit(7, 25)
 	if got := l.classify(3, 3); got != LayerClear {
 		t.Fatalf("fresh occupant want clear got %d", got)
 	}
