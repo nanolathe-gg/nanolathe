@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -46,7 +47,11 @@ func (b *battleSession) cursorShapeAt(latch input.Latch, mx, my int32) int {
 		PlacementValid: b.battleState().Input.BuildOK,
 	}
 	if hover.OverWorld && !hover.Placing {
-		_, hover.Target, _ = b.pickTarget(mx, my)
+		var pos *orders.ResolvePos
+		_, hover.Target, pos = b.pickTarget(mx, my)
+		if pos != nil {
+			hover.X, hover.Y, hover.Z = pos.X, pos.Y, pos.Z
+		}
 		hover.Feature = b.hoverFeature(mx, my)
 	}
 	return b.chooseCursorFor(latch, hover)
@@ -75,6 +80,7 @@ func (b *battleSession) cursorShapeForClick(latch input.Latch, mx, my int32, tar
 	}
 	if !hover.Placing {
 		hover.Target = target
+		hover.X, hover.Y, hover.Z = b.cursorWorld(mx, my)
 		hover.Feature = b.hoverFeature(mx, my)
 	}
 	return b.chooseCursorFor(latch, hover)
@@ -85,7 +91,7 @@ func (b *battleSession) cursorShapeForClick(latch input.Latch, mx, my int32, tar
 // shape table [07 §8][07 §9].
 func (b *battleSession) chooseCursorFor(latch input.Latch, hover hud.CursorHover) int {
 	b.fillHoverMoverMode(hover.Target)
-	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile}
+	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile, WeaponAdmits: b.sess.CursorAttackAdmits}
 	if b.interfaceTypeRightClick() {
 		sel.InterfaceType = hud.InterfaceTypeRightClick
 	}
@@ -123,7 +129,10 @@ func (b *battleSession) fillHoverMoverMode(t *units.Unit) {
 		return
 	}
 	if v, found := snapshotUnitByHandle(f, t.Handle); found {
+		// The attack row's admission gate reads the mode mirror, the word the
+		// view publishes [06 R-WPN-05 §1].
 		t.Move.Mode = v.MoverMode
+		t.Move.ModeMirror = v.MoverMode
 	}
 }
 

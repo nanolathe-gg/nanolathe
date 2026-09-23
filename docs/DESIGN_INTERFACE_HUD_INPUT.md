@@ -661,8 +661,14 @@ gives `cursorfindsite` or `cursortoofar`; an empty selection gives
 `cursorselect` over an own finished unit and `cursornormal` otherwise;
 otherwise the per-unit shapes are reduced by **lowest index wins**, so the
 table's numbering is also its priority order `[07 §8]`. `CursorHover` is the
-pick result and `CursorSelection` the acting side, including the stocks the
-command-fire affordability gate reads.
+pick result, including the resolved ground point, and `CursorSelection` the
+acting side, including the stocks the command-fire affordability gate reads.
+An immobile attacker's ATTACK shape is range-tested through
+`CursorSelection.WeaponAdmits`, which the shell binds to
+`session.CursorAttackAdmits`: slot 0 is rebuilt from the definition's first
+weapon link on the committed-view copy and asked the combat service's own
+unit-to-unit or point admission gate, so an out-of-range tower shows
+`cursortoofar` `[07 §8][06 R-WPN-05 §9]`.
 
 The same chooser is the armed click's front door. `battle_commands.go`'s
 `orderSelected` issues an armed order only when the reduced shape is an action

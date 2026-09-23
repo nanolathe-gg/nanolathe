@@ -32,6 +32,39 @@ func (s *Session) CursorToWorld(x, z int32) (numeric.Fixed, numeric.Fixed, numer
 	return wx, wy, wz, true
 }
 
+// CursorAttackAdmits is the ATTACK cursor row's range test for an actor with
+// no mover [07 §8]. Over a unit it asks runtime weapon slot 0's unit-to-unit
+// admission gate — the one routine [06 R-WPN-05 §9] lists the cursor-shape
+// chooser among the callers of — and over open ground the point form of the
+// shot-time gate, after refusing a `toairweapon` slot outright: that
+// target-class restriction answers the too-far shape even for a point in
+// range [07 §8]. The bound combat rule set answers both, as it does for the
+// order the click would issue.
+//
+// actor and target are presentation copies of committed unit views, which
+// carry no weapon slots. Slot 0 is rebuilt from the definition's first weapon
+// link because nothing but the creation initializer and save restore writes a
+// slot's link, and both write exactly that [06 R-WPN-05 §3]. The query is
+// read-only and draws no RNG [I6].
+func (s *Session) CursorAttackAdmits(actor, target *units.Unit, x, y, z numeric.Fixed) bool {
+	if s == nil || s.Combat == nil || actor == nil || actor.Def == nil {
+		return false
+	}
+	w := actor.Def.Weapon1Def
+	if content.IsWeaponInactive(w) {
+		w = nil
+	}
+	probe := *actor
+	probe.InstallWeapon(0, w)
+	if target != nil {
+		return s.Combat.CanEngageSlotTarget(&probe, target, 0, s.World)
+	}
+	if w == nil || w.ToAirWeapon {
+		return false
+	}
+	return s.Combat.ShotTimeAdmitsPoint(&probe, 0, x, y, z, s.World)
+}
+
 // PlayArea returns the authored playable extents through the session query
 // boundary. Presentation callers use it for minimap geometry without reaching
 // into the mutable terrain object [03 §3.4][07 §10][I6].

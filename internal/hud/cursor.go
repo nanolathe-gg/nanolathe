@@ -16,6 +16,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
@@ -32,6 +33,11 @@ type CursorHover struct {
 
 	// Target is the picked unit, or nil for open ground [07 §8].
 	Target *units.Unit
+
+	// X, Y, Z are the resolved ground point under the pointer. The ATTACK row
+	// range-tests an immobile actor against it when no unit is picked
+	// [07 §8].
+	X, Y, Z numeric.Fixed
 
 	// Feature is the definition of the feature occupying the picked cell, or
 	// nil. Only its reclaimable flag is consulted [07 §8][05 "Feature reclaim"].
@@ -60,6 +66,13 @@ type CursorSelection struct {
 	// Hostile routes side tests through the same diplomacy predicate the order
 	// resolver uses, so the cursor and the order cannot disagree [04 §3.4].
 	Hostile func(actor, target *units.Unit) bool
+
+	// WeaponAdmits is the immobile attacker's range test: runtime weapon
+	// slot 0's admission predicate against target, or against the ground
+	// point when target is nil [07 §8][06 R-WPN-05 §9]. The chooser cannot
+	// evaluate it from a committed unit copy alone, so the shell binds the
+	// session's read-only query. Nil leaves the in-range answer.
+	WeaponAdmits func(actor, target *units.Unit, x, y, z numeric.Fixed) bool
 
 	// Metal and Energy are the viewer's current stocks. The command-fire shape
 	// turns to cursortoofar when the armed weapon's per-shot cost is not
@@ -270,23 +283,16 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 		// An actor with no mover — a gun tower, a missile tower, a long-range
 		// battery — is instead range-tested against its *runtime* weapon slot 0
 		// (not the definition's primary weapon record the bomb-sight gate above
-		// reads): water/altitude admission, the ballistic solver's no-solution
-		// sentinel, and an inclusive planar squared distance against the slot's
-		// range, applied to the hovered unit or, with no unit under the pointer,
-		// to the resolved ground point; a slot carrying the target-class
-		// restriction flag answers cursortoofar even in range [07 §8].
-		//
-		// TODO(question): the chooser cannot run that test from its present
-		// inputs. CursorHover carries no resolved world point (only Target and
-		// Feature), and the battle shell's selection copies rebuild each actor
-		// from a committed unit view, which carries the status word and position
-		// but no runtime weapon slots — so slot 0's range, its water/ballistic
-		// flags and its target-class restriction flag are all absent, and there
-		// is no admission helper reachable from these inputs. Settling it needs
-		// either the hovered world point plus slot 0's range and flag word on
-		// the chooser's inputs, or a combat-side admission predicate published
-		// across the frame boundary. Until then an immobile attacker keeps
-		// cursorattack, which is the in-range answer.
+		// reads): over a unit, the unit-to-unit admission gate (water/altitude,
+		// the ballistic solver's no-solution sentinel, then the inclusive planar
+		// range); over open ground, the same test against the resolved point,
+		// where a slot carrying the target-class restriction flag answers
+		// cursortoofar even in range [07 §8]. The predicate is the combat
+		// service's own, so the shape and the order it would issue cannot
+		// disagree.
+		if sel.WeaponAdmits != nil && !sel.WeaponAdmits(u, t, h.X, h.Y, h.Z) {
+			return render.CursorTooFar
+		}
 		return render.CursorAttack
 
 	case input.LatchBlast:

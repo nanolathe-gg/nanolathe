@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
@@ -388,9 +389,9 @@ func TestLiveMoverGatedRows(t *testing.T) {
 	}
 
 	// Row 3 — ATTACK. A live mover short-circuits to cursorattack with no range
-	// test; an immobile attacker takes the range-tested path, which this port
-	// cannot yet evaluate and so also answers cursorattack (the in-range
-	// answer). Both directions are locked so the gate is not silently dropped.
+	// test; an immobile attacker takes the slot-0 admission predicate, and
+	// shows cursortoofar when it refuses. Both directions are locked so the
+	// gate is not silently dropped.
 	enemy := unit(1, gunshipDef)
 	attackHover := CursorHover{OverWorld: true, Target: enemy}
 	if !hasLiveMover(unit(0, gunshipDef)) {
@@ -399,10 +400,28 @@ func TestLiveMoverGatedRows(t *testing.T) {
 	if hasLiveMover(immobile(towerDef)) {
 		t.Errorf("a tower has a live mover [04 R-ORD-02 §1]")
 	}
-	if got := ChooseCursor(input.LatchAttack, sel(unit(0, gunshipDef)), attackHover); got != render.CursorAttack {
-		t.Errorf("mobile attacker = %d (%s), want cursorattack [07 §8]", got, render.CursorName(got))
+	inRange := true
+	ranged := func(us ...*units.Unit) CursorSelection {
+		c := sel(us...)
+		c.WeaponAdmits = func(_, _ *units.Unit, _, _, _ numeric.Fixed) bool { return inRange }
+		return c
 	}
-	if got := ChooseCursor(input.LatchAttack, sel(immobile(towerDef)), attackHover); got != render.CursorAttack {
-		t.Errorf("tower = %d (%s), want cursorattack pending the slot-0 range test [07 §8]", got, render.CursorName(got))
+	for _, inRange = range []bool{true, false} {
+		if got := ChooseCursor(input.LatchAttack, ranged(unit(0, gunshipDef)), attackHover); got != render.CursorAttack {
+			t.Errorf("mobile attacker (admits=%v) = %d (%s), want cursorattack [07 §8]", inRange, got, render.CursorName(got))
+		}
+	}
+	inRange = true
+	if got := ChooseCursor(input.LatchAttack, ranged(immobile(towerDef)), attackHover); got != render.CursorAttack {
+		t.Errorf("tower in range = %d (%s), want cursorattack [07 §8]", got, render.CursorName(got))
+	}
+	inRange = false
+	if got := ChooseCursor(input.LatchAttack, ranged(immobile(towerDef)), attackHover); got != render.CursorTooFar {
+		t.Errorf("tower out of range = %d (%s), want cursortoofar [07 §8]", got, render.CursorName(got))
+	}
+	// The idle latch re-enters the ATTACK row over a hostile target, so the
+	// contextual shape carries the same verdict.
+	if got := ChooseCursor(input.LatchNormal, ranged(immobile(towerDef)), attackHover); got != render.CursorTooFar {
+		t.Errorf("idle tower out of range = %d (%s), want cursortoofar [07 §8]", got, render.CursorName(got))
 	}
 }
