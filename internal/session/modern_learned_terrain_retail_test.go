@@ -80,8 +80,13 @@ func TestModernLearnedTerrainFreesTheMazeFlea(t *testing.T) {
 	}{{gameplay.Modern, true}, {gameplay.Strict31, false}} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			s, flea := mazeFlea(t, cat, fs, tc.mode)
-			cellsMoved(s, flea, 700) // both modes are at the face by now
-			moved := cellsMoved(s, flea, 500)
+			// Both modes are at or near the face by tick 700. The 800-tick
+			// window leaves room for Modern re-route staggering, whose 0–7
+			// tick later re-routes bring this flea to the face near tick 750
+			// and free it near tick 1150 (docs/DESIGN_MOVEMENT_PATH.md
+			// "Modern re-route staggering"); the Strict flea never leaves.
+			cellsMoved(s, flea, 700)
+			moved := cellsMoved(s, flea, 800)
 			if !flea.Alive {
 				t.Skip("the flea was killed en route; the case proves nothing")
 			}
@@ -89,7 +94,7 @@ func TestModernLearnedTerrainFreesTheMazeFlea(t *testing.T) {
 				t.Fatalf("%s: learned terrain present=%v, want %v", tc.mode, learned, tc.freed)
 			}
 			if freed := moved >= 30; freed != tc.freed {
-				t.Fatalf("%s: the flea moved %d cells in 500 ticks after reaching the face (now at cell %d,%d), want freed=%v", tc.mode, moved, world.WorldToCell(flea.X), world.WorldToCell(flea.Z), tc.freed)
+				t.Fatalf("%s: the flea moved %d cells in the 800 ticks after tick 700 (now at cell %d,%d), want freed=%v", tc.mode, moved, world.WorldToCell(flea.X), world.WorldToCell(flea.Z), tc.freed)
 			}
 		})
 	}

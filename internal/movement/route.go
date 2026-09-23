@@ -32,6 +32,13 @@ type Route struct {
 	// StaticRevision is Nanolathe runtime metadata. It is not part of the
 	// retail route save encoding [04 §7.3].
 	StaticRevision uint64
+	// firstHold and firstPending are the Modern group-order spread's runtime
+	// state: the earliest tick a held first request may be admitted, zero for
+	// none, and whether the request awaits its group's assignment
+	// (docs/DESIGN_MOVEMENT_PATH.md "Modern group-order spreading"). Neither
+	// is saved; a restore admits a held request when it next comes due.
+	firstHold    uint32
+	firstPending bool
 }
 
 // Publish publishes a waypoint list per [04 §7.3] C14.

@@ -61,7 +61,9 @@ Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-mod
 [factory-exit yielding](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding), and
 [construction-site clearance](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding), and
 [authored build membership](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-authored-build-membership), and
-[learned terrain](docs/DESIGN_MOVEMENT_PATH.md#modern-learned-terrain).
+[learned terrain](docs/DESIGN_MOVEMENT_PATH.md#modern-learned-terrain), and
+[re-route staggering](docs/DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering), and
+[group-order spreading](docs/DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
 ---

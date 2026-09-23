@@ -39,9 +39,11 @@ clamps against its old footprint boundary and proposes the same move next tick; 
 looks like sidestepping emerges from two independent timers — the follower's
 60-tick repath and the class layer's 30-tick occupant age — and from nothing
 else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Unapproved additions in this area invent retail behaviour. The explicit
-Modern construction-clearance contract below and
-[Modern learned terrain](#modern-learned-terrain) are user-authorized
-exceptions and must not be removed as parity defects.
+Modern construction-clearance contract below,
+[Modern learned terrain](#modern-learned-terrain),
+[Modern re-route staggering](#modern-re-route-staggering) and
+[Modern group-order spreading](#modern-group-order-spreading) are
+user-authorized exceptions and must not be removed as parity defects.
 
 ### Modern construction clearance priority
 
@@ -258,9 +260,11 @@ through fog `[04 §6.1 R-DOC04-B]` `[04 R-PATH-01 §2]`.
 **The policy seam** (`rules.go`, `learned.go`). `Rules` is this package's
 gameplay seam, bound on `System.Rules` by the session's rule set; unbound it
 answers as Strict 3.1. It carries
-[Community contested-cell claims](#community-contested-cell-claims) and
-[Modern learned terrain](#modern-learned-terrain), and `LearnedTerrain` is the
-per-owner grid that policy keeps on the `System`.
+[Community contested-cell claims](#community-contested-cell-claims),
+[Modern learned terrain](#modern-learned-terrain),
+[Modern re-route staggering](#modern-re-route-staggering) and
+[Modern group-order spreading](#modern-group-order-spreading), and `LearnedTerrain`
+is the per-owner grid the learned-terrain policy keeps on the `System`.
 
 **Routes** (`route.go`). `Route` is up to twenty published points plus the
 active and dirty bits. `Publish` clamps the count first and applies the zero-
@@ -593,7 +597,8 @@ installation preserves that tick when at most ten ticks old and clears it when
 older; activation and request staging never replace it with the current tick
 `[04 R-PATH-01 §8]`. The scheduler alone applies the inclusive
 `lastRequestTick + 60 <= tick` admission test and stamps a positive poll
-`[04 R-MOV-01 §7]`. This distinction matters for `RepairUnit`, which refreshes
+`[04 R-MOV-01 §7]`; the 60 is `Rules.RepathDelay`, which Modern lengthens by
+0–7 ticks ([Modern re-route staggering](#modern-re-route-staggering)). This distinction matters for `RepairUnit`, which refreshes
 its rectangle goal every 30–59 ticks: stamping each refresh as a request would
 continually postpone admission and leave its synthetic route through an
 obstacle. Replacement invalidates the old route binding and failure state while
@@ -1347,8 +1352,10 @@ changes.
 **No prompt repath.** Letting Modern re-request immediately after a lesson,
 instead of waiting out the sixty-tick throttle, was considered and not adopted:
 it would be a second departure, and the measurement above bounds what it could
-recover at the blocked share of the trip. The throttle is retail's in both
-modes.
+recover at the blocked share of the trip. This policy never shortens the
+throttle; the separate
+[Modern re-route staggering](#modern-re-route-staggering) only lengthens it by
+up to seven ticks.
 
 **The seam.** `movement.Rules` (`internal/movement/rules.go`) is a new seam,
 composed as `session.RuleSet.Movement` beside the other package seams:
@@ -1426,3 +1433,282 @@ set at that face, which `[04 R-PATH-01 §2]` records as not yet observed in
 retail, and says so — and `TestModernLearnedTerrainIsRelearnedAfterALoad` locks
 that a lesson never reaches the visibility grid, that a load restores nothing
 learned, and that the restored unit still gets free.
+
+### Modern re-route staggering
+
+**Nanolathe Modern policy.** A follower's re-route throttle is lengthened by a
+deterministic 0–7 ticks, re-drawn from the unit's slot and its last admission
+tick at every admission, so followers that were admitted together stop coming
+due together. It is a load-balancing policy: it spreads path-search work that
+retail's throttle concentrates on one tick, and it changes no route a search
+returns.
+
+**Strict 3.1 behavior.** The follower's poll answers "wants a path" when its
+wants-repath flag is set and `lastRequestTick + 60 <= currentTick`, inclusively;
+a yes stamps the current tick `[04 R-MOV-01 §7]`. Goal installation zeroes a
+stamp older than ten ticks `[04 R-PATH-01 §8]`, so every unit given an order on
+one tick is admitted on that tick as far as the scheduler's budget reaches, and
+from then on a unit that stays blocked or keeps exhausting its route re-requests
+exactly sixty ticks after its last admission. `StrictRules.RepathDelay` returns
+60 for every unit; Community inherits it unchanged (this is a Modern policy,
+not a Community 3.9 feature), and an unbound `System` answers the same.
+
+**Why the cohort matters.** Retail's step allowance of 1,333 per call admits at
+most about thirteen searches a tick (each admission costs 100 plus its pops
+`[04 R-PATH-01 §6]`), so — by that arithmetic, not by observation of retail —
+the budget itself spreads a large cohort over many ticks and the stamps drift
+apart. Community and Modern raise the allowance to
+66,650 (DESIGN_COMMUNITY_PATCH §4.1): the whole cohort is now admitted on its
+first tick, receives one stamp, and is due again on one tick every sixty ticks
+for as long as it keeps re-arming. Measured with temporary per-tick
+instrumentation (not committed) on the pre-policy Modern build:
+
+* Battle benchmark (scene v5, 360 mobiles created on one tick): 274 followers
+  were admitted on tick 60 (the first tick a zero stamp permits), 205 on 120,
+  141 on 181, then 37–89 on each of 240–243, 300–303 and 360–363; tick 181 ran
+  98,000 search steps and fifteen ticks exceeded 20,000. This first cohort is
+  an artifact of staging every unit on one tick.
+* Simulation benchmark (three computer armies, 1,500 ticks): the planner's
+  group orders admit 150–285 units on one tick, and 4,291 of the re-admissions
+  came exactly sixty ticks after the previous one, and 236 units whose last
+  admissions fell on ticks 602–605 were all re-admitted on tick 666. The
+  alignment therefore arises in ordinary play, not only in the fixture.
+
+**Modern behavior.** `ModernRules.RepathDelay(s, slot, last)` returns
+`60 + k`, where `k` in `0..7` is the top three bits (scaled by
+`modernRepathSpread`) of a 32-bit integer mix of the slot and `last + 1`. It
+reads no state, draws from neither RNG stream and uses no floating point. The
+follower's staging test and the scheduler's poll both call `System.repathDue`,
+so the staged payload and the admission can never disagree; the stamp, the
+inclusive comparison, the flag's writers, the ten-tick goal-install reset, the
+scheduler's single active request, its charges and budgets are retail's.
+
+**Per-admission mix, not a fixed per-unit phase.** A fixed offset per slot
+splits a cohort into eight sub-cohorts at its first re-admission, but units that
+share an offset then share every later stamp and stay in step for ever, so the
+worst tick settles at one eighth of the cohort. Mixing in the last admission
+tick re-draws each unit's offset every cycle, so two units that happen to
+share a stamp almost always separate at the next one. For 240 units stamped on
+one tick the largest same-tick re-admission is 40 after one cycle and 20 after
+ten, still falling (`TestModernRepathStaggerSeparatesACohort`); Strict keeps all
+240 together.
+
+**What it does not spread.** The first admission after an order is not
+delayed: a zeroed stamp plus at most 67 ticks is due on any tick after 67, so
+a group order is still answered on the tick it is issued, exactly as in Strict.
+Group-order bursts therefore remain under this policy alone — the simulation
+benchmark still admits up to 264 fresh requests on one planner tick — and are
+spread by [Modern group-order spreading](#modern-group-order-spreading).
+
+**Cost to the player.** A blocked or route-exhausted unit re-requests after
+60–67 ticks instead of 60, at most a quarter of a second later. No unit is
+refused a route it would have received; it receives it up to seven ticks
+later. Where a unit re-routes repeatedly the delays add up, and the changed
+timing can change the route: the Crystal Maze flea of
+[Modern learned terrain](#modern-learned-terrain) still frees itself from the
+face after about 400 ticks there, but its diverged trip stalls about 200 ticks
+at an earlier face and is freed near tick 1150 instead of 950, so
+`session.TestModernLearnedTerrainFreesTheMazeFlea` measures over ticks
+700–1500 rather than 700–1200.
+
+**Measured effect.** Two back-to-back pairs of each benchmark against the
+same build without the policy, `GOMAXPROCS=2` (2026-09-22):
+
+| | before | after |
+|---|---|---|
+| Battle benchmark `phase5-orders` max (ms) | 7.53, 7.71 | 2.46, 2.50 |
+| Battle benchmark `phase5-orders` mean (ms) | 0.75, 0.78 | 0.89, 0.88 |
+| Battle benchmark Step p95 / max (ms) | 5.38 / 9.71, 5.97 / 9.95 | 4.28 / 4.85, 4.26 / 4.86 |
+| Battle run, largest per-tick search steps | 97,996 | 35,371 |
+| Battle run, ticks above 20,000 steps | 15 | 7 |
+| Simulation benchmark tick mean (ms) | 1.86, 1.92 | 1.71, 1.73 |
+| Simulation benchmark `phase5-orders` mean (ms) | 0.72, 0.73 | 0.65, 0.65 |
+| Simulation benchmark tick p95 / max (ms) | 3.09 / 11.4, 3.10 / 12.5 | 3.07 / 13.3, 3.16 / 14.0 |
+
+The battle benchmark (`--renderer=modern --benchmark-tps=120`, scene v5) has a
+45-tick measured window containing one cadence tick; its spike is gone. Its
+mean rises because, in the diverged trajectory, the searches in that window
+are longer (instrumented: 669 admissions and 776,000 steps over ticks 240–419,
+against 690 and 558,000); the policy changes no search input, so this is a
+different battle rather than a per-search cost, and the simulation benchmark's
+mean falls. The simulation benchmark's worst tick is a planner group order's
+first admissions, which this policy deliberately leaves alone.
+
+**Boundaries.** Only the throttle period changes, for every follower the
+scheduler polls. It keeps no state, so saves, restores and switches need nothing: a switch to
+Strict applies retail's 60 from the next poll, and a follower stamped under
+either mode is judged by the mode bound when it is polled.
+
+**Determinism and fingerprints.** The answer is a pure integer function of the
+slot and the committed stamp and is asked in the scheduler's existing slot
+order, so Modern stays deterministic and bit-identical across hosts. Modern
+fingerprints move, because routes arrive on different ticks; Strict and
+Community fingerprints do not. The Modern long ashap lock moved to
+`partial-v1:002787072051be96` and that run no longer ends before its
+54000-tick bound (it ended at 49950); the Modern battle-fixture warm and final
+locks moved to `partial-v1:9a3af7e60b955710` and `partial-v1:6a826efb7465ecb2`.
+The Modern ashap 6000-tick and fixture initial locks are unchanged.
+
+**Verification.** `movement.TestStrictRepathDelayIsRetailsSixty` (Strict and
+Community return 60 for every slot and stamp; unbound refuses at `last+59` and
+admits at `last+60`), `TestModernRepathDelayBoundsAndDeterminism`,
+`TestModernRepathStaggerSeparatesACohort`, `TestModernPollHonoursTheRepathDelay`
+(refused one tick before the delay, admitted and stamped on it) and
+`TestRepathDueDoesNotAllocate`; the Strict, Community and Modern
+`headless` fingerprint locks cover RNG and resource effects over whole
+battles.
+
+### Modern group-order spreading
+
+**Nanolathe Modern policy.** When one player's order gives sixteen or more
+units their first route request on the same scheduler tick, the requests are
+admitted over three consecutive ticks instead of one: nearest goal first, cut
+so that each tick carries about a third of the group's summed goal distance.
+It is a load-balancing policy like
+[Modern re-route staggering](#modern-re-route-staggering), which it completes:
+that policy spreads re-requests and deliberately leaves the first request
+alone. It changes only the tick a request is admitted on, never the request,
+its goal or any search input.
+
+**Strict 3.1 behavior.** Goal installation zeroes an admission stamp older than
+ten ticks `[04 R-PATH-01 §8]`, and the follower's poll admits any armed
+follower whose `lastRequestTick + 60 <= currentTick` `[04 R-MOV-01 §7]`, so
+every unit given an order on one tick is admissible on the next scheduler call,
+as far as the step allowance reaches `[04 R-PATH-01 §6]`.
+`StrictRules.FirstRequestSpread` answers "off" (a threshold of zero);
+Community inherits it (this is not a Community 3.9 feature), and an unbound
+`System` answers the same. With the rule off nothing is recorded and the one
+added comparison in the due test, against a hold that is always zero, never
+refuses.
+
+**Why.** At retail's allowance of 1,333 steps a call, the budget alone admits
+about thirteen searches a tick, so — by that arithmetic, not by observation of
+retail — a large order is spread over many ticks. Under the 66,650 allowance
+(DESIGN_COMMUNITY_PATCH §4.1) the whole group is searched on one tick. In the
+simulation benchmark (seed 7, instrumented, not committed; all 4,200 ticks)
+78 ticks admitted 16
+or more first requests, 5,507 in all and up to 313 on one tick; those were the
+benchmark's slowest ticks, 12.6–13.9 ms against a median of about 1.7 ms. Below
+sixteen the per-tick count is ordinary traffic: over 4,200 ticks, 1,437 ticks
+admitted 0–3 first requests, 76 admitted 4–7, 18 admitted 8–11 and 4 admitted
+12–15, after which the counts are the planner's group orders.
+
+**Modern behavior.** `ModernRules.FirstRequestSpread` returns a threshold of 16
+and a width of three ticks.
+
+1. *Recording.* Every staging of a route request (`pathProvider.Submit`) whose
+   follower's admission stamp is zero is a first request: the unit has not been
+   admitted since its goal was installed. It is appended once to the
+   `System`'s pending list, and any hold an earlier staging was given is
+   cleared, because a new order is a new request.
+2. *Grouping.* At the start of each scheduler call, before its first poll, the
+   pending first requests that are due on this tick (armed, and the re-route
+   throttle from the zero stamp elapsed) form the candidates; the rest stay
+   pending until they are due. A candidate whose request was withdrawn or that
+   has since been admitted is dropped. Candidates are grouped by the player
+   whose request map holds them.
+3. *Assignment.* A player's group smaller than the threshold is left alone.
+   Otherwise its requests are sorted by estimated cost, then by slot. The cost
+   is the request goal's own search heuristic from the unit's committed start
+   cell `[04 §7.2]` plus one, so a group of zero-distance requests still splits
+   by count. Walking the sorted list, a request is given hold `k` = ⌊3 ×
+   (summed cost of the requests before it) ÷ (group total)⌋, capped at 2: the
+   second tick starts where the running sum first reaches a third, the third
+   where it reaches two thirds. Hold 0 is admitted as today; hold `k` sets the
+   route's earliest admission tick to `tick + k`.
+4. *Admission.* `System.repathDue`, which both the follower's staging test and
+   the scheduler poll use, refuses a follower whose hold tick is still ahead.
+   Admission stamps the tick as always and clears the hold.
+
+Integer arithmetic only, no RNG, no map iteration; the list is walked in
+staging order and the sort breaks ties by slot. Assignment reuses its scratch
+and allocates nothing once warm.
+
+**Composition with re-route staggering.** A held request is admitted on its hold
+tick and stamped with it; from then on the follower is under the ordinary
+throttle, so its next re-request is `RepathDelay` (60–67 ticks) after the held
+admission. The two policies share `repathDue`, so staging and admission agree.
+
+**What a waiting unit does.** Nothing new. Goal installation already gives the
+follower something to steer by before any search returns `[04 R-PATH-01 §8]`:
+the synthetic straight line to the goal, or the points the route-acceptance
+rule kept, or — where neither applies — no active route, and the unit waits.
+That is exactly the state a unit is in between its order and its search in
+Strict, which under retail's allowance lasts many ticks. Instrumented over the
+simulation benchmark's warm-up and 600 measured ticks, of 1,210 held requests
+735 held a two-point route (the shape of the synthetic line), 461 a longer
+kept route and 14 no active route. Order acceptance, the
+acknowledgement, the queue and everything shown to the player on the order
+tick are untouched: the hold is on the scheduler's admission only.
+
+**Cost to the player.** Only groups of sixteen or more wait, and only their
+farther members. Over the seed-7 simulation benchmark's 4,200 ticks, 5,282
+requests were spread: 55% were admitted on the due tick, 28% one tick later (33 ms) and 17%
+two ticks later (67 ms); the mean added wait of a spread request is 0.62 ticks.
+The rear of a column would be waiting behind the front line anyway.
+
+**Boundaries.** The threshold is per player per tick; two players' orders on one
+tick are two groups. Re-requests are never spread by this policy (they have a
+non-zero stamp). A long search can still block the scheduler: it holds the
+single working set, the other players' shares accumulate while it runs, and
+when it publishes the waiting requests — held ones included — are admitted
+together `[04 R-PATH-01 §6]`. The largest remaining planner-tick spikes in the
+simulation benchmark are of this kind; this policy does not change the
+scheduler's accumulator and does not address them. Holds and the pending list
+are runtime state and are not saved: a restore admits a held request when it
+next comes due. After a switch to Strict, holds already assigned (at most two
+ticks) run out and nothing new is recorded.
+
+**Measured effect.** Built against main `412cedcc` (the re-route staggering
+landing), `GOMAXPROCS=2`, 2026-09-22, on a host with other work running.
+
+Simulation benchmark (1,200 warm-up and 3,000 measured ticks, profiles off),
+five seeds. "Group-window max" is the slowest tick in the first ten ticks of
+each 300-tick planner cycle, excluding ticks that carried a class-layer
+rebuild:
+
+| seed | group-window max (ms) before → after | tick max | p95 | p99 | mean |
+|---|---|---|---|---|---|
+| 7 (two runs each) | 13.8, 13.9 → 9.8, 10.0 | 13.8, 18.2 → 11.5, 22.6 | 3.26, 3.38 → 2.74, 3.00 | 4.63, 4.68 → 4.39, 5.46 | 1.83, 1.86 → 1.84, 1.91 |
+| 8 | 11.5 → 12.7 | 11.9 → 12.7 | 2.76 → 3.28 | 3.54 → 4.50 | 1.79 → 1.88 |
+| 9 | 11.1 → 8.2 | 11.1 → 12.0 | 3.00 → 2.67 | 4.40 → 3.96 | 1.94 → 1.78 |
+| 10 | 11.5 → 8.6 | 12.1 → 13.2 | 2.73 → 2.90 | 3.72 → 4.24 | 1.85 → 1.90 |
+| 11 | 15.2 → 11.9 | 15.2 → 11.9 | 2.67 → 2.65 | 4.49 → 3.96 | 1.84 → 1.81 |
+
+The first-admission spike is gone: at seed 7 the 12.6–13.9 ms group ticks
+become three ticks of about 3.5–8 ms. Seed 8's worst group-window tick after the
+change is a backlog release (a 438-request group was assigned to ticks
+3901–3903, a long search then held the scheduler, and 230 requests were
+admitted on 3906). The remaining tick maxima that exceed the group windows are
+class-layer rebuild ticks, which the benchmark counts separately, or host
+stalls spanning consecutive ticks (seed 7's 22.6 and 18.2). Mean, p95 and p99
+move both ways within the spread of runs: each change of admission tick
+produces a different battle from that point, so these are different
+trajectories rather than a per-tick cost.
+
+Battle benchmark (`--renderer=modern --benchmark-tps=120`, scene v5), two
+back-to-back pairs:
+
+| | before | after |
+|---|---|---|
+| `phase5-orders` max (ms) | 2.38, 2.45 | 2.26, 2.14 |
+| `phase5-orders` mean (ms) | 0.90, 0.89 | 0.74, 0.71 |
+| Step p95 / max (ms) | 4.24 / 4.77, 4.25 / 4.88 | 3.77 / 4.52, 3.46 / 4.29 |
+
+**Determinism and fingerprints.** Modern stays deterministic and bit-identical
+across hosts; Strict and Community fingerprints do not move. The Modern
+benchmark-fixture warm and final locks moved to `partial-v1:8d9eef3348ae2124`
+and `partial-v1:b1586e88c6421317`. The Modern ashap locks do not move: that
+scene never forms a group of sixteen same-tick first requests (its largest is
+seven). The Modern fixture initial lock is unchanged.
+
+**Verification.** `movement.TestStrictFirstRequestSpreadIsOff` (Strict,
+Community and unbound: the rule is off, nothing is recorded, a twenty-unit
+group is admitted on its due tick), `TestModernFirstRequestSpreadOverThreeTicks`
+(twenty units use all three ticks and a later admission is never nearer its
+goal than an earlier one; fifteen units, and two players of twelve, are not
+spread), `TestHoldGroupBalancesByCost` (cut points on a worked example),
+`TestFirstRequestHoldComposesWithRepathDelay` and
+`TestAssignFirstRequestHoldsDoesNotAllocate`; the Strict, Community and Modern
+`headless` fingerprint locks cover RNG and resource effects over whole
+battles.

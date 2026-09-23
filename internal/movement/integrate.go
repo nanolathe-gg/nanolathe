@@ -174,6 +174,12 @@ type System struct {
 	moveGoals       []*moveGoal      // per-unit movement-goal handle [04 §8.3][04 §7.4]
 	recordGoals     [][]recordGoal   // retained record objects, independent of controller binding [04 R-ORD-01 §9]
 	pathProvider    *pathProvider
+	// firstRequests are staged first requests awaiting the scheduler tick they
+	// come due on, in staging order; firstGroup is that tick's candidate
+	// scratch. Both are empty unless the bound rules spread group orders
+	// (docs/DESIGN_MOVEMENT_PATH.md "Modern group-order spreading").
+	firstRequests []pool.Handle
+	firstGroup    []firstRequest
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
 	// maximum terrain height over the 3x3 block of sectors around each one
@@ -274,9 +280,18 @@ func (s *System) PathRequestsSnapshot() []path.Request {
 	}
 	return s.pathProvider.allRequests()
 }
-func (p *pathProvider) PlayerCount() int        { return p.players }
-func (p *pathProvider) UnitLimit() int32        { return p.limit }
-func (p *pathProvider) SetPathTick(tick uint32) { p.tick = tick }
+func (p *pathProvider) PlayerCount() int { return p.players }
+func (p *pathProvider) UnitLimit() int32 { return p.limit }
+
+// SetPathTick opens a scheduler call. Group-order holds are assigned here,
+// before the call's first poll, so every candidate of a group is judged
+// against the same tick.
+func (p *pathProvider) SetPathTick(tick uint32) {
+	p.tick = tick
+	if p.system != nil {
+		p.system.assignFirstRequestHolds(tick)
+	}
+}
 func (p *pathProvider) Eligible(player int) bool {
 	// Eligibility is player-record existence, not queue non-emptiness. Retail
 	// accrues and spends the equal share while polling that player's followers
@@ -321,7 +336,7 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 		return path.Request{}, path.PollVisited
 	}
 	route := handleRow(p.system.Routes, h)
-	if !route.WantsRepath || route.LastRequestTick+60 > p.tick {
+	if !p.system.repathDue(route, int(h), p.tick) {
 		return path.Request{}, path.PollVisited
 	}
 	if r.Activation != 0 {
@@ -346,6 +361,7 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 	// submission-time snapshot, and the flag stays armed until publication
 	// [04 R-MOV-01 §7][04 R-PATH-01 §6].
 	route.LastRequestTick = p.tick
+	route.firstHold = 0
 	p.dropRequest(player, h)
 	return r, path.PollRequest
 }
@@ -512,7 +528,25 @@ func (p *pathProvider) Submit(r path.Request) {
 	}
 	p.requests[r.Player][r.Unit] = r
 	p.setStaged(r.Unit, true)
+	if p.system != nil {
+		p.system.noteFirstRequest(r.Unit)
+	}
 }
+
+// stagedRequest returns h's staged request and the player whose map holds it,
+// looking the players up in index order.
+func (p *pathProvider) stagedRequest(h pool.Handle) (path.Request, int, bool) {
+	if p == nil || !p.isStaged(int(h)) {
+		return path.Request{}, 0, false
+	}
+	for player := range p.requests {
+		if r, ok := p.requests[player][h]; ok {
+			return r, player, true
+		}
+	}
+	return path.Request{}, 0, false
+}
+
 func (p *pathProvider) Cancel(unit pool.Handle) bool {
 	for player := range p.requests {
 		if _, ok := p.requests[player][unit]; ok {
@@ -2437,7 +2471,7 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	// The follower stages the current request payload once. Its poll at the
 	// scheduler's physical-slot visit owns the inclusive throttle comparison
 	// and timestamp write [04 R-MOV-01 §7][04 R-PATH-01 §6].
-	if !route.WantsRepath || route.LastRequestTick+60 > tick || s.HasPathRequest(u.Handle) {
+	if !s.repathDue(route, int(u.Handle), tick) || s.HasPathRequest(u.Handle) {
 		return arrived
 	}
 	binding := handleRow(s.activeOrders, u.Handle)
@@ -2452,6 +2486,20 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	return arrived
 }
 
+// repathDue is the follower's request-poll test: armed, and the throttle
+// since the last admitted poll has elapsed, inclusively [04 R-MOV-01 §7]. The
+// staging test and the scheduler poll share it so a Modern delay cannot let
+// one admit what the other refuses. The rule is asked only for an armed
+// follower, so an idle unit costs no dispatch. A Modern group-order hold is
+// the one further condition; it is zero whenever the bound rules do not
+// spread (docs/DESIGN_MOVEMENT_PATH.md "Modern group-order spreading").
+func (s *System) repathDue(route *Route, slot int, tick uint32) bool {
+	if !route.WantsRepath || route.firstHold > tick {
+		return false
+	}
+	return route.LastRequestTick+s.rules().RepathDelay(s, slot, route.LastRequestTick) <= tick
+}
+
 // clearPathState is the single lifecycle reset for follower-owned path state.
 // Cancelling the request separately is not enough: a route with wants-repath
 // left armed could resurrect a removed order on a later unit visit. The order
@@ -2464,6 +2512,7 @@ func (s *System) clearPathState(handle pool.Handle) {
 	s.invalidatePathState(handle)
 	if route := handleRow(s.Routes, handle); route != nil {
 		route.LastRequestTick = 0
+		route.firstHold = 0
 	}
 }
 
