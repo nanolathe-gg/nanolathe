@@ -279,9 +279,6 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	// a slot list. Use the same name that supplies the art and hover card.
 	if ctx.selected != nil && b.cat != nil {
 		if product, found := b.cat.Unit(gad.Name); found && product != nil {
-			if ctx.window == h.expandedSidebar.window && !sidebarProductAllowed(ctx.frame, b.cat, gad.Name) {
-				return false
-			}
 			if !hud.ProductArmsPlacement(product) {
 				delta := factoryBuildDelta(modifiers, rightClick)
 				b.playUICue(nil, countedBuildCue(delta))

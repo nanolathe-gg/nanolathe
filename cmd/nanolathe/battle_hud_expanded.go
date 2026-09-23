@@ -11,7 +11,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
-	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
 
@@ -119,17 +118,6 @@ func (h *retailBattleHUD) sidebarSource(window *gui.Window, index int, art *form
 	return window, art
 }
 
-func sidebarProductAllowed(f *frame.Frame, cat *content.Catalog, name string) bool {
-	// A factory queue resolves the installed widget name, not CANBUILD.
-	// Stock ARMPLAT authors ARMCSA where its list names ARMCA [07 §9].
-	if cat != nil {
-		if product, ok := cat.Unit(name); ok && product != nil && product.BMCode != 0 {
-			return true
-		}
-	}
-	return hud.BuildProductAllowed(cat, f, name)
-}
-
 func (h *retailBattleHUD) sidebarGadgetVerdict(window *gui.Window, gad gui.Gadget, f *frame.Frame, paged bool, cat *content.Catalog) (commandButtonVerdict, bool) {
 	if window == h.expandedSidebar.window {
 		paged = h.sidebarPaging.state.Page != 0
@@ -138,9 +126,17 @@ func (h *retailBattleHUD) sidebarGadgetVerdict(window *gui.Window, gad gui.Gadge
 			return commandButtonVerdict{hidden: h.sidebarPaging.state.Count < 2}, true
 		}
 	}
+	// A product slot greys only when its installed name resolves to no
+	// definition, exactly as on an authored page [07 R-HUD-03 §6]. CANBUILD
+	// membership is not a button-state input: stock CORCS installs CORSY and
+	// CORLLT on its first page without listing either, and both stay live
+	// [07 §9].
 	if window == h.expandedSidebar.window && gad.CommonAttribs&4 != 0 {
-		product, ok := cat.Unit(gad.Name)
-		return commandButtonVerdict{grey: !ok || product == nil || !sidebarProductAllowed(f, cat, gad.Name)}, true
+		var product *content.UnitDef
+		if cat != nil {
+			product, _ = cat.Unit(gad.Name)
+		}
+		return commandButtonVerdict{grey: product == nil}, true
 	}
 	return paletteGadgetVerdict(gad, f, paged, cat)
 }

@@ -132,7 +132,7 @@ func TestRetailOversizedModMenus(t *testing.T) {
 									if hit := w.HitTest(r.X+r.W/2, r.Y+r.H/2); hit != i {
 										t.Fatalf("%s covered by gadget %d", g.Name, hit)
 									}
-									if product, ok := cat.Unit(g.Name); ok && hud.ProductArmsPlacement(product) && !hud.BuildProductAllowed(cat, f, g.Name) {
+									if product, ok := cat.Unit(g.Name); ok && hud.ProductArmsPlacement(product) && !publishedProductAllowed(cat, f, g.Name) {
 										t.Fatalf("authored structure %s absent from placement membership", g.Name)
 									}
 									if product, ok := cat.Unit(g.Name); ok && product.Builder {

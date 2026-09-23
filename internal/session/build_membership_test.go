@@ -35,7 +35,7 @@ func TestBuildMembershipSwitchPublishesOwnedListAndRebindsAI(t *testing.T) {
 	s.RebindRules()
 	s.publishSnapshot(2)
 	modern := s.Snapshot.Current()
-	if !hud.BuildProductAllowed(cat, modern, "factory") || hud.BuildProductAllowed(cat, before, "factory") {
+	if !slices.Contains(hud.AllowedBuildProducts(cat, modern), "factory") || slices.Contains(hud.AllowedBuildProducts(cat, before), "factory") {
 		t.Fatal("published admission did not follow selected rule")
 	}
 	if !slices.Equal(s.AI[1].BuildProducts("builder"), menu.AuthoredButtons) {
@@ -46,7 +46,7 @@ func TestBuildMembershipSwitchPublishesOwnedListAndRebindsAI(t *testing.T) {
 	}
 	s.BindRules(StrictRuleSet())
 	s.publishSnapshot(3)
-	if hud.BuildProductAllowed(cat, s.Snapshot.Current(), "factory") || !slices.Equal(s.AI[1].BuildProducts("builder"), menu.Buttons) {
+	if slices.Contains(hud.AllowedBuildProducts(cat, s.Snapshot.Current()), "factory") || !slices.Equal(s.AI[1].BuildProducts("builder"), menu.Buttons) {
 		t.Fatal("strict rebind retained extension")
 	}
 	if *s.SimRNG() != sim || *s.CrtRNG() != crt || s.Econ.Players[0].Stock != ([2]float32{321, 654}) {
@@ -73,7 +73,7 @@ func TestPublishedEmptyBuildMembershipDoesNotFallBackToCatalog(t *testing.T) {
 	s.BindRules(rules)
 	s.publishSnapshot(1)
 	f := s.Snapshot.Current()
-	if f.CommandPage.AllowedProducts == nil || hud.BuildProductAllowed(cat, f, "factory") {
+	if f.CommandPage.AllowedProducts == nil || slices.Contains(hud.AllowedBuildProducts(cat, f), "factory") {
 		t.Fatal("explicit empty rule membership fell back to catalog")
 	}
 }

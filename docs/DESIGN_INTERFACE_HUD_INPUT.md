@@ -1424,9 +1424,10 @@ applying download placements. Read pages in authored page order and products in
 vertical then horizontal reading order, with stable source-record tie breaking.
 Real products on a custom page zero also belong to this list. Omit empty IGPATCH
 slots and inactive records; retain duplicate real entries and separate directional
-shipyard definitions. CANBUILD is an availability/placement contract, not a source
-of button identities: in particular a physical factory button may name a product
-that differs from CANBUILD. Do not reconstruct this list from membership or infer
+shipyard definitions. CANBUILD is neither a source of button identities nor a
+button-state or placement gate: a physical page may name a product that differs
+from CANBUILD (ARMPLAT's ARMCSA, CORCS's CORSY and CORLLT), and such a cell greys
+only when its name resolves to no definition [07 R-HUD-03 §6]. Do not reconstruct this list from membership or infer
 relationships from unit-name suffixes. Arbitrary building rotation is deferred.
 
 Each list entry is one logical cell containing one or more product buttons.
@@ -2005,6 +2006,14 @@ the retained common-widget editor. The dialog owns keyboard, button and world
 pointer input through its close frame. Simulation continues, pointer-edge
 camera scrolling remains live, and held-arrow and drag camera movement are
 suppressed. Enter posts and Escape cancels; either exit clears the editor.
+Keypad Enter is Enter. A right-button press anywhere cancels as Escape does:
+`serviceTalk` serves the editor one Escape in place of that frame's pointer
+records and closes the line without committing even if the editor had lost
+its capture. The press belongs to the dialog's frame, so it never cancels an
+armed order or clears the selection. This is a Supported inference from a
+retail maintainer's manual observation `[07 §5 "Chat"]`, applies in every
+gameplay mode, and is locked by `TestTalkRightPressCancelsAndIsConsumed`
+together with the unchanged right press while chat is closed.
 Posting reads the registered local-player name without a fallback and appends
 `<name> text` to the local message ring with class 4, source unit 0, speaker
 sentinel 10 and the current published tick. Campaign entry registers the name

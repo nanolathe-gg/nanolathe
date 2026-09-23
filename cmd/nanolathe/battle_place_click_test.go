@@ -165,9 +165,16 @@ func heldClick(c *BattleController, x, y int32, held int) {
 // selection, and the release issued a contextual Move that purged the build
 // order the same click had just queued — the builder walked to the site and
 // never built.
+//
+// armfac is absent from the fixture builder's CANBUILD list and still queues:
+// the world click issues the armed product with no membership test [07 §9].
 func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
-	for _, held := range []int{1, 4, 12} {
-		t.Run(fmt.Sprintf("held%dframes", held), func(t *testing.T) {
+	for _, tc := range []struct {
+		product string
+		held    int
+	}{{"armsolar", 1}, {"armsolar", 4}, {"armsolar", 12}, {"armfac", 4}} {
+		product, held := tc.product, tc.held
+		t.Run(fmt.Sprintf("%s/held%dframes", product, held), func(t *testing.T) {
 			b, s, builder := placeClickFixture(t, 64, 64)
 			c := newReplayController(b)
 			s.Step(s.Clock.ScaledAnchor + 1)
@@ -184,7 +191,7 @@ func TestHeldPlacementClickQueuesOnlyTheBuildOrder(t *testing.T) {
 				t.Fatalf("builder not on the command page: ok=%v page=%+v", ok, f.CommandPage)
 			}
 
-			prodDef, ok := b.cat.Unit("armsolar")
+			prodDef, ok := b.cat.Unit(product)
 			if !ok {
 				t.Fatal("fixture product missing")
 			}
@@ -276,9 +283,7 @@ func TestHeldRejectedPlacementClickQueuesNothing(t *testing.T) {
 	}
 	s.Step(s.Clock.ScaledAnchor + 1)
 
-	// armfac is a placement product absent from the builder's authored list,
-	// so commitBuild refuses it: the GUI may not invent a product [R-P0-03].
-	prodDef, ok := b.cat.Unit("armfac")
+	prodDef, ok := b.cat.Unit("armsolar")
 	if !ok {
 		t.Fatal("fixture product missing")
 	}
@@ -287,6 +292,22 @@ func TestHeldRejectedPlacementClickQueuesNothing(t *testing.T) {
 	c.Step(BattleInputFrame{MouseX: sx, MouseY: sy, Elapsed: 1.0 / 30.0}, nil)
 	if !b.battleState().Input.BuildOK {
 		t.Fatalf("fixture site %d,%d is not a legal placement", sx, sy)
+	}
+	// The command boundary refuses the legal site because the committed page
+	// no longer names a builder the local player owns. CANBUILD membership is
+	// not a refusal: the world click carries no such test [07 §9].
+	current := s.Snapshot.Current()
+	next := *current
+	next.Units = append([]frame.UnitView(nil), current.Units...)
+	for i := range next.Units {
+		next.Units[i].Pieces = append([]frame.PieceView(nil), current.Units[i].Pieces...)
+	}
+	next.Selection.Handles = append([]pool.Handle(nil), current.Selection.Handles...)
+	next.CommandPage = frame.CommandPageView{}
+	published := s.Snapshot.BeginWrite()
+	*published = next
+	if err := s.Snapshot.Republish(current.Tick); err != nil {
+		t.Fatal(err)
 	}
 	heldClick(c, sx, sy, 6)
 	s.Step(s.Clock.ScaledAnchor + 1)

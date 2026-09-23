@@ -130,9 +130,6 @@ func (h *retailBattleHUD) drawCommunityRotationMenu(c *client.Client, b *battleS
 		if !found || product == nil || product.BMCode != 0 {
 			continue
 		}
-		if window == h.expandedSidebar.window && !sidebarProductAllowed(f, b.cat, gad.Name) {
-			continue
-		}
 		allowed := b.sess.Build.AllowedFacings(product)
 		if communityRotationFacingCount(allowed) < 2 {
 			continue

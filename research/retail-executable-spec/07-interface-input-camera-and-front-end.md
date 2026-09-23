@@ -2885,6 +2885,14 @@ terminator byte) plus the `SENDTO` toggle bit on every exit path. While
 `TALK.GUI` is present, held-arrow camera movement is suppressed; pointer-edge
 scrolling is never suppressed by chat.
 
+**Supported inference — a right-button press cancels the open line.** While
+`TALK.GUI` is open, a right-button press anywhere discards the typed text and
+closes the dialog without committing, as Escape does, and the press has no
+further battle effect: it neither returns an armed order to idle nor clears
+the selection. This rests on manual observation of retail by a long-time
+ProTA maintainer, not on a trace; how the editor's capture release produces
+it is unknown (Unknown list below).
+
 ### The front-end controller: phases, substates and the pump [R-FE-01 §1]
 
 **Established fact.** The shell controller is one function called once per
@@ -8495,11 +8503,10 @@ can remain composed under the appropriate overlay.
 
 - Chat commit-versus-cancel semantics on every send route, including whether
   the terminator is included per route · §11 · static trace.
-- Whether a mouse button press outside the open chat editor (the tester's
-  expectation for the right button) releases its capture and discards the
-  line, or is ignored · §5 "Chat" [R-WGT-01 §6] · static trace of the editor
-  capture release on an outside button-down, or a retail capture of
-  right-clicking with chat open.
+- The mechanism behind the right-button chat cancel of §5 "Chat" (Supported
+  inference from manual observation), and whether a left press outside the
+  editor behaves the same · §5 "Chat" [R-WGT-01 §6] · what would settle it: a
+  trace of the editor capture release on an outside button-down.
 - Outcome transition timing · §11 · static trace.
 - Pause authorization and forwarding authority for chat, pause, and speed
   packets in multiplayer · §11 · static trace. Out of implementation scope.

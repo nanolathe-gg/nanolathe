@@ -189,9 +189,11 @@ func (b *battleSession) commitBuild(queued bool) bool {
 	if !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
 		return false
 	}
-	if b.cat != nil && !hud.BuildProductAllowed(b.cat, frame, b.battleState().Input.BuildDef) {
-		return false // GUI may not invent products absent from authored list [R-P0-03]
-	}
+	// Retail's world click issues MOBILEBUILD to every selected builder with no
+	// CANBUILD membership test [07 §9], and the order drain adds none
+	// [04 R-ORD-02 §1]. The armed product is the installed gadget's resolved name
+	// [07 §9], so a page product its builder's CANBUILD
+	// omits (stock CORCS: CORSY, CORLLT) is placed like any other.
 	var def *content.UnitDef
 	if b.cat != nil {
 		def, _ = b.cat.Unit(b.battleState().Input.BuildDef)

@@ -86,26 +86,46 @@ func (b *battleSession) serviceTalk(in *input.State) {
 	b.chat.ownsFrame = true
 	// Enter commits and Escape empties then fires, so both close the line
 	// [07 R-WGT-01 §6]; keypad Enter reaches here as Enter (ebitenapp).
-	// TODO(question): whether a right-button press outside the TALK input
-	// cancels the open chat line. Research records only that a left or right
-	// press inside an input takes the capture [07 R-WGT-01 §6] and that the
-	// battle right button cancels an armed order or clears the selection
-	// [07 §9]; neither covers TALK.GUI's outside press. A trace of the text
-	// editor's capture release on an outside button-down, or a retail capture
-	// of right-clicking with chat open, would settle it.
 	frame := pointerFrame(in, in.PeekTokens(), false)
+	// A right-button press anywhere cancels the line exactly as Escape does:
+	// the editor is served one Escape in place of this frame's records, so it
+	// empties the text, frees its capture and fires, and nothing is committed.
+	// Supported inference from manual observation of retail by a long-time
+	// ProTA maintainer, not a trace [07 §5 "Chat"]. The press is consumed with
+	// the rest of this frame, so it neither cancels an armed order nor clears
+	// the selection.
+	cancel := talkRightPress(frame)
+	if cancel {
+		frame.Tokens = []input.Token{{Kind: input.TokenEdit, Key: input.KeyEscape}}
+		frame.PointerEvents = nil
+	}
 	frame.DisableQuickKeys = b.developer.quickkeysDisabled
 	result := b.hud.talkPanel.ServiceFrame(frame, ui.WidgetHooks{Measure: b.talkMeasure})
 	if result.Fired && result.FiredIndex == b.hud.talkPanel.Index("TALK") {
 		text := b.hud.talkPanel.TextOf("TALK")
-		if text != "" {
+		if text != "" && !cancel {
 			b.commitLocalChat(text)
 		}
+		b.closeTalk()
+	} else if cancel {
+		// The editor had already lost its capture, so the Escape did not
+		// reach it; the cancel still closes the line without committing.
 		b.closeTalk()
 	}
 	// The dialog owns the complete input frame, including records after its
 	// closing Enter/Escape. None may reach a battle child opened later.
 	in.DiscardTokens(in.PendingTokens())
+}
+
+// talkRightPress reports a right-button down, single or double, in the frame
+// the TALK dialog owns.
+func talkRightPress(frame ui.WidgetFrame) bool {
+	for _, event := range frame.PointerEvents {
+		if event.Kind == input.RightDown || event.Kind == input.RightDoubleClick {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *battleSession) commitLocalChat(text string) {

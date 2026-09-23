@@ -286,9 +286,12 @@ func TestExpandedSidebarCombinedOrdersAndSourceInput(t *testing.T) {
 	if !b.hud.hitTestFor(b, r.X+1, r.Y+1) {
 		t.Fatal("factory identity filtered through membership")
 	}
+	// A structure outside CANBUILD is equally live: a product slot greys only
+	// when its name resolves to no definition [07 R-HUD-03 §6] (stock CORCS
+	// installs CORSY and CORLLT without listing them).
 	b.cat.Units["product6"].BMCode = 0
-	if b.hud.hitTestFor(b, r.X+1, r.Y+1) {
-		t.Fatal("structural membership ignored")
+	if !b.hud.hitTestFor(b, r.X+1, r.Y+1) {
+		t.Fatal("structure identity filtered through membership")
 	}
 	b.hud.selectExpandedSidebarPage(b, f, 0)
 	w = expandedWindow(t, b)

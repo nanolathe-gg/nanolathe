@@ -240,17 +240,3 @@ func AllowedBuildProducts(cat *content.Catalog, f *frame.Frame) []string {
 	}
 	return nil
 }
-
-// BuildProductAllowed uses the committed rule-selected list for placement.
-func BuildProductAllowed(cat *content.Catalog, f *frame.Frame, product string) bool {
-	key := content.CanonicalKey(product)
-	if key == "" {
-		return false
-	}
-	for _, candidate := range AllowedBuildProducts(cat, f) {
-		if content.CanonicalKey(candidate) == key {
-			return true
-		}
-	}
-	return false
-}

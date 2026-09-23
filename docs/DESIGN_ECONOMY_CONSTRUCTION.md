@@ -1224,17 +1224,21 @@ suffix filter or fabricated product is inferred from a patch.
 for hand-built catalogs without retained authored data. Nil rules remain
 Strict. This extends the existing construction seam and the same session
 RuleSet; no parallel selector exists. AI managers inherit that construction
-rule during binding, rebinding and creation. Mobile placement admission, resource
-shortcuts and structure-button availability use `CommandPage.AllowedProducts`, a committed
-copy of the selected builder's complete list; page-local products remain separate.
-Mission restrictions prune both lists in the session catalog copy.
+rule during binding, rebinding and creation. Resource shortcuts use
+`CommandPage.AllowedProducts`, a committed copy of the selected builder's complete
+list; page-local products remain separate. Mission restrictions prune both lists
+in the session catalog copy. Neither list gates a product button or a mobile
+placement: in both modes a product slot greys only when its installed name
+resolves to no definition [07 R-HUD-03 §6], and the world click issues the armed
+installed product with no CANBUILD test [07 §9]. Stock CORCS installs CORSY and
+CORLLT on page one while its CANBUILD omits both; they remain buildable, as in
+retail, and are still not added to AI candidates.
 
 The decision itself allocates nothing and consumes no resources or RNG. AI
 selection retains authored duplicates and may consequently choose different
 products or consume different later draws when the extended list changes its
 candidates; this is an intended downstream Modern effect. Ordinary resource
 costs, order insertion, placement and construction execution remain shared.
-The placement producer validates against its committed rule-selected list.
 Already queued commands retain their captured product across a rule switch;
 the authoritative drain does not add a CANBUILD whitelist [04 R-ORD-02 §1].
 Factory queue products retain the resolved
@@ -1242,7 +1246,7 @@ installed GUI identity [07 §9][07 R-P0-11 §1]; CANBUILD is not their admission
 whitelist. The stock seaplane platform's GUI names ARMCSA while CANBUILD names
 ARMCA, and both ordinary and fitted menus must preserve the former on click.
 Do not add physical GUI products to AI candidate lists to conceal this distinction.
-Switching rules changes future published placement admission and AI candidates;
+Switching rules changes future published resource shortcuts and AI candidates;
 queued commands and construction orders are not canceled or rewritten. Catalogs are never mutated
 by binding, and no new save state is introduced. As with other rules, saves
 currently use the host-selected rules on restore.
