@@ -833,8 +833,8 @@ document carries them.
   not create, seed, advance, expire, or recolour nanolathe particles from
   events, so any client renders the same committed snapshot identically
   `[03 R-STRIP-01 §2]` `[03 R-STRIP-01 §3]` `[03 §5.5]` [I6].
-  The optional Modern team-colour mapping reads committed owner metadata at
-  draw time; its presentation-only exception is DESIGN_GPU_RENDERER §23.6.
+  The Community team-colour mapping reads committed owner metadata at draw
+  time; its presentation-only exception is DESIGN_GPU_RENDERER §37.1.
 * **C2.2 The debris draw's own two producers.** A whole-piece debris record
   carries two engine bits the simulation never reads: SMOKE and FIRE are draw
   inputs, and a frame that draws the piece makes one strip-9 smoke-puff

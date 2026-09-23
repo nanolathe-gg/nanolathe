@@ -369,43 +369,31 @@ func checkSubmergedNanoDevicePixels() error {
 	return nil
 }
 
-// Team illumination uses the entire selected ramp, independent of shimmer.
-func TestTeamNanoLightingUsesSelectedRamp(t *testing.T) {
+// Community stream assignments stay fixed and supply Enhanced illumination.
+func TestCommunityNanoLightingUsesAssignedByte(t *testing.T) {
 	r := &Renderer{w: 64, h: 64}
-	var ramp [7]uint8
-	for i := range ramp {
-		ramp[i] = byte(40 + i)
-		r.displayPalette[ramp[i]] = [4]byte{0, 0, byte(40 + i*30), 255}
-		r.displayPalette[0xa1+i] = [4]byte{0, 255, 0, 255}
-	}
-	var reference [3]float32
-	for i := range ramp {
+	r.displayPalette[40] = [4]byte{0, 0, 220, 255}
+	r.displayPalette[41] = [4]byte{220, 0, 0, 255}
+	for _, tc := range []struct {
+		index uint8
+		axis  int
+	}{{40, 2}, {41, 0}} {
 		var list drawlist.List
-		list.RecordFill(drawlist.Fill{Nano: true, NanoTeam: true, NanoRamp: ramp, Index: ramp[i], Rect: drawlist.Rect{X: 20, Y: 20, W: 2, H: 2}})
+		list.RecordFill(drawlist.Fill{Nano: true, NanoTeam: true, Index: tc.index, Rect: drawlist.Rect{X: 20, Y: 20, W: 2, H: 2}})
 		r.prepareBattleLighting(&list)
 		if len(r.lighting.lights) != 1 {
 			t.Fatal("missing team light")
 		}
 		color := r.lighting.lights[0].color
-		if color[0] != 0 || color[1] != 0 || color[2] <= 0 {
-			t.Fatalf("team light is not blue: %v", color)
-		}
-		if i == 0 {
-			reference = color
-		} else if color != reference {
-			t.Fatalf("shimmer changed broad light: %v != %v", color, reference)
+		if color[tc.axis] <= 0 || color[(tc.axis+1)%3] != 0 || color[(tc.axis+2)%3] != 0 {
+			t.Fatalf("assigned byte %d produced light %v", tc.index, color)
 		}
 	}
 }
 
 func checkTeamNanoDevicePixels() error {
 	pal := fixturePalette()
-	var ramp [7]uint8
-	for i := range ramp {
-		ramp[i] = byte(40 + i)
-		pal.Base[ramp[i]] = [4]byte{0, 0, byte(60 + i*30), 255}
-		pal.Base[0xa1+i] = [4]byte{0, byte(60 + i*30), 0, 255}
-	}
+	pal.Base[40] = [4]byte{0, 0, 220, 255}
 	const w, h = 240, 140
 	r, err := NewChecked(&pal, w, h)
 	if err != nil {
@@ -416,7 +404,7 @@ func checkTeamNanoDevicePixels() error {
 	list.RecordClear()
 	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: 25})
 	for i := 0; i < 35; i++ {
-		list.RecordFill(drawlist.Fill{Nano: true, NanoTeam: true, NanoRamp: ramp, Index: ramp[i%7], Rect: drawlist.Rect{X: 100 + int32(i%7)*3, Y: 60 + int32(i/7)*3, W: 2, H: 2}, WorldHeight: 12, LightingScale: 1})
+		list.RecordFill(drawlist.Fill{Nano: true, NanoTeam: true, Index: 40, Rect: drawlist.Rect{X: 100 + int32(i%7)*3, Y: 60 + int32(i/7)*3, W: 2, H: 2}, WorldHeight: 12, LightingScale: 1})
 	}
 	list.RecordWorld(drawlist.WorldSpace{})
 	list.RecordExpand()

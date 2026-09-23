@@ -859,19 +859,16 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			blitBattlePanel(c, h.panelBottom, int(x), bottomY)
 		}
 	}
-	blitBattlePanel(c, h.panelSide, 0, 0)
 	// The left rail keeps its authored 129x480 art: retail stamps PANELSIDE
 	// once at battle start onto a surface cleared to palette index 0 and never
 	// extends it, so on a surface taller than the art the band under the panel
 	// stays index 0 for the whole battle [07 R-HUD-05]. This composer draws the
 	// world across the whole framebuffer first, so the band is painted here.
 	// The band is measured from the art's authored 480 rows, which is now also
-	// the panel's only position: the slide does not move it.
-	if h.panelSide != nil {
-		if gap, ok := hud.RailGap(int32(screenH), int32(h.panelSide.Width), int32(h.panelSide.Height)); ok {
-			c.UIFillRect(int(gap.X1), int(gap.Y1), int(gap.X2-gap.X1+1), int(gap.Y2-gap.Y1+1), 0)
-		}
-	}
+	// the panel's only position: the slide does not move it. A host layout
+	// that places rail controls below those rows stretches the art instead
+	// (drawRailBackdrop).
+	h.drawRailBackdrop(c, b, cur, screenH)
 	// The hovered-gadget index is the footer's first source, so the pointer
 	// pass over the open page runs before the footer draws [07 R-HUD-03 §1].
 	if c.Input() != nil && c.Input().Mouse != nil {

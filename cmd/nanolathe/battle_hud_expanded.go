@@ -39,7 +39,7 @@ type expandedSidebarLayout struct {
 }
 
 func (h *retailBattleHUD) expandedSidebarWindow(b *battleSession, f *frame.Frame, base *gui.Window, art *formats.GAF) *gui.Window {
-	flat := b != nil && b.cl != nil && b.cl.Enhanced() && b.expandedSidebarEnabled()
+	flat := b.expandedSidebarActive()
 	if h.sidebarPaging.flat != flat {
 		h.retireExpandedSidebar()
 		h.sidebarPaging = sidebarRowPaging{flat: flat}

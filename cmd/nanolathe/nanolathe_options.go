@@ -72,12 +72,11 @@ func (g *gameShell) setPresentation(p settings.Presentation) {
 // to and from rather than one that knows about the draw list.
 func presentationEffects(p settings.Presentation) drawlist.Effects {
 	return drawlist.Effects{
-		Water:         p.Water != 0,
-		Lighting:      p.Lighting != 0,
-		Finish:        p.Finish != 0,
-		Distortion:    p.Distortion != 0,
-		Marks:         p.Marks != 0,
-		TeamNanospray: p.TeamNanospray != 0,
+		Water:      p.Water != 0,
+		Lighting:   p.Lighting != 0,
+		Finish:     p.Finish != 0,
+		Distortion: p.Distortion != 0,
+		Marks:      p.Marks != 0,
 	}
 }
 
@@ -222,7 +221,6 @@ func nanolatheOptionsPage(window *gui.Window) error {
 		{"NFINISH", "Metal: Off|Metal: On"},
 		{"NHEAT", "Heat: Off|Heat: On"},
 		{"NMARKS", "Marks: Off|Marks: On"},
-		{"NNANO", "Nano: Green|Nano: Team"},
 	} {
 		control := button
 		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, 2
@@ -242,14 +240,13 @@ type nanolatheEffectSwitch struct {
 // paired with the persisted field each one writes. `NGLOW` is not among them:
 // glow stays in the display block, where the chat command and the capture route
 // already read it (DESIGN_GPU_RENDERER §19.4).
-func nanolatheEffectSwitches(p *settings.Presentation) [6]nanolatheEffectSwitch {
-	return [6]nanolatheEffectSwitch{
+func nanolatheEffectSwitches(p *settings.Presentation) [5]nanolatheEffectSwitch {
+	return [5]nanolatheEffectSwitch{
 		{"NWATER", &p.Water},
 		{"NLIGHTS", &p.Lighting},
 		{"NFINISH", &p.Finish},
 		{"NHEAT", &p.Distortion},
 		{"NMARKS", &p.Marks},
-		{"NNANO", &p.TeamNanospray},
 	}
 }
 
@@ -364,6 +361,5 @@ func (g *gameShell) setNanolathePreferences(p settings.Presentation) {
 	next := g.presentation
 	next.Renderer, next.FPS, next.ExpandedSidebar = p.Renderer, p.FPS, p.ExpandedSidebar
 	next.Water, next.Lighting, next.Finish, next.Distortion, next.Marks = p.Water, p.Lighting, p.Finish, p.Distortion, p.Marks
-	next.TeamNanospray = p.TeamNanospray
 	g.setPresentation(next)
 }

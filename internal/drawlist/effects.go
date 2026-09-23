@@ -8,8 +8,6 @@ package drawlist
 // Every field is a modern presentation choice. Classic records and composes the
 // same pixels whatever the set says, and no field reaches simulation state [I6].
 type Effects struct {
-	// TeamNanospray opts into builder-coloured spray (GPU design §23.6).
-	TeamNanospray bool
 	// Water gates the coastal water surface, surface wakes and hover dust,
 	// building foam, water motion and the screen-space reflections (§26).
 	Water bool
@@ -28,8 +26,7 @@ type Effects struct {
 	Marks bool
 }
 
-// AllEffects is the default selection: all effect families on; optional team
-// nanospray stays off to preserve the standard green appearance.
+// AllEffects is the default selection: all effect families on.
 func AllEffects() Effects {
 	return Effects{Water: true, Lighting: true, Finish: true, Distortion: true, Marks: true}
 }

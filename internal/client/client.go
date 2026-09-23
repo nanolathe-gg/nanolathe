@@ -421,8 +421,7 @@ type Client struct {
 	// (docs/DESIGN_GPU_RENDERER.md §30), persisted in the presentation block.
 	// The recorder gates the producers that cost work to record; the executor
 	// gates the passes. Classic composes the same pixels whatever it says.
-	effects   drawlist.Effects
-	nanoRamps [256]nanoTeamRamp
+	effects drawlist.Effects
 	// shadows is options word bit2 0x04, the master model-shadow gate;
 	// vehicleShadows is bit3 0x08, featureShadows is bit4 0x10, and shading is
 	// bit5 0x20. Feature sprites read bit4 directly; it remains independent of
@@ -656,7 +655,6 @@ func (c *Client) SetPalette(p *palette.Tables) {
 		c.pausedWorldRevision++
 	}
 	c.pal = p
-	c.nanoRamps = [256]nanoTeamRamp{}
 	if p != nil {
 		c.rebuildDisplayPalette()
 		c.ResolveUnitStyle()

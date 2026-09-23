@@ -10,3 +10,9 @@ func (b *battleSession) expandedSidebarEnabled() bool {
 	}
 	return settings.DefaultPresentation().ExpandedSidebar != 0
 }
+
+// expandedSidebarActive reports whether the flat Expanded sidebar layout is
+// selected: the Modern renderer with the preference on.
+func (b *battleSession) expandedSidebarActive() bool {
+	return b != nil && b.cl != nil && b.cl.Enhanced() && b.expandedSidebarEnabled()
+}

@@ -3970,44 +3970,11 @@ and motion still affect illumination, and an overloaded scene may drop distant
 construction sources. The Lighting switch disables both explosion and nano
 lighting; glow remains independent.
 
-### 23.6 Optional team-coloured nanospray
+### 23.6 Community team-coloured nanospray
 
-**Nanolathe presentation policy.** `presentation.teamNanospray` defaults to 0
-(green); the NANOLATHE options page's `Nano: Green|Nano: Team` control sets it.
-Only the Modern renderer applies it, independently of the gameplay rule set.
-Classic and the disabled option preserve the raw green ramp of [03 §5.5].
-
-At emission, the strip container captures the builder's player colour from the
-existing player record, using the event's owner even when reclaim/capture
-reverses the geometric endpoints. Every particle publishes that colour and its
-presence bit. It survives builder death, capture and slot reuse until expiry.
-No preference enters the session; particle colour bytes, lifetimes, motion,
-spawn admission, CRT draws and resources are unchanged. Transient strips retain
-the existing save/restore lifecycle; new emissions after load use restored
-player colours.
-
-After ordinary visibility admission the Modern recorder takes the dominant
-opaque colour of that player's authored logo, shared with strategic icons.
-For each of the seven original green palette entries, its largest RGB channel
-is the target intensity. Scale each logo channel by target intensity / largest
-logo channel, with integer truncation, then choose the palette entry minimizing
-squared RGB distance (lowest index wins ties). This preserves the seven-step
-phase and uses shades of the selected player colour without a hardcoded player
-palette. Matches are cached by logo palette index and cleared on palette
-replacement. Missing colour, missing logo/palette, black logo ink or an invalid
-source ramp preserves green. Palette quantization can merge adjacent shades.
-
-The fill carries the selected ramp: the core and glow use its current shade;
-broad lighting averages the entire displayed ramp, so shimmer does not flash
-the surroundings. Nearby sprays of different colours contribute their own
-colours to shared light clusters. Submerged particles keep the selected core
-but retain the existing emission suppression. No new shader or draw pass.
-
-Acceptance covers builder ownership in forward/reverse emissions, immutable
-published colours after owner changes, unchanged CRT draws and particle state,
-all seven shades, Classic/default/missing-art fallbacks, live toggle and palette
-replacement, and team-coloured lighting independent of shimmer. Inspect a
-retail-palette spray comparison and run the existing rendering and battle gates.
+The Community patch's `TeamColorNanolathe` host preference selects the
+stream and nanoframe palette lists in both renderers. The mapping and its
+Enhanced lighting input are specified in §37.1.
 
 ### 23.7 Metallic glint
 
@@ -4683,9 +4650,8 @@ reason the display bits are: a stored 0 is "off" and is kept, only a negative
 value is repaired, and a file that omits a key keeps the default because the
 loader decodes over the defaults [02 "Settings"]. `internal/drawlist.Effects` is
 the value type both sides read, with one `bool` field per switch;
-`drawlist.AllEffects()` enables those five families, while the optional
-`teamNanospray` colour preference (§23.6) remains off. `cmd/nanolathe` converts the stored
-integers, so `internal/settings` remains a leaf.
+`drawlist.AllEffects()` enables those five families. `cmd/nanolathe` converts
+the stored integers, so `internal/settings` remains a leaf.
 
 | Switch | Recorder gate | Executor gate |
 |---|---|---|
@@ -4694,9 +4660,6 @@ integers, so `internal/settings` remains a leaf.
 | Finish | none — face material and normals are always recorded | the metallic glint (§23.7) and the metal/paint finishes (§29.1) |
 | Distortion | blast ring metadata (§25), the burning-feature heat tag (§27), and the fresh-wreck emission and shimmer (§28) | the blast rings and the vegetation heat shimmer |
 | Marks | the scorch observer and draw (§29.2) and the trail layer (§15) | the fading scorch layer |
-
-The optional `teamNanospray` switch (§23.6) also travels in `Effects`, defaults
-to 0, and gates only the Modern recorder's particle colour mapping.
 
 These five families are the executor **effect** surface. `Renderer.SetEffects` is its only
 entry point: the per-family setters are package-internal, each is set from the
@@ -5469,20 +5432,16 @@ in §16.3.
 
 ### 37.1 Team-coloured nanolathe and nanoframes
 
-The existing Enhanced `teamNanospray` option remains available. When both it
-and `teamColorNanolathe` are enabled, the explicit Community palette lists take
-precedence in both renderers; disabling Community restores the existing
-Enhanced logo-derived ramp and its lighting. Community particles feed their
-fixed configured colour into Enhanced illumination as well. Both paths share captured owner
-metadata, and neither changes simulation state.
-
-
 `TeamColorNanolathe` is an independent host presentation switch, off by
 default. Its ten stream-list and frame-list strings use the parser, bounds,
 per-list fallback and stock-palette defaults established in
 [community-patch-engine.md "Team-coloured nanolathe and nanoframe colours"](../research/extensions/community-patch-engine.md#512-team-coloured-nanolathe-and-nanoframe-colours).
 It is not a gameplay-rule choice and never consumes a simulation or CRT draw,
 changes an event count, or writes authoritative state [I6].
+It is the sole team-colour control for nano particles and construction frames
+in both renderers. A disabled switch preserves the stock palette bytes;
+Community particles feed their fixed configured colour into Enhanced
+illumination.
 
 The strip publisher freezes the nano particle's resolved owner-logo colour,
 creation sample and per-colour creation sequence beside its ordinary stock fill

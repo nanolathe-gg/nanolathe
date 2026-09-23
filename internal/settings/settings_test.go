@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -75,6 +76,30 @@ func TestPresentationPreferencesLoadAndRoundTrip(t *testing.T) {
 				t.Fatalf("round-trip presentation = %+v, want %+v", s.Presentation, tc.want)
 			}
 		})
+	}
+}
+
+func TestLegacyTeamNanosprayPreferenceIsDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"presentation":{"teamNanospray":1,"teamColorNanolathe":1}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Presentation.TeamColorNanolathe != 1 {
+		t.Fatal("Community team colour setting was lost")
+	}
+	if err := s.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"teamNanospray"`)) {
+		t.Fatalf("legacy setting survived save: %s", data)
 	}
 }
 

@@ -496,14 +496,10 @@ type Presentation struct {
 	// TrailStrength is a percentage of the trail layer's tuned peak opacity.
 	// Zero hides trails while leaving the Marks switch's scorch layer intact.
 	TrailStrength int `json:"trailStrength"`
-	// TeamNanospray selects player-coloured nanospray in the modern renderer.
-	// Zero preserves green, including in older files; Classic always stays
-	// green (DESIGN_GPU_RENDERER §30).
-	TeamNanospray int `json:"teamNanospray"`
 }
 
 // DefaultPresentation selects the modern executor with a 60 FPS cap and every
-// Enhanced effect on, with the default green nanospray.
+// Enhanced effect on.
 func DefaultPresentation() Presentation {
 	return Presentation{
 		Renderer: "modern", FPS: 60, ExpandedSidebar: 1, GroupNumbers: 1,
@@ -549,9 +545,6 @@ func (p *Presentation) Normalize() {
 		} else {
 			*value &= 1
 		}
-	}
-	if p.TeamNanospray < 0 {
-		p.TeamNanospray = 0
 	}
 	for _, value := range []*int{&p.Water, &p.Lighting, &p.Finish, &p.Distortion, &p.Marks} {
 		if *value < 0 {

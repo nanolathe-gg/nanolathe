@@ -140,14 +140,13 @@ func (c *Client) drawStripViews(cur *frame.Frame, views []frame.StripView) Strip
 			// two world pixels square (DESIGN_GPU_RENDERER §14.2).
 			side := c.viewScale().Px(stripParticleSize)
 			rw, rh := c.recordExtent()
-			index, ramp, team := c.nanoParticleColor(v)
+			index, team := c.nanoParticleColor(v)
 			c.emitFill(drawlist.Fill{
 				Rect: drawlist.Rect{
 					X: sx - camera.OriginX, Y: sy - camera.OriginY,
 					W: side, H: side,
 				},
 				Index:         index,
-				NanoRamp:      ramp,
 				NanoTeam:      team,
 				Style:         drawlist.FillSolid,
 				Nano:          v.Family == frame.StripFamilyNano,

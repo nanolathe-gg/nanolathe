@@ -374,7 +374,7 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 		s.emitSFXStripProducers(ev)
 	case cob.PresentationNano:
 		// This bridge has no Team field upstream; carry the source unit's
-		// owner explicitly for optional team spray (GPU design §23.6).
+		// owner explicitly for the Community stream-colour option (GPU design §37.1).
 		e.Team = combat.NeutralSide
 		if s.session != nil && s.session.Units != nil {
 			if u := s.session.Units.Unit(s.source); u != nil {

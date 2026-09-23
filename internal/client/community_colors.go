@@ -5,7 +5,11 @@ package client
 // draw from either random stream (community-patch-engine.md "Team-coloured
 // nanolathe and nanoframe colours") [I6].
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+)
 
 const (
 	communityPlayerColors    = 10
@@ -147,4 +151,14 @@ func (c *Client) communityStreamColor(owner uint8, known bool, stock, sample uin
 	}
 	config := &c.communityColors.players[owner]
 	return config.stream[(uint32(sample)+sequence)%uint32(config.streamCount)]
+}
+
+// nanoParticleColor applies the Community host colour list before either
+// renderer receives the shared fill. A mapped byte stays fixed for the
+// particle's lifetime (community patch engine behavior §5.12).
+func (c *Client) nanoParticleColor(v frame.StripView) (uint8, bool) {
+	if v.Family != frame.StripFamilyNano || !c.communityColors.options.TeamColorNanolathe || !v.NanoOwnerColorKnown || v.NanoOwnerColor >= communityPlayerColors {
+		return v.Fill, false
+	}
+	return c.communityStreamColor(v.NanoOwnerColor, true, v.Fill, v.ColorSample, v.ColorSequence), true
 }

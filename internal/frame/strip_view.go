@@ -53,7 +53,7 @@ const (
 // within an object [03 §1][03 R-FX-02 §1][I1].
 type StripView struct {
 	// NanoOwnerColor is the builder's lobby colour captured at emission.
-	// Presentation metadata for optional team spray (GPU design §23.6).
+	// Presentation metadata for Community stream colours (GPU design §37.1).
 	NanoOwnerColor      uint8
 	NanoOwnerColorKnown bool
 	// Strip is the barrier this record draws at, 0..9 [03 §1].

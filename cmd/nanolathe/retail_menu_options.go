@@ -1515,7 +1515,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		return g.activateCommunityHUDOption(name)
 	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE":
 		return g.activateBuilderOption(name)
-	case "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR", "NNANO":
+	case "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR":
 		return g.activateNanolatheOption(name)
 	case "NPREVIEW", "NROVERLAY", "NORDERDRAG", "NTEAMNANO", "NMEXSNAP", "NWRECKSNAP", "NSNAPMOD":
 		return g.activateCommunityPlacementOption(name)
@@ -1834,8 +1834,6 @@ func retailOptionsCueKey(name string) string {
 		return "nheat"
 	case "NMARKS":
 		return "nmarks"
-	case "NNANO":
-		return "nnano"
 	case "SOUND":
 		return "sound"
 	case "MUSIC":

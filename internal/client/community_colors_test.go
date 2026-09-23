@@ -159,19 +159,23 @@ func TestUnitNanoframeMapsBeforeBothRenderers(t *testing.T) {
 	}
 }
 
-func TestCommunityNanoOverridesEnhancedRamp(t *testing.T) {
-	c, v := teamNanoFixture()
+func TestCommunityNanoUsesOneColorControl(t *testing.T) {
+	c := &Client{}
+	v := frame.StripView{Family: frame.StripFamilyNano, Fill: 0xa3, NanoOwnerColorKnown: true}
 	options := CommunityColorOptions{TeamColorNanolathe: true}
 	options.PlayerStreamColors[0] = "90,91,92"
 	c.SetCommunityColorOptions(options)
 	v.ColorSample, v.ColorSequence = 2, 5
-	index, ramp, colored := c.nanoParticleColor(v)
-	if index != 91 || !colored || ramp != [7]uint8{91, 91, 91, 91, 91, 91, 91} {
-		t.Fatalf("Community color/light=%d %v %v", index, ramp, colored)
+	for _, enhanced := range []bool{false, true} {
+		c.enhanced = enhanced
+		index, colored := c.nanoParticleColor(v)
+		if index != 91 || !colored {
+			t.Fatalf("Community color with enhanced=%t: %d %t", enhanced, index, colored)
+		}
 	}
 	c.SetCommunityColorOptions(CommunityColorOptions{})
-	index, _, colored = c.nanoParticleColor(v)
-	if index != 40 || !colored {
-		t.Fatalf("Enhanced fallback=%d %v", index, colored)
+	index, colored := c.nanoParticleColor(v)
+	if index != v.Fill || colored {
+		t.Fatalf("disabled Community color=%d %t, want stock", index, colored)
 	}
 }

@@ -84,11 +84,8 @@ func (r *Renderer) prepareNanoLighting(list *drawlist.List) {
 		}
 		particleColor := color
 		if f.NanoTeam {
-			particleColor = [3]float32{}
-			for _, index := range f.NanoRamp {
-				for j := range particleColor {
-					particleColor[j] += float32(r.displayPalette[index][j]) / (255 * 7)
-				}
+			for j := range particleColor {
+				particleColor[j] = float32(r.displayPalette[f.Index][j]) / 255
 			}
 		}
 		group := &l.nano[at]
