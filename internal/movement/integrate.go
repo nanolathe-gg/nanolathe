@@ -41,6 +41,10 @@ import (
 // One System is created per authoritative session and is the sole writer
 // of per-unit movement state for that world.
 type System struct {
+	// passAlliance is this tick's alliance-row query for Modern allied
+	// pass-through, or nil (DESIGN_MOVEMENT_PATH "Modern allied
+	// pass-through"). Derived per tick, never saved.
+	passAlliance func(from, toward uint8) bool
 	// Community holds only this owner's projected feature answers (DESIGN_COMMUNITY_PATCH §3.1).
 	Community community.Features
 	Terrain   *world.Terrain
@@ -180,6 +184,17 @@ type System struct {
 	// (docs/DESIGN_MOVEMENT_PATH.md "Modern group-order spreading").
 	firstRequests []pool.Handle
 	firstGroup    []firstRequest
+	// unreachable holds the Modern unreachable-move certificates, dense by
+	// handle and never ranged; unreachableLive counts the set rows so the
+	// follower asks nothing while it is zero, and unreachableGoals is the
+	// probe's goal-cell scratch. All three stay empty unless the bound rules
+	// complete unreachable moves, are cleared with the order binding, and are
+	// not saved: a load starts with none and the next cannot-get-there
+	// publication certifies afresh (docs/DESIGN_MOVEMENT_PATH.md "Modern
+	// unreachable moves").
+	unreachable      []unreachableCert
+	unreachableLive  int
+	unreachableGoals []path.Cell
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
 	// maximum terrain height over the 3x3 block of sectors around each one
@@ -405,6 +420,25 @@ func (p *pathProvider) pollSlice(player int) (start, end int, ok bool) {
 		return 0, 0, false
 	}
 	return start, end, true
+}
+
+// PathWorkBound answers the scheduler's bounded-work question from the bound
+// movement rules (docs/DESIGN_MOVEMENT_PATH.md "Modern bounded path work").
+func (p *pathProvider) PathWorkBound() (int32, bool) {
+	if p == nil || p.system == nil {
+		return 0, false
+	}
+	return p.system.rules().PathWorkBound(p.system)
+}
+
+// SweepLen is the number of polls in one full sweep of player's slots: the
+// provider's cursor visits every physical slot of the player's slice.
+func (p *pathProvider) SweepLen(player int) int {
+	start, end, ok := p.pollSlice(player)
+	if !ok {
+		return 0
+	}
+	return end - start + 1
 }
 
 // nextSlot is the cursor step of one poll: forward one slot, wrapping from
@@ -2428,7 +2462,10 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	// Modern can finish a terminal point move at a stable local crowd frontier,
 	// including an inactive rejected route waiting in its phase-zero retry.
 	// Its rule owns eligibility/dwell; ordinary arrival still owns the release.
-	if orders.CrowdedMoveArrival(u, head, tick) {
+	// A move whose goal is certified sealed finishes the same way after its
+	// dwell (docs/DESIGN_MOVEMENT_PATH.md "Modern unreachable moves"); the
+	// question is not asked while no certificate is live.
+	if orders.CrowdedMoveArrival(u, head, tick) || s.unreachableArrival(u, head, tick) {
 		head.Phase = 1
 		head.DynamicGate |= arrivalSatisfiedBit
 		s.raiseArrival(u, &arrivalHandle{order: head})
@@ -2546,6 +2583,7 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 	if s.activeOrders != nil {
 		setHandleRow(&s.activeOrders, handle, nil)
 	}
+	s.clearUnreachable(handle)
 	if s.arrivalHandles != nil {
 		setHandleRow(&s.arrivalHandles, handle, nil)
 	}
@@ -3058,6 +3096,12 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 		// "cannot get there" notification [04 R-PATH-01 §7][04
 		// R-PATH-01 §9][04 R-COLL-01 §6].
 		boundOrder.Satisfied |= 0x40
+		// Nanolathe Modern policy: a sealed goal may be certified here
+		// (docs/DESIGN_MOVEMENT_PATH.md "Modern unreachable moves"); Strict
+		// answers off and the retry above is the whole response.
+		s.noteRouteUnavailable(boundUnit, boundOrder, r)
+	} else if len(points) > 0 && liveBinding {
+		s.noteRouteFound(r.Unit, boundOrder, r.Goal, points)
 	}
 	route := handleRow(s.Routes, r.Unit)
 	if route == nil {
@@ -3206,6 +3250,14 @@ func (s *System) seedRestoredMoveTier(u *units.Unit) {
 // commits without needing a separate grid copy. BeginTick must be called once
 // before any StepUnit in the tick; the world must have been bound via BindWorld.
 func (s *System) BeginTick(tick uint32) {
+	// Allied pass-through reads alliance rows through the order binding; the
+	// query is resolved once per tick, not per contested cell.
+	if s != nil {
+		s.passAlliance = nil
+		if s.rules().AlliedPassThrough(s) {
+			s.passAlliance = s.diplomacyRows()
+		}
+	}
 	if s == nil {
 		return
 	}
@@ -3509,6 +3561,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// carries no reason [04 R-COLL-01 §2]; only the Modern learned-terrain
 	// policy below reads this.
 	staticReject := false
+	// Nanolathe Modern allied pass-through: asked once per visit, and the
+	// partner test runs only for a cell another mover holds.
+	alliedPass := coll.Mode == 1 && !brakingOnly && s.rules().AlliedPassThrough(s)
 	perCell := func(c Cell) bool {
 		if !inBounds {
 			return coll.Mode == 2
@@ -3522,6 +3577,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		}
 		if s.Grid != nil {
 			if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
+				if alliedPass && s.alliedPassPartner(u, coll, occ) {
+					return true
+				}
 				blockerID = occ
 				return false
 			}

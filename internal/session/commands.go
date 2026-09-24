@@ -1289,6 +1289,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if !c.Order.AssignedPosition {
 			center, count = s.humanOrderCentroid(handles, excluded)
 		}
+		slots := s.groupDestinationSlots(c.Order, handles, excluded, target, center, count)
 		for _, h := range handles {
 			u := s.humanUnit(h)
 			if u == nil || h == excluded {
@@ -1306,6 +1307,9 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			if !c.Order.AssignedPosition && orders.DescriptorFor(id).StaticGate&2 != 0 && count != 0 {
 				goal := humanFormationGoal(c.Order.Position, u, center, count)
 				gx, gy, gz = goal.X, goal.Y, goal.Z
+				if d, ok := slots.lookup(h); ok {
+					gx, gz = d.X, d.Z
+				}
 			}
 			q := orders.QueueForUnit(u)
 			if q == nil {

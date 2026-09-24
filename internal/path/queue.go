@@ -78,6 +78,22 @@ type tickCandidateProvider interface {
 	SetPathTick(tick uint32)
 }
 
+// workBoundProvider is an optional policy boundary for Nanolathe Modern
+// bounded path work (docs/DESIGN_MOVEMENT_PATH.md "Modern bounded path
+// work"). A provider without it, or one that answers (0, false), keeps the
+// retail accounting: unspent work carries forward without bound and polling
+// continues until the total is spent [04 R-PATH-01 §6].
+type workBoundProvider interface {
+	// PathWorkBound is asked once per scheduler call. carryShares > 0 caps
+	// each player's accumulator at that many equal shares; sweepStop ends a
+	// player's polling for the call once its polls since its last admission
+	// exceed one full sweep of its candidates.
+	PathWorkBound() (carryShares int32, sweepStop bool)
+	// SweepLen is the number of polls one full sweep of player's candidates
+	// takes, or zero when it cannot say.
+	SweepLen(player int) int
+}
+
 // idleCandidateProvider is an optional batching boundary. A provider that can
 // tell, without polling, that a player's next polls will be idle lets the
 // scheduler charge a whole block of them at once. It changes the cost of the
@@ -142,7 +158,12 @@ type Scheduler struct {
 	// reports done. Handing the table out from here is what makes a shared
 	// generation-stamped table safe -- a second search cannot be given the
 	// table the first is still using, it is refused and keeps its own map.
-	workspace    Workspace
+	workspace Workspace
+	// sweepPolls counts, per player, the polls since its last admission in
+	// the current call. It is read only under Modern bounded path work and
+	// is reset at the start of every call, so it carries no state between
+	// ticks and is not saved.
+	sweepPolls   [10]int64
 	traceEnabled bool
 	traces       []Trace
 	traceLimit   int
@@ -497,6 +518,12 @@ func (s *Scheduler) Tick(tick uint32) {
 		return
 	}
 	share := s.stepAllowance / int32(players)
+	var carryShares int32
+	sweepStop := false
+	bound, bounded := s.provider.(workBoundProvider)
+	if bounded {
+		carryShares, sweepStop = bound.PathWorkBound()
+	}
 	total := int32(0)
 	for p := 0; p < 10; p++ {
 		// An admitted request is removed from the provider while the global
@@ -506,7 +533,16 @@ func (s *Scheduler) Tick(tick uint32) {
 		activePlayer := s.active != nil && s.activePlayer == p
 		if activePlayer || s.provider != nil && s.provider.Eligible(p) {
 			s.accumulator[p] += share
+			// Nanolathe Modern bounded path work: carry at most carryShares
+			// shares. The discarded work is credited to the poll count it
+			// would have bought, so the heuristic tier the next replenish
+			// derives from that count sees the same load [04 R-PATH-01 §10].
+			if limit := carryShares * share; carryShares > 0 && s.accumulator[p] > limit {
+				s.serviceCount[p] += s.accumulator[p] - limit
+				s.accumulator[p] = limit
+			}
 		}
+		s.sweepPolls[p] = 0
 		total += s.accumulator[p]
 	}
 	for total > 0 {
@@ -582,6 +618,20 @@ func (s *Scheduler) Tick(tick uint32) {
 		s.serviceCount[player]++ // every visited candidate consumes one poll [04 R-PATH-01 §6]
 		s.accumulator[player]--
 		total--
+		if sweepStop {
+			// Nanolathe Modern bounded path work: once a whole sweep of this
+			// player's candidates has admitted nothing, the rest of its work
+			// this call could only repeat those polls. It is credited as
+			// polls, as the carry cap's discard is, and dropped.
+			if poll == PollRequest {
+				s.sweepPolls[player] = 0
+			} else if s.sweepPolls[player]++; s.accumulator[player] > 0 && s.swept(bound, player) {
+				s.serviceCount[player] += s.accumulator[player]
+				total -= s.accumulator[player]
+				s.accumulator[player] = 0
+				continue
+			}
+		}
 		if poll != PollRequest || s.accumulator[player] < 0 {
 			continue
 		}
@@ -609,6 +659,13 @@ func (s *Scheduler) Tick(tick uint32) {
 			break
 		}
 	}
+}
+
+// swept reports that player's polls since its last admission exceed one
+// full sweep of its candidates. An unknown sweep length never stops.
+func (s *Scheduler) swept(bound workBoundProvider, player int) bool {
+	n := bound.SweepLen(player)
+	return n > 0 && s.sweepPolls[player] > int64(n)
 }
 
 // skipIdleRounds charges whole rounds of idle polls at once and returns the
@@ -659,6 +716,7 @@ func (s *Scheduler) skipIdleRounds(idle idleCandidateProvider, total int32) int3
 	}
 	for _, p := range round[:n] {
 		idle.SkipIdle(p, m)
+		s.sweepPolls[p] += int64(m)
 		s.serviceCount[p] += m
 		s.accumulator[p] -= m
 	}

@@ -63,7 +63,11 @@ Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-mod
 [authored build membership](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-authored-build-membership), and
 [learned terrain](docs/DESIGN_MOVEMENT_PATH.md#modern-learned-terrain), and
 [re-route staggering](docs/DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering), and
-[group-order spreading](docs/DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading).
+[group-order spreading](docs/DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading), and
+[bounded path work](docs/DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work), and
+[group destination slots](docs/DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots), and
+[allied pass-through](docs/DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through), and
+[unreachable moves](docs/DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
 ---

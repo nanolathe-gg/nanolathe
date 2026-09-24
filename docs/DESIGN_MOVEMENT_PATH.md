@@ -41,8 +41,9 @@ looks like sidestepping emerges from two independent timers — the follower's
 else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Unapproved additions in this area invent retail behaviour. The explicit
 Modern construction-clearance contract below,
 [Modern learned terrain](#modern-learned-terrain),
-[Modern re-route staggering](#modern-re-route-staggering) and
-[Modern group-order spreading](#modern-group-order-spreading) are
+[Modern re-route staggering](#modern-re-route-staggering),
+[Modern group-order spreading](#modern-group-order-spreading) and
+[Modern unreachable moves](#modern-unreachable-moves) are
 user-authorized exceptions and must not be removed as parity defects.
 
 ### Modern construction clearance priority
@@ -268,8 +269,10 @@ gameplay seam, bound on `System.Rules` by the session's rule set; unbound it
 answers as Strict 3.1. It carries
 [Community contested-cell claims](#community-contested-cell-claims),
 [Modern learned terrain](#modern-learned-terrain),
-[Modern re-route staggering](#modern-re-route-staggering) and
-[Modern group-order spreading](#modern-group-order-spreading), and `LearnedTerrain`
+[Modern re-route staggering](#modern-re-route-staggering),
+[Modern group-order spreading](#modern-group-order-spreading),
+[Modern bounded path work](#modern-bounded-path-work) and
+[Modern unreachable moves](#modern-unreachable-moves), and `LearnedTerrain`
 is the per-owner grid the learned-terrain policy keeps on the `System`.
 
 **Routes** (`route.go`). `Route` is up to twenty published points plus the
@@ -1169,7 +1172,12 @@ The contracts retain these questions, each with its settling observation.
 ## Full-layer rebuild storage
 
 The whole-layer classifier runs when a class layer is allocated and at no other
-time `[03 R-LAYER §2]`. Each full rebuild classifies each source cell once
+time `[03 R-LAYER §2]`, once: the registry attaches the mover, mapping and
+commit-clock ports first and then stamps. (It used to stamp the bare layer and
+stamp again with the ports, discarding the first result; a new layer's zero
+watermark keeps the seeded clocks out of that stamp either way. On the
+simulation benchmark's 540×540 map this removed about 5 ms from the tick that
+allocates a class, with every fingerprint unchanged.) Each full rebuild classifies each source cell once
 into a reusable byte array, then computes the footprint/ring minimum through
 row and column windows
 [04 R-SLOPE-01 §3]. Each window counts blocked and non-clear cells, updating
@@ -1718,3 +1726,342 @@ spread), `TestHoldGroupBalancesByCost` (cut points on a worked example),
 `TestAssignFirstRequestHoldsDoesNotAllocate`; the Strict, Community and Modern
 `headless` fingerprint locks cover RNG and resource effects over whole
 battles.
+
+### Modern bounded path work
+
+**Nanolathe Modern policy.** The path scheduler carries at most four ticks'
+share of unspent search work per player, and stops polling a player for the
+rest of a call once a whole sweep of that player's units has admitted nothing.
+It is a frame-time policy: it bounds how much search and polling one tick can
+do, and changes no search input or route.
+
+**Strict 3.1 behavior.** Each call adds `stepAllowance / playerCount` to every
+eligible player's accumulator, and the admission loop polls and searches until
+the call's total is spent; unspent work carries forward without bound
+`[04 R-PATH-01 §6]`. Every poll raises the player's service count, from which
+the 150-call replenish derives the heuristic weight tier `[04 R-PATH-01 §10]`.
+`StrictRules.PathWorkBound` answers `(0, false)`; Community inherits it and an
+unbound `System` answers the same. A provider that does not implement the
+question — every standalone scheduler — also keeps this accounting.
+
+**Why.** At retail's allowance of 1,333 the carry is small. Under the 66,650
+allowance (DESIGN_COMMUNITY_PATCH §4.1), a player whose units wait behind
+another player's long search banks about 22,000 steps a tick. In the opt-in
+path benchmark's `traffic/waves` 1500-unit case two players had banked about
+275,000 each when the working set freed, and one tick then made 1.8 million
+polls — mostly of units whose staged requests the
+[group-order spreading](#modern-group-order-spreading) hold still refuses,
+which the idle-run batching cannot skip — taking about 150 ms; another tick
+spent 403,000 search pops in 53 ms. The same deterministic ticks spiked in
+every repeat. Separately, an ordinary tick with nothing admissible still
+polled until its whole share was gone.
+
+**Modern behavior.** `ModernRules.PathWorkBound` answers `(4, true)`; the
+movement system's path provider relays it to `path.Scheduler` through the
+optional `workBoundProvider` question, asked once per call.
+
+1. *Carry cap.* After a player's share is added, an accumulator above four
+   shares is cut to four shares. The discarded amount is added to the player's
+   service count — the polls it would have bought — so the heuristic tier the
+   next replenish derives sees the same load as retail's accounting.
+2. *Futile-sweep stop.* The scheduler counts each player's polls since its last
+   admission in this call, including polls charged in bulk by the idle-run
+   batching. When the count exceeds the provider's sweep length — the number of
+   physical slots in the player's unit slice, which one sweep of the poll
+   cursor visits — the player's remaining accumulator is credited to its
+   service count and set to zero. An admission restarts the count; every count
+   restarts at the next call.
+
+Active-search continuation, admission charges, the 100-pop slice, the
+full-or-empty publication, the poll cursor and its per-slot walk are retail's.
+Integer arithmetic only, no RNG, no map iteration, no allocation.
+
+**Cost to the player.** Work that would have been spent in one burst is spread
+over the following ticks, so in a burst some requests are admitted later: in
+`traffic/waves` 1500 the mean pending age of a move rose from 54 to 62 ticks
+while the longest fell from 196 to 164. In the controlled-input
+`round2/fixed-mixed-waves` 1500 case arrivals are unchanged (1005 → 1007 of
+4500). The futile stop also changes the order in which later requests are
+admitted, since the poll cursor no longer spins through the remaining share;
+dense 256-unit crowds are sensitive to that order in both directions (three
+perturbed open layouts: 256/125/214 arrivals in the window under the previous
+Modern, 212/256/256 under this policy).
+
+**Measured effect.** Opt-in path benchmark (research branch
+`proto/path-round3`, GOMAXPROCS=2, three repeats, medians):
+
+| | before | after |
+|---|---|---|
+| `traffic/waves` 1500 p95 / p99 / max (ms) | 6.1 / 12.5 / 148 | 3.4 / 5.1 / 10.0 |
+| `traffic/waves` 1500 ticks above 16.7 ms per run | 6–8 | 0 |
+| `round2/fixed-mixed-waves` 1500 p95 / p99 (ms) | 2.7 / 6.6 | 1.6 / 3.0 |
+| open 256-unit group p95 (ms) | 3.0 | 0.4 |
+| open 128-unit group p95 (ms) | 1.5 | 0.2 |
+
+Displayless simulation benchmark (`nanolathe-headless --sim-benchmark`, seed 7,
+1,200 warm-up and 3,000 measured ticks, GOMAXPROCS=2, three alternating runs
+each, 2026-09-23): mean tick 1.67 → 1.60 ms, p95 2.52 → 2.31 ms, p99
+3.68 → 3.38 ms. The maximum is 10.8–10.9 ms before and 11.5–12.0 ms after; the
+trajectories diverge after the warm-up, so this is a different battle's worst
+tick rather than a per-tick cost, and the same order of maximum is present
+without the policy.
+
+**Boundaries.** The cap applies to every eligible player and to the player of
+an active search alike; a search that outlives four shares resumes next call as
+before. The sweep length is the player's whole slot slice, so a stop never
+precedes a full visit of every unit. Accumulators, service counts and the poll
+cursor carry no new saved state; the per-call counts reset every call. After a
+switch to Strict an accumulator already capped simply grows again from the
+next call.
+
+**Determinism and fingerprints.** Modern stays deterministic and bit-identical
+across hosts; Strict and Community fingerprints do not move, nor do the Modern
+ashap locks or the benchmark-fixture initial lock. The Modern benchmark-fixture
+warm and final locks moved to `partial-v1:471cf87f63c23989` and
+`partial-v1:9d57adada125953c`: admission order after a futile sweep differs.
+
+**Verification.** `path.TestModernWorkBoundCapsCarryAndCreditsPolls` (retail
+banks at least nineteen shares behind a long search; the bound keeps four and
+carry plus credited polls equals retail's), `TestModernWorkBoundSweepStop` (a
+`(0, false)` answer equals a provider without the question; Modern stops after
+one sweep plus the proving poll, credits the rest, and an admission restarts
+the sweep), `movement.TestPathWorkBoundAnswers` (Strict, Community, unbound,
+Modern; the answer does not allocate); the Strict, Community and Modern
+`headless` fingerprint locks cover RNG and resource effects over whole battles.
+
+### Modern allied pass-through
+
+**Nanolathe Modern policy.** Two ground movers of the same owner, or of owners
+allied with each other, that meet heading against each other while both are
+mid-route may pass through each other's footprints instead of stopping. It
+replaces a head-on deadlock with a brief overlap; every other occupant still
+blocks.
+
+**Strict 3.1 behavior.** The commit validator rejects a proposal whose
+footprint holds any other occupant; the blocked mover halves its speed, clamps
+against its old footprint and proposes the same move next tick `[04 R-COLL-01
+§1]` `[04 R-COLL-01 §2]`. Only the 60-tick repath and the occupant-age gate
+change anything, so two groups meeting head-on stay locked until one side's
+stationary units become walls to the other's searches. In the opt-in path
+benchmark two same-owner 32-flea groups meeting head-on in open ground finish
+16 of 64 moves in 900 ticks, and allied groups through an eight-cell aperture 10
+of 64. `StrictRules.AlliedPassThrough` answers false; Community inherits it.
+
+**Modern behavior.** `ModernRules.AlliedPassThrough` answers true. In the
+ground commit's per-cell occupant test, a cell held by another unit is
+treated as free when that unit (`System.alliedPassPartner`):
+
+1. is a grounded (mode 1) mover, not a building, not carried, alive;
+2. belongs to the mover's owner, or to an owner whose alliance row and the
+   mover owner's row both declare the other allied (the same rows the guard
+   join reads `[05 R-SHARE-01 §1]`, resolved once per tick through the order
+   binding);
+3. has an active route of at least two points whose final point is more than
+   64 world units away, as does the mover — so an overlap is never carried into
+   a destination, where the crowded-arrival and destination-slot policies
+   apply;
+4. heads at least 0x5555 (about 120°) away from the mover's committed heading.
+
+Terrain, features, structures, enemies, stopped units and same-direction or
+crossing traffic block exactly as before. The stamp's existing overlap
+arbitration owns any contested cell once the mover commits
+(ClaimConflict, `[04 R-COLL-01 §4]`); the pass changes only the occupant test.
+No state is kept, nothing is saved, no RNG is drawn.
+
+**Cost to the player.** Opposing friendly units briefly overlap while
+passing. A variant that also passed crossing traffic (≥ 90°) or waited four
+blocked ticks first was measured and rejected: the first wedged an opposing
+choke, the second gave back most of the gain. Hostile head-on groups are
+unchanged — they meet and block as in retail.
+
+**Measured effect.** Opt-in path benchmark on research branch
+`proto/path-round3`, deterministic one-repeat outcomes, against a Modern with
+bounded path work and destination slots: near-goal arrivals 829 → 1,000 of
+1,463 and pending moves 594 → 415 over 43 case/size combinations; allied
+eight-cell choke with 64 units 10 → 31, allied passing bays with 8 units 0 → 8,
+same-owner head-on 64 29 → 55 (16 under the earlier Modern), same-owner
+four-cell choke 16 0 → 16. Two cases lost arrivals (a 64-unit rotated
+formation crossing 11 → 9, a 64-unit perpendicular crossing 54 → 52). Total
+tick cost did not rise: blocked units re-search less. A hostile head-on
+control shows no pass between the groups.
+
+**Boundaries.** Aircraft and carried units never
+reach the ground occupant test. Four-cell chokes with 64 units per side still
+jam: passing needs a head-on meeting, and a crowded aperture holds units at
+every angle. Directional choke coordination remains open.
+
+**Determinism and fingerprints.** The partner test reads committed state in
+the sweep's slot order and writes nothing; Modern stays deterministic and
+bit-identical across hosts. Strict and Community fingerprints do not move,
+nor do the Modern ashap locks; the Modern benchmark-fixture warm and final
+locks moved to `partial-v1:4fd8922d85f7e16f` and `partial-v1:8fdb5da2c8ee19d8`
+because that battle's computer armies now pass through each other.
+
+**Verification.** `movement.TestAlliedPassThrough` (Strict and Community
+reject; Modern passes same-owner and mutually allied head-on movers and
+commits into the passed cell; an unallied owner, same-direction traffic, a
+routeless blocker and a mover near its route end are rejected by that
+blocker), `TestAlliedPassThroughAnswers` (the answers; a Strict tick never
+resolves the alliance query); the Strict, Community and Modern `headless`
+fingerprint locks.
+
+### Modern unreachable moves
+
+**Nanolathe Modern policy.** A plain terminal ground move whose goal the unit
+cannot reach — the goal is sealed off by terrain, features or buildings the
+owner knows about — finishes at the wall after a short wait instead of
+retrying for ever. The user chose this explicitly: "end the order after a
+reasonable short wait". A goal behind a crowd, behind unexplored ground, or
+one that opens during the wait is not finished this way.
+
+**Strict 3.1 behavior.** An empty publication for a live order raises the
+cannot-get-there bit `0x40` [04 R-PATH-01 §7]. `Move_Ground`'s phase 1 wakes on
+its `0xE0` gate and returns code 9; as the last primary record it re-arms
+phase 0 with a 30–59-tick deadline, which re-installs the point goal and
+requests a new search [04 R-ORD-01 §4][04 §3.3]. Nothing records that the
+previous search failed. `StrictRules.UnreachableMoves` answers `(0, 0)`;
+Community inherits it and an unbound `System` answers the same.
+
+**Why.** On a sealed goal the first search usually succeeds — to the wrong
+place. The setup ray's wall follow circles the obstacle and keeps the lowest
+heuristic it touched as the arrival tolerance [04 R-PATH-01 §5]
+[04 R-PATH-01 §15], so the route ends at the tolerance frontier, the closest
+point of the traced boundary. Once the unit stands there every later search
+is rejected at setup without seeding and publishes nothing, and the retry
+above repeats for the life of the order: the unit never goes idle, never
+takes its next order from an idle refill, and in a group at the same wall
+the members keep re-requesting and jostling (research-branch diagnosis:
+nine setup rejections between ticks 210 and 619 for one flea; 150 searches
+in 1,800 ticks for four fleas at one dead end).
+
+**Modern behavior.** `ModernRules.UnreachableMoves` answers `(6, 90)`.
+
+1. *Certification.* At the one site where an empty publication raises `0x40`
+   on the live order, the movement system asks orders whether the record is
+   eligible (`orders.Rules.UnreachableMoveArrival`,
+   [DESIGN_UNITS_ORDERS_COB](DESIGN_UNITS_ORDERS_COB.md#modern-unreachable-moves)).
+   For an eligible record it re-runs the same setup ray, read-only, from the
+   unit's committed cell (`path.ProbeGoalSealed`). The probe reads a *static
+   view* of the requester's class layer: every anchor the layer admits keeps
+   its answer, so the view is never stricter than the search's own read;
+   ground the owner has not mapped (nor learned, under
+   [Modern learned terrain](#modern-learned-terrain)) keeps the search's
+   optimistic value 2; and a blocked anchor on known ground is re-read from
+   the terrain and feature chain and from building occupancy (an occupant
+   with no mover) over its footprint, inside the restamp's edge bound
+   [04 R-PATH-01 §2][04 R-PATH-01 §14][04 R-SLOPE-01 §3]. Every mobile
+   occupant — ally or enemy, parked or moving — is transparent. The probe is
+   *sealed* when the wall follow closes its loop (the cursors meet) or
+   exhausts every sector without touching a goal cell, reaching its target or
+   entering the goal's zero-heuristic band. A sealed probe records a
+   certificate when the unit also stands within six cells per axis of the
+   probe's frontier — the first touched cell with the lowest heuristic, which
+   is where the first route led. A sealed unit farther away (held back by a
+   crowd or still walking) keeps the retail retry and may still close in.
+2. *Dwell.* The certificate belongs to the order record, not to an
+   activation: the retry re-installs the goal under a new activation every
+   30–59 ticks, and each later empty publication re-certifies while keeping
+   the tick of the first certification. An unsealed or far probe clears the
+   certificate, as does a published route for the order that ends in the
+   goal's zero band (the search has just shown the goal reachable). The
+   ordinary retry continues throughout.
+3. *Closing probe and completion.* The ground follower asks, before the
+   ordinary arrival step and only while some certificate is live, whether its
+   head's certificate is due: it must name the head, the activation it was
+   made for must still be bound, and 90 ticks must have passed since the
+   first certification. The follower then probes once more from where the
+   unit stands; if the goal is still sealed with the unit at the frontier and
+   orders still admits the record, the move completes through the
+   crowded-arrival path — phase 1, arrival bit armed, `raiseArrival` releases
+   goal, route and pending search, and the ordinary pump emits `Arrived`,
+   removes the move and refills idle
+   ([Modern crowded arrival](#modern-crowded-arrival)). Otherwise the
+   certificate is cleared and the retry goes on.
+
+No new closest-point search runs: the unit stops where the rejected request
+found it. Integer arithmetic only, no RNG, no map iteration; a large goal's
+enumerated cells are sorted into a canonical order for membership lookup.
+
+**Cost to the player.** A goal that is sealed when the order is judged and
+opens more than 90 ticks later is not reached: the unit is idle at the wall
+and must be ordered again (research-branch fixture `unreach-sealed-reopen`,
+where a wreck closing the only gate is reclaimed at tick 450). A goal that
+opens within the dwell is reached by the ordinary retry. Large groups at one
+unreachable goal still leave some orders pending, because members more than
+six cells from the frontier keep retrying; widening the radius completed
+units mid-crowd, where they stood idle in other units' paths. The move
+reports `Arrived`; there is no separate "cannot get there" acknowledgement.
+About one unreachable goal in ten on random maps is not certified (for
+example when the walk enters a large goal radius's zero band) and keeps the
+retail retry.
+
+**Measured effect.** Research-branch measurements (`proto/path-round3`,
+`docs/PATH_PROTOTYPE_UNREACH.md`; opt-in path benchmark, GOMAXPROCS=2, three
+repeats, medians) of the certificate with **immediate** completion, before the
+dwell and closing probe were added. The dwell postpones each completion by 90
+ticks, during which the ordinary retry and its searches continue, and adds one
+closing probe per completion:
+
+| Fixture | Pending moves at end | Searches | Setup+pops |
+|---|---|---|---|
+| `terrain-concave-sealed` / 1 | 1 → 0 | 11 → 2 | 818 → 179 |
+| `shared-same-goal-deadend` / 4 | 4 → 0 | 150 → 13 | 14,296 → 1,486 |
+| `unreach-goal-enclosed` / 4 | 4 → 0 | 79 → 28 | 16,768 → 14,447 |
+| `unreach-fog-sealed` / 1 | 1 → 0 | 48 → 6 | 5,161 → 1,969 |
+| `unreach-corner-group` / 64 | 39 → 2 | 926 → 313 | 74,290 → 48,362 |
+| `naval-four-cell-cruiser` / 1 | 1 → 0 | 10 → 2 | 1,561 → 385 |
+
+Reachable fixtures — winding, branching maze, concave, the three dynamic
+wreck cases, the seven knowledge cases, capacity control and the shared-goal
+maze — kept identical outcomes, search counts and work, and
+`unreach-jammed-gate` (a goal reachable only through a gate two parked allies
+fill) made 19 probes and no certificate. On the 1,500-unit scripted waves a
+probe-only control ran 6,157 probes (348,428 ray steps) inside the host-drift
+bracket of an unchanged Modern control (total 3,607 → 3,614 ms, p99
+12,278 → 12,330 µs, allocation +0.04 MB). The randomized check below found no
+sealed verdict for a reachable goal in 40,000 maps.
+
+In tree, on the session fixture below a zero-dwell reference finishes the
+flea's move at the wall at tick 144; Modern finishes it at tick 233, the first
+follower visit after the dwell, and with the wreck reclaimed at tick 174
+reaches the goal by tick 339.
+
+**Boundaries.** Only a sole primary `Move_Ground` with no target, not produced
+by automatic work and not a danger response or return, on a live, complete,
+unstunned, uncarried ground mover; orders owns that list. A move with
+successors already leaves the queue on its first failure through code 9;
+patrol, guard, build and repair approaches, attacks, and aircraft keep their
+own failure handling. The certificate is dense per-handle state on the
+`System` (`unreachable`, with a live count that keeps the follower's question
+off while it is zero) and is written only when the bound rules answer on, so
+Strict never allocates it. It is cleared with the order binding
+(`DeactivateMove`, hence `ForgetUnit` on death and slot reuse), on a restored
+unit, when the follower finds a different head, and at the first follower
+visit after a switch to Strict or Community. It is not saved: a load starts
+with no certificate and the next cannot-get-there publication certifies
+afresh, starting a new dwell. A certificate is not revalidated after the move
+completes.
+
+**Determinism and fingerprints.** Modern stays deterministic and bit-identical
+across hosts. Completing a move removes a code-9 retry, whose 30–59-tick
+deadline draws from the simulation stream, so any scene with a certified move
+diverges from the previous Modern. None of the locked scenes contains one:
+the Strict, Community and Modern `headless` fingerprint locks (the Ashap
+Plateau battles and the benchmark fixture) are unchanged.
+
+**Verification.** `path.TestProbeGoalSealedNeverSealsAReachableGoal` (40,000
+pseudo-random maps against an exhaustive flood over the search's own step
+rule: 9,299 sealed verdicts, none for any of 12,017 reachable goals),
+`TestProbeGoalSealedSealsOnlyAClosedKnownRing` (a known closed ring seals, the
+same ring unexplored or opened does not), `TestProbeGoalSealedReusesScratch`,
+`TestRouteEndCellInvertsWorldPoint`; `movement.TestUnreachableMovesAnswers`
+(Strict, Community and unbound answer off, touch no certificate state and the
+dispatch does not allocate), `TestUnreachableCertificateLiveCount`,
+`TestStaticPassableSeesThroughMobilesOnly`;
+`orders.TestUnreachableMoveArrivalEligibilityAndStrictBypass` and the rule
+dispatch allocation and Strict no-draw tests; and the retail-tier
+`session.TestModernUnreachableMoveFinishesAfterDwell` on an authored wall and
+gate closed by a wreck: Strict and Community retry to the end of the window,
+Modern finishes at the wall no sooner than 90 ticks after the first
+certificate, a gate reopened during the dwell is reached, and a switch to
+Strict during the dwell keeps the retry.

@@ -32,3 +32,29 @@ func TestFullRebuildMatchesLiveClassifierAndExpiresCellView(t *testing.T) {
 		}
 	}
 }
+
+// The row-major column pass must match the live classifier on irregular
+// ground, for footprints wider, taller and larger than the map's structure.
+func TestFullRebuildMatchesLiveClassifierOnRandomGround(t *testing.T) {
+	seed := uint32(12345)
+	next := func() uint32 { seed = seed*1664525 + 1013904223; return seed >> 8 }
+	profiles := []Profile{Template(), kbotsSS2, tankDS2, spid3, boats4, {FootPrintX: 1, FootPrintZ: 5, MaxWaterDepth: 100, MinWaterDepth: -10000, MaxSlope: 32, BadSlope: 16}}
+	for trial := 0; trial < 4; trial++ {
+		terrain := layerTerrain(37, 29, 20)
+		for i := 0; i < 120; i++ {
+			x, z := int32(next()%37), int32(next()%29)
+			lo := uint8(next() % 60)
+			setDerived(terrain, x, z, lo, lo+uint8(next()%40))
+		}
+		for _, profile := range profiles {
+			layer := NewClassLayer(profile, terrain, NewOccupancyGrid())
+			for z := int32(0); z < layer.H; z++ {
+				for x := int32(0); x < layer.W; x++ {
+					if got, want := layer.Value(x, z), layer.classify(x, z); got != want {
+						t.Fatalf("trial %d profile %+v cell %d,%d: got %d want %d", trial, profile, x, z, got, want)
+					}
+				}
+			}
+		}
+	}
+}

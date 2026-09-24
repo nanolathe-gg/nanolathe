@@ -302,7 +302,9 @@ Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission) and
 "Modern threat targeting and incoming fire", DESIGN_UNITS_ORDERS_COB
 "Modern Hold Fire" and "Modern danger response", DESIGN_MOVEMENT_PATH
 "Modern danger escape", "Modern learned terrain", "Modern re-route
-staggering" and "Modern group-order spreading", and
+staggering", "Modern group-order spreading", "Modern bounded path work",
+"Modern allied pass-through" and "Modern unreachable moves",
+DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
 "Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE
 "Modern save unit limits". Each departure reaches its algorithm through the

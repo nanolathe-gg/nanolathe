@@ -38,6 +38,10 @@ type Rules interface {
 
 	// CrowdedMoveArrival admits bounded Modern completion near a friendly crowd.
 	CrowdedMoveArrival(u *units.Unit, n *Node, tick uint32) bool
+	// UnreachableMoveArrival admits a record to Modern unreachable-move
+	// completion once movement has certified its goal sealed. It is a pure
+	// eligibility answer; movement owns the certificate and dwell.
+	UnreachableMoveArrival(u *units.Unit, n *Node) bool
 	// MarkAutomaticAttack records producer provenance only for Modern.
 	MarkAutomaticAttack(n *Node)
 	// PreserveAutomaticTarget avoids cancelling a same-target automatic handoff.
@@ -220,3 +224,7 @@ func (StrictRules) MarkAutomaticAttack(*Node) {}
 func (StrictRules) ObserveImpact(*units.Unit, numeric.Angle, uint32) {}
 
 func (StrictRules) CrowdedMoveArrival(*units.Unit, *Node, uint32) bool { return false }
+
+// UnreachableMoveArrival is false under Strict 3.1: a failed terminal move
+// retries through code 9 for as long as it stays at the head [04 R-ORD-01 §4].
+func (StrictRules) UnreachableMoveArrival(*units.Unit, *Node) bool { return false }

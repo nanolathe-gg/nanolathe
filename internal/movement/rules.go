@@ -11,18 +11,22 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 // (community-patch-engine.md CP-DMG-2).
 //
 // No other seam owns these decisions. They are asked by this package's own
-// algorithms — the occupancy commit, rejected movement commit, follower poll
-// and request open — about state this package owns, and none is an order
-// decision, construction decision or choice of search kernel; the kernel still opens the same retail
+// algorithms — the occupancy commit, rejected movement commit, follower poll,
+// request open and empty publication — about state this package owns, and
+// none is an order decision (orders still decides which records may finish
+// as unreachable moves), construction decision or choice of search kernel; the kernel still opens the same retail
 // search over the same passability port [docs/DESIGN_GAMEPLAY_RULES.md §9 step 3].
 //
 // The implementation is chosen when the session binds a rule set. ClaimConflict
 // is asked per contested cell; the learned-terrain questions are asked once per
 // rejected commit and once per opened search, never per expanded node;
 // RepathDelay is asked only for an armed follower's staging test and poll;
-// FirstRequestSpread once per scheduler call and per staged first request.
+// FirstRequestSpread once per scheduler call and per staged first request;
+// UnreachableMoves once per cannot-get-there publication and, while a
+// certificate is live, per follower visit.
 // Every implementation is a zero-size value or a pointer to one, so dispatch
-// allocates nothing; the learned grid belongs to the System.
+// allocates nothing; the learned grid and the unreachable-move certificates
+// belong to the System.
 type Rules interface {
 	// ClaimConflict reports whether claimant displaces incumbent from one
 	// contested occupancy cell. ArbitrateOverlap asks it for every ground,
@@ -67,6 +71,43 @@ type Rules interface {
 	// It is asked once per scheduler call and once per first-request
 	// staging, never per poll, and must be a pure answer: no writes, no RNG.
 	FirstRequestSpread(s *System) (minGroup, ticks int)
+
+	// PathWorkBound is the scheduler's bounded path work: carryShares > 0
+	// caps each player's carried search work at that many per-call shares,
+	// and sweepStop ends a player's polling for the call once a whole sweep
+	// of its units has admitted nothing (docs/DESIGN_MOVEMENT_PATH.md
+	// "Modern bounded path work"). (0, false) is retail's unbounded carry
+	// [04 R-PATH-01 §6]. It is asked once per scheduler call and must be a
+	// pure answer: no writes, no RNG.
+	PathWorkBound(s *System) (carryShares int32, sweepStop bool)
+
+	// GroupDestinationSlots reports whether an ordinary group move gives each
+	// ground actor its own destination footprint: outliers keep their bearing
+	// clamped to the formation cutoff instead of sharing the clicked point,
+	// and a shared or blocked goal moves to the nearest free footprint
+	// (DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots"). It is
+	// asked once per group command and must be a pure answer.
+	GroupDestinationSlots(s *System) bool
+
+	// AlliedPassThrough reports whether two ground movers of the same or
+	// mutually allied owners, meeting head-on while both are mid-route, may
+	// pass through each other's footprints (DESIGN_MOVEMENT_PATH "Modern
+	// allied pass-through"). It is asked once per ground mover visit and must
+	// be a pure answer: no writes, no RNG.
+	AlliedPassThrough(s *System) bool
+
+	// UnreachableMoves is the unreachable-move completion: frontierCells > 0
+	// lets an empty publication that raises the cannot-get-there bit on an
+	// eligible terminal ground move certify the goal sealed when a static
+	// re-run of the setup ray closes its loop with the unit within that many
+	// cells of the walk's frontier, and the follower then completes the move
+	// through the ordinary arrival once dwell ticks have passed since the
+	// order's first certification and a closing probe agrees
+	// (docs/DESIGN_MOVEMENT_PATH.md "Modern unreachable moves"). (0, 0) is
+	// retail's endless retry [04 R-PATH-01 §7][04 R-ORD-01 §4]. It is asked
+	// once per such empty publication and by the follower only while a
+	// certificate is live, and must be a pure answer: no writes, no RNG.
+	UnreachableMoves(s *System) (frontierCells int32, dwell uint32)
 }
 
 // StrictRules is the retail baseline: nothing is learned and nothing learned
@@ -112,6 +153,24 @@ func (StrictRules) RepathDelay(*System, int, uint32) uint32 { return retailRepat
 // has elapsed is admissible on the tick it comes due [04 R-MOV-01 §7].
 func (StrictRules) FirstRequestSpread(*System) (int, int) { return 0, 0 }
 
+// PathWorkBound is retail's accounting under Strict 3.1: unspent work carries
+// forward without bound and polling continues until it is spent
+// [04 R-PATH-01 §6].
+func (StrictRules) PathWorkBound(*System) (int32, bool) { return 0, false }
+
+// GroupDestinationSlots is off under Strict 3.1: actors keep retail's
+// centroid offsets and outliers share the clicked point [04 R-STANCE-01 §5].
+func (StrictRules) GroupDestinationSlots(*System) bool { return false }
+
+// AlliedPassThrough is off under Strict 3.1: every occupied footprint cell
+// rejects a proposal [04 R-COLL-01 §2].
+func (StrictRules) AlliedPassThrough(*System) bool { return false }
+
+// UnreachableMoves is off under Strict 3.1: an empty publication raises the
+// cannot-get-there bit and the order's own retry is the whole response
+// [04 R-PATH-01 §7][04 R-ORD-01 §4].
+func (StrictRules) UnreachableMoves(*System) (int32, uint32) { return 0, 0 }
+
 // retailRepathDelay is the follower poll's throttle period [04 R-MOV-01 §7].
 const retailRepathDelay = 60
 
@@ -145,14 +204,32 @@ const (
 	modernSpreadTicks    = 3
 )
 
+// modernCarryShares bounds a player's carried path work to four per-call
+// shares. It is Nanolathe Modern policy tuning
+// (docs/DESIGN_MOVEMENT_PATH.md "Modern bounded path work").
+const modernCarryShares = 4
+
+// PathWorkBound bounds carried search work and stops futile polling
+// (docs/DESIGN_MOVEMENT_PATH.md "Modern bounded path work").
+func (*ModernRules) PathWorkBound(*System) (int32, bool) { return modernCarryShares, true }
+
+// GroupDestinationSlots gives each actor of an ordinary group move its own
+// destination (DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots").
+func (*ModernRules) GroupDestinationSlots(*System) bool { return true }
+
+// AlliedPassThrough lets head-on friendly movers pass
+// (DESIGN_MOVEMENT_PATH "Modern allied pass-through").
+func (*ModernRules) AlliedPassThrough(*System) bool { return true }
+
 // FirstRequestSpread admits a large same-tick group of first requests over
 // three ticks (docs/DESIGN_MOVEMENT_PATH.md "Modern group-order spreading").
 func (*ModernRules) FirstRequestSpread(*System) (int, int) {
 	return modernSpreadMinGroup, modernSpreadTicks
 }
 
-// ModernRules carries the approved learned-terrain, re-route staggering and
-// group-order spreading policies. It is zero size and is held by pointer so a
+// ModernRules carries the approved learned-terrain, re-route staggering,
+// group-order spreading, bounded path work, group destination slot and
+// unreachable-move policies. It is zero size and is held by pointer so a
 // later set may embed it and override one answer.
 type ModernRules struct{ CommunityRules }
 

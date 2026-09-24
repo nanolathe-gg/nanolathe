@@ -1667,3 +1667,28 @@ Tests cover the captured Flash crowd and inactive status-512 phase-zero retry,
 ordinary cleanup, Strict bypass, protected assignments, local free steps,
 invalid blockers, extreme coordinates and save restoration. Movement owns the
 [local footprint proof](DESIGN_MOVEMENT_PATH.md#modern-crowded-arrival).
+
+### Modern unreachable moves
+
+**Nanolathe Modern policy.** A terminal ground move whose goal movement has
+certified sealed may finish where its unit stands. Strict 3.1 keeps
+`Move_Ground`'s code-9 retry for as long as the record is the last primary
+one [04 R-ORD-01 §4][04 R-PATH-01 §7]; `StrictRules.UnreachableMoveArrival`
+answers false without writes or random draws, and Community inherits it.
+
+Orders owns only eligibility, through `orders.Rules.UnreachableMoveArrival`:
+the crowded-arrival record test without its radius, stillness or dwell — a
+sole primary `Move_Ground` with no target, not produced by automatic work and
+not a danger response or return, on a live, complete, unstunned, uncarried
+ground mover. Both Modern completion policies share that test. Movement asks
+it before probing an empty publication and again before completing, and owns
+the certificate, its six-cell frontier radius, its 90-tick dwell and the
+closing probe:
+[Modern unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves).
+
+Completion is the crowded-arrival completion: phase 1, the arrival gate armed,
+ordinary arrival and release, then the normal pump emits `Arrived`, removes
+the move and performs its idle refill. No queue teardown, route search,
+resource or RNG operation is added, and the record carries no new state.
+Moves with successors, patrol, guard, build and repair approaches, attacks
+and air moves keep their own failure handling.

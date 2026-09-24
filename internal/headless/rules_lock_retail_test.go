@@ -57,6 +57,20 @@ import (
 // ticks later. The ashap scene forms no group of sixteen same-tick first
 // requests (its largest is seven), so its Modern locks are unchanged, as are
 // the Modern benchmark initial lock and every Strict and Community lock.
+//
+// Modern bounded path work (DESIGN_MOVEMENT_PATH "Modern bounded path work")
+// moves the Modern benchmark warm/final locks once more: a player's carried
+// search work is capped at four shares and a whole sweep that admits nothing
+// ends its polling for the call, which changes the poll cursor's position and
+// so the order later requests are admitted in. The ashap scene's Modern locks,
+// the benchmark initial lock and every Strict and Community lock are
+// unchanged by it.
+//
+// Modern allied pass-through (DESIGN_MOVEMENT_PATH "Modern allied
+// pass-through") moves the Modern benchmark warm/final locks: the computer
+// armies' opposed movers now pass through each other mid-route instead of
+// blocking. The ashap locks, the benchmark initial lock and every Strict and
+// Community lock are unchanged by it.
 const (
 	lockAshapMap                   = "ashap plateau"
 	lockAshapSeed           uint32 = 7
@@ -79,10 +93,10 @@ const (
 	lockBenchModernInitial           = "partial-v1:f6cbc51b5ef4deff"
 	lockBenchStrictWarm              = "partial-v1:dce20f30bcdeef34"
 	lockBenchCommunityWarm           = "partial-v1:f907fb371a053c87"
-	lockBenchModernWarm              = "partial-v1:8d9eef3348ae2124"
+	lockBenchModernWarm              = "partial-v1:4fd8922d85f7e16f"
 	lockBenchStrictFinal             = "partial-v1:d0eaf19c8a8f135b"
 	lockBenchCommunityFinal          = "partial-v1:81b03660538b0eac"
-	lockBenchModernFinal             = "partial-v1:b1586e88c6421317"
+	lockBenchModernFinal             = "partial-v1:8fdb5da2c8ee19d8"
 )
 
 // TestStrictFingerprintIsLocked holds the retail baseline. Nothing in a Modern

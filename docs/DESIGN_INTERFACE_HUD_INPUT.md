@@ -2426,7 +2426,9 @@ The `internal/session/commands.go` ordinary `HumanOrder` path computes the
 centroid before per-actor resolution, excluding the designated target where
 the numeric command requires it. Captured handles are treated as a set in pool
 order. Formation-enabled descriptors apply the retail offset before queued
-point matching and insertion. This behavior applies in both gameplay modes.
+point matching and insertion. Strict 3.1 and Community 3.9 use it unchanged;
+Modern adjusts the resulting ground destinations as described in
+[Modern group destination slots](#modern-group-destination-slots).
 The producer does not consume RNG or resources, and retains the supplied Y.
 
 Explicit drag destinations set `HumanOrderCommand.AssignedPosition`; those
@@ -2439,6 +2441,84 @@ the inclusive cutoff, outliers, per-actor command rejection after counting,
 selected-target exclusion, non-formation rally descriptors, queued toggles,
 and exact fractional drag destinations. Blocked-move completion and retaliation
 retain their retail contracts [04 R-ORDER-02 §1][04 R-STANCE-01 §3].
+
+### Modern group destination slots
+
+**Nanolathe Modern policy.** An ordinary group move gives every ground actor
+its own destination footprint. Outliers keep their bearing instead of sharing
+the clicked point, and an actor whose destination is shared or held moves to
+the nearest free footprint.
+
+**Strict 3.1 behavior.** Actors within the cutoff keep their offset from the
+selection centroid; every actor beyond it takes the clicked point
+[04 R-STANCE-01 §5]. A line wider than the cutoff therefore sends both end
+actors to one cell, and the first to arrive can park in front of the slots
+the others still need. In the opt-in path benchmark a sixteen-flea row
+ordered along its own axis ends with one flea at its goal and the rest queued
+behind the one parked mid-row (`traffic/open_flea` 15, 16 and 17; 8 and 64
+are unaffected). `movement.StrictRules.GroupDestinationSlots` answers false;
+Community inherits it.
+
+**Modern behavior.** In the ordinary `HumanOrder` path, before the per-actor
+loop, `Session.groupDestinationSlots` takes each ground actor whose resolved
+order carries the formation flag (aircraft keep the retail goal) and asks
+`movement.System.AssignGroupDestinations`:
+
+1. *Clamped outliers.* An actor inside the cutoff keeps exactly the retail
+   goal. One beyond it keeps its offset direction, scaled to the cutoff
+   radius `isqrt(3000 × count)` world units.
+2. *Claim order.* Actors claim in travel order: the actor farthest along the
+   centroid-to-click direction first, ties by lateral position. Each actor
+   keeps its own goal where it is free, so retail pairing is preserved; a
+   first version that re-paired actors to goals by travel order scrambled
+   large formations and was rejected.
+3. *Free footprint.* A footprint is free when no earlier actor claimed any of
+   its cells, no stationary unit outside the selection holds one, and the
+   actor's class passes it as the owner knows the ground — the route search's
+   own read, where unexplored ground is passable and learned ground is read
+   (DESIGN_MOVEMENT_PATH "Modern learned terrain"), so a destination never
+   reveals hidden terrain. When the actor's class layer has not been
+   allocated yet, the same mapping-word gate over the static footprint test
+   answers; the query never allocates a layer.
+4. *Nearest.* An unfree goal moves to the nearest free footprint, ring by ring
+   up to twelve cells; with none, the actor keeps its goal. A moved goal is the
+   footprint's centre, which the commit's quantisation maps back to its anchor.
+
+The supplied Y, queued matching, drag destinations (`AssignedPosition`),
+targeted orders, area batches and the AI's orders are untouched. Integer
+arithmetic only; no RNG, resources or simulation state are touched.
+
+**Measured effect.** Opt-in path benchmark, research branch
+`proto/path-round3` (one-repeat outcomes, deterministic): near-goal arrivals
+`open_flea` 15/16/17 1/1/1 → 15/16/17; `idle_blockers` 8/16 3/4 → 8/16;
+`packed_goal` 16 12 → 16; `terrain-clutter-mixed` 17 5 → 17; `terrain-winding`
+8 4 → 8; the `knowledge-*` 8-unit cases 4 → 8; open 64/256, dense groups and
+drag formations unchanged. Destinations move 0–2 cells in most cases (the
+collapsed outliers), at most 5 in a dense 64-unit head-on. Losses: slow
+shallow-water ships keep their true formation width and so are still sailing
+at the window end (`naval-shallow-surface` 8, 5 → 0 near), and
+`lifecycle/patrol` and `dynamic-new-wreck` lose one arrival each. The landed
+implementation, together with [Modern bounded path
+work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work), was re-measured over the
+whole opt-in corpus against the previous Modern (one deterministic repeat,
+excluding the position-dependent `traffic/waves`): near-goal arrivals
+3,520 → 3,744 of 5,676, pending objectives 1,974 → 1,834, 36 cases better and
+6 worse; the worse are the ships above, `lifecycle/patrol`, and dense 256-unit
+crowds whose outcome depends on admission order in both directions.
+
+**Boundaries.** One pass per command, over the selection only: later
+commands, other players' units and moving units can still reach a claimed
+footprint, and the ordinary follower and crowded-arrival policy handle them.
+Nothing is saved. Strict and Community fingerprints are unchanged; the locked
+Modern scenes issue no human group move, so their locks are unchanged too.
+
+**Verification.** `session.TestGroupDestinationSlotsStrictAndModern` (a
+sixteen-unit row: Strict and Community send both outliers to the click; Modern
+keeps every inside actor's retail goal, gives the outliers their own bearing,
+shares no cell, and consumes no RNG or resources),
+`TestGroupDestinationSlotsAvoidHeldGround` (a stationary unselected unit's
+cell), `movement.TestGroupDestinationSlotsAnswers`, and the unchanged
+`TestHumanGroupMove*` retail producer tests.
 
 ### 3.11 Modern drag commands
 

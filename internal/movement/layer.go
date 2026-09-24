@@ -121,13 +121,11 @@ type ClassLayer struct {
 	fullStamps uint64
 }
 
-// NewClassLayer allocates the layer for one class over the terrain and stamps
-// the whole map [04 §6.1]: the single-cell classifier form runs per attribute
-// cell with the watermark zero, so occupants never block at load, then the
-// two-direction contagion pass runs [04 §6.1 R-DOC04-B]. Bounds are explicit:
-// the layer covers exactly the terrain's attribute-cell lattice.
-func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer {
-	l := &ClassLayer{
+// newUnstampedClassLayer allocates a layer whose caller stamps it once its
+// ports are attached; the registry used to stamp twice, once here without
+// the mover port and again with it, the first result wholly overwritten.
+func newUnstampedClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer {
+	return &ClassLayer{
 		Profile: p,
 		W:       t.CellW,
 		H:       t.CellH,
@@ -136,10 +134,8 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 		cells:   make([]uint32, int(t.CellW)*int((t.CellH+15)>>4)),
 	}
 	// No nil guard on t: the struct literal above reads four of its fields, so
-	// a nil terrain has already panicked by here. A guard that stands after the
-	// dereferences it claims to protect reads as if nil were a supported input.
-	l.stampAll()
-	return l
+	// a nil terrain panics here. A guard after those dereferences would read as
+	// if nil were a supported input.
 }
 
 // classifyCell is the layer's per-cell chain: the profile's terrain chain
@@ -660,15 +656,15 @@ func (c *ClassLayers) For(name string, p Profile) *ClassLayer {
 	if l, ok := c.byName[name]; ok {
 		return l
 	}
-	l := NewClassLayer(p, c.terrain, c.grid)
-	// A new layer inherits both registry ports before its first classification
-	// so its map-load stamp already sees buildings [04 R-PATH-01 §14].
+	l := newUnstampedClassLayer(p, c.terrain, c.grid)
+	// A new layer inherits both registry ports before its one classification
+	// so its map-load stamp already sees buildings [04 R-PATH-01 §14]. The
+	// seeded commit clocks cannot affect that stamp: a new layer's watermark
+	// is zero, so the occupant-age gate is closed.
 	l.movers = c.movers
 	l.mapping = c.mapping
 	c.seedCommits(l)
-	if c.movers != nil {
-		l.stampAll()
-	}
+	l.stampAll()
 	c.byName[name] = l
 	c.names = append(c.names, name)
 	return l

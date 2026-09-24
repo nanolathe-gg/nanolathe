@@ -28,7 +28,7 @@ func (*ModernRules) CrowdedMoveArrival(u *units.Unit, n *Node, tick uint32) bool
 		return false
 	}
 	q := QueueOfUnit(u)
-	if q == nil || u == nil || u.Def == nil || !u.Alive || u.Dying || u.Stunned || u.Remaining != 0 || u.Attachment.Carrier != 0 || u.Def.CanFly || u.Def.BMCode != 1 || !u.Def.CanMove || u.Move.Speed != 0 || len(q.primary) != 1 || q.primary[0] != n || n.ID != rowMoveGround || n.Target != 0 || n.automaticWork || n == q.danger.response || n == q.danger.returnMove {
+	if !plainTerminalGroundMove(q, u, n) || u.Move.Speed != 0 {
 		n.crowdedArrival = crowdedArrivalState{}
 		return false
 	}
@@ -63,4 +63,17 @@ func (*ModernRules) CrowdedMoveArrival(u *units.Unit, n *Node, tick uint32) bool
 	}
 	state.lastTick = tick
 	return tick-state.since >= crowdedArrivalDwell
+}
+
+// plainTerminalGroundMove is the record eligibility the Modern move-completion
+// policies share: a sole primary Move_Ground with no target, not produced by
+// automatic work and not a danger response or return, on a live, complete,
+// unstunned, uncarried ground mover. A move with successors already leaves
+// the queue on its first failure through the pump's code 9 [04 §3.3]; Patrol,
+// Guard, build and repair approaches keep their own failure handling.
+func plainTerminalGroundMove(q *Queue, u *units.Unit, n *Node) bool {
+	return q != nil && u != nil && n != nil && u.Def != nil && u.Alive && !u.Dying && !u.Stunned && u.Remaining == 0 && u.Attachment.Carrier == 0 &&
+		!u.Def.CanFly && u.Def.BMCode == 1 && u.Def.CanMove &&
+		len(q.primary) == 1 && q.primary[0] == n && n.ID == rowMoveGround && n.Target == 0 &&
+		!n.automaticWork && n != q.danger.response && n != q.danger.returnMove
 }
