@@ -787,6 +787,13 @@ value to the campaign/session selector, including the Hard-to-Easy wrap
 `[08 "Skirmish configuration"]`. The coupling belongs to this screen; it
 does not make every preference load or NEWGAME write update both fields.
 
+The screen's typed-key history accepts `*III` through `*X` (with `*` entered
+by Shift+8) and sets the visible row count to 3 through 10. The matching
+count is saved immediately and the runtime rows are rebuilt at their new
+spacing; `*V`, `*VI` and `*VII` keep the prefix so the longer numerals can
+complete. The setup still requires a map with enough start positions and at
+least one computer opponent `[07 R-FE-02 §10]` `[08 R-SKIR-01 §1]`.
+
 `activateGadget`,
 `activateSkirmishGadget` and `activateDynamicSkirmishGadget`
 are the callbacks — the authored escape default is resolved by the widget

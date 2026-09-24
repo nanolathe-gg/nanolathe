@@ -916,7 +916,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			if !pl.Exists {
 				continue
 			}
-			published.Economy = append(published.Economy, frame.EconomyView{
+			view := frame.EconomyView{
 				Player:         uint8(p),
 				Metal:          pl.Stock[economy.Metal],
 				Energy:         pl.Stock[economy.Energy],
@@ -932,7 +932,9 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				MetalShareThreshold:  pl.MetalShareThreshold,
 				EnergyShareThreshold: pl.EnergyShareThreshold,
 				Active:               pl.Exists && !pl.IsObserver,
-			})
+			}
+			s.survivalTeamEconomy(&view)
+			published.Economy = append(published.Economy, view)
 		}
 	} else {
 		published.Economy = published.Economy[:0]
@@ -948,6 +950,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 	published.ShakeDuration = s.shakeDuration
 	published.ShakeRemaining = s.shakeRemaining
 	published.ShakeAmpX = s.shakeAmpX
+	published.Survival = s.survivalFrameStatus(tick)
 	published.ShakeAmpY = s.shakeAmpY
 
 	// RS-05: publish the authoritative result once through the committed frame

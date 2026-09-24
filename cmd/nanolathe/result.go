@@ -588,6 +588,7 @@ func (h *retailBattleHUD) drawResultStats(c *client.Client, b *battleSession, vi
 			h.drawResultBar(c, rowIndex, column, current, max)
 		}
 	}
+	h.drawSurvivalResultLine(c, view, len(h.resultState.rows))
 }
 
 func resultBarText(value int) string {

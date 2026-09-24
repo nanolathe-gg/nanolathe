@@ -46,6 +46,7 @@ var authoritativeDirs = []string{
 	"internal/save",
 	"internal/session",
 	"internal/sim",
+	"internal/survival",
 	"internal/triggers",
 	"internal/units",
 	"internal/version",

@@ -86,7 +86,7 @@ func (s *Session) announceElimination(owner int, tick uint32) {
 	if s == nil || owner < 0 || owner >= 10 {
 		return
 	}
-	if !s.postsEliminationAnnouncement() {
+	if !s.postsEliminationAnnouncement() || s.isSurvivalAttacker(owner) {
 		return
 	}
 	// One CRT draw, taken modulo three. Uint32n consumes exactly one draw at

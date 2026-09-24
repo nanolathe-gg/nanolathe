@@ -1,12 +1,57 @@
 package main
 
-import "github.com/nanolathe-gg/nanolathe/internal/session"
+import (
+	"strings"
+
+	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+)
 
 const (
 	resourceMin  = 200
 	resourceMax  = 10000
 	resourceStep = 500
 )
+
+// skirmishPlayerCountToken applies the hidden *III..*X selector to the
+// skirmish window's unclaimed typed-key history [07 R-FE-02 §10]
+// [08 R-SKIR-01 §1]. The star is Shift+8 on the
+// original keyboard layout; the input adapter supplies the typed character.
+func (g *gameShell) skirmishPlayerCountToken(token input.Token) {
+	if token.Kind == input.TokenText && token.Rune >= 0 && token.Rune <= 0x7f {
+		ch := byte(token.Rune)
+		if ch >= 'a' && ch <= 'z' {
+			ch -= 'a' - 'A'
+		}
+		g.skirmishKeys += string(ch)
+	} else {
+		// An intervening edit or non-ASCII key breaks the typed sequence.
+		g.skirmishKeys += "\x00"
+	}
+	if len(g.skirmishKeys) > 15 {
+		g.skirmishKeys = g.skirmishKeys[len(g.skirmishKeys)-15:]
+	}
+	for i, suffix := range [...]string{"*III", "*IV", "*V", "*VI", "*VII", "*VIII", "*IX", "*X"} {
+		if !strings.HasSuffix(g.skirmishKeys, suffix) {
+			continue
+		}
+		g.setup.NumPlayers = i + 3
+		if g.selectedSlot >= g.setup.NumPlayers {
+			g.selectedSlot = g.setup.NumPlayers - 1
+		}
+		g.saveSettings()
+		// The row builder lays out all rows from the new count, so a new
+		// runtime window is needed; the saved per-row choices stay in setup.
+		g.openMenuWithTokenFlush(modeMenuSkirmish, false)
+		g.playMenuCue("SkirmishCheat")
+		// Retail leaves the prefix for *V, *VI and *VII so a longer
+		// Roman numeral can be completed without starting over.
+		if i < 2 || i > 4 {
+			g.skirmishKeys = ""
+		}
+		return
+	}
+}
 
 // newSkirmishMenuConfig is the retail setup data initialized before
 // SKIRMISH.GUI is opened. The authored GUI is then extended by retail's

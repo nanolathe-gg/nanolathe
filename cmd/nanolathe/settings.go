@@ -178,6 +178,9 @@ func (g *gameShell) syncMapIndex() {
 // captureSettings reads the shell's live frontend state back into the
 // persisted block.
 func (g *gameShell) captureSettings() settings.Settings {
+	// While the Survival screen is open its rows sit in g.setup; the file
+	// records the skirmish rows set aside for it.
+	setup, controllers := g.persistedSkirmishSetup(), g.persistedSkirmishControllers()
 	s := settings.Settings{
 		Version:     settings.FileVersion,
 		Fullscreen:  g.fullscreen,
@@ -189,7 +192,7 @@ func (g *gameShell) captureSettings() settings.Settings {
 		// Written back unchanged: nothing in the frontend edits it, so this
 		// preserves whatever the file held rather than inventing a value
 		// [08 R-SKIR-01 §6].
-		UnitLimit: g.setup.UnitLimit,
+		UnitLimit: setup.UnitLimit,
 		// The options root's `PREV` ("OK") is one of the save points that
 		// rewrite the whole block; the value it saves is whatever the live
 		// display record holds [07 R-FE-01 §6][07 R-FE-01 §11].
@@ -210,20 +213,20 @@ func (g *gameShell) captureSettings() settings.Settings {
 		Clock:         boolInt(g.clockVisible),
 	}
 	s.Skirmish = settings.Skirmish{
-		Map:            g.setup.MapName,
-		NumPlayers:     g.setup.NumPlayers,
-		Difficulty:     g.setup.Difficulty,
-		Location:       g.setup.Location,
-		CommanderDeath: g.setup.CommanderDeath,
-		Mapping:        g.setup.Mapping,
-		LineOfSight:    g.setup.LineOfSight,
-		LOSType:        g.setup.LOSType,
+		Map:            setup.MapName,
+		NumPlayers:     setup.NumPlayers,
+		Difficulty:     setup.Difficulty,
+		Location:       setup.Location,
+		CommanderDeath: setup.CommanderDeath,
+		Mapping:        setup.Mapping,
+		LineOfSight:    setup.LineOfSight,
+		LOSType:        setup.LOSType,
 		Players:        make([]settings.Player, session.SkirmishMaxPlayers),
 	}
 	for i := 0; i < session.SkirmishMaxPlayers; i++ {
-		row := g.setup.Players[i]
+		row := setup.Players[i]
 		s.Skirmish.Players[i] = settings.Player{
-			Controller: g.retailControllers[i],
+			Controller: controllers[i],
 			Side:       row.Side,
 			Color:      row.Color,
 			AllyGroup:  row.AllyGroup,

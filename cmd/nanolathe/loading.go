@@ -212,6 +212,7 @@ func (g *gameShell) startBattleLoad(mapName string) {
 	// Start is the commit point for the skirmish setup: the next run of the
 	// engine opens SKIRMISH.GUI on the rows this battle was started with.
 	g.saveSettings()
+	g.lastBattleSurvival = false
 	cfg := g.skirmishConfigForStart(mapName)
 	request, err := skirmishBattleRequest(g.opts, g.cs, cfg, headlessScenarioSkirmish, nil, newBattleSeedSource(g.opts))
 	if err != nil {

@@ -28,7 +28,7 @@ func (s *Service) Publish(owner PlayerID, cx, cz int32, heightByte uint8, radius
 	}
 	// Only a LOCAL player's cell change clears the fog-cache-valid bit and wakes
 	// the composer; remote players' changes dirty nothing [03 §3.2] C15.
-	if owner == s.local && changed {
+	if s.localSide(owner) && changed {
 		s.invalidatePresentation()
 	}
 }
@@ -50,7 +50,7 @@ func (s *Service) Unpublish(owner PlayerID, cx, cz int32, heightByte uint8, radi
 	} else {
 		s.walkSpriteMask(cx, cz, radius, visit)
 	}
-	if owner == s.local && changed {
+	if s.localSide(owner) && changed {
 		s.invalidatePresentation()
 	}
 	return changed
@@ -336,7 +336,7 @@ func (s *Service) removeFootprint(old footprint) bool {
 		return false // ray branch's storedByte != 0 guard [03 R-VIS-01 §2]
 	}
 	changed := s.Unpublish(old.owner, old.cx, old.cz, old.heightByte, old.radius)
-	return old.owner == s.local && changed
+	return s.localSide(old.owner) && changed
 }
 
 // Forget drops an observer's stored footprint without touching the grids. The

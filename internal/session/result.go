@@ -42,6 +42,8 @@ type Result struct {
 	Countdown    int16               `json:"countdown"`
 	Scores       []frame.ResultScore `json:"scores,omitempty"`
 	ColumnMaxima [7]int              `json:"column_maxima,omitempty"`
+	// Survival is the Survival line (DESIGN_SURVIVAL §8); nil otherwise.
+	Survival *frame.SurvivalResult `json:"survival,omitempty"`
 }
 
 // teamForOwner maps an owner slot to its team identifier: the lowest slot in
@@ -117,6 +119,7 @@ func (s *Session) FrozenResultView() frame.ResultView {
 		Reason: r.Reason, Tick: r.Tick, ArmedTick: r.ArmedTick,
 		Countdown: r.Countdown, Draw: r.Draw,
 		Scores: append([]frame.ResultScore(nil), r.Scores...), ColumnMaxima: r.ColumnMaxima,
+		Survival: r.Survival.Copy(),
 	}
 }
 
@@ -196,7 +199,7 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 // non-zero, a restored observer slot was classified as an ordinary human and
 // took a row. See player_record.go.
 func (s *Session) resultScoreRowEligible(i int, p economy.Player) bool {
-	if i < 0 || i >= 10 || !p.Exists || p.RejectionReason != 0 {
+	if i < 0 || i >= 10 || !p.Exists || p.RejectionReason != 0 || s.isSurvivalAttacker(i) {
 		return false
 	}
 	if p.ResultAuxiliary != 0 {
@@ -368,7 +371,9 @@ func (s *Session) EvaluateResult(tick uint32) bool {
 	// kind-2 victory sweep", and it is consulted only at the crossing below.
 	localDefeated := s.localDefeated()
 	victory := false
-	if !localDefeated {
+	// Survival has no victory: an empty attacker between waves must never
+	// arm the countdown (DESIGN_SURVIVAL §8).
+	if !localDefeated && s.Survival == nil {
 		victory = s.victorySweep()
 	}
 	if !localDefeated && !victory {
@@ -637,6 +642,7 @@ func (s *Session) endedResultView(tick uint32) Result {
 		Countdown:    s.Latch.Countdown,
 		Scores:       scores,
 		ColumnMaxima: resultColumnMaxima(scores),
+		Survival:     s.survivalResult(tick),
 	}
 }
 
@@ -663,6 +669,9 @@ func (s *Session) ownerEliminated(owner int) bool {
 // controller 0, which is a human, and a restored observer slot was counted as a
 // participant. See player_record.go.
 func (s *Session) resultOwnerEligible(owner int) bool {
+	if s.isSurvivalAttacker(owner) {
+		return false
+	}
 	p := s.playerRecord(owner)
 	if p == nil {
 		// No player table at all: an unwired composition, where the setup row

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/survival"
 	"io"
 	"os"
 	"runtime"
@@ -180,6 +182,12 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	})
 	flags.StringVar(&contentProfile, "content-profile", "", "content profile: "+strings.Join(contentprofiles.Names(), ", ")+", or the path of a profile JSON file; omitted detects it from the mounted content set (docs/DESIGN_CONTENT_VFS.md §5)")
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
+	var survivalPace string
+	flags.BoolVar(&request.Survival.Enabled, "survival", false, "run a Survival battle on --map (docs/DESIGN_SURVIVAL.md)")
+	flags.IntVar(&request.SurvivalBuddies, "survival-buddies", 0, "allied computer players in a Survival battle, 0..2")
+	flags.StringVar(&survivalPace, "survival-pace", "normal", "Survival wave pace: normal, relaxed or relentless")
+	flags.BoolVar(&request.Survival.NoAir, "survival-no-air", false, "Survival: no air waves")
+	flags.BoolVar(&request.Survival.NoNaval, "survival-no-naval", false, "Survival: no naval waves")
 	flags.StringVar(&request.Mission, "mission", "", "campaign selector, e.g. camps/Arm Campaign.tdf:MISSION0")
 	flags.IntVar(&request.Difficulty, "difficulty", 1, "battle difficulty: 0 easy, 1 medium, 2 hard (skirmish and campaign)")
 	flags.Int64Var(&seed, "seed", -1, "seed for both deterministic streams; negative derives a pair from the clock")
@@ -197,6 +205,17 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.BoolVar(&bench.Profiles, "benchmark-profiles", true, "write cpu.pprof and the allocation profile pair for the measured window")
 	if err := flags.Parse(args); err != nil {
 		return request, reportPath, profiles, bench, err
+	}
+	if pace, err := survival.ParsePace(survivalPace); err != nil {
+		return request, reportPath, profiles, bench, err
+	} else {
+		request.Survival.Pace = pace
+	}
+	if request.Survival.Enabled && (request.Map == "" || request.Mission != "") {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: survival needs a map: logical path <command line>, providers searched [survival], expected --map and no --mission")
+	}
+	if request.SurvivalBuddies < 0 || request.SurvivalBuddies > session.SurvivalMaxBuddies {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid survival buddies: logical path <command line>, providers searched [survival-buddies], expected 0..%d", session.SurvivalMaxBuddies)
 	}
 	unitLimitSet := false
 	flags.Visit(func(f *flag.Flag) {

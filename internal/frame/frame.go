@@ -986,6 +986,47 @@ type ResultView struct {
 	// the committed result so presentation never derives denominators from the
 	// live world [08 R-CAMP-01 §7].
 	ColumnMaxima [7]int
+	// Survival is the Survival battle's line under the rows
+	// (docs/DESIGN_SURVIVAL.md §8); nil for every other battle.
+	Survival *SurvivalResult
+}
+
+// Survival director phases, as SurvivalStatus.Phase carries them.
+const (
+	SurvivalGrace uint8 = iota
+	SurvivalWarning
+	SurvivalActive
+	SurvivalDowntime
+)
+
+// SurvivalStatus is one tick's Survival director state: the wave the phase
+// refers to, the phase, whole seconds to the phase's end and the attacker's
+// live units.
+type SurvivalStatus struct {
+	Active      bool
+	Wave        int32
+	Phase       uint8
+	SecondsLeft int32
+	Attackers   int32
+}
+
+// SurvivalResult is the local player's Survival outcome.
+type SurvivalResult struct {
+	Waves      int32  `json:"waves_survived"`
+	Reached    int32  `json:"wave_reached"`
+	TicksAlive uint32 `json:"ticks_alive"`
+	Destroyed  int64  `json:"value_destroyed"`
+	Lost       int64  `json:"value_lost"`
+	Score      int64  `json:"score"`
+}
+
+// Copy returns an independent copy, nil for nil.
+func (r *SurvivalResult) Copy() *SurvivalResult {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	return &c
 }
 
 // PlayerRowSlots is the number of player slots published every tick. Retail
@@ -1110,6 +1151,9 @@ type Frame struct {
 	Events      []EventView
 	Fog         FogView
 	Result      ResultView
+	// Survival is the Survival director's committed state for the HUD
+	// (docs/DESIGN_SURVIVAL.md §9); zero outside Survival.
+	Survival SurvivalStatus
 	// Players is the ten player slots' live per-tick rows, indexed by slot,
 	// slot 0..9 ascending [07 R-HUD-04 §1][I1]. Every slot is written every
 	// tick; an absent record publishes its zero value with Present false.
@@ -1272,6 +1316,7 @@ func (f *Frame) Reset() {
 	f.ShakeRemaining = 0
 	f.ShakeAmpX = 0
 	f.ShakeAmpY = 0
+	f.Survival = SurvivalStatus{}
 	f.Selection = SelectionView{Handles: f.Selection.Handles}
 	f.CommandPage = CommandPageView{
 		ProductKeys:       f.CommandPage.ProductKeys,

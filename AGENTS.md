@@ -65,6 +65,15 @@ no RNG and no per-tick state, and it is owned by
 mutators* is the retail baseline, and every fingerprint lock runs with none.
 Anything data cannot express is not a mutator and follows the rules above.
 
+**Survival is the other mode-independent exception (user-authorized
+2026-09-23).** It is a scenario, not a rule: a skirmish session with a
+commanderless attacker slot and a wave director that creates units through
+the ordinary allocator and gives them ordinary orders. The survivors share
+sight, radar and income as one side. It adds no seam, runs in every mode, and
+exists only in a Survival session, so no other session or fingerprint lock
+changes. Survival battles cannot be saved. It is owned by
+[DESIGN_SURVIVAL](docs/DESIGN_SURVIVAL.md).
+
 Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission),
 [Hold Fire](docs/DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire), and
 [factory-exit yielding](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding), and

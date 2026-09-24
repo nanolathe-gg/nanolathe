@@ -230,7 +230,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 			continue
 		}
 		*u.Status &^= DecloakBit
-		if u.Owner == s.local || s.viewerDefeated {
+		if s.localSide(u.Owner) || s.viewerDefeated {
 			*u.Status |= FriendlyMask
 		} else {
 			*u.Status &^= sensorClearMask
@@ -259,7 +259,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	// dead data in retail too. Do not widen this gate.
 	for i := range units {
 		e := &units[i]
-		if !e.Alive || e.Dying || e.Owner != s.local || !e.Active {
+		if !e.Alive || e.Dying || !s.localSide(e.Owner) || !e.Active {
 			continue // alive, own, active, and not death-latched [R-VIS-01 §4] pass 2
 		}
 		if e.RadarDistance == 0 && e.SonarDistance == 0 {
@@ -283,7 +283,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 				if !c.Alive || c.Status == nil {
 					continue
 				}
-				if c.Owner == s.local || c.Stealth {
+				if s.localSide(c.Owner) || c.Stealth {
 					continue
 				}
 				d2 := planarSquared(e, c)
@@ -306,7 +306,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 				// Rejects in order: an own-side candidate, then definition
 				// stealth, which suppresses radar and sonar outright with no
 				// distance or elevation term [R-VIS-01 §5].
-				if c.Owner == s.local || c.Stealth {
+				if s.localSide(c.Owner) || c.Stealth {
 					continue
 				}
 				d2 := planarSquared(e, c)
@@ -331,7 +331,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	// actual jammer and skips both callbacks when its owner is allied.
 	for i := range units {
 		e := &units[i]
-		if !e.Alive || !e.Active || (e.RadarJam == 0 && e.SonarJam == 0) || !s.rules().JammerSuppresses(s, s.local, e.Owner) {
+		if !e.Alive || !e.Active || (e.RadarJam == 0 && e.SonarJam == 0) || !s.rules().JammerSuppresses(s, s.local, e.Owner) || (e.Owner != s.local && s.localSide(e.Owner)) {
 			continue
 		}
 		if e.RadarJam != 0 {

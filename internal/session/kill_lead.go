@@ -137,7 +137,9 @@ func (s *Session) applyKillLeadShift(slot int) {
 	if s == nil || s.Econ == nil || slot < 0 || slot >= len(s.Econ.Players) {
 		return
 	}
-	if !s.runsKillLeadShift() {
+	// The Survival attacker is not a player and never takes the lead
+	// (DESIGN_SURVIVAL §8).
+	if !s.runsKillLeadShift() || s.isSurvivalAttacker(slot) {
 		return
 	}
 	me := &s.Econ.Players[slot]

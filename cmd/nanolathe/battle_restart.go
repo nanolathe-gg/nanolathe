@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
@@ -330,6 +331,18 @@ func (g *gameShell) restartCampaignEntry(request battleRestartRequest) {
 // entry path [08 R-CAMP-01 §8].
 func (g *gameShell) restartSkirmishEntry(request battleRestartRequest) {
 	if g == nil {
+		return
+	}
+	// A Survival battle restarts from its own setup, which already holds the
+	// attacker row; it never passes through the skirmish rows.
+	if request.Skirmish.Survival.Enabled {
+		fresh, err := skirmishBattleRequest(g.opts, g.cs, request.Skirmish, headless.ScenarioSurvival, nil, newBattleSeedSource(g.opts))
+		if err != nil {
+			reportRetailMessageError(g.showRetailMessage(err.Error()))
+			return
+		}
+		g.lastBattleSurvival = true
+		g.beginFreshBattleLoad(request.Skirmish.MapName, modeMenuSkirmish, fresh, nil)
 		return
 	}
 	g.setup = request.Skirmish

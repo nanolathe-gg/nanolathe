@@ -83,7 +83,12 @@ type Manager struct {
 	// It runs before the separate strategic refresh [06 §3.2][08 "Dispatch gates and order sinks"].
 	WeaponMaintenance func(player uint8)
 
-	Player    uint8     // 0..9, 10 is sentinel never dispatched [08][PLAN_11 C1]
+	Player uint8 // 0..9, 10 is sentinel never dispatched [08][PLAN_11 C1]
+	// Passive suppresses the computer-policy classification sweep and virtual
+	// tasks while keeping weapon maintenance and the strategic refresh. Only
+	// the Survival attacker sets it: a computer slot that never builds and
+	// whose units the wave director orders (docs/DESIGN_SURVIVAL.md §4.1).
+	Passive   bool
 	Strategic Strategic // fixed-size retail strategic state, named fields per I13 [08][PLAN_11 C2]
 	Deadlines [TaskKindCount]uint32
 	Profile   *Profile
@@ -482,7 +487,7 @@ func (m *Manager) retailStep(tick uint32, w *units.World, econ *economy.Service)
 	// and it is only "when the gate passes" that "the manager decrements its
 	// 30-countdown; when it reaches zero it resets to 30 and runs the
 	// classification sweep".
-	if ctrl == 2 {
+	if ctrl == 2 && !m.Passive {
 		// Eligible entry — count for classification cadence [08] "classifications run every 30 eligible manager entries" [PLAN_11 C3]
 		if m.countdown == 0 {
 			m.countdown = 30

@@ -35,6 +35,8 @@ const (
 	ScenarioDirectOTA ScenarioKind = "direct_ota"
 	ScenarioSkirmish  ScenarioKind = "skirmish"
 	ScenarioCampaign  ScenarioKind = "campaign"
+	// ScenarioSurvival is a Survival battle (docs/DESIGN_SURVIVAL.md §10).
+	ScenarioSurvival ScenarioKind = "survival"
 	// ScenarioMission is retained as the report spelling used by the existing
 	// displayless command. Fresh composition classifies the same request as a
 	// campaign before constructing the session.
@@ -112,6 +114,10 @@ type Request struct {
 	CRTSeed           uint32
 	TickLimit         uint32
 	UnitLimit         int // zero uses the skirmish default; campaign keeps authored maxunits
+	// Survival selects a Survival battle on Map with SurvivalBuddies allied
+	// computer players (docs/DESIGN_SURVIVAL.md §10).
+	Survival        session.SurvivalOptions
+	SurvivalBuddies int
 	// ContentProfile selects the mounted content set's directory table and
 	// limits by name or by the path of a profile JSON file. Empty detects the
 	// profile from the mounted markers. Run overwrites it with the resolved
@@ -172,6 +178,13 @@ func RunWithContent(request Request, fs vfs.FSOps, catalog *content.Catalog) (Re
 		freshKind = ScenarioCampaign
 	}
 	cfg := session.DirectSkirmishConfig(request.Map)
+	if request.Survival.Enabled {
+		if kind != ScenarioSurvival {
+			return Report{}, diagnostic("session load failed: survival needs a map", identity, nil, "one skirmish map and no mission")
+		}
+		freshKind = ScenarioSurvival
+		cfg = session.SurvivalSkirmishConfig(request.Map, request.SurvivalBuddies, request.Survival)
+	}
 	if request.UnitLimit != 0 {
 		cfg.UnitLimit = request.UnitLimit
 	}
@@ -213,7 +226,7 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	switch kind {
 	case ScenarioCampaign:
 		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits}, request.Progress)
-	case ScenarioDirectOTA, ScenarioSkirmish:
+	case ScenarioDirectOTA, ScenarioSkirmish, ScenarioSurvival:
 		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Progress: request.Progress, ContentLimits: request.ContentLimits})
 	default:
 		err = fmt.Errorf("headless: unsupported fresh battle kind %q", kind)
@@ -276,7 +289,7 @@ func normalizeFreshBattleRequest(request FreshBattleRequest) (ScenarioKind, stri
 			return "", "", cfg, diagnostic("session load failed: campaign identity is missing", "<request>", nil, "one campaign mission selector")
 		}
 		return kind, missionName, cfg, nil
-	case ScenarioDirectOTA, ScenarioSkirmish:
+	case ScenarioDirectOTA, ScenarioSkirmish, ScenarioSurvival:
 		if mapName == "" || missionName != "" {
 			return "", "", cfg, diagnostic("session load failed: map identity is missing", "<request>", nil, "one skirmish map")
 		}
@@ -383,6 +396,8 @@ func scenario(request Request) (ScenarioKind, string, error) {
 		return "", "<request>", diagnostic("session load failed: map and mission are mutually exclusive", "<request>", nil, "exactly one skirmish map or campaign mission")
 	case missionName != "":
 		return ScenarioMission, missionName, nil
+	case mapName != "" && request.Survival.Enabled:
+		return ScenarioSurvival, mapName, nil
 	case mapName != "":
 		return ScenarioSkirmish, mapName, nil
 	default:

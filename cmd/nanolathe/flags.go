@@ -8,7 +8,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/community"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
+	"github.com/nanolathe-gg/nanolathe/internal/survival"
 	"io"
 	"math"
 	"path/filepath"
@@ -42,12 +44,17 @@ type Options struct {
 	BenchmarkFrames    int
 	BenchmarkTPS       int
 	BenchmarkPreTicks  int
-	Root               string      // first content root; default save parent for programmatic callers
-	Roots              []string    // ordered content roots; empty enables host discovery
-	ListInstalls       bool        // print resolved installation roots without mounting content
-	CheckInstall       bool        // validate startup content and exit without opening a window
-	SaveDir            string      // exact save/load directory override; empty uses the install root
-	Map                string      // map name without extension, e.g. "ashap plateau"
+	Root               string   // first content root; default save parent for programmatic callers
+	Roots              []string // ordered content roots; empty enables host discovery
+	ListInstalls       bool     // print resolved installation roots without mounting content
+	CheckInstall       bool     // validate startup content and exit without opening a window
+	SaveDir            string   // exact save/load directory override; empty uses the install root
+	Map                string   // map name without extension, e.g. "ashap plateau"
+	Survival           bool     // a Survival battle on Map (docs/DESIGN_SURVIVAL.md)
+	SurvivalBuddies    int      // allied computer players, 0..2
+	SurvivalPace       string   // normal, relaxed or relentless
+	SurvivalNoAir      bool
+	SurvivalNoNaval    bool
 	Seed               int64       // battle RNG seed for both streams; <0 = derive pair from clock
 	Headless           bool        // run the session without opening a window
 	Ticks              int         // authoritative tick limit; zero uses the headless default
@@ -150,6 +157,11 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.BoolVar(&opts.CheckInstall, "check-install", false, "validate selected content roots without opening a game window")
 	set.StringVar(&opts.SaveDir, "save-dir", "", "exact save/load directory (omitted uses savegame beneath the installation)")
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
+	set.BoolVar(&opts.Survival, "survival", false, "start a Survival battle on --map (docs/DESIGN_SURVIVAL.md)")
+	set.IntVar(&opts.SurvivalBuddies, "survival-buddies", 0, "allied computer players in a Survival battle, 0..2")
+	set.StringVar(&opts.SurvivalPace, "survival-pace", "normal", "Survival wave pace: normal, relaxed or relentless")
+	set.BoolVar(&opts.SurvivalNoAir, "survival-no-air", false, "Survival: no air waves")
+	set.BoolVar(&opts.SurvivalNoNaval, "survival-no-naval", false, "Survival: no naval waves")
 	set.IntVar(&opts.UnitLimit, "unit-limit", 0, "per-player skirmish unit setting (20..3276); omitted uses saved unitLimit or 1000; gameplay feature table may override it")
 	set.Int64Var(&opts.Seed, "seed", -1, "battle RNG seed for both streams; negative derives a pair from the clock")
 	set.BoolVar(&opts.Headless, "headless", false, "run a skirmish or mission without opening a window")
@@ -265,6 +277,17 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.FPSSet = true
 		}
 	})
+	if opts.Survival {
+		if _, err := survival.ParsePace(opts.SurvivalPace); err != nil {
+			fmt.Fprintln(out, err)
+			return opts, err
+		}
+		if opts.Map == "" || opts.Mission != "" || opts.LoadSave != "" || opts.SurvivalBuddies < 0 || opts.SurvivalBuddies > session.SurvivalMaxBuddies {
+			err := fmt.Errorf("nanolathe: invalid survival selection: logical path <command line>, providers searched [survival], expected --map, no --mission or --load-save, and --survival-buddies 0..%d", session.SurvivalMaxBuddies)
+			fmt.Fprintln(out, err)
+			return opts, err
+		}
+	}
 	if unitLimitSet && (opts.UnitLimit < settings.MinUnitLimit || opts.UnitLimit > settings.MaxUnitLimit) {
 		err := fmt.Errorf("nanolathe: invalid unit limit: logical path <command line>, providers searched [unit-limit], expected %d..%d", settings.MinUnitLimit, settings.MaxUnitLimit)
 		fmt.Fprintln(out, err) // mainOptions expects parseFlags to print validation failures.

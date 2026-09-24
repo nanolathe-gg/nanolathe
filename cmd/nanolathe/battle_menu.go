@@ -197,6 +197,10 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 			cl.RequestExit()
 		}
 	case ui.BattleModalActionSaveGame:
+		// A Survival battle is live only (docs/DESIGN_SURVIVAL.md §11).
+		if b.sess != nil && b.sess.IsSurvival() {
+			break
+		}
 		b.openBattleSaveLoadScreen(saveScreenMode)
 	case ui.BattleModalActionLoadGame:
 		b.openBattleSaveLoadScreen(loadScreenMode)

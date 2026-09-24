@@ -336,6 +336,9 @@ func (s *Session) RetailProjection(in RetailSaveInputs) (save.RetailProjection, 
 // truncate-write policy already owned by save.WriteFile [08 "File naming and
 // write policy"].
 func (s *Session) WriteRetailSave(path string, in RetailSaveInputs) error {
+	if s.IsSurvival() {
+		return fmt.Errorf("nanolathe: survival battles cannot be saved: logical path %s, providers searched [session], expected a skirmish or campaign battle", path)
+	}
 	p, err := ProjectRetailSession(s, in)
 	if err != nil {
 		return err

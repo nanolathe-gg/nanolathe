@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/survival"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
@@ -23,6 +24,14 @@ func unavailableBattleContentError() error {
 }
 
 func directMapBattleRequest(opts Options, cs *contentSet, source BattleSeedSource) (freshBattleRequest, error) {
+	if opts.Survival {
+		pace, _ := survival.ParsePace(opts.SurvivalPace) // validated by parseFlags
+		cfg := session.SurvivalSkirmishConfig(opts.Map, opts.SurvivalBuddies, session.SurvivalOptions{
+			Pace: pace, NoAir: opts.SurvivalNoAir, NoNaval: opts.SurvivalNoNaval,
+		})
+		cfg.UnitLimit = loadedSettings().UnitLimit
+		return skirmishBattleRequest(opts, cs, cfg, headless.ScenarioSurvival, nil, source)
+	}
 	cfg := session.DirectSkirmishConfig(opts.Map)
 	cfg.UnitLimit = loadedSettings().UnitLimit
 	return skirmishBattleRequest(opts, cs, cfg, headless.ScenarioDirectOTA, nil, source)

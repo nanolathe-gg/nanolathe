@@ -243,6 +243,9 @@ type Session struct {
 	// the remaining round rules stay available to visibility/endgame wiring
 	// without being silently replaced by map-global defaults.
 	Skirmish SkirmishConfig
+	// Survival is the wave director of a Survival battle, nil otherwise
+	// (docs/DESIGN_SURVIVAL.md).
+	Survival *survivalState
 
 	// VictoryDone / DefeatDone latch the mission end conditions [08
 	// "Evaluation"]. They are set by the trigger poll site below and are

@@ -111,6 +111,9 @@ func (g *gameShell) serviceMenuWidgets(p *ui.Panel, in *input.State) bool {
 		},
 	})
 	in.DiscardTokens(result.ConsumedTokens)
+	if g.frontend.Mode == modeMenuSkirmish && editorIndex < 0 && !result.Fired && result.ConsumedTokens != 0 && len(frame.Tokens) != 0 && !g.survivalMenu {
+		g.skirmishPlayerCountToken(frame.Tokens[0])
+	}
 	if editorIndex >= 0 && g.saveLoadPanelActive() {
 		if gad, ok := g.currentGadget(editorIndex); ok && gui.CallbackNameEqual(gad.Name, "GAMENAME") {
 			saveLoadUI.SetName(p.TextAt(editorIndex))
@@ -273,6 +276,12 @@ func (g *gameShell) activateGadget(name string) {
 	// `options` cue here: the root is not open yet when that button fires, so
 	// the early return above does not claim it.
 	g.playMenuCue(frontendCue(g.frontend.Mode, key))
+	// Leaving the Survival screen by the fixed PrevMenu edge restores the
+	// skirmish rows it set aside (docs/DESIGN_SURVIVAL.md §9).
+	if g.survivalMenu && g.frontend.Mode == modeMenuSkirmish && name == "PrevMenu" {
+		g.closeSurvivalMenu()
+		g.saveSettings()
+	}
 	if target, ok := g.frontend.Navigate(name); ok {
 		g.openMenu(target)
 		return
@@ -307,6 +316,8 @@ func (g *gameShell) activateGadget(name string) {
 			// `SINGLE` is the front end's only route to the options root; it
 			// opens as a child window over `SINGLE` [07 R-FE-01 §2].
 			g.openRetailOptionsScreenReporting()
+		case survivalButton:
+			g.openSurvivalMenu()
 		}
 	case modeMenuMission:
 		switch name {
@@ -348,6 +359,9 @@ func (g *gameShell) activateGadget(name string) {
 }
 
 func (g *gameShell) activateSkirmishGadget(name string) {
+	if g.survivalMenu && g.activateSurvivalGadget(name) {
+		return
+	}
 	if name == "PrevMenu" {
 		// Backing out of SKIRMISH.GUI still commits the setup, so the next
 		// visit to the screen opens on the rows that were last configured.
@@ -576,7 +590,7 @@ func frontendCallbackKey(name string) string {
 		return "newcamp"
 	case "AnyMsn":
 		return "anymsn"
-	case "Skirmish":
+	case "Skirmish", survivalButton:
 		return "skirmish"
 	case "Options":
 		return "options"

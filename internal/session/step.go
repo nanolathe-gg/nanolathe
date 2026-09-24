@@ -86,6 +86,9 @@ func (s *Session) stepCommunityTickTail(tick uint32) {
 func (s *Session) phaseNetwork(tick uint32) {
 	s.resetBigBrotherEvents()
 	s.applyHumanCommands(tick)
+	// The Survival director runs after human commands, where the spawn
+	// command already creates units (DESIGN_SURVIVAL §6.8).
+	s.stepSurvival(tick)
 	s.recordPhase("phase1-network", tick)
 }
 

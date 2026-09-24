@@ -329,6 +329,15 @@ They are owned by [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) §6. The
 retail baseline is Strict 3.1 *with no mutators*, and every fingerprint lock
 runs with none.
 
+**Survival** (user-authorized 2026-09-23) is likewise available in every mode.
+It is a scenario — a skirmish session with a commanderless attacker slot and a
+wave director that creates units through the ordinary allocator and gives
+them ordinary orders, with the survivors sharing sight, radar and income as
+one side — not a rule, so it adds no seam and consults the bound rule set like
+any other battle. Its director exists only in a Survival
+session and draws the simulation stream only there. It is owned by
+[DESIGN_SURVIVAL](DESIGN_SURVIVAL.md).
+
 The mode word also selects a **registered** set by name: a third-party set is
 compiled in through `mods/`, which only a command may import, and it composes
 the shipped implementations rather than reimplementing a policy. Such a set

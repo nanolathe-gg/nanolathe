@@ -131,6 +131,15 @@ type gameShell struct {
 	// happens only at battle entry.
 	retailControllers    [session.SkirmishMaxPlayers]int
 	retailControllersSet bool
+	// skirmishKeys is the setup window's typed-key history for the retail
+	// hidden player-count selector [07 R-FE-02 §10].
+	skirmishKeys string
+	// survival is the Survival setup screen's own rows and switches;
+	// survivalMenu is set while SKIRMISH.GUI shows them; lastBattleSurvival
+	// sends the post-battle return to the screen the battle came from.
+	survival           survivalMenuState
+	survivalMenu       bool
+	lastBattleSurvival bool
 
 	// settingsWritable is set by the windowed entry point once it has read the
 	// persisted preferences. Only that path writes them back, so the
@@ -589,6 +598,12 @@ func retailFrontendAssetError(cs *contentSet, what, logical, expected string, ca
 }
 
 func (g *gameShell) openMenu(mode shellMode) {
+	g.openMenuWithTokenFlush(mode, true)
+}
+
+// The hidden skirmish count hook rebuilds the same window while its typed
+// prefix remains live; pending characters must reach the next GUI pass.
+func (g *gameShell) openMenuWithTokenFlush(mode shellMode, flushTokens bool) {
 	if g == nil {
 		return
 	}
@@ -615,10 +630,13 @@ func (g *gameShell) openMenu(mode shellMode) {
 	if g.frontend == nil {
 		g.frontend = ui.NewFrontend(mode)
 	}
-	if clPtr != nil && clPtr.Input() != nil {
+	if flushTokens && clPtr != nil && clPtr.Input() != nil {
 		clPtr.Input().DrainTokens()
 	}
 	oldPanel, oldMode := g.activePanel(), g.frontend.Mode
+	if mode != modeMenuSkirmish || oldMode != modeMenuSkirmish {
+		g.skirmishKeys = ""
+	}
 	if oldPanel != nil {
 		// Clear a gesture before replacing the active window. This used to sit
 		// after panel=nil and was unreachable, allowing a held press to leak
@@ -641,6 +659,12 @@ func (g *gameShell) openMenu(mode shellMode) {
 				// word before building its controls [08 "Skirmish configuration"].
 				g.missionDifficultyValue = g.setup.Difficulty
 				g.installSkirmishDynamicGadgets(window)
+				if g.survivalMenu {
+					applySurvivalLayout(window)
+				}
+			}
+			if mode == modeMenuSingle {
+				addSurvivalButton(window)
 			}
 			// The builder sees runtime-appended controls and resolves all
 			// records before Panel copies instance state. Repaints only use the
@@ -906,7 +930,7 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {
 			g.teardownBattle(cl)
-			g.openMenu(modeMenuSkirmish)
+			g.openSetupAfterBattle()
 			g.bindFrontendClient(cl)
 		}
 	}

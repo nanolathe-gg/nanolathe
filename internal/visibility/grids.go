@@ -42,6 +42,9 @@ type Service struct {
 	byteGrids [10][]uint8
 	fog       FogCache
 	local     PlayerID
+	// team is each owner's vision team as player bits; zero means the owner
+	// alone. Only a Survival battle sets it (SetVisionTeam).
+	team [10]uint16
 	// mappingVersion identifies the local viewer's immutable minimap inputs;
 	// fogVersion identifies completed derived fog bytes. They are presentation
 	// revisions, never simulation counters [03 §2.4][03 §3.6].
@@ -273,14 +276,52 @@ func cellBit(p PlayerID) uint16 {
 
 func validPlayer(p PlayerID) bool { return p < 10 }
 
+// SetVisionTeam makes members one side for line of sight, the explored map and
+// radar: every member's coverage is stamped into every member's grids, radar
+// and sonar from any member's units count for each of them, and a member's
+// jammers never blind the others. It is not retail behaviour — retail never
+// merges an ally's coverage [03 R-VIS-01 §7] — and only a Survival battle
+// calls it, once at battle entry, before any coverage is published
+// (docs/DESIGN_SURVIVAL.md §4.3). Reference counts stay balanced because the
+// team is fixed for the battle: a stamp and its later removal reach the same
+// grids.
+func (s *Service) SetVisionTeam(members []PlayerID) {
+	if s == nil {
+		return
+	}
+	var bits uint16
+	for _, p := range members {
+		bits |= cellBit(p)
+	}
+	for _, p := range members {
+		if validPlayer(p) {
+			s.team[p] = bits
+		}
+	}
+}
+
+// visionBits are the player bits an owner's coverage stamps.
+func (s *Service) visionBits(owner PlayerID) uint16 {
+	if validPlayer(owner) && s.team[owner] != 0 {
+		return s.team[owner]
+	}
+	return cellBit(owner)
+}
+
+// localSide reports an owner on the viewing player's side: the viewer itself,
+// or a member of its vision team.
+func (s *Service) localSide(owner PlayerID) bool {
+	return owner == s.local || (validPlayer(s.local) && validPlayer(owner) && s.team[s.local]&cellBit(owner) != 0)
+}
+
 // setWordBit sets the owner's bit if absent; idempotent, never decrements [03 §3.2] C4.
 // Returns true if the cell changed.
 func (s *Service) setWordBit(idx int, owner PlayerID) bool {
 	if idx < 0 || idx >= len(s.wordMask) || !validPlayer(owner) {
 		return false
 	}
-	bit := cellBit(owner)
-	if s.wordMask[idx]&bit != 0 {
+	bit := s.visionBits(owner)
+	if s.wordMask[idx]&bit == bit {
 		return false
 	}
 	s.wordMask[idx] |= bit
@@ -289,6 +330,19 @@ func (s *Service) setWordBit(idx int, owner PlayerID) bool {
 
 // incByteGrid increments the owner's byte refcount at idx [03 §3.1] C1.
 func (s *Service) incByteGrid(idx int, owner PlayerID) bool {
+	if validPlayer(owner) && s.team[owner] != 0 {
+		changed := false
+		for p := PlayerID(0); p < 10; p++ {
+			if s.team[owner]&cellBit(p) != 0 {
+				changed = s.incOwnByteGrid(idx, p) || changed
+			}
+		}
+		return changed
+	}
+	return s.incOwnByteGrid(idx, owner)
+}
+
+func (s *Service) incOwnByteGrid(idx int, owner PlayerID) bool {
 	if int(owner) >= len(s.byteGrids) || s.byteGrids[owner] == nil {
 		return false
 	}
@@ -304,6 +358,19 @@ func (s *Service) incByteGrid(idx int, owner PlayerID) bool {
 // decByteGrid decrements the owner's byte refcount at idx P0-11.
 // Retail does plain DEC with u8 wrap 256 (0→255) [03 §3.1] P0-11.
 func (s *Service) decByteGrid(idx int, owner PlayerID) bool {
+	if validPlayer(owner) && s.team[owner] != 0 {
+		changed := false
+		for p := PlayerID(0); p < 10; p++ {
+			if s.team[owner]&cellBit(p) != 0 {
+				changed = s.decOwnByteGrid(idx, p) || changed
+			}
+		}
+		return changed
+	}
+	return s.decOwnByteGrid(idx, owner)
+}
+
+func (s *Service) decOwnByteGrid(idx int, owner PlayerID) bool {
 	if int(owner) >= len(s.byteGrids) || s.byteGrids[owner] == nil {
 		return false
 	}

@@ -102,11 +102,14 @@ type retailBattleHUD struct {
 	resultState    resultPresentation // ENDMSN dynamic bars/reveal state [08 R-CAMP-01 §7]
 	windowContext  *battleWindowContext
 	optionsRelabel bool
-	optionsBuilt   bool
-	exitBuilt      bool
-	confirmBuilt   bool
-	restartBuilt   bool
-	resultBuilt    bool
+	// optionsNoSave greys Save Game: a Survival battle cannot be saved
+	// (docs/DESIGN_SURVIVAL.md §11).
+	optionsNoSave bool
+	optionsBuilt  bool
+	exitBuilt     bool
+	confirmBuilt  bool
+	restartBuilt  bool
+	resultBuilt   bool
 
 	fs    vfs.FSOps
 	pages map[string]*formats.GAF
@@ -361,7 +364,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	resultGAF := loadGAFOptional(fs, "anims/endmsn.gaf", "endmsn.gaf [07 §11]")
 	var resultPanel *ui.Panel
 	h := &retailBattleHUD{
-		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel,
+		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel, optionsNoSave: sess.IsSurvival(),
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, primaryFont: primaryFont, developerFont: developerFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
@@ -570,6 +573,13 @@ func (h *retailBattleHUD) openOptionsWindow() {
 	h.optionsBuilt = true
 	if h.optionsWin != nil {
 		h.optionsPanel = ui.NewPanel(h.optionsWin)
+	}
+	if h.optionsNoSave && h.optionsWin != nil {
+		for i := range h.optionsWin.Gadgets {
+			if gui.Name16Equal(h.optionsWin.Gadgets[i].Name, "SAVEGAME") {
+				h.optionsWin.Gadgets[i].GrayedOut |= 1
+			}
+		}
 	}
 	if !h.optionsRelabel || h.optionsWin == nil {
 		return
@@ -912,6 +922,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// from the Space-held LIGHTBAR readout above and remains below every linked
 	// battle window [07 R-CAM-01 §6][07 R-HUD-04 §4].
 	h.drawClock(c, b, cur)
+	h.drawSurvivalStatus(c, cur)
 	h.drawCommunityBPS(c, b)
 	h.drawCommunityIncome(c, b, cur)
 	h.drawCommunityWeather(c, b, cur)

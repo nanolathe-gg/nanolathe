@@ -1,10 +1,90 @@
 package main
 
 import (
+	"os"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/client"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
+
+func TestRetailSkirmishTenPlayerShortcut(t *testing.T) {
+	g, _, cl := retailAssetShell(t)
+	g.openMenu(modeMenuSkirmish)
+	for _, r := range "*X" {
+		if !cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: r}) {
+			t.Fatal("enqueue shortcut token")
+		}
+		g.menuInput(cl)
+	}
+	p := g.activePanel()
+	if g.setup.NumPlayers != 10 || p == nil || p.Index("Player9") < 0 || !p.ActiveOf("Player9") {
+		t.Fatalf("shortcut count/last row = %d/%v", g.setup.NumPlayers, p)
+	}
+	writeShellShot(t, cl, os.Getenv("NANOLATHE_SKIRMISH_TEN_SHOT"))
+	clickRowGadget(t, g, p, cl, "Player9", input.MouseButtonLeft)
+	if g.retailControllers[9] != 2 || !g.activePanel().ActiveOf("Side9") {
+		t.Fatal("tenth row did not become a configurable computer player")
+	}
+}
+
+func TestSkirmishTypedPlayerCountRebuildsTenRows(t *testing.T) {
+	g := &gameShell{
+		frontend: ui.NewFrontend(modeMenuSingle),
+		setup:    newSkirmishMenuConfig("test"),
+		assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{
+			modeMenuSkirmish: {window: &gui.Window{Rect: gui.Rect{W: 640, H: 480}, Gadgets: []gui.Gadget{{Kind: gui.KindPanel}}}},
+		}},
+	}
+	g.openMenu(modeMenuSkirmish)
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousClient := clPtr
+	clPtr = cl
+	t.Cleanup(func() { clPtr = previousClient })
+	for _, r := range "*viii" {
+		cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
+	}
+	for cl.Input().PendingTokens() != 0 {
+		g.menuInput(cl)
+	}
+	if g.setup.NumPlayers != 8 || g.activePanel().Index("Player7") < 0 || g.activePanel().Index("Player8") >= 0 {
+		t.Fatalf("*VIII produced count %d and %d gadgets", g.setup.NumPlayers, len(g.activePanel().Window.Gadgets))
+	}
+	for _, r := range "*X" {
+		cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
+		g.menuInput(cl)
+	}
+	if g.setup.NumPlayers != 10 || g.activePanel().Index("Player9") < 0 {
+		t.Fatalf("*X produced count %d with no tenth row", g.setup.NumPlayers)
+	}
+	if got := g.captureSettings().Skirmish.NumPlayers; got != 10 {
+		t.Fatalf("persisted setup count = %d, want 10", got)
+	}
+	if got := g.activePanel().Window.Gadgets[g.activePanel().Index("Player9")].Rect.Y; got != 259 {
+		t.Fatalf("tenth row Y = %d, want layout rebuilt for 10 rows", got)
+	}
+}
+
+func TestSkirmishTypedPlayerCountNeedsContiguousSequence(t *testing.T) {
+	g := &gameShell{frontend: ui.NewFrontend(modeMenuSkirmish), setup: newSkirmishMenuConfig("test")}
+	for _, token := range []input.Token{
+		{Kind: input.TokenText, Rune: '*'},
+		{Kind: input.TokenEdit, Key: input.KeyLeft},
+		{Kind: input.TokenText, Rune: 'X'},
+	} {
+		g.skirmishPlayerCountToken(token)
+	}
+	if g.setup.NumPlayers != session.SkirmishDefaultPlayers {
+		t.Fatalf("interrupted *X changed count to %d", g.setup.NumPlayers)
+	}
+}
 
 func TestSkirmishMenuDefaultsAndOpponentCount(t *testing.T) {
 	cfg := newSkirmishMenuConfig("small")

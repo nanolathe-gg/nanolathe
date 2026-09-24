@@ -193,6 +193,10 @@ type SkirmishConfig struct {
 	RNGSimSeed uint32
 	RNGCrtSeed uint32
 
+	// Survival selects the Survival scenario (docs/DESIGN_SURVIVAL.md): the
+	// last row is the commanderless attacker. The zero value is a skirmish.
+	Survival SurvivalOptions
+
 	// rulesDefaultsApplied distinguishes a zero-value config (missing registry
 	// values) from an explicit Easy/randomized/off choice. It is deliberately
 	// private: callers use ApplyDefaults once, then may cycle the public values.
@@ -513,6 +517,12 @@ func (c SkirmishConfig) NormalizedBytes() []byte {
 	// the pool [05 R-SHARE-01 §7]. Two bytes, little endian, appended after
 	// the rows so the existing prefix keeps its meaning.
 	b = append(b, byte(c.UnitLimit), byte(c.UnitLimit>>8))
+	// Survival appends its switches only when selected, so every skirmish
+	// keeps its existing bytes.
+	if c.Survival.Enabled {
+		o := c.Survival
+		b = append(b, 'S', byte(o.Pace), boolByte(o.NoAir), boolByte(o.NoNaval))
+	}
 	return b
 }
 
@@ -795,6 +805,16 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 			return nil, err
 		}
 	}
+	// The Survival attacker keeps its manager — the manager's step also
+	// rebuilds the slot's combat target registry and aims its autonomous
+	// weapons — but runs no planner tasks: it never builds, and the wave
+	// director gives its units their orders (DESIGN_SURVIVAL §4.1).
+	if err := s.initSurvival(cfg); err != nil {
+		return nil, err
+	}
+	if a := cfg.survivalAttacker(); a >= 0 && s.AI[a] != nil {
+		s.AI[a].Passive = true
+	}
 	// 7-9. battle entry: place features → units → resources (InitialMission inside) [08 "Placement and battle entry"] C9
 	if err := skirmishBattleEntry(s, cfg, m); err != nil {
 		return nil, err
@@ -955,10 +975,23 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	if err := skirmishPlaceFeatures(s, m); err != nil {
 		return err
 	}
+	// Survival settles its start site now, while only authored features
+	// stand, and adds its extra deposits before the deposit pass seeds their
+	// metal (DESIGN_SURVIVAL §4.2, §4.5).
+	if s.Survival != nil {
+		if err := s.survivalChooseSite(cfg); err != nil {
+			return err
+		}
+		s.survivalSeedDeposits(cfg, m)
+	}
 	// The deposit pass runs after every feature stamp, mission-placed ones
 	// included [05 R-FEAT-01 §7].
 	s.World.SeedFeatureMetalDeposits()
-	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
+	if s.Survival != nil {
+		if err := s.placeSurvivalCommanders(cfg); err != nil {
+			return err
+		}
+	} else if err := skirmishReconstructUnits(s, cfg, m); err != nil {
 		return err
 	}
 	// Reconstructed units may carry lazily-created order queues. Apply the
@@ -1264,6 +1297,10 @@ func skirmishGrantResourcesDirect(s *Session, cfg SkirmishConfig) {
 		if !s.Econ.Players[p].Exists {
 			continue
 		}
+		// The Survival attacker has no economy (DESIGN_SURVIVAL §4.1).
+		if p == cfg.survivalAttacker() {
+			continue
+		}
 		// [05 "Storage capacity"] [05 R-ECO-01 §4] [OX P1] per-player storage bonus.
 		// Retail enables the per-player storage bonus and applies a minimum
 		// capacity of 0xC8 (200) to each resource, storing the integer bonus
@@ -1306,3 +1343,10 @@ var (
 )
 
 var _ = strings.TrimSpace
+
+func boolByte(v bool) byte {
+	if v {
+		return 1
+	}
+	return 0
+}

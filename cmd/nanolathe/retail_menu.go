@@ -170,6 +170,7 @@ func (g *gameShell) refreshRetailPanel() {
 		g.refreshMapPanel()
 	case modeMenuSkirmish:
 		g.refreshSkirmishPanel()
+		g.refreshSurvivalPanel()
 	}
 }
 

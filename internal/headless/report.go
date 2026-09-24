@@ -92,6 +92,9 @@ type Report struct {
 	StateHash                 string           `json:"state_hash"`
 	PresentationEventsDropped uint64           `json:"presentation_events_dropped,omitempty"`
 	Players                   [10]PlayerReport `json:"players"`
+	// Survival is the Survival director's state, outcome and wave plans
+	// (docs/DESIGN_SURVIVAL.md §10); absent for every other battle.
+	Survival *session.SurvivalReport `json:"survival,omitempty"`
 }
 
 // attackFamily is the set of canonical command names the order resolver
@@ -233,6 +236,7 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 			report.Players[i].OrderIntents = append(report.Players[i].OrderIntents, IntentReport{Intent: name, Count: observer.intents[i][name]})
 		}
 	}
+	report.Survival = sess.SurvivalReport(sess.Clock.GlobalTick)
 	result := sess.GetResult()
 	if result.Ended {
 		switch result.Kind {

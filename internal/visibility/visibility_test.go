@@ -219,3 +219,30 @@ func TestFogLocalOnly(t *testing.T) {
 		t.Fatalf("RebuildFog should set valid")
 	}
 }
+
+// A Survival vision team is the one exception to C9: a member's coverage
+// reaches every member's grids and leaves them together, and a player outside
+// the team still sees nothing (docs/DESIGN_SURVIVAL.md §4.3).
+func TestVisionTeamSharesCoverage(t *testing.T) {
+	terrain := &world.Terrain{CellW: 128, CellH: 128}
+	s := newTestService(terrain, ModeHistoryEnabled|ModeCurrentEnabled)
+	s.SetLocal(0)
+	s.SetVisionTeam([]PlayerID{0, 1})
+	s.Publish(1, 20, 20, 0, 320)
+
+	enemy := Target{Owner: 3, X: tileWorld(20), Z: tileWorld(20)}
+	if !s.IsVisible(0, enemy) {
+		t.Fatalf("team member 0 does not see what member 1 covers")
+	}
+	if s.IsVisible(2, enemy) {
+		t.Fatalf("player 2 is outside the team and saw member 1's coverage")
+	}
+	s.Unpublish(1, 20, 20, 0, 320)
+	if s.IsVisible(0, enemy) || s.IsVisible(1, enemy) {
+		t.Fatalf("coverage outlived its observer: team reference counts are unbalanced")
+	}
+	w, _ := s.GridDimensions()
+	if s.WordMask()[20*int(w)+20]&1 == 0 {
+		t.Fatalf("member 1's explored area is not member 0's")
+	}
+}

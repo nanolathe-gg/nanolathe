@@ -159,5 +159,6 @@ func (s *Session) recordFinalizedDeathStatistics(cause units.DeathCause, u *unit
 		attacker = s.Units.RawUnitRecord(u.EngagementTarget)
 	}
 	s.recordDeathStatistics(in, attacker)
+	s.survivalNoteDeath(u)
 	_ = cause // retained for the callback's lifecycle signature
 }
