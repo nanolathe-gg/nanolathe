@@ -5389,7 +5389,9 @@ full or wireframe and defaults off. It is independent of gameplay mode: Strict,
 Modern and Community sessions see the same host choice, and changing it never
 changes placement admission, an order, simulation state or either RNG stream.
 The ordinary green/red build rectangle remains the placement verdict in every
-mode.
+mode. Nanolathe animates a small white glint around that border from the
+committed tick, including when the model preview preference is off (interface
+design C12). The preview preference does not alter that border animation.
 
 While placement is armed and the pointer is over the world viewport, the host
 places the immutable catalog definition's model at the resolved build-cell

@@ -11,6 +11,24 @@ import (
 // mapPx is one map pixel in 16.16 world units [03 §2.1].
 func mapPx(v int32) numeric.Fixed { return numeric.Fixed(int64(v) << 16) }
 
+func TestBuildGhostGlintMovesWithinFootprint(t *testing.T) {
+	const l, top, r, bottom, thickness int32 = 100, 200, 164, 248, 2
+	x0, y0, width, height, ok := buildGhostGlint(l, top, r, bottom, thickness, 0)
+	if !ok || x0 != l || y0 != top || width != 12 || height != 2 {
+		t.Fatalf("initial glint = (%d,%d) size %dx%d, visible %v", x0, y0, width, height, ok)
+	}
+	x1, y1, _, _, _ := buildGhostGlint(l, top, r, bottom, thickness, 1)
+	if x1 <= x0 || y1 != y0 {
+		t.Fatalf("glint did not advance along top edge: (%d,%d) to (%d,%d)", x0, y0, x1, y1)
+	}
+	for tick := uint32(0); tick < 100; tick++ {
+		x, y, width, height, ok := buildGhostGlint(l, top, r, bottom, thickness, tick)
+		if !ok || x < l || y < top || x+width > r || y+height > bottom {
+			t.Fatalf("tick %d glint outside footprint: (%d,%d) size %dx%d", tick, x, y, width, height)
+		}
+	}
+}
+
 // TestBuildSiteSnapRoundsToNearestCell locks the round-to-nearest term of the
 // site snap [07 R-P0-11 §1 "The site."]:
 //

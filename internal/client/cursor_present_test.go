@@ -5,7 +5,41 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 )
+
+// The placement reticle is anchored on the picked build point even when the
+// presentation pointer arrives after recording. The stock GAF offset would
+// move its visible centre down-right [03 R-FX-01 §5].
+func TestPlacementReticleCenteredAfterLatePosition(t *testing.T) {
+	c, err := New(Options{Width: 80, Height: 70})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := snapshotCursor(99)
+	cs.idx = render.CursorFindSite
+	f := cs.Frame()
+	f.Width, f.Height = 21, 23
+	f.XOffset, f.YOffset = -15, -3
+	f.Pixels = make([]byte, int(f.Width)*int(f.Height))
+	f.Transparent = make([]bool, len(f.Pixels))
+	for i := range f.Transparent {
+		f.Transparent[i] = true
+	}
+	f.Pixels[11*int(f.Width)+10] = 99
+	f.Transparent[11*int(f.Width)+10] = false
+	c.SetCursors(cs)
+	c.in.Mouse.SetPosition(30, 30)
+	c.drawCursor()
+	c.PositionPresentationCursor(&c.list, 40, 35)
+	c.replayForTest()
+	if got := c.indexed[35*c.width+40]; got != 99 {
+		t.Fatalf("late positioned reticle centre = %d, want 99", got)
+	}
+	if got := c.indexed[30*c.width+30]; got != 0 {
+		t.Fatalf("reticle remained at old pointer: %d", got)
+	}
+}
 
 // Host late positioning must affect only the presented pointer, preserve the
 // GAF hotspot [07 §8], and never move the pointer used by commands [I6].

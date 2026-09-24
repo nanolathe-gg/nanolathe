@@ -191,7 +191,15 @@ func (c *Client) drawCursor() {
 		mouse.X, mouse.Y = c.cursorRestoreX, c.cursorRestoreY
 	}
 	x, y := render.CursorHotspot(f, int(mouse.X), int(mouse.Y))
+	centerOnPointer := c.cursors.Index() == render.CursorFindSite
+	if centerOnPointer {
+		// Nanolathe host presentation policy: centre the placement reticle on
+		// the pointer that resolves the build site. The authored hotspot
+		// places this one shape down-right of that point [03 R-FX-01 §5].
+		x = int(mouse.X) - (int(f.Width)-1)/2
+		y = int(mouse.Y) - (int(f.Height)-1)/2
+	}
 	// Record then execute inline: classicSink.Cursor runs the same UIBlit at the
 	// hotspot-resolved origin this used to call directly [07 §8].
-	c.emitCursor(drawlist.Cursor{Frame: f, HotX: int32(x), HotY: int32(y)})
+	c.emitCursor(drawlist.Cursor{Frame: f, HotX: int32(x), HotY: int32(y), CenterOnPointer: centerOnPointer})
 }

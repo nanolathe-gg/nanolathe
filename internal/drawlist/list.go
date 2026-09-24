@@ -575,6 +575,9 @@ const DetailTilePixels = 64 * 64
 type Cursor struct {
 	Frame      *formats.GAFFrame
 	HotX, HotY int32
+	// CenterOnPointer is Nanolathe's host presentation choice for the build
+	// placement reticle. Late positioning must preserve the same anchor.
+	CenterOnPointer bool
 }
 
 // family identifies the command struct one ordering tag points at. It is
@@ -806,6 +809,10 @@ func (l *List) PositionCursor(x, y int) {
 		cu := &l.cursor[i]
 		if cu.Frame != nil {
 			hx, hy := render.CursorHotspot(cu.Frame, x, y)
+			if cu.CenterOnPointer {
+				hx = x - (int(cu.Frame.Width)-1)/2
+				hy = y - (int(cu.Frame.Height)-1)/2
+			}
 			cu.HotX, cu.HotY = int32(hx), int32(hy)
 		}
 	}

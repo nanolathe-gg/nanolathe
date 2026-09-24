@@ -1330,6 +1330,16 @@ as its hotspot, and the index writer diffs before swapping so an unchanged shape
 keeps its animation phase. Shape selection is the four-step chooser of §2.5
 `[07 §8]` `[03 R-FX-01 §5]`.
 
+**Nanolathe host presentation policy — placement feedback.** While build
+placement is armed, `cursorfindsite` is drawn with its artwork centred on the
+pointer used for site picking. The retail GAF offset puts that one reticle
+down-right of the pointer; this display choice changes neither the chosen
+cursor shape nor the site, click or order. A white glint walks clockwise around
+the green/red footprint border using the committed tick. The full border keeps
+the retail validity colour and cell-aligned rectangle. The accent pauses with
+the committed tick and consumes no RNG. Both choices apply in every gameplay
+mode because they are presentation only `[07 §8][07 §9]`.
+
 **C13 — the panel slide.** On entering battle a flip surface is allocated at the
 negotiated video-mode dimensions with the static `PANEL` backdrop blitted in,
 plus a cleared 300×480 backup scratch strip whose header words are saved; the
