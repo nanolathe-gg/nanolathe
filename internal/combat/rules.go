@@ -4,6 +4,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -54,7 +55,7 @@ type Rules interface {
 	// SelectTarget chooses among the existing registry query's contacts.
 	SelectTarget(s *Service, q *TargetQuery) (pool.Handle, bool)
 	// ReconsiderTarget bypasses only the autonomous maintenance retention shortcut.
-	ReconsiderTarget() bool
+	ReconsiderTarget(shooter *units.Unit, slot *units.Slot, target *units.Unit, vis *visibility.Service) bool
 	// CombatTick supplies the time of a decision without a second clock.
 	CombatTick(s *Service, tick uint32, afterProjectiles bool)
 	// ObserveDanger forwards a hostile launch or accepted damage observation.
@@ -337,7 +338,9 @@ func previewsShot(r Rules) bool {
 func (StrictRules) SelectTarget(_ *Service, q *TargetQuery) (pool.Handle, bool) {
 	return acquireFilteredTarget(q.Candidates, q.Acquisition)
 }
-func (StrictRules) ReconsiderTarget() bool                                   { return false }
+func (StrictRules) ReconsiderTarget(*units.Unit, *units.Slot, *units.Unit, *visibility.Service) bool {
+	return false
+}
 func (StrictRules) CombatTick(*Service, uint32, bool)                        {}
 func (StrictRules) ObserveDanger(*Service, *units.Unit, *units.Unit, uint32) {}
 

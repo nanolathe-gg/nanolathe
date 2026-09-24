@@ -60,7 +60,7 @@ func (s *Service) StepAutonomousForPlayer(player uint8, w *units.World, vis *vis
 				// Until their full free-writer set is mapped, the compact freed
 				// record resolves absent here [06 "Missing and unknown"].
 				target := w.Unit(slot.Target.Unit)
-				if !s.rules().ReconsiderTarget() && target != nil && target.Def != nil &&
+				if !s.rules().ReconsiderTarget(u, slot, target, vis) && target != nil && target.Def != nil &&
 					!registryOwnerDeclaresAllianceWithCandidate(player, target.Owner, econ) &&
 					IsPreferredCategoryMask(target.Def.DefinitionMask(), badMaskForSlot(u.Def, idx)) &&
 					!(slot.Weapon.Paralyzer && target.Stunned) {

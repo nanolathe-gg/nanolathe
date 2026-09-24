@@ -39,7 +39,19 @@ type incomingShot struct {
 	beamInvalid     bool
 }
 
-func (*ModernRules) ReconsiderTarget() bool { return true }
+// Keep a building's damage-time retaliation target while it remains unseen.
+// The retail offer already installed that target without a sensor query
+// [06 R-WPN-04 §2]; maintaining it does not reveal any other hidden unit.
+// Mobile units keep Modern's observed-danger response and visible acquisition.
+func (*ModernRules) ReconsiderTarget(shooter *units.Unit, slot *units.Slot, target *units.Unit, vis *visibility.Service) bool {
+	if shooter == nil || shooter.Def == nil || shooter.Def.CanMove || slot == nil ||
+		target == nil || target.Def == nil || vis == nil ||
+		shooter.EngagementTarget == 0 || slot.Target.Kind != units.TargetUnit ||
+		slot.Target.Unit != shooter.EngagementTarget || target.Handle != shooter.EngagementTarget {
+		return true
+	}
+	return vis.IsVisible(visibility.PlayerID(shooter.Owner), visibilityTarget(target, target.Flags))
+}
 func (*ModernRules) CombatTick(s *Service, tick uint32, afterProjectiles bool) {
 	s.modernTick = tick
 	if afterProjectiles {

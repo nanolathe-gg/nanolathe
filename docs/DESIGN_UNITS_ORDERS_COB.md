@@ -420,6 +420,11 @@ position but never extends the age. A lost contact supplies only its frozen
 position to withdrawal scoring, never a live pursuit target. Identity includes
 the unit object as well as its handle so slot reuse cannot inherit danger.
 There is no global danger grid or shared hidden-target tracker.
+The separate damage-reaction weapon offer can still give an immobile armed unit
+its unseen attacker [06 R-WPN-04 §2]. Combat maintenance preserves that
+retaliation target under the documented Modern exception in
+[DESIGN_WEAPONS_PROJECTILES "Modern threat targeting and incoming fire"](DESIGN_WEAPONS_PROJECTILES.md#modern-threat-targeting-and-incoming-fire);
+the danger queue gains no hidden contact from it.
 
 A received projectile hit can also establish anonymous danger when its attacker
 is unseen. `ObserveImpact(unit, bearing, tick)` receives only the victim and

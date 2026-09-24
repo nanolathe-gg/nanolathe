@@ -367,6 +367,15 @@ weapon can cause positive effective damage. Both controllers exclude dropped
 and command-fire weapons from automatic maintenance; an explicit command still
 uses the ordinary firing pipeline. Paralyzer immunity and existing stun reject
 paralyzer targets. Compiled bad-target categories remain a scoring preference.
+An immobile unit whose weapon slot holds the attacker recorded by damage keeps
+that target while the attacker is unseen, subject to the existing autonomous
+retention gates (liveness, hostility, bad-target category and paralyzer stun).
+The damage reaction already assigned it without a visibility query
+[06 R-WPN-04 §2]; maintenance does not require a second sighting before it can
+finish firing. Once visible, the slot returns to Modern threat ranking. Mobile
+units retain Modern's observed-danger response. This uses the existing damage
+link and adds no target memory, RNG draw or resource effect. Strict retains its
+retail order and slot response [08 R-AI-01 §11].
 
 Threat is derived from enabled authored weapons, never unit names or a tower
 list. An enemy receives a base score of 1. A completed, unstunned enemy with an
