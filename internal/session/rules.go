@@ -184,11 +184,11 @@ func ModernRuleSet() RuleSet {
 		// The retail search with its sawtooth turns straightened
 		// (DESIGN_MOVEMENT_PATH "Modern route straightening").
 		Path: path.StraightenKernel{},
-		// The retail step, because no Modern planner exists: a replacement
-		// would change the simulation stream's call order and therefore the
-		// whole battle, so it needs its own approved policy and its own
-		// contract before it can be the default [I11].
-		Planner: ai.RetailPlanner{},
+		// The retail step with Modern wave air targets: members without a
+		// weapon that can engage an airborne hostile take a grounded one
+		// (DESIGN_SESSIONS_AI_SAVE "Modern wave air targets"). Target choice,
+		// cadence and simulation-stream draws stay the retail step's.
+		Planner: ai.ModernPlanner{},
 	}
 }
 

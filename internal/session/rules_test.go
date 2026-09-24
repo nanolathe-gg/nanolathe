@@ -222,10 +222,10 @@ func TestBoundRuleDispatchDoesNotAllocate(t *testing.T) {
 	}
 }
 
-// The computer player's think step reaches every manager the session owns,
-// and all reserved sets bind the retail step: no alternate planner exists, and a
-// replacement would change the simulation stream's call order and therefore
-// the whole battle, so it needs its own approved policy first
+// The computer player's think step reaches every manager the session owns.
+// Strict 3.1 and Community bind the retail step; Modern binds the retail step
+// with Modern wave air targets (DESIGN_SESSIONS_AI_SAVE "Modern wave air
+// targets"), whose simulation-stream draws are the retail step's
 // (docs/DESIGN_GAMEPLAY_RULES.md "The computer player's think step").
 //
 // The walk is player-indexed with nil holes, so a session with only two
@@ -235,8 +235,12 @@ func TestBindRulesProjectsThePlannerOntoEveryComputerPlayer(t *testing.T) {
 	s.AI[0] = &ai.Manager{Player: 0}
 	s.AI[3] = &ai.Manager{Player: 3}
 	for _, set := range reservedRuleSets() {
-		if _, retail := set.Planner.(ai.RetailPlanner); !retail {
-			t.Fatalf("%s binds planner %T; all reserved sets run the retail step", set.Name, set.Planner)
+		if set.Name == ModernRuleSetName {
+			if _, modern := set.Planner.(ai.ModernPlanner); !modern {
+				t.Fatalf("%s binds planner %T, want the Modern wave air step", set.Name, set.Planner)
+			}
+		} else if _, retail := set.Planner.(ai.RetailPlanner); !retail {
+			t.Fatalf("%s binds planner %T; Strict and Community run the retail step", set.Name, set.Planner)
 		}
 		s.BindRules(set)
 		for player, mgr := range s.AI {

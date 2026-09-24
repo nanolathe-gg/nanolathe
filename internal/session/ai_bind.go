@@ -11,7 +11,9 @@ import (
 	"fmt"
 
 	"github.com/nanolathe-gg/nanolathe/internal/ai"
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 func bindAIQueue(mgr *ai.Manager, s *Session) {
@@ -43,4 +45,11 @@ func bindAIQueue(mgr *ai.Manager, s *Session) {
 			return construction.QueueFactoryBuild(builder, req.UnitKey, req.Count, s.Catalog)
 		}
 	}
+}
+
+// aiCanPursueAir is the Modern wave air targets predicate the computer
+// player's ModernPlanner asks (DESIGN_SESSIONS_AI_SAVE "Modern wave air
+// targets"): some weapon of member could engage the airborne target.
+func (s *Session) aiCanPursueAir(member, target *units.Unit) bool {
+	return combat.ModernAirPursuitAdmits(member, target, s.World, s.Catalog, s.Combat)
 }

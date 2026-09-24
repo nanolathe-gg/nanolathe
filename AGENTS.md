@@ -87,7 +87,8 @@ Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-mod
 [allied pass-through](docs/DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through), and
 [unreachable moves](docs/DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves), and
 [jam release](docs/DESIGN_MOVEMENT_PATH.md#modern-jam-release), and
-[route straightening](docs/DESIGN_MOVEMENT_PATH.md#modern-route-straightening).
+[route straightening](docs/DESIGN_MOVEMENT_PATH.md#modern-route-straightening), and
+[wave air targets](docs/DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
 ---

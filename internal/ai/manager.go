@@ -83,6 +83,14 @@ type Manager struct {
 	// It runs before the separate strategic refresh [06 §3.2][08 "Dispatch gates and order sinks"].
 	WeaponMaintenance func(player uint8)
 
+	// CanPursueAir is session wiring for Modern wave air targets: whether a
+	// member has a weapon that can engage an airborne hostile. It is asked
+	// only under ModernPlanner; nil keeps the retail broadcast
+	// (DESIGN_SESSIONS_AI_SAVE "Modern wave air targets").
+	CanPursueAir func(member, target *units.Unit) bool
+	// modernWaveAir is set by ModernPlanner for the duration of its step.
+	modernWaveAir bool
+
 	Player uint8 // 0..9, 10 is sentinel never dispatched [08][PLAN_11 C1]
 	// Passive suppresses the computer-policy classification sweep and virtual
 	// tasks while keeping weapon maintenance and the strategic refresh. Only
@@ -1103,6 +1111,10 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	if target == nil {
 		return
 	}
+	if m.airTargetSplit(target) {
+		m.broadcastAirSplit(w, econ, groupID, 3, 0, target, cx, cy, cz, tick, false)
+		return
+	}
 	m.broadcastGroupOrder(w, groupID, 3, 0, target, target.X, target.Y, target.Z, tick, 0)
 }
 
@@ -1372,6 +1384,13 @@ func fixedWordNeg(v int32) numeric.Fixed {
 // (`SetCloakedInstance`'s bit, [03 R-VIS-01 §6]), not bit 2 of the 32-bit
 // status word.
 func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y, z numeric.Fixed) *units.Unit {
+	return m.nearestHostile(w, econ, x, y, z, false)
+}
+
+// nearestHostile is nearestHostileUnit's walk; skipAirborne also passes over
+// hostiles whose committed mover mode is airborne (2), for Modern wave air
+// targets. The retail helper never sets it.
+func (m *Manager) nearestHostile(w *units.World, econ *economy.Service, x, y, z numeric.Fixed, skipAirborne bool) *units.Unit {
 	if m == nil || w == nil || econ == nil {
 		return nil
 	}
@@ -1386,6 +1405,9 @@ func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y
 		if u.Flags&0x3 == 2 || u.Flags&units.ImmunityStatus != 0 || u.Hidden {
 			continue
 		}
+		if skipAirborne && u.Move.ModeMirror&3 == airborneMode {
+			continue
+		}
 		dx := int64(fixedWordDelta(u.X, x))
 		dz := int64(fixedWordDelta(u.Z, z))
 		distance := ((dx * dx) >> 32) + ((dz * dz) >> 32)
@@ -1395,6 +1417,52 @@ func (m *Manager) nearestHostileUnit(w *units.World, econ *economy.Service, x, y
 		}
 	}
 	return best
+}
+
+// airborneMode is the committed mover mode of a flying unit, the operand of
+// the retail `toairweapon` gate [06 §3.1][04 R-MOV-01 §8].
+const airborneMode = 2
+
+// airTargetSplit reports whether this broadcast's target needs Modern wave air
+// targets: the policy is on for this step, the session bound its predicate,
+// and the chosen hostile is airborne.
+func (m *Manager) airTargetSplit(target *units.Unit) bool {
+	return m.modernWaveAir && m.CanPursueAir != nil && target != nil && target.Move.ModeMirror&3 == airborneMode
+}
+
+// broadcastAirSplit is broadcastGroupOrder for an airborne target under
+// Modern wave air targets: a member that can engage the target is ordered at
+// it as retail orders every member; one that cannot is ordered at the nearest
+// grounded hostile to the group centre (x, y, z), found once and only if
+// needed, or given no order when there is none. positional orders at the
+// chosen unit's position rather than the unit itself, as the explore task
+// does (DESIGN_SESSIONS_AI_SAVE "Modern wave air targets").
+func (m *Manager) broadcastAirSplit(w *units.World, econ *economy.Service, group uint8, intent int, modifier uint8, target *units.Unit, x, y, z numeric.Fixed, tick uint32, positional bool) {
+	var ground *units.Unit
+	looked := false
+	m.broadcastWalk = w.AppendLiveSliced(m.broadcastWalk[:0]) // players then slots ascending (I1)
+	for _, u := range m.broadcastWalk {
+		if u == nil || !u.Alive || u.Owner != m.Player || u.Def == nil || u.Group != group {
+			continue
+		}
+		pick := target
+		if !m.CanPursueAir(u, target) {
+			if !looked {
+				ground, looked = m.nearestHostile(w, econ, x, y, z, true), true
+			}
+			if ground == nil {
+				continue
+			}
+			pick = ground
+		}
+		var ordered *units.Unit
+		if !positional {
+			ordered = pick
+		}
+		orders.BindQueueBinding(u, m.OrderBinding)
+		id := resolveAIIntent(intent, u, ordered, pick.X, pick.Y, pick.Z)
+		m.submitResolvedOrder(u, id, ordered, pick.X, pick.Y, pick.Z, tick, modifier, 0)
+	}
 }
 
 // RallyBattleBindings are the session-owned predicates needed by the rally
@@ -1546,6 +1614,10 @@ func (m *Manager) doExplore(tick uint32, w *units.World, econ *economy.Service) 
 			// Retail dereferences the missing target here. Bounding it to a
 			// deterministic no-op is the research-sanctioned divergence
 			// [08 R-AI-01 §6].
+			return
+		}
+		if m.airTargetSplit(target) {
+			m.broadcastAirSplit(w, econ, 8, 9, 1, target, cx, cy, cz, tick, true)
 			return
 		}
 		m.broadcastGroupOrder(w, 8, 9, 1, nil, target.X, target.Y, target.Z, tick, 0)

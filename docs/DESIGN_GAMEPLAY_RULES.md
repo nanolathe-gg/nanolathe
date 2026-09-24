@@ -93,14 +93,14 @@ as a second way to select a policy: a composed session always binds.
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
 | `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned; [re-route staggering](DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering): a 0–7 tick offset on the 60-tick re-route throttle; [group-order spreading](DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading): a same-tick group's first requests admitted over three ticks, nearest first; [bounded path work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work): carried search work capped at four shares and a futile polling sweep ends the player's call; [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots): each actor of an ordinary group move gets its own free destination footprint; [allied pass-through](DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through): head-on friendly movers pass through each other mid-route; [unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves): a goal certified sealed by a static re-run of the setup ray finishes its eligible move at the frontier after a 90-tick dwell and a closing probe; [jam release](DESIGN_MOVEMENT_PATH.md#modern-jam-release): a ground mover friendly units have blocked for 30 ticks ignores friendly ground occupants other than same-way movers for 90 ticks and plans over the static view |
 | `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); Strict 3.1 and Community bind `path.RetailKernel`, Modern binds `path.StraightenKernel` ([route straightening](DESIGN_MOVEMENT_PATH.md#modern-route-straightening)) |
-| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); all three reserved sets bind `ai.RetailPlanner` |
+| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); Strict 3.1 and Community bind `ai.RetailPlanner`, Modern binds `ai.ModernPlanner` ([wave air targets](DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets)) |
 
 The last two rows are the **whole-subsystem** seams: each replaces an
 algorithm rather than answering a question inside one, and both now exist.
-Neither has a Community or Modern implementation — all three reserved sets
-bind the retail one —
-because replacing either is a behaviour change with its own contract rather
-than a selection. Both are request-granularity replacements (§4), and the two
+Strict 3.1 and Community bind the retail implementation of each. Modern binds
+a thin wrapper around it — route straightening around the retail search, and
+wave air targets around the retail think step — each a behaviour change with
+its own contract rather than a selection. Both are request-granularity replacements (§4), and the two
 sections below state each one's boundary: a kernel may not change *when* a
 route publishes, because publication timing is ordering behaviour owned by the
 tick, and a planner may not draw from the simulation stream in a different
@@ -162,8 +162,11 @@ A replacement answers the same step from the same manager. It may draw from the
 simulation stream only through the manager's own accessor and only in the order
 the retail step draws, because that call order is the whole future of the
 battle; a planner that draws differently is a gameplay policy needing its own
-contract, so **all three reserved sets bind `RetailPlanner`** — there is no
-Community or Modern planner today, and Strict 3.1 could never bind one. A set
+contract. **Strict 3.1 and Community bind `RetailPlanner`**, and Strict 3.1
+could never bind anything else. Modern binds `ModernPlanner`, the retail step
+with [Modern wave air targets](DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets):
+the same draws in the same order, with members that cannot engage an airborne
+wave target ordered at a grounded one. A set
 assembled outside `internal/ai` composes the retail step by calling
 `ai.RetailPlanner{}.Step`; the retail body itself stays unexported.
 

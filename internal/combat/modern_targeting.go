@@ -112,6 +112,30 @@ func ModernResponseAdmits(shooter, target *units.Unit, idx int, terrain *world.T
 	return unitToUnitAdmitsBeforeRange(gateEndForUnit(shooter), gateEndForUnit(target), sea, weapon.WaterWeapon, weapon.ToAirWeapon)
 }
 
+// ModernAirPursuitAdmits reports whether shooter has a weapon worth pursuing
+// an airborne target with: some enabled slot that the out-of-range response
+// gate above admits against target and whose weapon is not ballistic. A
+// ballistic weapon's lob reaches an aircraft only at the solver's mercy — low,
+// close and slow — so it is no anti-air capability to chase with; a laser,
+// missile or other direct weapon that the retail acquisition gate does not
+// refuse against a flying target is. Nanolathe Modern policy
+// (DESIGN_SESSIONS_AI_SAVE "Modern wave air targets").
+func ModernAirPursuitAdmits(shooter, target *units.Unit, terrain *world.Terrain, catalog *content.Catalog, services ...*Service) bool {
+	if shooter == nil {
+		return false
+	}
+	for idx := 0; idx < units.NumSlots; idx++ {
+		slot := orderSlot(shooter, idx)
+		if slot == nil || slot.Weapon == nil || slot.Weapon.Ballistic {
+			continue
+		}
+		if ModernResponseAdmits(shooter, target, idx, terrain, catalog, services...) {
+			return true
+		}
+	}
+	return false
+}
+
 // Only straight ordinary shots whose first impact directly damages the target
 // are counted. Small-area direct hits take full damage [06 §9.1]; splash,
 // bursts, homing, ballistic, paralyzer and persistent effects fail open.

@@ -1606,6 +1606,74 @@ scheduler against a Strict load at the matching limit, and rejects the
 mismatched Strict load. These
 run with the session package in `tools/check` and `tools/check-retail`.
 
+### Modern wave air targets
+
+**Nanolathe Modern policy.** A computer player's units that have no weapon
+able to engage aircraft do not go after aircraft. The user chose the rule:
+units without anti-air should not chase aircraft, while units whose weapons
+can shoot aircraft — lasers, for example — still may.
+
+**Strict 3.1 behavior.** The wave task orders every member of an attacking
+group to attack the hostile nearest the group's centre, and the explore task
+sends a small scout group to that hostile's position; the helper considers
+every non-allied, non-immune, uncloaked unit, aircraft included
+`[08 R-AI-01 §9]`. When the nearest hostile is an aircraft, members that cannot
+shoot it chase it anyway. In the simulation benchmark's three-army battle most
+chasing time was ground units without anti-air pursuing aircraft.
+`ai.RetailPlanner` keeps this, and Strict 3.1 and Community bind it.
+
+**Modern behavior.** The Modern rule set binds `ai.ModernPlanner`, which runs
+the retail step unchanged except at those two broadcasts. When the chosen
+hostile's committed mover mode is airborne (2, the operand of the retail
+`toairweapon` gate `[06 §3.1]`), each member is asked
+`Manager.CanPursueAir(member, target)`; a member that can engage it is ordered
+at it as retail orders every member, and one that cannot is ordered at the
+hostile nearest the group centre that is not airborne (found once per
+broadcast, only when needed, with the same walk and tie order), or given no
+order when there is none. The session binds the predicate to
+`combat.ModernAirPursuitAdmits`: some enabled weapon slot passes Modern
+combat's out-of-range response gate (`combat.ModernResponseAdmits`: the weapon
+can damage the target, is not command-fire or an interceptor, the target is not
+in the slot's authored bad-target categories, and the retail water/air gate
+admits it) and its weapon is not ballistic. A ballistic lob reaches an
+aircraft only low, close and slow, so it is no anti-air capability to chase
+with; a laser or missile that the retail acquisition gate does not refuse
+against a flying target is. The target choice, the task cadence and every
+simulation-stream draw are the retail step's.
+
+**Measured effect.** The simulation benchmark's three 250-unit computer armies
+(`TestStuckCensus` on research branch `research/path-round4`, 4,200 ticks,
+seeds 7, 11 and 23; retail planner against Modern planner, both under the
+Modern rule set otherwise): unit-ticks spent stuck 114,845 / 94,758 / 154,782
+→ 74,345 / 78,038 / 72,378 (−38% on average), unit-ticks spent chasing
+1.19 M / 0.99 M / 1.50 M → 0.94 M / 0.90 M / 0.86 M, and the share of chasing
+ticks with the target in weapon range 10% → 14%. Battles are bloodier: fewer
+units survive the window, because members fight grounded hostiles instead of
+trailing aircraft.
+
+**Boundaries.** Only the wave attack broadcast and the explore move are
+affected; a unit's own weapons still acquire aircraft by the retail gate, and
+a member with anti-air still attacks the aircraft the retail step chose. A
+member given no order keeps whatever it was doing. The predicate is bound per
+tick when missing, so a restored manager asks it as a fresh one does; the
+policy flag lives only for the duration of one Modern step and is never
+saved.
+
+**Determinism and fingerprints.** The extra walk is in the retail helper's
+player-then-slot order and draws nothing. Strict, Community and Modern
+fingerprints do not move: no wave or explore broadcast in the locked battles
+chooses an airborne hostile (a counted Modern run of the long Ashap battle
+made 15 such decisions, none at an aircraft).
+
+**Verification.** `ai.TestModernWaveAirTargetsSplitByCapability` (an anti-air
+member is ordered at the aircraft, one without at the nearest grounded
+hostile or not at all; the retail step and grounded targets never split),
+`combat.TestModernAirPursuitAdmitsByWeaponKind` (direct and anti-air weapons
+qualify; ballistic, water and command-fire weapons do not),
+`session.TestBindRulesProjectsThePlannerOntoEveryComputerPlayer`, and
+`ai.TestOrderSubmissionSeamCarriesOnlyMoveAttackPatrolCodes`, which now audits
+the split broadcast's call sites too.
+
 ## 6. Research map
 
 | Behaviour | Owning research |

@@ -945,7 +945,7 @@ func TestOrderSubmissionSeamCarriesOnlyMoveAttackPatrolCodes(t *testing.T) {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		if fn.Name.Name == "broadcastGroupOrder" {
+		if fn.Name.Name == "broadcastGroupOrder" || fn.Name.Name == "broadcastAirSplit" {
 			// Its own body only forwards the caller's intent/target straight
 			// into resolveAIIntent; the real submission sites are its
 			// callers, walked below like any other task body.
@@ -965,10 +965,16 @@ func TestOrderSubmissionSeamCarriesOnlyMoveAttackPatrolCodes(t *testing.T) {
 				}
 				intentArg, targetArg = call.Args[0], call.Args[2]
 			case *ast.SelectorExpr:
-				if callee.Sel.Name != "broadcastGroupOrder" || len(call.Args) < 5 {
+				switch {
+				case callee.Sel.Name == "broadcastGroupOrder" && len(call.Args) >= 5:
+					intentArg, targetArg = call.Args[2], call.Args[4]
+				case callee.Sel.Name == "broadcastAirSplit" && len(call.Args) >= 6:
+					// (w, econ, group, intent, modifier, target, ...): the
+					// Modern wave air split forwards its caller's intent too.
+					intentArg, targetArg = call.Args[3], call.Args[5]
+				default:
 					return true
 				}
-				intentArg, targetArg = call.Args[2], call.Args[4]
 			default:
 				return true
 			}

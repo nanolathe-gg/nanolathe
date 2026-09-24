@@ -469,3 +469,30 @@ func TestModernEffectiveDamageRejectsHealthWrap(t *testing.T) {
 		t.Fatalf("actual accepted health=%d want101", target.Health)
 	}
 }
+
+// Modern wave air targets' capability test (DESIGN_SESSIONS_AI_SAVE "Modern
+// wave air targets"): a direct weapon may pursue an airborne target, a
+// ballistic or water weapon may not, and a command-fire weapon never counts.
+func TestModernAirPursuitAdmitsByWeaponKind(t *testing.T) {
+	_, _, terrain, shooter, target, weapon := modernCombatFixture(t)
+	target.Move.ModeMirror = airborneMoverMode
+	if !ModernAirPursuitAdmits(shooter, target, terrain, nil) {
+		t.Fatal("a direct weapon could not pursue an airborne target")
+	}
+	weapon.Ballistic = true
+	if ModernAirPursuitAdmits(shooter, target, terrain, nil) {
+		t.Fatal("a ballistic weapon counted as anti-air")
+	}
+	weapon.Ballistic, weapon.WaterWeapon = false, true
+	if ModernAirPursuitAdmits(shooter, target, terrain, nil) {
+		t.Fatal("a water weapon counted as anti-air")
+	}
+	weapon.WaterWeapon, weapon.CommandFire = false, true
+	if ModernAirPursuitAdmits(shooter, target, terrain, nil) {
+		t.Fatal("a command-fire weapon counted as anti-air")
+	}
+	weapon.CommandFire, weapon.ToAirWeapon = false, true
+	if !ModernAirPursuitAdmits(shooter, target, terrain, nil) {
+		t.Fatal("an anti-air weapon could not pursue an airborne target")
+	}
+}

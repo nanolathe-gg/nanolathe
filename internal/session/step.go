@@ -1043,6 +1043,9 @@ func (s *Session) tickPlayers(tick uint32) {
 		if mgr != nil && mgr.WeaponMaintenance == nil {
 			mgr.WeaponMaintenance = s.maintainPlayerWeapons
 		}
+		if mgr != nil && mgr.CanPursueAir == nil {
+			mgr.CanPursueAir = s.aiCanPursueAir
+		}
 		before := func() {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)

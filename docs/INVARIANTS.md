@@ -308,7 +308,7 @@ release" and "Modern route straightening",
 DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
 "Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE
-"Modern save unit limits". Each departure reaches its algorithm through the
+"Modern save unit limits" and "Modern wave air targets". Each departure reaches its algorithm through the
 owning package's rule interface, bound once from the central session mode as
 one named rule set — not through independently configurable flags; new and
 restored queues inherit the same set, and an unbound seam answers as retail.

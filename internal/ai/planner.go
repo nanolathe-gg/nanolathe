@@ -54,6 +54,21 @@ func (RetailPlanner) Step(m *Manager, tick uint32, w *units.World, econ *economy
 	m.retailStep(tick, w, econ)
 }
 
+// ModernPlanner runs the retail step with Modern wave air targets
+// (DESIGN_SESSIONS_AI_SAVE "Modern wave air targets"): when a wave's or an
+// explore group's chosen hostile is airborne, a member with no weapon that can
+// engage it takes the nearest grounded hostile instead, or no order. The
+// target choice, the task cadence and every simulation-stream draw are the
+// retail step's. It is zero size and holds no state.
+type ModernPlanner struct{}
+
+// Step runs the retail think step for m with the Modern wave air rule.
+func (ModernPlanner) Step(m *Manager, tick uint32, w *units.World, econ *economy.Service) {
+	m.modernWaveAir = true
+	m.retailStep(tick, w, econ)
+	m.modernWaveAir = false
+}
+
 // planner answers with the step this manager runs. A nil field is the retail
 // step: a fixture, a manager a restore rebuilt, and the retail baseline all
 // want the same answer, and making that the zero value keeps an unbound
