@@ -2482,6 +2482,21 @@ func (w *World) Iter() []*Unit {
 	return w.AppendLive(nil)
 }
 
+// FirstLive returns the first live unit, in pool-slot-ascending order (I1),
+// for which match reports true, or nil. It is AppendLive's order without the
+// copy, for callers that stop at the first hit.
+func (w *World) FirstLive(match func(*Unit) bool) *Unit {
+	if w == nil {
+		return nil
+	}
+	for i := 1; i < len(w.units); i++ {
+		if u := w.units[i]; u != nil && u.Alive && match(u) {
+			return u
+		}
+	}
+	return nil
+}
+
 // AppendLive is Iter writing into a destination the caller owns: it appends the
 // same units in the same pool-slot-ascending order (I1) and returns the grown
 // slice. A per-tick caller that keeps one scratch buffer and passes

@@ -303,7 +303,8 @@ Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission) and
 "Modern Hold Fire" and "Modern danger response", DESIGN_MOVEMENT_PATH
 "Modern danger escape", "Modern learned terrain", "Modern re-route
 staggering", "Modern group-order spreading", "Modern bounded path work",
-"Modern allied pass-through" and "Modern unreachable moves",
+"Modern allied pass-through", "Modern unreachable moves", "Modern jam
+release" and "Modern route straightening",
 DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
 "Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE
@@ -319,6 +320,14 @@ set, reports its digest and projects immutable copies to the service owners.
 Strict 3.1 ignores every table override. Community applies the resolved table;
 Modern builds on that result and then applies its own documented policies.
 This exception is not a second registry or a general capability system.
+
+**Mutators** (user-authorized 2026-09-23) are the one exception that applies
+in every mode, Strict 3.1 included. They are a closed set of global
+multipliers applied once to the per-battle catalog clone at battle entry: a
+transform of content, not a rule, with no seam, no RNG and no per-tick state.
+They are owned by [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) §6. The
+retail baseline is Strict 3.1 *with no mutators*, and every fingerprint lock
+runs with none.
 
 The mode word also selects a **registered** set by name: a third-party set is
 compiled in through `mods/`, which only a command may import, and it composes

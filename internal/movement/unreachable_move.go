@@ -206,6 +206,13 @@ func (s *System) clearUnreachable(h pool.Handle) {
 // occupancy (an occupant with no mover) over its footprint
 // [04 R-PATH-01 §2][04 R-PATH-01 §14][04 R-SLOPE-01 §3].
 func (l *ClassLayer) staticPassable(x, z int32, footX, footZ int16, player uint8, learned *LearnedTerrain) uint8 {
+	return l.staticPassableKeeping(x, z, footX, footZ, player, learned, nil)
+}
+
+// staticPassableKeeping is staticPassable with the mobile occupants for which
+// keep reports true still blocking; a nil keep makes every mobile occupant
+// transparent. Modern jam release keeps hostile movers.
+func (l *ClassLayer) staticPassableKeeping(x, z int32, footX, footZ int16, player uint8, learned *LearnedTerrain, keep func(id int) bool) uint8 {
 	v := l.Passable(x, z, footX, footZ, player)
 	if v == LayerUnmapped && learned != nil {
 		if bx, bz := mappingTile(x, z, footX, footZ); learned.Known(bx, bz, player) {
@@ -231,7 +238,7 @@ func (l *ClassLayer) staticPassable(x, z int32, footX, footZ int16, player uint8
 				return LayerBlocked
 			}
 			if l.Grid != nil {
-				if id, ok := l.Grid.OccupantAt(Cell{X: cx, Z: cz}); ok && (l.movers == nil || !l.movers.HasMover(pool.Handle(id))) {
+				if id, ok := l.Grid.OccupantAt(Cell{X: cx, Z: cz}); ok && (l.movers == nil || !l.movers.HasMover(pool.Handle(id)) || keep != nil && keep(id)) {
 					return LayerBlocked
 				}
 			}

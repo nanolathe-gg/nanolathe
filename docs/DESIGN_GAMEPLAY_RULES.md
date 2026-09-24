@@ -91,8 +91,8 @@ as a second way to select a policy: a composed session always binds.
 | `visibility.Rules` | `internal/visibility` | Community allied-jammer suppression and aircraft border visibility (DESIGN_COMMUNITY_PATCH §4.4); no prior seam owned per-viewer sensor decisions |
 | `session.ScriptPortRules` | `internal/session` | Community recorder ports 32 and 69–75 (DESIGN_COMMUNITY_PATCH §4.5) |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
-| `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned; [re-route staggering](DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering): a 0–7 tick offset on the 60-tick re-route throttle; [group-order spreading](DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading): a same-tick group's first requests admitted over three ticks, nearest first; [bounded path work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work): carried search work capped at four shares and a futile polling sweep ends the player's call; [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots): each actor of an ordinary group move gets its own free destination footprint; [allied pass-through](DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through): head-on friendly movers pass through each other mid-route; [unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves): a goal certified sealed by a static re-run of the setup ray finishes its eligible move at the frontier after a 90-tick dwell and a closing probe |
-| `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); all three reserved sets bind `path.RetailKernel` |
+| `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned; [re-route staggering](DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering): a 0–7 tick offset on the 60-tick re-route throttle; [group-order spreading](DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading): a same-tick group's first requests admitted over three ticks, nearest first; [bounded path work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work): carried search work capped at four shares and a futile polling sweep ends the player's call; [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots): each actor of an ordinary group move gets its own free destination footprint; [allied pass-through](DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through): head-on friendly movers pass through each other mid-route; [unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves): a goal certified sealed by a static re-run of the setup ray finishes its eligible move at the frontier after a 90-tick dwell and a closing probe; [jam release](DESIGN_MOVEMENT_PATH.md#modern-jam-release): a ground mover friendly units have blocked for 30 ticks ignores friendly ground occupants other than same-way movers for 90 ticks and plans over the static view |
+| `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); Strict 3.1 and Community bind `path.RetailKernel`, Modern binds `path.StraightenKernel` ([route straightening](DESIGN_MOVEMENT_PATH.md#modern-route-straightening)) |
 | `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); all three reserved sets bind `ai.RetailPlanner` |
 
 The last two rows are the **whole-subsystem** seams: each replaces an
@@ -110,9 +110,11 @@ order, because that call order is the whole future of the battle.
 
 `path.Kernel` has one method: it opens one request's resumable search, and
 `path.Search` is that search behind an interface. `path.RetailKernel` is the
-retail ray-and-A\* search, it is zero size, and **all three reserved sets bind
-it** — there is no Modern kernel, because no approved Modern policy changes
-how a route is found. ([Modern learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain)
+retail ray-and-A\* search, it is zero size, and **Strict 3.1 and Community bind
+it**. Modern binds `path.StraightenKernel`, the same retail search whose
+finished route has its sawtooth turns removed before publication
+([Modern route straightening](DESIGN_MOVEMENT_PATH.md#modern-route-straightening));
+it publishes on exactly the slice the retail search finishes on. ([Modern learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain)
 changes one *input* the retail search reads, through `movement.Rules`; the
 search is the same.) `Session.BindRules` projects the field onto
 `movement.System.Kernel`; a system with nothing bound searches as retail does,
@@ -282,6 +284,13 @@ carries a `TODO(question)` naming what is missing: a decision on a
 Nanolathe-side save metadata area — a sidecar file, or an agreed additional
 box — which is a save-format question rather than a retail one.
 
+**Planned change.** [DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar)
+settles that question with a Nanolathe sidecar file beside the bank. The
+sidecar records the bound set, the Community sources, the unit limit, the mod
+and the mutators, and a load restores them. Until that design is implemented,
+this section describes the code. A save without a sidecar keeps this
+behaviour afterwards.
+
 A future extension that needs persistent identity or private state must first
 settle the metadata format, versioning, missing-set behavior and restoration
 contract in the owning save design. The current omission is a limitation,
@@ -321,7 +330,7 @@ Two consequences are worth stating because they are observable:
 | A set composed outside `internal/` registers, overrides one answer and inherits its base | `example.TestTheExampleSetIsRegisteredAndSelectable`, `example.TestTheExampleSetOverridesOneAnswerAndInheritsModern`, `example.TestSelectingTheExampleSetProjectsTheOverride` |
 | Only a command imports the mod list | `architecture.TestOnlyCommandsImportTheModList` |
 | The movement policy seam reaches the movement system, dispatches without allocating, and answers Strict when unbound | `session.TestBindRulesProjectsEverySeam`, `session.TestCompositionProjectsTheSearchKernelOntoMovement`, `movement.TestMovementRulesDispatchDoesNotAllocate`, `movement.TestStrictTerrainRejectionLearnsNothing` |
-| All reserved sets bind the retail search kernel, and the composer projects it onto the movement system | `session.TestReservedRuleSetsBindTheRetailSearchKernel`, `session.TestCompositionProjectsTheSearchKernelOntoMovement` |
+| Strict and Community bind the retail search kernel, Modern binds route straightening, and the composer projects the kernel onto the movement system | `session.TestReservedRuleSetsBindTheirSearchKernels`, `path.TestStraightenRemovesSawtoothTurns`, `path.TestStraightenKeepsBlockedAndDiagonalTurns`, `session.TestCompositionProjectsTheSearchKernelOntoMovement` |
 | The retail kernel opens the retail search, is asked once per request, and its dispatch adds no allocation | `path.TestRetailKernelOpensTheRetailSearch`, `path.TestAKernelIsAskedOncePerRequest`, `path.TestRetailKernelDispatchAddsNoAllocation`, `movement.TestSearchFuncOpensItsSearchThroughTheBoundKernel`, `movement.TestAnUnboundKernelIsRetailAndCostsNothing` |
 | All three reserved sets' fingerprints are locked to constants | `headless.TestStrictFingerprintIsLocked`, `headless.TestCommunityFingerprintIsLocked`, `headless.TestModernFingerprintIsLocked` |
 | The think step reaches every computer player, all reserved sets bind the retail step, and the dispatch allocates nothing | `session.TestBindRulesProjectsThePlannerOntoEveryComputerPlayer` |

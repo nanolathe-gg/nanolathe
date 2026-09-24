@@ -181,9 +181,9 @@ func ModernRuleSet() RuleSet {
 		UnitLimit:    ModernUnitLimit{},
 		ScriptPorts:  ModernScriptPorts{},
 		Movement:     &movement.ModernRules{},
-		// The retail search is what Modern means for pathfinding too: no
-		// approved Modern policy touches how a route is found.
-		Path: path.RetailKernel{},
+		// The retail search with its sawtooth turns straightened
+		// (DESIGN_MOVEMENT_PATH "Modern route straightening").
+		Path: path.StraightenKernel{},
 		// The retail step, because no Modern planner exists: a replacement
 		// would change the simulation stream's call order and therefore the
 		// whole battle, so it needs its own approved policy and its own

@@ -2339,6 +2339,7 @@ func ensureMovementForAll(s *Session) {
 	for _, u := range s.Units.Iter() {
 		s.Movement.EnsureUnit(u)
 	}
+	s.Movement.BuildPendingLayers()
 }
 
 // ensure imports used

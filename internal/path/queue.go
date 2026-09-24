@@ -78,6 +78,12 @@ type tickCandidateProvider interface {
 	SetPathTick(tick uint32)
 }
 
+// tickEndCandidateProvider is told when a scheduler call ends, so anything it
+// cached for the call is not read afterwards.
+type tickEndCandidateProvider interface {
+	EndPathTick()
+}
+
 // workBoundProvider is an optional policy boundary for Nanolathe Modern
 // bounded path work (docs/DESIGN_MOVEMENT_PATH.md "Modern bounded path
 // work"). A provider without it, or one that answers (0, false), keeps the
@@ -503,6 +509,9 @@ func (s *Scheduler) Tick(tick uint32) {
 	if p, ok := s.provider.(tickCandidateProvider); ok {
 		p.SetPathTick(tick)
 	}
+	if p, ok := s.provider.(tickEndCandidateProvider); ok {
+		defer p.EndPathTick()
+	}
 	s.callCount++
 	// The counter is incremented first and the rebuild fires on the call whose
 	// incremented value REACHES the interval, so the period is exactly
@@ -692,8 +701,17 @@ func (s *Scheduler) skipIdleRounds(idle idleCandidateProvider, total int32) int3
 	var round [10]int
 	n := 0
 	for k := 0; k < 10; k++ {
-		p := (s.playerCursor + k) % 10
+		p := s.playerCursor + k
+		if p >= 10 {
+			p -= 10
+		}
 		if s.accumulator[p] >= 1 && s.provider.Eligible(p) {
+			// The run is bounded by every member's idle run, so a first
+			// member whose very next poll is not idle ends it before the rest
+			// of the round is gathered; IdleRun and Eligible are queries.
+			if n == 0 && total >= 1 && idle.IdleRun(p, 1) == 0 {
+				return total
+			}
 			round[n] = p
 			n++
 		}

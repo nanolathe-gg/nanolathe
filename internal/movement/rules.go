@@ -108,6 +108,15 @@ type Rules interface {
 	// once per such empty publication and by the follower only while a
 	// certificate is live, and must be a pure answer: no writes, no RNG.
 	UnreachableMoves(s *System) (frontierCells int32, dwell uint32)
+
+	// JamRelease is the jam release: jamAfter > 0 lets a ground mover that
+	// friendly units have blocked for jamAfter consecutive ticks ignore
+	// friendly ground occupants, other than same-way movers ahead of it, for
+	// lifetime ticks, planning over the static view meanwhile
+	// (docs/DESIGN_MOVEMENT_PATH.md "Modern jam release"). (0, 0) is
+	// retail's occupant test [04 R-COLL-01 §1]. It is asked once per ground
+	// mover visit and once per search opening, and must be a pure answer.
+	JamRelease(s *System) (jamAfter uint16, lifetime uint32)
 }
 
 // StrictRules is the retail baseline: nothing is learned and nothing learned
@@ -171,6 +180,10 @@ func (StrictRules) AlliedPassThrough(*System) bool { return false }
 // [04 R-PATH-01 §7][04 R-ORD-01 §4].
 func (StrictRules) UnreachableMoves(*System) (int32, uint32) { return 0, 0 }
 
+// JamRelease is off under Strict 3.1: every friendly occupant blocks the
+// commit and every search reads the occupancy layer [04 R-COLL-01 §1].
+func (StrictRules) JamRelease(*System) (uint16, uint32) { return 0, 0 }
+
 // retailRepathDelay is the follower poll's throttle period [04 R-MOV-01 §7].
 const retailRepathDelay = 60
 
@@ -228,8 +241,8 @@ func (*ModernRules) FirstRequestSpread(*System) (int, int) {
 }
 
 // ModernRules carries the approved learned-terrain, re-route staggering,
-// group-order spreading, bounded path work, group destination slot and
-// unreachable-move policies. It is zero size and is held by pointer so a
+// group-order spreading, bounded path work, group destination slot,
+// allied pass-through, unreachable-move and jam-release policies. It is zero size and is held by pointer so a
 // later set may embed it and override one answer.
 type ModernRules struct{ CommunityRules }
 

@@ -136,6 +136,14 @@ type System struct {
 	// an occupancy commit before the unit world is bound; every BindWorld call
 	// refreshes its revision-pass world [04 §6.1 R-DOC04-B].
 	layerRegistry *ClassLayers
+	// pendingLayers are units registered since the last BuildPendingLayers
+	// whose movement class may not have a layer yet. The layers are built at
+	// the next tick start (or at the end of battle composition) instead of
+	// inside the first search of the class, where a full-map stamp stacked on
+	// a search burst made the slowest ticks of a battle. Retail creates every
+	// class record with the map [04 R-PATH-01 §14]; the build point changes
+	// no layer value, since every occupancy writer maintains allocated layers.
+	pendingLayers []pool.Handle
 
 	// BeginTick/EndTick delimit the unit sweep transaction [04 §8.2] C22.
 	// Attachment is deliberately not cached here: the carried branch belongs to
@@ -144,11 +152,9 @@ type System struct {
 	tickStarted bool
 	tick        uint32
 
-	// The two live-unit walks the air-base rebuild cadence makes, in pool order
-	// (I1). They are separate buffers because the rebuild's list is still being
-	// read while the alliance-row walk runs.
-	airBaseWalkScratch   []*units.Unit
-	diplomacyWalkScratch []*units.Unit
+	// The live-unit walk the air-base rebuild cadence makes, in pool order
+	// (I1).
+	airBaseWalkScratch []*units.Unit
 
 	// airBases is the per-side target registry's third list — the
 	// damaged-aircraft base candidates of [06 §3.1 "the third list"] and
@@ -195,6 +201,12 @@ type System struct {
 	unreachable      []unreachableCert
 	unreachableLive  int
 	unreachableGoals []path.Cell
+	// jamReleases is the Modern jam-release state, dense by handle and never
+	// ranged. It stays empty unless the bound rules release jams, is cleared
+	// when the unit is forgotten or restored, and is not saved: a load starts
+	// with no unit released (docs/DESIGN_MOVEMENT_PATH.md "Modern jam
+	// release").
+	jamReleases []jamRelease
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
 	// maximum terrain height over the 3x3 block of sectors around each one
@@ -243,6 +255,11 @@ type pathProvider struct {
 	players  int
 	eligible func(int) bool
 	limit    int32
+	// eligibleNow caches eligible for the duration of one scheduler call:
+	// the gate reads player records no path work can change, and the
+	// scheduler asks it on every admission-loop iteration for every player.
+	eligibleNow   [10]bool
+	eligibleValid bool
 }
 
 // dropPathSession clears the working set at a handle and hands the scheduler's
@@ -306,8 +323,21 @@ func (p *pathProvider) SetPathTick(tick uint32) {
 	if p.system != nil {
 		p.system.assignFirstRequestHolds(tick)
 	}
+	p.eligibleValid = false
+	for player := range p.eligibleNow {
+		p.eligibleNow[player] = p.Eligible(player)
+	}
+	p.eligibleValid = true
 }
+
+// EndPathTick closes a scheduler call; eligibility is read live again until
+// the next call opens.
+func (p *pathProvider) EndPathTick() { p.eligibleValid = false }
+
 func (p *pathProvider) Eligible(player int) bool {
+	if p.eligibleValid && player >= 0 && player < len(p.eligibleNow) {
+		return p.eligibleNow[player]
+	}
 	// Eligibility is player-record existence, not queue non-emptiness. Retail
 	// accrues and spends the equal share while polling that player's followers
 	// even when none currently wants a route [04 R-PATH-01 §6].
@@ -1882,6 +1912,11 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	profile := s.resolveProfile(u)
 	setHandleRow(&s.profiles, h, &profile)
 	setHandleRow(&s.profileNames, h, s.classKeyOf(u))
+	if u.Def.BMCode == 1 && !u.Def.CanFly {
+		// Movers only: a structure (byte 0) never requests a search, so its
+		// profile would build a full-map layer nothing reads.
+		s.pendingLayers = append(s.pendingLayers, h)
+	}
 	// SteerState [M2][M3] with pitch accumulator and accel/brake plumbing.
 	//
 	// The mover's records start from the heading the unit already carries, not
@@ -2584,6 +2619,7 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 		setHandleRow(&s.activeOrders, handle, nil)
 	}
 	s.clearUnreachable(handle)
+	s.resetJamRun(handle)
 	if s.arrivalHandles != nil {
 		setHandleRow(&s.arrivalHandles, handle, nil)
 	}
@@ -2878,6 +2914,19 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 			if learned := s.rules().LearnedTerrain(s); learned != nil {
 				cfg.PassableValue = func(c path.Cell) uint8 {
 					return layer.passableLearned(c.X, c.Z, footX, footZ, owner, learned)
+				}
+			}
+			// Nanolathe Modern jam release: a released unit plans over the
+			// static view with friendly mobile units transparent, so its route
+			// leads through the friendly jam it may now cross, while a hostile
+			// mover still walls its anchor: the release never lets a unit
+			// through an enemy (docs/DESIGN_MOVEMENT_PATH.md "Modern jam
+			// release").
+			if jamAfter, _ := s.rules().JamRelease(s); jamAfter > 0 && s.releasing(requester, s.tick) {
+				learned := s.rules().LearnedTerrain(s)
+				hostile := s.hostileMover(owner)
+				cfg.PassableValue = func(c path.Cell) uint8 {
+					return layer.staticPassableKeeping(c.X, c.Z, footX, footZ, owner, learned, hostile)
 				}
 			}
 		} else {
@@ -3254,7 +3303,7 @@ func (s *System) BeginTick(tick uint32) {
 	// query is resolved once per tick, not per contested cell.
 	if s != nil {
 		s.passAlliance = nil
-		if s.rules().AlliedPassThrough(s) {
+		if jamAfter, _ := s.rules().JamRelease(s); jamAfter > 0 || s.rules().AlliedPassThrough(s) {
 			s.passAlliance = s.diplomacyRows()
 		}
 	}
@@ -3263,6 +3312,7 @@ func (s *System) BeginTick(tick uint32) {
 	}
 	s.tick = tick
 	s.tickStarted = true
+	s.BuildPendingLayers()
 	w := s.world
 	// The target registry's third list, on its own cadence — the call is made
 	// every tick and Rebuild itself applies the 30-tick throttle, so the
@@ -3283,15 +3333,17 @@ func (s *System) diplomacyRows() func(from, toward uint8) bool {
 	if s == nil || s.world == nil {
 		return nil
 	}
-	s.diplomacyWalkScratch = s.world.AppendLive(s.diplomacyWalkScratch[:0]) // pool slot ascending (I1)
-	for _, u := range s.diplomacyWalkScratch {
-		b := airBinding(u)
-		if b == nil || b.World == nil || b.World.DeclaresAlliance == nil {
-			continue
+	// Stop at the first bound queue: Modern asks every tick, and collecting
+	// the whole live pool first made that an O(units) walk per tick.
+	var rows func(from, toward uint8) bool
+	s.world.FirstLive(func(u *units.Unit) bool {
+		if b := airBinding(u); b != nil && b.World != nil && b.World.DeclaresAlliance != nil {
+			rows = b.World.DeclaresAlliance
+			return true
 		}
-		return b.World.DeclaresAlliance
-	}
-	return nil
+		return false
+	})
+	return rows
 }
 
 // AirBaseList is the read side of the third list, for the ally group's own
@@ -3564,6 +3616,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// Nanolathe Modern allied pass-through: asked once per visit, and the
 	// partner test runs only for a cell another mover holds.
 	alliedPass := coll.Mode == 1 && !brakingOnly && s.rules().AlliedPassThrough(s)
+	// Nanolathe Modern jam release: asked once per visit; the release test
+	// also runs only for a cell another unit holds.
+	var jamAfter uint16
+	var jamLifetime uint32
+	if coll.Mode == 1 && !orderless {
+		jamAfter, jamLifetime = s.rules().JamRelease(s)
+	}
 	perCell := func(c Cell) bool {
 		if !inBounds {
 			return coll.Mode == 2
@@ -3578,6 +3637,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		if s.Grid != nil {
 			if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
 				if alliedPass && s.alliedPassPartner(u, coll, occ) {
+					return true
+				}
+				if jamAfter > 0 && s.jamReleaseIgnores(u, coll, occ, tick) {
 					return true
 				}
 				blockerID = occ
@@ -3639,6 +3701,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		s.noteOccupancyCommit(handle, tick)
 	}
 	coll.BlockerID = blockerID
+	if jamAfter > 0 {
+		s.noteJamRelease(u, coll, isBlocked, blockerID, tick, jamAfter, jamLifetime)
+	}
 	u.Move.ModeMirror = coll.CachedMode & 3
 	u.X = numeric.Fixed(int64(coll.X))
 	u.Z = numeric.Fixed(int64(coll.Z))
@@ -3713,4 +3778,23 @@ func (g gridOccupancy) CellOccupant(cellX, cellZ int32) uint16 {
 		return ^uint16(0)
 	}
 	return uint16(id)
+}
+
+// BuildPendingLayers allocates and stamps the class layer of every unit
+// registered since the last call whose class has none yet, in registration
+// order. BeginTick calls it; the session also calls it once battle
+// composition has registered the starting units, so no layer build lands on a
+// simulated tick at all for the classes a battle starts with. A system with no
+// terrain or world keeps its queue for a later call.
+func (s *System) BuildPendingLayers() {
+	if s == nil || len(s.pendingLayers) == 0 || s.world == nil || s.Terrain == nil {
+		return
+	}
+	reg := s.ensureLayerRegistry()
+	for _, h := range s.pendingLayers {
+		if u := s.world.Unit(h); u != nil && u.Alive {
+			reg.For(s.classKeyFor(h), s.ProfileFor(h))
+		}
+	}
+	s.pendingLayers = s.pendingLayers[:0]
 }

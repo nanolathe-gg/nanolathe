@@ -200,6 +200,7 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 	s.dropPathSession(int(h))
 	setHandleRow(&s.activeOrders, h, nil)
 	s.clearUnreachable(h)
+	s.clearJamRelease(h)
 	setHandleRow(&s.moveGoals, h, nil)
 	setHandleRow(&s.arrivalHandles, h, nil)
 	c.LastProposalTick = 0

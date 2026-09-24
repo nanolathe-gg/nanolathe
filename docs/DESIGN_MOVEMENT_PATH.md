@@ -190,9 +190,10 @@ bound kernel on `System.Kernel` and asks it once per admitted request — never
 once per budget slice and never once per expanded node. **The kernel is
 selected by the session's gameplay rule set** (`RuleSet.Path`, see
 [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-path-search-kernel)),
-which binds it at composition and at the phase-1 command boundary; both
-reserved sets bind `RetailKernel`, the search described above, and a system
-with no kernel bound searches the same way. The scheduler keeps admission
+which binds it at composition and at the phase-1 command boundary; Strict 3.1
+and Community bind `RetailKernel`, the search described above, Modern binds
+`StraightenKernel` ([Modern route straightening](#modern-route-straightening)),
+and a system with no kernel bound searches as retail does. The scheduler keeps admission
 order, the per-player step allowance `[04 R-PATH-01 §10]` and the full-or-empty
 publication boundary `[04 §7.3]`, so a replacement kernel may change how a
 route is found and never when one publishes.
@@ -219,6 +220,21 @@ charges. `PublishFunc` is called only when the search is done, never at a budget
 boundary. `Trace`, `RequestTrace`, `GoalTrace` and `SchedulerTraceState` are
 value-only copies for diagnostics; no interface or pointer identity can reach a
 deterministic report.
+
+Under a large step allowance almost every poll is idle, so the scheduler's cost
+is dominated by bookkeeping rather than search unless that bookkeeping is kept
+proportional to the requests it finds. Whole rounds of idle polls are charged at
+once (`skipIdleRounds`), and the round is abandoned as soon as the first member's
+next poll is not idle, since every member's idle run bounds it. The provider
+caches per-player eligibility for one scheduler call (`SetPathTick` fills it,
+`EndPathTick` drops it): the player-record gate cannot change while paths are
+being searched, and the admission loop asks it for every player on every
+iteration. Both are pure reorganisations of queries — the charged work, the
+admission order and every route are unchanged, and every fingerprint lock
+holds. On the opt-in path benchmark's Community 3.9 scripted waves with 1,500
+units (interleaved runs, four each) they cut simulation CPU 19% and the
+tick p99 from 20.9 to 15.9 ms; the worst tick fell from 70 to 59 ms, which
+remains the cost of the 3.9 step allowance's searches themselves.
 
 ### 2.2 `internal/movement`
 
@@ -1177,7 +1193,22 @@ commit-clock ports first and then stamps. (It used to stamp the bare layer and
 stamp again with the ports, discarding the first result; a new layer's zero
 watermark keeps the seeded clocks out of that stamp either way. On the
 simulation benchmark's 540×540 map this removed about 5 ms from the tick that
-allocates a class, with every fingerprint unchanged.) Each full rebuild classifies each source cell once
+allocates a class, with every fingerprint unchanged.)
+
+A layer is built for each class a registered ground mover (movement byte 1,
+not an aircraft) carries, not at the class's first path request; a
+structure never searches and gets none: `EnsureUnit` queues the unit and
+`BuildPendingLayers` builds any missing layer at the end of battle
+composition and at the next tick start. Retail creates every class record
+with the map `[04 R-PATH-01 §14]`; building early changes no layer value,
+because every occupancy writer maintains the allocated layers and a fresh
+layer's zero watermark keeps the occupant-age gate closed until its first
+revision. Every Strict, Community and Modern fingerprint is unchanged. A
+lazy build ran the full-map stamp inside the first search of its class, on
+the same tick as that search burst: in the simulation benchmark's battle the
+slowest early tick built two layers atop a burst of first requests.
+
+Each full rebuild classifies each source cell once
 into a reusable byte array, then computes the footprint/ring minimum through
 row and column windows
 [04 R-SLOPE-01 §3]. Each window counts blocked and non-clear cells, updating
@@ -1381,8 +1412,8 @@ restore receives it through the same `RebindRules` call. No existing seam owns
 the two questions: they are asked by this package's own occupancy commit and
 request open about state this package owns; they are not an order decision
 (`orders.Rules`), not construction, and not a replacement search —
-`path.Kernel` still opens the same retail search over the same passability
-port, and what changes is one input to that port
+`path.Kernel` still opens a retail search over the same passability port,
+and what changes is one input to that port
 ([DESIGN_GAMEPLAY_RULES §9](DESIGN_GAMEPLAY_RULES.md#9-extending-the-existing-mechanism)
 step 3). Both implementations are zero size. Both questions are asked at
 request granularity — once per rejected commit, once per opened search — and
@@ -2065,3 +2096,244 @@ gate closed by a wreck: Strict and Community retry to the end of the window,
 Modern finishes at the wall no sooner than 90 ticks after the first
 certificate, a gate reopened during the dwell is reached, and a switch to
 Strict during the dwell keeps the retry.
+
+### Modern jam release
+
+**Nanolathe Modern policy.** A ground mover that friendly units have held in
+place for one second stops colliding with friendly ground units for three
+seconds, and its searches during that window look through every mobile unit.
+A friendly jam — two columns wedged in a choke, a unit walled in by parked
+friends, a crowd around a factory exit — therefore always drains. Terrain,
+features, structures and enemies block exactly as before, and a friendly unit
+moving the same way ahead is still a queue to wait in.
+
+**Strict 3.1 behavior.** The commit validator rejects a proposal whose
+footprint holds any other occupant; the blocked mover halves its speed, clamps
+against its old footprint and proposes the same step next tick
+`[04 R-COLL-01 §1]` `[04 R-COLL-01 §2]`. Only the 60-tick repath and the
+occupant-age gate change anything: a unit a stationary friendly group has
+surrounded searches a layer in which those friends are walls and publishes
+nothing, and two columns wedged at an angle in an aperture stay wedged.
+[Allied pass-through](#modern-allied-pass-through) resolves only the head-on
+case between two routed movers. `StrictRules.JamRelease` answers `(0, 0)`;
+Community inherits it.
+
+**Modern behavior.** `ModernRules.JamRelease` answers `(30, 90)`.
+
+1. *Jammed ticks.* After each ground commit of a unit with a movement head,
+   the movement system counts the tick as jammed when the commit was rejected
+   by a friendly ground unit (`System.friendlyMover`: live, grounded,
+   uncarried, not a structure, of the mover's owner or a mutually allied
+   owner, through the same per-tick alliance query as allied pass-through)
+   that is not a *same-way mover* — a unit with an active route heading
+   within 0x2AAA (about 60°) of the mover. A rejected unit with no route
+   counts the tick as jammed when a friendly ground unit holds a cell of or
+   around its footprint: its search failed because friends walled it in. Any
+   other tick resets the count.
+2. *Release.* On the thirtieth consecutive jammed tick the unit is released
+   for 90 ticks, unless its previous release ended fewer than 60 ticks ago.
+   Within 128 world units of its movement goal or its route's final point
+   (or with neither), a release starts only when this tick's commit was
+   rejected by a friendly mover that is not a same-way mover and no parked
+   friend (a friendly ground unit with no active route) holds the unit's goal
+   footprint — that destination is [crowded arrival](#modern-crowded-arrival)'s
+   to finish — or when the unit already stands inside a friend; the end rule below then closes it at
+   the first commit clear of every friend, so near the destination a release
+   lasts only while the unit passes through the friend in its way. This is
+   what frees two units that wedge each other beside their goals at the edge
+   of a packed formation. The release raises the route's repath request and
+   clears its request tick, so the next search is admitted promptly. The
+   count restarts when the unit's order ends.
+3. *During the release.* In the ground commit's per-cell occupant test, a
+   cell held by a friendly ground unit is free when either unit is released
+   and the occupant is not a same-way mover. Searches opened for a released
+   unit read the static view of its class layer — the view the
+   [unreachable-move](#modern-unreachable-moves) probe reads, in which
+   structures, terrain, features and unexplored ground keep their answers —
+   with only friendly mobile units transparent: a mover of neither the unit's
+   owner nor a mutually allied owner still walls the anchors it holds
+   (`ClassLayer.staticPassableKeeping`), so a release never routes a unit
+   into enemies it cannot pass.
+4. *End.* The release ends at the first commit within 128 world units of
+   the movement goal or the route's final point that leaves the unit's
+   footprint clear of every friendly unit, or when its 90 ticks pass. While
+   the unit still stands inside a friend (`System.insideFriend`: a friendly
+   ground unit holds a cell of its committed footprint) the window is held
+   open a tick at a time, to at most 180 ticks after it started: an overlap
+   that outlived the release would leave the friend blocking every later
+   step. After the window closes the route is asked to re-plan, since the
+   one planned over the static view leads into friends that block again.
+
+The stamp's existing overlap arbitration owns any contested cell once the
+mover commits (ClaimConflict, `[04 R-COLL-01 §4]`); released units separate
+through the ordinary occupant test once their windows close. Integer
+arithmetic only, no RNG, no map iteration.
+
+**Cost to the player.** Friendly units visibly overlap while one is released.
+A unit may leave a queue that Strict would hold, when the blocker ahead is
+parked or heading across it. Three variants were measured and rejected on research
+branch `research/path-round4`: releasing past every friendly blocker
+regardless of heading let same-way columns overlap through single-file chokes
+and into their destinations (one-cell choke 16 → 11 arrivals, clutter 17 →
+13); a back-off that steered a jammed unit sideways lost arrivals overall
+(920 → 883); and letting a blocked mover pass a waiting friend changed
+nothing (960 → 959).
+
+**Measured effect.** Opt-in path benchmark on research branch
+`research/path-round5`, one deterministic repeat of every case and size, with
+the retail search kernel, this contract against the same tree with jam
+release answering `(0, 0)` (artifacts kept in `~/nanolathe-bench/2026-09-23`,
+directories `final` and `prod2`): near-goal arrivals 4,001 → 4,145 of 5,756
+and pending moves 1,652 → 1,509 over the corpus without the scripted waves;
+on the scripted waves 164 → 282 of 2,304 with 256 units across three owners
+and 600 → 833 of 13,500 with 1,500. Twenty-two cases gain, the largest being
+the friendly two-cell choke with 64 units (2 → 54), opposed columns through a
+two-cell choke (33 → 57), the one-footprint corridor with passing bays
+(0 → 16 of 16) and perpendicular flows (52 → 64). Six lose: the hostile
+head-on meeting with 64 units a side 25 → 22 (its friends crowd the front
+rather than waiting behind it), the 64-unit scripted waves 71 → 68, and four
+cases by one arrival. Tick cost
+did not rise: on interleaved repeats of the 1,500-unit waves the CPU p95 and
+p99 stayed within the host's noise. A released unit's re-plan is an
+ordinary search; the release changes which searches run, not their kernel.
+
+The contract's history, from the round-four prototypes (research doc
+`docs/PATH_PROTOTYPES_ROUND4.md` on `research/path-round4`) to this form: the
+movement-goal guard keeps a stranded unit beside a crowded goal from pushing
+through the crowd (`session.TestRetailCapturedCrowdedRallyCompletesOnlyInModern`);
+holding the window open while the unit stands inside a friend removed a
+permanent block behind a wide parked friend near a goal (review finding;
+waves 247 → 293 at 256 and 759 → 886 at 1,500); keeping hostile movers as
+walls in the released search recovered the hostile head-on case from 17 to
+22; and letting a release start near the destination to pass one blocking
+friend — unless a parked friend holds the goal, which crowded arrival
+finishes — freed the units that wedged each other at the edge of packed
+formations (arrivals 4,108 → 4,145; a 256-unit formation whose last columns
+stranded 18 units after 1,200 ticks now strands 5). On its own that start
+lowered the 1,500-unit waves from 886 to 833; with
+[route straightening](#modern-route-straightening) they reach 1,070.
+The near-destination start adds a few overlaps where an order finishes
+mid-pass: units left overlapping at the end of a fixture's window rose from
+16 to 19 pairs across the corpus without the 1,500-unit waves.
+
+**Boundaries.** Aircraft, carried units, structures and units with no
+movement head never count jammed ticks. A unit released while its order ends
+stays released until its window closes, and friendly movers may pass through
+it meanwhile. The per-handle state (`System.jamReleases`: run, window end,
+hold limit, cooldown end, owed re-plan) is written only when the bound rules
+release jams, so Strict never allocates it; the run is reset when the order
+binding is deactivated, the whole row is cleared when the unit is forgotten
+or restored, and it is not saved: a load starts with no unit released, and a
+unit loaded inside a friend is freed by the near-destination start above.
+A switch to Strict or Community mid-release leaves the state unread; an
+overlap then in place is resolved, as in retail, only by the units moving
+apart.
+
+**Determinism and fingerprints.** The release reads committed state in the
+sweep's slot order; Modern stays deterministic and bit-identical across hosts.
+Strict and Community fingerprints do not move, nor does the 6,000-tick
+Modern Ashap Plateau lock at the time it landed; the current Modern locks
+are listed under [Modern route straightening](#modern-route-straightening),
+which moved them again. Those battles contain friendly jams that now
+drain. Because the policy can end
+a battle sooner, a change to it must run `tools/check-retail --full`, whose
+long trajectory is the only lock on the end tick.
+
+**Verification.** `movement.TestJamRelease` (Strict and Community stay blocked
+behind a parked friend; Modern commits on the tick after thirty jammed ticks;
+a same-way queue, an enemy, a one-way ally and a mover near its route end
+are never released; a Strict run allocates no state), `TestJamReleaseAnswers`,
+`TestJamReleaseNeverEndsInsideAFriend` (a 1x1 mover passing a parked 3x3
+friend just before its goal is never left inside it),
+`TestJamReleaseStateIsCleared` (a deactivated move forgets its run, a
+forgotten unit its release), `TestStaticPassableSeesThroughMobilesOnly`
+(kept movers wall their anchors); the Strict, Community and Modern
+`headless` fingerprint locks, including the long Modern Ashap end tick
+(`tools/check-retail --full`).
+
+### Modern route straightening
+
+**Nanolathe Modern policy.** A finished route has its sawtooth turns removed
+before it is published, so a unit whose goal lies a little off its row or
+column travels in a straight line instead of weaving between two parallel
+lines. Everything else about the route — how it is found, where it ends,
+when it publishes — is the retail search's.
+
+**Strict 3.1 behavior.** The retail search reconstructs a route from the
+cells where its grid path turns, converts them to world points and the
+publisher keeps the first 20 `[04 R-PATH-01 §7]`. For a goal slightly off
+the start's row the grid path can alternate diagonal steps between two
+parallel lines a few cells apart, so the route is a sawtooth of up to 64 turn
+points of which 20 are published. A slow-turning unit crawls along it,
+turning at every point, and reaches the end of the 20 only part of the way
+there. In the opt-in path benchmark eight surface ships ordered across open
+water (`naval-shallow-surface`) each received a 20-point sawtooth with turns
+five cells apart; before [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots)
+four of them shared a goal, collided and re-planned, which happened to
+replace the sawtooth with a straight route, and with slots none collided and
+none arrived in the window. Strict 3.1 and Community bind
+`path.RetailKernel`.
+
+**Modern behavior.** The Modern rule set binds `path.StraightenKernel`. It
+opens the retail search unchanged; on the slice that search finishes, if the
+route has 3 to 64 points, it walks them once: while the points on either side
+of an interior turn share a row or a column no more than 16 cells apart, and
+every anchor strictly between them reads passable through the request's own
+passability port (the same port, and the same view, the search read —
+including [learned terrain](#modern-learned-terrain) and a
+[jam release](#modern-jam-release)'s static view), the turn is dropped;
+otherwise the walk moves on. The result is published on that same slice, so
+publication timing is exactly retail's, and the publisher then keeps the
+first 20 points as before. Each anchor probed is charged to the player's work
+like a heap pop `[04 §7.3]`.
+
+Only turns whose neighbours share a row or a column are removed. A general
+line-of-sight shortcut was measured and rejected: it sent each unit of a
+column straight at a choke from its own angle, so the column arrived as a
+clump instead of the files the retail route forms, and it lost heavily in the
+choke cases (opposed columns through a two-cell choke with 64 units 55 → 36;
+one-cell choke with 16 units 16 → 12); keeping one cell of clearance from
+obstacles did not help. A 64-cell span also hurt dense open groups (64 units
+64 → 30), where straight shortcuts converge.
+
+**Cost to the player.** Units still funnel as their retail routes lead them,
+but a straightened route changes their spacing, and small single-lane chokes
+lose a little throughput: one-cell choke with 16 units 15 → 13, perpendicular
+flows with 64 units 64 → 60, the friendly wide choke with 64 units 61 → 58.
+
+**Measured effect.** Opt-in path benchmark on research branch
+`research/path-round5`, one deterministic repeat of every case and size,
+against the same tree with the retail kernel (artifacts
+`~/nanolathe-bench/2026-09-23/prod2`): near-goal arrivals 4,145 → 4,167 of
+5,756 and pending moves 1,509 → 1,486 over the corpus without the scripted
+waves, 13 cases gaining and 5 losing; on the scripted waves 282 → 282 of
+2,304 with 256 units and 833 → 1,070 of 13,500 with 1,500. The naval crossing
+goes 0 → 8 of 8; the friendly two-cell choke with 64 units 54 → 61 and the
+idle-army crossing 29 → 36. On interleaved repeats the
+straightening probes added about 6% to the 1,500-unit waves' search work with
+the tick CPU p95, p99 and total within the host's noise.
+
+**Boundaries.** A route of more than 64 points (never produced: the
+reconstruction keeps 64) and a request with no passability port are published
+unchanged. Diagonal legs, the first and last points and the route's status
+are never altered. A straightened segment is checked against the same
+snapshot of passability the search read, at the tick it finished; moving
+units are the follower's and the commit validator's business, as for any
+retail route. The kernel is zero size and keeps no state across requests.
+
+**Determinism and fingerprints.** Integer arithmetic only, no RNG, no map
+iteration; the walk is in route order. Strict and Community fingerprints do
+not move. The Modern locks move, together with those of the jam release's
+near-destination start that landed with this policy: the 6,000-tick Modern
+Ashap lock to `partial-v1:320cbaa11e9fd28a` (it had equalled Community's),
+the long Modern Ashap battle runs to its 54,000-tick bound again at
+`partial-v1:9bfdd19e13a3809a`, and the benchmark-fixture warm and final locks
+to `partial-v1:3e207cfb11bc3644` and `partial-v1:ee6fd800ec1b6ea1`.
+
+**Verification.** `path.TestStraightenRemovesSawtoothTurns` (a two-row
+sawtooth becomes one row; probes are charged; the route publishes on the
+slice the retail search finishes, not before),
+`TestStraightenKeepsBlockedAndDiagonalTurns` (a blocked cell keeps the turn;
+diagonal approaches and shortcuts longer than 16 cells are never taken);
+`session.TestReservedRuleSetsBindTheirSearchKernels`; the Strict, Community
+and Modern `headless` fingerprint locks.

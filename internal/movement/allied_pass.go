@@ -36,15 +36,8 @@ func routeEndClear(r *Route, x, z int32) bool {
 // record is mine) may treat occupant occ's cells as free. It reads committed
 // state only and writes nothing.
 func (s *System) alliedPassPartner(self *units.Unit, mine *CollisionState, occ int) bool {
-	other := handleRow(s.Collisions, pool.Handle(occ))
-	if other == nil || other.Building || other.Mode != 1 || s.world == nil {
-		return false
-	}
-	ou := s.world.Unit(pool.Handle(occ))
-	if ou == nil || !ou.Alive || ou.Attachment.Carrier != 0 {
-		return false
-	}
-	if ou.Owner != self.Owner && (s.passAlliance == nil || !s.passAlliance(self.Owner, ou.Owner) || !s.passAlliance(ou.Owner, self.Owner)) {
+	other, ok := s.friendlyMover(self, occ)
+	if !ok {
 		return false
 	}
 	if !routeEndClear(handleRow(s.Routes, pool.Handle(occ)), other.X>>16, other.Z>>16) ||

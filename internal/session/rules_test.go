@@ -115,13 +115,19 @@ func TestBindRulesProjectsEverySeam(t *testing.T) {
 	}
 }
 
-// All reserved sets bind the retail search kernel: no approved gameplay policy
-// changes how a route is found, and the scheduler owns when one publishes
-// (docs/DESIGN_GAMEPLAY_RULES.md "The seams"). A Modern kernel would be a
-// behaviour change with its own contract, so this test is what makes adding
-// one a deliberate edit rather than a silent one.
-func TestReservedRuleSetsBindTheRetailSearchKernel(t *testing.T) {
+// Strict 3.1 and Community bind the retail search kernel; Modern binds the
+// retail search behind route straightening (DESIGN_MOVEMENT_PATH "Modern route
+// straightening"). The scheduler owns when a route publishes under every kernel
+// (docs/DESIGN_GAMEPLAY_RULES.md "The path search kernel"), and this test is
+// what makes changing a reserved set's kernel a deliberate edit.
+func TestReservedRuleSetsBindTheirSearchKernels(t *testing.T) {
 	for _, set := range reservedRuleSets() {
+		if set.Name == ModernRuleSetName {
+			if _, ok := set.Path.(path.StraightenKernel); !ok {
+				t.Fatalf("%s bound search kernel %T, want route straightening", set.Name, set.Path)
+			}
+			continue
+		}
 		if _, retail := set.Path.(path.RetailKernel); !retail {
 			t.Fatalf("%s bound search kernel %T, want the retail kernel", set.Name, set.Path)
 		}

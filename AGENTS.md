@@ -56,6 +56,15 @@ Load-time content profiles remain separate from gameplay selection. Research
 an extension before proposing its contract; evidence that a patch implements
 a behavior is not authorization to enable that behavior in Nanolathe.
 
+**Mutators are the one mode-independent exception (user-authorized
+2026-09-23).** A mutator is a global multiplier applied to the per-battle
+catalog clone at battle entry. It applies in every mode, **Strict 3.1
+included**, because it transforms content rather than rules. It adds no seam,
+no RNG and no per-tick state, and it is owned by
+[DESIGN_MODS_MUTATORS](docs/DESIGN_MODS_MUTATORS.md) §6. Strict 3.1 *with no
+mutators* is the retail baseline, and every fingerprint lock runs with none.
+Anything data cannot express is not a mutator and follows the rules above.
+
 Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission),
 [Hold Fire](docs/DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire), and
 [factory-exit yielding](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding), and
@@ -67,7 +76,9 @@ Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-mod
 [bounded path work](docs/DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work), and
 [group destination slots](docs/DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots), and
 [allied pass-through](docs/DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through), and
-[unreachable moves](docs/DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves).
+[unreachable moves](docs/DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves), and
+[jam release](docs/DESIGN_MOVEMENT_PATH.md#modern-jam-release), and
+[route straightening](docs/DESIGN_MOVEMENT_PATH.md#modern-route-straightening).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
 ---

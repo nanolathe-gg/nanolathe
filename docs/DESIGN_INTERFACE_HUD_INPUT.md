@@ -2477,9 +2477,11 @@ order carries the formation flag (aircraft keep the retail goal) and asks
    actor's class passes it as the owner knows the ground — the route search's
    own read, where unexplored ground is passable and learned ground is read
    (DESIGN_MOVEMENT_PATH "Modern learned terrain"), so a destination never
-   reveals hidden terrain. When the actor's class layer has not been
-   allocated yet, the same mapping-word gate over the static footprint test
-   answers; the query never allocates a layer.
+   reveals hidden terrain. Class layers are built when a unit of the class
+   is registered (DESIGN_MOVEMENT_PATH "Full-layer rebuild storage"); for a
+   unit registered on this tick, whose layer is not built yet, the same
+   mapping-word gate over the static footprint test answers. The query never
+   allocates a layer.
 4. *Nearest.* An unfree goal moves to the nearest free footprint, ring by ring
    up to twelve cells; with none, the actor keeps its goal. A moved goal is the
    footprint's centre, which the commit's quantisation maps back to its anchor.
