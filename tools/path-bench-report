@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Summarize or compare path-bench artifacts without averaging away failures."""
+import argparse
+from collections import Counter, defaultdict
+import json
+from pathlib import Path
+from statistics import median
+import sys
+
+COMPAT = ("schema", "go_version", "platform", "machine", "processor", "host", "logical_cpus", "gomaxprocs", "gogc", "gomemlimit", "go_flags", "scope", "repeats", "fixture_source_sha256")
+
+def load(root):
+    root = Path(root)
+    manifest = json.loads((root / "manifest.json").read_text())
+    complete = json.loads((root / "complete.json").read_text())
+    groups = defaultdict(list)
+    count = 0
+    for file in sorted(root.glob("*__r*.json")):
+        row = json.loads(file.read_text())
+        groups[(row["Case"], row["Rules"], row["Size"])].append(row)
+        count += 1
+    if count != complete["Runs"] or not count:
+        raise ValueError(f"{root}: incomplete or empty result set")
+    catalog = json.loads((root / "cases.json").read_text())
+    sizes = {int(x) for x in manifest["sizes"].split(",") if x}
+    selected = {(c["ID"], rule, n) for c in catalog for n in c["Sizes"]
+                if not sizes or n in sizes for rule in manifest["rules"].split(",")}
+    if set(groups) != selected:
+        raise ValueError(f"{root}: missing or unexpected selected cases: missing={sorted(selected-set(groups))}, unexpected={sorted(set(groups)-selected)}")
+    for key, rows in groups.items():
+        expected = rows[0]
+        if sorted(r["Repeat"] for r in rows) != list(range(1, manifest["repeats"] + 1)):
+            raise ValueError(f"{root}: missing or duplicate repeat for {key}")
+        for row in rows[1:]:
+            for field in ("Schema", "Ticks", "CatalogHash", "AssetManifest", "InputHash", "InitialPartialHash", "Outcome"):
+                if row[field] != expected[field]:
+                    raise ValueError(f"{root}: inconsistent repeats for {key}: {field}")
+    return manifest, groups
+
+def nearest(values, p):
+    return sorted(values)[(len(values) * p + 99) // 100 - 1] if values else None
+
+def behavior(row):
+    out = row["Outcome"]
+    objs = out.get("Objectives") or []
+    arrivals = [o["FirstNearTick"] - o["IssuedTick"] + 1 for o in objs if o["FirstNearTick"] > 0]
+    return {
+        "objectives": len(objs), "near": len(arrivals),
+        "moving_end": sum(a.get("Order") in ("Move_Ground", "VTOL_Move") for a in out["Actors"]),
+        "ends": dict(Counter(o["End"] for o in objs)),
+        "first": min(arrivals, default=None), "p50": nearest(arrivals, 50),
+        "p95": nearest(arrivals, 95), "last": max(arrivals, default=None),
+        "still": max((o["LongestStill"] for o in objs), default=0),
+        "blocked": sum(o["BlockedTicks"] for o in objs),
+        "searches": out["SearchStarts"], "popped": out["SearchPopped"],
+        "unexpected_removals": sum(not a["Alive"] and not a["ExpectedRemoval"] for a in out["Actors"]),
+    }
+
+def costs(rows):
+    return {key: median(r["Cost"][key] for r in rows) for key in ("P50NS", "P95NS", "P99NS", "MaxNS", "TotalTickNS", "AllocBytes", "Allocs")}
+
+def summary(root):
+    manifest, groups = load(root)
+    lines = ["# Pathfinding baseline", "", f"Revision `{manifest['revision']}`; dirty={manifest['dirty']}; {manifest['go_version']}; GOMAXPROCS={manifest['gomaxprocs']}.", "", "Near means entering the declared reporting radius, not proof that every kind of order succeeded. Arrival percentiles cover arrivals only; pending and removed objectives remain visible. Cost columns are medians across repeats, in microseconds per phase cycle. Allocations cover the window including scripted events, excluding fixture construction and diagnostic tracing.", "", "| Case / rules / size | Near / goals | Move heads at end | Other outcomes | Arrival p50 / p95 ticks | Longest still | p50 / p95 / p99 µs | Bytes/tick | Searches |", "|---|---:|---:|---|---:|---:|---:|---:|---:|"]
+    for (case, rules, size), rows in sorted(groups.items()):
+        b, c = behavior(rows[0]), costs(rows)
+        other = ", ".join(f"{k}={v}" for k, v in sorted(b["ends"].items()) if k != "near_goal") or "—"
+        if b["unexpected_removals"]:
+            other += f"; unexpected removals={b['unexpected_removals']}"
+        lines.append(f"| {case} / {rules} / {size} | {b['near']}/{b['objectives']} | {b['moving_end']} | {other} | {b['p50']} / {b['p95']} | {b['still']} | {c['P50NS']/1000:.1f} / {c['P95NS']/1000:.1f} / {c['P99NS']/1000:.1f} | {c['AllocBytes']/rows[0]['Ticks']:.0f} | {b['searches']} |")
+    path = Path(root) / "summary.md"
+    path.write_text("\n".join(lines) + "\n")
+    print(f"{len(groups)} case/rules/size combinations; {path}")
+
+def compare(before, after, rule_map=None, before_rule=None, after_rule=None):
+    bm, bg = load(before)
+    am, ag = load(after)
+    if before_rule:
+        bg = {key: rows for key, rows in bg.items() if key[1] == before_rule}
+    if after_rule:
+        ag = {key: rows for key, rows in ag.items() if key[1] == after_rule}
+    if not bg or not ag:
+        raise ValueError("rule selection has no results")
+    if rule_map:
+        mapped = {}
+        for (case, rule, size), rows in ag.items():
+            key = (case, rule_map.get(rule, rule), size)
+            if key in mapped:
+                raise ValueError(f"rule mapping collides at {key}")
+            mapped[key] = rows
+        ag = mapped
+    mismatches = [key for key in COMPAT if bm.get(key) != am.get(key)]
+    if mismatches:
+        raise ValueError("incompatible host/runtime metadata: " + ", ".join(mismatches))
+    if set(bg) != set(ag):
+        raise ValueError(f"different case selections: removed={sorted(set(bg)-set(ag))}, added={sorted(set(ag)-set(bg))}")
+    lines = ["# Pathfinding comparison", "", f"Before `{bm['revision']}` → after `{am['revision']}`. Negative cost deltas mean less cost; outcomes must be assessed separately. These measurements alone do not approve an algorithm.", "", "| Case / rules / size | Near before → after | Other endings before → after | Arrival p95 before → after | p50 / p95 / p99 cost Δ | Bytes Δ | Observed trajectory |", "|---|---:|---:|---:|---:|---:|---|"]
+    if rule_map:
+        lines[3:3] = [f"Explicit candidate → baseline rule mapping: {rule_map}. All input and runtime guards still apply.", ""]
+    def delta(a, b):
+        return "n/a" if a == 0 else f"{(b/a-1)*100:+.1f}%"
+    for key in sorted(bg):
+        br, ar = bg[key][0], ag[key][0]
+        for field in ("Schema", "BaseMode", "Ticks", "CatalogHash", "AssetManifest", "InputHash"):
+            if br[field] != ar[field]:
+                raise ValueError(f"incompatible {key}: {field}")
+        b, a = behavior(br), behavior(ar)
+        bc, ac = costs(bg[key]), costs(ag[key])
+        same = br["Outcome"]["TrajectoryHash"] == ar["Outcome"]["TrajectoryHash"] and br["Outcome"]["FinalPartialHash"] == ar["Outcome"]["FinalPartialHash"]
+        change = " / ".join(delta(bc[f], ac[f]) for f in ("P50NS", "P95NS", "P99NS"))
+        lines.append(f"| {' / '.join(map(str,key))} | {b['near']} → {a['near']} | { {k:v for k,v in b['ends'].items() if k != 'near_goal'} } → { {k:v for k,v in a['ends'].items() if k != 'near_goal'} } | {b['p95']} → {a['p95']} | {change} | {delta(bc['AllocBytes'],ac['AllocBytes'])} | {'same partial trace' if same else 'CHANGED'}; moves still active {b['moving_end']} → {a['moving_end']}; unexpected removals {b['unexpected_removals']} → {a['unexpected_removals']} |")
+    print("\n".join(lines))
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest="action", required=True)
+    s = sub.add_parser("summarize"); s.add_argument("run")
+    c = sub.add_parser("compare"); c.add_argument("before"); c.add_argument("after")
+    c.add_argument("--map-rule", action="append", default=[], metavar="CANDIDATE=BASELINE", help="explicitly compare a registered prototype rule to its baseline")
+    c.add_argument("--before-rule", help="select one rule from an otherwise fully validated before artifact")
+    c.add_argument("--after-rule", help="select one rule from an otherwise fully validated after artifact")
+    a = p.parse_args()
+    if a.action == "summarize": summary(a.run)
+    else:
+        rule_map = {}
+        for item in a.map_rule:
+            candidate, sep, baseline = item.partition("=")
+            if not sep or not candidate or not baseline or candidate in rule_map:
+                raise ValueError("expected a unique CANDIDATE=BASELINE mapping")
+            rule_map[candidate] = baseline
+        compare(a.before, a.after, rule_map, a.before_rule, a.after_rule)
+
+if __name__ == "__main__":
+    try: main()
+    except (OSError, ValueError, KeyError, TypeError) as error: sys.exit(f"path-bench: {error}")

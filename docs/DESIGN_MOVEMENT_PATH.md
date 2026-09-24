@@ -2187,8 +2187,8 @@ directories `final` and `prod2`): near-goal arrivals 4,001 → 4,145 of 5,756
 and pending moves 1,652 → 1,509 over the corpus without the scripted waves;
 on the scripted waves 164 → 282 of 2,304 with 256 units across three owners
 and 600 → 833 of 13,500 with 1,500. Twenty-two cases gain, the largest being
-the friendly two-cell choke with 64 units (2 → 54), opposed columns through a
-two-cell choke (33 → 57), the one-footprint corridor with passing bays
+the friendly four-cell choke with 64 units (2 → 54), opposed columns through a
+choke two flea footprints wide (33 → 57), the one-footprint corridor with passing bays
 (0 → 16 of 16) and perpendicular flows (52 → 64). Six lose: the hostile
 head-on meeting with 64 units a side 25 → 22 (its friends crowd the front
 rather than waiting behind it), the 64-unit scripted waves 71 → 68, and four
@@ -2291,7 +2291,8 @@ Only turns whose neighbours share a row or a column are removed. A general
 line-of-sight shortcut was measured and rejected: it sent each unit of a
 column straight at a choke from its own angle, so the column arrived as a
 clump instead of the files the retail route forms, and it lost heavily in the
-choke cases (opposed columns through a two-cell choke with 64 units 55 → 36;
+choke cases (opposed columns through a choke two flea footprints wide with 64 units
+55 → 36;
 one-cell choke with 16 units 16 → 12); keeping one cell of clearance from
 obstacles did not help. A 64-cell span also hurt dense open groups (64 units
 64 → 30), where straight shortcuts converge.
@@ -2308,7 +2309,7 @@ against the same tree with the retail kernel (artifacts
 5,756 and pending moves 1,509 → 1,486 over the corpus without the scripted
 waves, 13 cases gaining and 5 losing; on the scripted waves 282 → 282 of
 2,304 with 256 units and 833 → 1,070 of 13,500 with 1,500. The naval crossing
-goes 0 → 8 of 8; the friendly two-cell choke with 64 units 54 → 61 and the
+goes 0 → 8 of 8; the friendly four-cell choke with 64 units 54 → 61 and the
 idle-army crossing 29 → 36. On interleaved repeats the
 straightening probes added about 6% to the 1,500-unit waves' search work with
 the tick CPU p95, p99 and total within the host's noise.

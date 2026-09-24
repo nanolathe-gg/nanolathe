@@ -405,3 +405,10 @@ ticks with no window, renderer or audio device: three 250-unit computer armies
 fighting on one map, with per-phase attribution, a census that proves the
 workload, and CPU and allocation profiles of the measured window. It shares the
 same host lock, so it never runs beside the windowed benchmark.
+
+For pathfinding and movement-policy changes, use the opt-in
+[path benchmark](docs/PATH_BENCHMARK.md) (`tools/path-bench`): authored
+scenarios from single units to 1,500-unit waves under any registered rule set,
+with arrival outcomes, per-tick thread CPU time and deterministic hashes, plus
+rule sets that switch off one Modern pathfinding policy at a time. Compare
+candidates by alternating runs of the two builds on a shared host.

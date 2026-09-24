@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Render a path-bench trace jsonl into a contact sheet PNG.
+usage: render.py trace.jsonl out.png [--frames N] [--crop x0,z0,x1,z1] [--scale S] [--ticks a,b,c]"""
+import json, argparse
+from PIL import Image, ImageDraw
+
+ap = argparse.ArgumentParser()
+ap.add_argument('trace'); ap.add_argument('out')
+ap.add_argument('--frames', type=int, default=8)
+ap.add_argument('--crop', default='')
+ap.add_argument('--scale', type=int, default=4)
+ap.add_argument('--ticks', default='')
+ap.add_argument('--cols', type=int, default=4)
+a = ap.parse_args()
+lines = open(a.trace).read().splitlines()
+hd = json.loads(lines[0])
+frames = [json.loads(l) for l in lines[1:] if l.startswith('{"Tick"')]
+tail = json.loads(lines[-1]); goals = tail.get('Goals') or []
+W, H = hd['W'], hd['H']
+x0, z0, x1, z1 = 0, 0, W, H
+if a.crop:
+    x0, z0, x1, z1 = map(int, a.crop.split(','))
+S = a.scale
+if a.ticks:
+    sel = [min(frames, key=lambda f: abs(f['Tick'] - int(t))) for t in a.ticks.split(',')]
+else:
+    n = min(a.frames, len(frames))
+    sel = [frames[int(i * (len(frames) - 1) / max(1, n - 1))] for i in range(n)]
+cols = min(a.cols, len(sel)); rows = (len(sel) + cols - 1) // cols
+fw, fh = (x1 - x0) * S, (z1 - z0) * S + 14
+sheet = Image.new('RGB', (cols * (fw + 4), rows * (fh + 4)), (40, 40, 40))
+cells = hd['Cells']
+base = Image.new('RGB', (fw, fh - 14), (0, 0, 0))
+d = ImageDraw.Draw(base)
+for z in range(z0, z1):
+    for x in range(x0, x1):
+        c = cells[z * W + x]
+        if c == '#': col = (15, 15, 15)
+        elif c == 'f': col = (130, 85, 30)
+        elif c.isdigit(): col = (70 + int(c) * 15,) * 3
+        else: col = (90, 90, 90)
+        d.rectangle([(x - x0) * S, (z - z0) * S, (x - x0 + 1) * S - 1, (z - z0 + 1) * S - 1], fill=col)
+for gx, gz, r in goals:
+    cx, cz = (gx - x0) * S, (gz - z0) * S
+    d.ellipse([cx - r * S, cz - r * S, cx + r * S, cz + r * S], outline=(60, 220, 60))
+owners = [(80, 160, 255), (255, 120, 80), (230, 220, 80), (200, 100, 255)]
+for i, f in enumerate(sel):
+    img = Image.new('RGB', (fw, fh), (0, 0, 0)); img.paste(base, (0, 14))
+    dd = ImageDraw.Draw(img)
+    blocked = sum(1 for u in f['Units'] if u[3]); moving = sum(1 for u in f['Units'] if u[4])
+    dd.text((2, 1), f"t={f['Tick']} orders={moving} blocked={blocked}", fill=(255, 255, 255))
+    for ux, uz, o, b, h, _ in f['Units']:
+        if not (x0 <= ux < x1 and z0 <= uz < z1):
+            continue
+        cx, cz = (ux - x0) * S, (uz - z0) * S + 14
+        col = owners[int(o) % 4] if h else (200, 200, 200)
+        rr = S * 0.9
+        dd.ellipse([cx - rr, cz - rr, cx + rr, cz + rr], fill=col, outline=(255, 0, 0) if b else None, width=2 if b else 1)
+    sheet.paste(img, ((i % cols) * (fw + 4), (i // cols) * (fh + 4)))
+sheet.save(a.out)
+print(a.out, sheet.size, len(frames), 'frames')

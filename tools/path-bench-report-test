@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Lightweight negative checks for the benchmark artifact comparison guard."""
+from contextlib import redirect_stdout
+from copy import deepcopy
+import io
+import json
+from pathlib import Path
+import runpy
+import tempfile
+import unittest
+
+report = runpy.run_path(str(Path(__file__).with_name("path-bench-report")))
+
+class ArtifactChecks(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.before = Path(self.temp.name) / "before"
+        self.after = Path(self.temp.name) / "after"
+        self.manifest = {"schema": 1, "revision": "fixture", "repeats": 1, "gomaxprocs": 2, "rules": "modern", "sizes": ""}
+        self.row = {
+            "Schema": 1, "Case": "fixture", "Rules": "modern", "BaseMode": "modern", "Size": 1,
+            "Ticks": 30, "Repeat": 1, "CatalogHash": "catalog", "AssetManifest": "assets", "InputHash": "input", "InitialPartialHash": "initial",
+            "Outcome": {"Objectives": [{"IssuedTick": 1, "FirstNearTick": 10, "End": "near_goal", "LongestStill": 2, "BlockedTicks": 1}], "Actors": [{"Alive": True, "ExpectedRemoval": False}], "SearchStarts": 1, "SearchPopped": 2, "TrajectoryHash": "trajectory", "FinalPartialHash": "final"},
+            "Cost": {key: 1000 for key in ("P50NS", "P95NS", "P99NS", "MaxNS", "TotalTickNS", "AllocBytes", "Allocs")},
+        }
+        for root in (self.before, self.after):
+            root.mkdir(); self.write(root)
+
+    def write(self, root, row=None, manifest=None):
+        for name, data in (("manifest.json", manifest or self.manifest), ("complete.json", {"Runs": 1}), ("cases.json", [{"ID": "fixture", "Sizes": [1]}]), ("fixture__r1.json", row or self.row)):
+            (root / name).write_text(json.dumps(data))
+
+    def test_reject_incompatible_runtime_and_inputs(self):
+        changed = dict(self.manifest, gomaxprocs=4)
+        self.write(self.after, manifest=changed)
+        with self.assertRaisesRegex(ValueError, "gomaxprocs"):
+            report["compare"](self.before, self.after)
+        changed = dict(self.row, InputHash="different")
+        self.write(self.after, row=changed)
+        with self.assertRaisesRegex(ValueError, "InputHash"):
+            report["compare"](self.before, self.after)
+
+    def test_reject_different_repeat_count_and_fixture_code(self):
+        for field, value in (("repeats", 3), ("fixture_source_sha256", "changed")):
+            changed = dict(self.manifest, **{field: value})
+            self.write(self.after, manifest=changed)
+            with self.assertRaises(ValueError):
+                report["compare"](self.before, self.after)
+
+    def test_reject_missing_repeat(self):
+        self.write(self.after, manifest=dict(self.manifest, repeats=2))
+        with self.assertRaisesRegex(ValueError, "missing or duplicate repeat"):
+            report["load"](self.after)
+
+    def test_reject_entirely_missing_selected_case(self):
+        (self.after / "cases.json").write_text(json.dumps([{"ID": "fixture", "Sizes": [1, 8]}]))
+        with self.assertRaisesRegex(ValueError, "missing or unexpected selected cases"):
+            report["load"](self.after)
+
+    def test_faster_failure_remains_visible(self):
+        changed = deepcopy(self.row)
+        changed["Outcome"]["Objectives"][0].update(FirstNearTick=0, End="away_no_move_head")
+        changed["Outcome"]["TrajectoryHash"] = "changed"
+        changed["Cost"]["P95NS"] = 500
+        self.write(self.after, row=changed)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            report["compare"](self.before, self.after)
+        text = output.getvalue()
+        self.assertIn("1 → 0", text)
+        self.assertIn("away_no_move_head", text)
+        self.assertIn("-50.0%", text)
+        self.assertIn("CHANGED", text)
+
+    def test_explicit_rule_mapping_keeps_input_guard(self):
+        changed = dict(self.row, Rules="prototype")
+        manifest = dict(self.manifest, rules="prototype")
+        self.write(self.after, row=changed, manifest=manifest)
+        with self.assertRaisesRegex(ValueError, "different case selections"):
+            report["compare"](self.before, self.after)
+        with redirect_stdout(io.StringIO()):
+            report["compare"](self.before, self.after, {"prototype": "modern"})
+        for field in ("InputHash", "BaseMode"):
+            self.write(self.after, row=dict(changed, **{field: "different"}), manifest=manifest)
+            with self.assertRaisesRegex(ValueError, field):
+                report["compare"](self.before, self.after, {"prototype": "modern"})
+
+    def test_paired_run_selection_is_explicit_and_still_validates_all_rows(self):
+        root = self.before
+        (root / "manifest.json").write_text(json.dumps(dict(self.manifest, rules="modern,prototype")))
+        (root / "complete.json").write_text(json.dumps({"Runs": 2}))
+        (root / "prototype__r1.json").write_text(json.dumps(dict(self.row, Rules="prototype")))
+        with redirect_stdout(io.StringIO()):
+            report["compare"](root, root, {"prototype": "modern"}, "modern", "prototype")
+        with self.assertRaisesRegex(ValueError, "no results"):
+            report["compare"](root, root, None, "absent", "modern")
+        (root / "prototype__r1.json").unlink()
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            report["compare"](root, root, None, "modern", "modern")
+
+if __name__ == "__main__":
+    unittest.main()

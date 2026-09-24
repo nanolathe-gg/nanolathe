@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Opt-in retail-unit pathfinding experiments; never starts a display or game UI."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+
+def command(args, **kw):
+    return subprocess.run(args, cwd=ROOT, check=True, **kw)
+
+def capture(args):
+    return subprocess.check_output(args, cwd=ROOT, text=True).strip()
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "compare":
+        os.execv(sys.executable, [sys.executable, str(ROOT / "tools/path-bench-report"), *sys.argv[1:]])
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("output", nargs="?", type=Path, help="new output directory, outside the repository")
+    p.add_argument("--list", action="store_true", help="list registered cases without simulating")
+    p.add_argument("--assets", type=Path, default=Path(os.environ.get("NANOLATHE_RETAIL_ASSETS", Path.home() / "TotalAnnihilation")))
+    p.add_argument("--cases", default="", help="Go regular expression on case IDs")
+    p.add_argument("--rules", default="modern,strict-3.1,community-3.9", help="comma-separated registered rule-set names")
+    p.add_argument("--sizes", default="", help="comma-separated supported group sizes; empty selects all")
+    p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--ticks", type=int, help="override fixed windows for fixture debugging (incompatible with baseline)")
+    p.add_argument("--profiles", action="store_true", help="extra untimed CPU profile pass per selected case")
+    a = p.parse_args()
+    if a.repeats < 1 or (a.ticks is not None and a.ticks < 1):
+        p.error("repeats and ticks must be positive")
+    if a.sizes and any(not x.isdigit() or int(x) < 1 for x in a.sizes.split(",")):
+        p.error("sizes must be positive integers separated by commas")
+    if not a.assets.is_dir():
+        p.error(f"retail installation does not exist: {a.assets}")
+    if not a.output and not a.list:
+        p.error("supply a new output directory, or --list")
+    temp = tempfile.TemporaryDirectory(prefix="nanolathe-path-bench-") if not a.output else None
+    output = a.output.expanduser().resolve() if a.output else Path(temp.name) / "list"
+    if output == ROOT or ROOT in output.parents:
+        p.error("keep benchmark artifacts outside the repository")
+    output.mkdir(parents=True, exist_ok=False)
+    env = os.environ.copy()
+    env.setdefault("GOMAXPROCS", "2")
+    env.setdefault("NANOLATHE_TEST_P", "2")
+    # Explicit fields prevent unrelated inherited diagnostic settings from
+    # silently changing the selected experiment.
+    for key in list(env):
+        if key.startswith("NANOLATHE_PATH_BENCH_"):
+            del env[key]
+    env.update({
+        "NANOLATHE_RETAIL_ASSETS": str(a.assets.resolve()),
+        "NANOLATHE_PATH_BENCH_OUT": str(output),
+        "NANOLATHE_PATH_BENCH_FORMATIONS": str(output / "formations.json"),
+        "NANOLATHE_PATH_BENCH_FILTER": a.cases,
+        "NANOLATHE_PATH_BENCH_RULES": a.rules,
+        "NANOLATHE_PATH_BENCH_SIZES": a.sizes,
+        "NANOLATHE_PATH_BENCH_REPEATS": str(a.repeats),
+        "NANOLATHE_PATH_BENCH_LIST": "1" if a.list else "0",
+        "NANOLATHE_PATH_BENCH_PROFILES": "1" if a.profiles else "0",
+    })
+    if a.ticks:
+        env["NANOLATHE_PATH_BENCH_TICKS"] = str(a.ticks)
+    go = ["go", "test", f"-p={env['NANOLATHE_TEST_P']}", "-tags=pathbench,retail", "-count=1", "-timeout=90m", "-v"]
+    fixture_files = sorted(ROOT.glob("internal/session/path_bench*test.go")) + sorted(ROOT.glob("internal/session/navigation_*_test.go")) + [ROOT / "cmd/nanolathe/path_bench_formation_test.go"]
+    fixture_hash = hashlib.sha256()
+    for file in fixture_files:
+        fixture_hash.update(str(file.relative_to(ROOT)).encode())
+        fixture_hash.update(file.read_bytes())
+    metadata = {
+        "schema": 1, "revision": capture(["git", "rev-parse", "HEAD"]),
+        "dirty": bool(capture(["git", "status", "--porcelain", "--untracked-files=normal"])),
+        "fixture_source_sha256": fixture_hash.hexdigest(),
+        "go_version": capture(["go", "version"]), "platform": platform.platform(),
+        "machine": platform.machine(), "processor": platform.processor(),
+        "host": platform.node(), "logical_cpus": os.cpu_count(),
+        "gomaxprocs": int(env["GOMAXPROCS"]),
+        "gogc": env.get("GOGC", "100"), "gomemlimit": env.get("GOMEMLIMIT", "off"),
+        "go_flags": env.get("GOFLAGS", ""),
+        "rules": a.rules, "sizes": a.sizes, "filter": a.cases,
+        "repeats": a.repeats, "ticks_override": a.ticks,
+        "scope": "twelve authoritative phases; events and observer outside tick timer; allocation includes scripted events",
+    }
+    (output / "manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    started = time.monotonic()
+    try:
+        with (output / "run.log").open("w") as log:
+            # The pure geometry file and exporter compile as a named-file
+            # package, so importing the window application's main is unnecessary.
+            for args in [
+                [*go, "cmd/nanolathe/battle_drag_geometry.go", "cmd/nanolathe/path_bench_formation_test.go", "-run=^TestPathBenchFormationExport$"],
+                [*go, "./internal/session", "-run=^TestPathBenchmark$"],
+            ]:
+                cmd = [str(ROOT / "tools/host-run"), *args]
+                with subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+                    for line in proc.stdout:
+                        log.write(line)
+                        log.flush()
+                        if not a.list:
+                            print(line, end="", flush=True)
+                    if proc.wait():
+                        raise RuntimeError(f"benchmark failed; see {output / 'run.log'}")
+        if a.list:
+            for c in json.loads((output / "cases.json").read_text()):
+                print(f"{c['ID']:48} sizes={c['Sizes']} ticks={c['Ticks']}\n  {c['Description']}")
+        else:
+            if not (output / "complete.json").is_file():
+                raise RuntimeError("benchmark did not finish; skipped tests cannot establish a baseline")
+            command([sys.executable, "tools/path-bench-report", "summarize", str(output)])
+            print(f"Artifacts: {output} ({time.monotonic() - started:.1f}s including setup)")
+    finally:
+        if temp:
+            temp.cleanup()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))

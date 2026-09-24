@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Compare rule variants within one path-bench output dir.
+usage: cmp.py DIR [--base modern] [--brief]"""
+import json, glob, os, sys, statistics, argparse, re
+from collections import defaultdict
+ap = argparse.ArgumentParser(); ap.add_argument('dir'); ap.add_argument('--base', default='modern')
+ap.add_argument('--totals', action='store_true')
+a = ap.parse_args()
+runs = defaultdict(list)
+for f in glob.glob(os.path.join(a.dir, '*__r*.json')):
+    d = json.load(open(f))
+    runs[(d['Case'], d['Size'], d['Rules'])].append(d)
+def dist(o):
+    g = o['Goal']; e = None
+    return g
+def summarize(ds):
+    o = next((d for d in ds if d['Outcome'].get('Objectives')), ds[0])['Outcome']
+    objs = o.get('Objectives') or []
+    ends = defaultdict(int)
+    for ob in objs: ends[ob['End']] += 1
+    near = ends.get('near_goal', 0)
+    blocked = sum(ob.get('BlockedTicks', 0) for ob in objs)
+    still = max([ob.get('LongestStill', 0) for ob in objs] or [0])
+    arr = sorted(ob['FirstNearTick'] for ob in objs if ob.get('FirstNearTick'))
+    med = lambda k: statistics.median(d['Cost'][k] for d in ds)
+    def cpu(q):
+        vals=[]
+        for d in ds:
+            t=sorted(d['Cost'].get('TickCPUNS') or [0])
+            vals.append(t[min(len(t)-1,int(len(t)*q))] if q<1 else t[-1])
+        return statistics.median(vals)/1e3
+    cpu_tot=statistics.median(sum(d['Cost'].get('TickCPUNS') or [0]) for d in ds)/1e6
+    return dict(goals=len(objs), near=near, pend=ends.get('pending', 0), away=ends.get('away_no_move_head', 0),
+                blocked=blocked, still=still, arr50=arr[len(arr)//2] if arr else None,
+                arr95=arr[int(len(arr)*0.95)] if arr else None,
+                p95=med('P95NS')/1e3, p99=med('P99NS')/1e3, mx=med('MaxNS')/1e3, tot=med('TotalTickNS')/1e6,
+                alloc=med('AllocBytes')/1e6, searches=o.get('SearchStarts', 0), pops=o.get('SearchPopped', 0),
+                c95=cpu(0.95), c99=cpu(0.99), cmx=cpu(1), ctot=cpu_tot,
+                pmean=statistics.mean([ob.get('PendingTicks', 0) for ob in objs] or [0]), pmax=max([ob.get('MaxPendingAge', 0) for ob in objs] or [0]))
+cases = sorted({(c, n) for c, n, _ in runs})
+rules = sorted({r for _, _, r in runs}, key=lambda r: (r != a.base, r))
+print(f"| case | n | rules | near/goals | pend | away | blockedT | still | arr50/95 | p95/p99/max µs | total ms | alloc MB | searches | pendT mean/maxAge | CPU p95/p99/max µs | CPU total ms |")
+print("|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+tot = defaultdict(lambda: defaultdict(float))
+for c, n in cases:
+    for r in rules:
+        if (c, n, r) not in runs: continue
+        s = summarize(runs[(c, n, r)])
+        for k in ('near', 'goals', 'pend', 'blocked', 'tot', 'searches', 'pmean'): tot[r][k] += s[k]
+        print(f"| {c} | {n} | {r} | {s['near']}/{s['goals']} | {s['pend']} | {s['away']} | {s['blocked']} | {s['still']} | {s['arr50']}/{s['arr95']} | {s['p95']:.0f}/{s['p99']:.0f}/{s['mx']:.0f} | {s['tot']:.1f} | {s['alloc']:.2f} | {s['searches']} | {s['pmean']:.0f}/{s['pmax']} | {s['c95']:.0f}/{s['c99']:.0f}/{s['cmx']:.0f} | {s['ctot']:.1f} |")
+print()
+for r in rules:
+    t = tot[r]
+    print(f"TOTAL {r}: near {int(t['near'])}/{int(t['goals'])} pend {int(t['pend'])} blockedT {int(t['blocked'])} tick-total {t['tot']:.1f} ms searches {int(t['searches'])} sum-mean-pendT {t['pmean']:.0f}")

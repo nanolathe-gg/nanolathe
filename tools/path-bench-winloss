@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+import json,glob,os,sys,statistics
+from collections import defaultdict
+d=sys.argv[1]; base=sys.argv[2]; cands=sys.argv[3].split(',')
+runs=defaultdict(list)
+for f in glob.glob(os.path.join(d,'*__r*.json')):
+    j=json.load(open(f)); runs[(j['Case'],j['Size'],j['Rules'])].append(j)
+def summ(ds):
+    o=ds[0]['Outcome']; objs=o.get('Objectives') or []
+    near=sum(1 for x in objs if x['End']=='near_goal'); pend=sum(1 for x in objs if x['End']=='pending')
+    away=sum(1 for x in objs if x['End']=='away_no_move_head')
+    arr=[x['FirstNearTick'] for x in objs if x.get('FirstNearTick')]
+    c=ds[0]['Cost']
+    return dict(near=near,goals=len(objs),pend=pend,away=away,arrmean=(sum(arr)/len(arr) if arr else 0),p99=statistics.median(x['Cost']['P99NS'] for x in ds)/1e3,mx=statistics.median(x['Cost']['MaxNS'] for x in ds)/1e3,tot=statistics.median(x['Cost']['TotalTickNS'] for x in ds)/1e6)
+for cand in cands:
+    wins=[];losses=[];tb=tc=0;nb=nc=0;gb=0;pb=pc=0
+    for (c,n,r) in sorted(runs):
+        if r!=base or c=='traffic/waves': continue
+        if (c,n,cand) not in runs: continue
+        b=summ(runs[(c,n,base)]); x=summ(runs[(c,n,cand)])
+        tb+=b['tot']; tc+=x['tot']; nb+=b['near']; nc+=x['near']; gb+=b['goals']; pb+=b['pend']; pc+=x['pend']
+        dn=x['near']-b['near']
+        row=f"{c:32s} {n:5d} near {b['near']:4d}->{x['near']:4d}/{b['goals']:<4d} pend {b['pend']:3d}->{x['pend']:3d} away {b['away']:2d}->{x['away']:2d} p99 {b['p99']:6.0f}->{x['p99']:6.0f} max {b['mx']:6.0f}->{x['mx']:6.0f} tot {b['tot']:7.1f}->{x['tot']:7.1f}"
+        if dn>0: wins.append((dn,row))
+        elif dn<0: losses.append((dn,row))
+    print(f"=== {cand} vs {base} (excluding traffic/waves): near {nb}->{nc} of {gb}, pending {pb}->{pc}, total tick {tb:.0f}->{tc:.0f} ms")
+    print(f"--- {len(wins)} wins"); [print(r) for _,r in sorted(wins,reverse=True)]
+    print(f"--- {len(losses)} losses"); [print(r) for _,r in sorted(losses)]

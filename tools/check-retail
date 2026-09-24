@@ -54,6 +54,10 @@ echo "==> lint (staticcheck + deadcode, retail tag)"
 
 echo "==> go vet (retail tag)"
 go vet -tags retail "$@"
+# The opt-in path benchmark (docs/PATH_BENCHMARK.md) builds only under its own
+# tag, so no other step compiles it; vetting it here keeps the suite buildable.
+echo "==> go vet (path benchmark tags)"
+go vet -tags 'pathbench retail' ./internal/session ./cmd/nanolathe
 echo "==> go test (retail corpus, tagged, short=$short)"
 # Bounded for the same reason as tools/check, and it matters more here: each
 # package binary that opts in holds a compiled retail catalog.

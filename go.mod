@@ -2,7 +2,10 @@ module github.com/nanolathe-gg/nanolathe
 
 go 1.25.0
 
-require github.com/hajimehoshi/ebiten/v2 v2.10.1
+require (
+	github.com/hajimehoshi/ebiten/v2 v2.10.1
+	golang.org/x/sys v0.47.0
+)
 
 require (
 	github.com/ebitengine/gomobile v0.0.0-20260820040257-d11f821a26a6 // indirect
@@ -12,5 +15,4 @@ require (
 	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/jfreymuth/pulse v0.1.3 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 )
