@@ -97,10 +97,12 @@ type app struct {
 	updatedAt time.Time
 	// presentInterval is the minimum spacing between two presented modern
 	// frames, zero for the display's own refresh; presentedAt is when the last
-	// one was presented; refresh measures the window's current refresh period
-	// from Draw arrivals. See RunOptions.MaxFPS and presentDue.
+	// one was presented, and presentFollowed says a Draw has arrived since;
+	// refresh measures the window's current refresh period from Draw arrivals.
+	// See RunOptions.MaxFPS and presentDue.
 	presentInterval time.Duration
 	presentedAt     time.Time
+	presentFollowed bool
 	refresh         refreshEstimate
 	// pipe is the record/submit pipeline's host state
 	// (docs/DESIGN_GPU_RENDERER.md §13.10). It is modern-only: the classic path
@@ -663,9 +665,25 @@ func (a *app) launchPreRecord(now, sampledAt time.Time, period time.Duration, ti
 // When the measured refresh is no faster than the cap, every refresh is due;
 // only a Draw less than half a refresh after the last present, one of a burst
 // of back-to-back Draws, is skipped.
+//
+// A present is timed by the refresh it belonged to, not by when its Draw
+// arrived. Draws follow the display's refreshes, so the Draw after a present
+// arriving well inside one refresh of it shows that the present's own Draw was
+// late — the loop was held up — and that the refreshes carried on without it.
+// That present still reached the screen at the refresh after its own; timed by
+// its late arrival it moved the cap's clock, and the next present waited an
+// extra refresh. Under host load that was about half the late frames of a
+// heavy save at 120 Hz. The earlier time is taken only from that pattern, so a
+// refresh estimate still settling after a rate switch cannot move it.
 func (a *app) presentDue(now time.Time) bool {
 	refresh := a.refresh.observe(now)
 	if a.presentInterval > 0 && !a.presentedAt.IsZero() {
+		if !a.presentFollowed {
+			a.presentFollowed = true
+			if gap := now.Sub(a.presentedAt); refresh > 0 && gap >= refresh/4 && gap <= refresh-refresh/4 {
+				a.presentedAt = a.presentedAt.Add(gap - refresh)
+			}
+		}
 		allowance := a.presentInterval / 8
 		threshold := a.presentInterval - allowance
 		if refresh >= threshold {
@@ -675,7 +693,7 @@ func (a *app) presentDue(now time.Time) bool {
 			return false
 		}
 	}
-	a.presentedAt = now
+	a.presentedAt, a.presentFollowed = now, false
 	return true
 }
 

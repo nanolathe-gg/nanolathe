@@ -103,3 +103,21 @@ func TestPresentCapSkipsBurstAt60Hz(t *testing.T) {
 		t.Fatalf("60 Hz burst presented %v", got[12:])
 	}
 }
+
+// A present whose Draw arrived late — here 5 ms into its refresh — still
+// reached the screen at the refresh after its own, and the Draw after it
+// arrives back on the display's refresh. The next present stays two refreshes
+// after the late one's refresh instead of waiting a third, which is what the
+// window trace of a heavy save under host load showed for half its late
+// frames.
+func TestPresentCapBooksLatePresentAtItsRefresh(t *testing.T) {
+	gaps := append(repeatGaps(13, refresh120), refresh120+5, refresh120-5)
+	gaps = append(gaps, repeatGaps(4, refresh120)...)
+	got := presentPattern(t, gaps)
+	want := map[int]bool{14: true, 15: false, 16: true, 17: false, 18: true}
+	for i, w := range want {
+		if got[i] != w {
+			t.Fatalf("draw %d presented=%v, want %v: %v", i, got[i], w, got[12:])
+		}
+	}
+}

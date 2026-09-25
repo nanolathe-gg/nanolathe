@@ -1363,7 +1363,14 @@ measured refresh is no faster than the cap every refresh is due, and only a
 Draw within half a refresh of the last present, one of a burst, is skipped:
 at 60 Hz the eighth-interval test skipped the refresh after any present more
 than 2 ms late, so one hitch cost two refreshes and a quiet battle counted
-55–59. Original ignores the cap.
+55–59. A present is timed by the refresh it belonged to: when the Draw after
+a present arrives well inside one refresh of it (a quarter to three quarters
+of a refresh), the present's own Draw was late — the loop was held up — and
+it still reached the screen at the refresh after its own, so the present is
+booked that much earlier. Timed by its late arrival it pushed the cap's clock
+forward and the next present waited a third refresh; on a 120 Hz panel under
+host load that was about half of a heavy save's late frames (3.1% → 1.1% and
+2.7% → 1.3% in two recorded window traces). Original ignores the cap.
 
 The default cap is 60 FPS. The Nanolathe options page offers 30 / 60 / 120 and
 previews changes immediately; OK persists them, Cancel restores the entry value.
