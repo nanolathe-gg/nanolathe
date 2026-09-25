@@ -103,7 +103,16 @@ func (g *gameShell) mapDataFor(name string) *retailMapData {
 		maxTNTBytes = 1 << 30 // the former format-loader fallback for fixtures
 	}
 	if data, err := g.cs.fs.ReadFileLimit("maps/"+name+".tnt", maxTNTBytes); err == nil {
-		d.tnt, _ = formats.LoadTNT(data)
+		if full, err := formats.LoadTNT(data); err == nil {
+			// The map chooser only reads the minimap and playable dimensions.
+			// Keep the parsed-success sentinel and those pixels, not the large
+			// decoded terrain and raw TNT while a battle runs.
+			d.tnt = &formats.TNT{
+				Width: full.Width, Height: full.Height,
+				MinimapWidth: full.MinimapWidth, MinimapHeight: full.MinimapHeight,
+				Minimap: append([]byte(nil), full.Minimap...),
+			}
+		}
 	}
 	g.mapData[key] = d
 	return d

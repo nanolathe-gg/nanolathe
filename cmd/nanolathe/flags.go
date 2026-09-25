@@ -58,6 +58,7 @@ type Options struct {
 	ShotArrivalTime    float64 // seconds into a reproducible opening capture; negative disables
 	UnitLimit          int     // zero uses the saved preference; explicit CLI values override it
 	BattleBenchmark    string
+	BenchmarkCapture   string
 	BenchmarkFactories bool
 	BenchmarkFrames    int
 	BenchmarkTPS       int
@@ -212,6 +213,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.ShotBuild, "shot-build", "", "preview this unit beside the first selection or at viewport centre in --shot (no construction order)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
 	set.StringVar(&opts.BattleBenchmark, "battle-benchmark", "", "run the seeded live battle benchmark into a new output directory")
+	set.StringVar(&opts.BenchmarkCapture, "benchmark-capture", "", "stage a battle benchmark from a Ctrl+Shift+F11 diagnostic directory")
 	set.BoolVar(&opts.BenchmarkFactories, "benchmark-factories", true, "queue factory production in the battle benchmark")
 	set.IntVar(&opts.BenchmarkFrames, "benchmark-frames", 180, "measured battle benchmark frames after two seconds of renderer warmup")
 	set.IntVar(&opts.BenchmarkPreTicks, "benchmark-pre-ticks", 300, "simulation ticks before opening the battle benchmark window (30 ticks per second)")
@@ -352,12 +354,15 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 	}
 	if opts.BattleBenchmark != "" {
+		if opts.BenchmarkCapture != "" && (!opts.Survival || opts.Map == "") {
+			return opts, fmt.Errorf("nanolathe: capture benchmark requires --survival and --map")
+		}
 		// --zoom is accepted here: the benchmark scene is the same battle at
 		// twice the pixels, and the detail view's cost is exactly what the
 		// benchmark exists to measure (DESIGN_GPU_RENDERER §14.6). The scale
 		// is recorded in the scene metadata, so two runs are only compared
 		// when they were captured at the same one.
-		if opts.Shot != "" || opts.ShotModel != "" || opts.Headless || opts.LoadSave != "" || opts.Mission != "" || opts.CPUProfile != "" || opts.MemProfile != "" || opts.ProfileSeconds != 0 || opts.ShotRenderer != "" || opts.ShotGPUProfileFrames != 0 || (opts.ShotSize != "" && opts.ShotSize != "1920x1080") {
+		if opts.Shot != "" || opts.ShotModel != "" || opts.Headless || opts.LoadSave != "" || opts.Mission != "" || opts.CPUProfile != "" || opts.MemProfile != "" || opts.ProfileSeconds != 0 || opts.ShotRenderer != "" || opts.ShotGPUProfileFrames != 0 || (opts.BenchmarkCapture == "" && opts.ShotSize != "" && opts.ShotSize != "1920x1080") {
 			return opts, fmt.Errorf("nanolathe: battle benchmark requires a standalone 1920x1080 battle")
 		}
 		if opts.BenchmarkPreTicks < 0 || opts.BenchmarkPreTicks > 18000 {
@@ -376,7 +381,12 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.Seed = 7
 		}
 		opts.Shot = filepath.Join(opts.BattleBenchmark, "battle.png")
-		opts.ShotSize = "1920x1080"
+		if opts.ShotSize == "" {
+			opts.ShotSize = "1920x1080"
+		}
+	}
+	if opts.BenchmarkCapture != "" && opts.BattleBenchmark == "" {
+		return opts, fmt.Errorf("nanolathe: --benchmark-capture requires --battle-benchmark")
 	}
 	if opts.Shot != "" || opts.ShotModel != "" {
 		if err := validateShotOptions(opts); err != nil {

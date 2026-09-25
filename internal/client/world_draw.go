@@ -1,6 +1,8 @@
 package client
 
 import (
+	"slices"
+
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -11,9 +13,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// worldDrawable is one admitted object in the painter pass. The source slice
-// order is retained for equal rows; only rows are sorted by their world-Z plot
-// row [03 R-RAST-01 §7].
+// worldDrawable is one admitted object in the painter pass. Original retains
+// source slice order inside each world-Z plot row [03 R-RAST-01 §7]; Enhanced
+// refines the unit order there (DESIGN_GPU_RENDERER §5.5).
 type worldDrawable struct {
 	row     int32
 	unit    *frame.UnitView
@@ -184,6 +186,10 @@ type worldBuckets struct {
 	items        []worldDrawable
 	bucket       []worldBucket
 	orderedItems []worldDrawable
+	// Enhanced keeps the retail row barriers but orders units within each row
+	// by their full world Z, so crossing a plot-row edge cannot flip an overlap
+	// (DESIGN_GPU_RENDERER §5.5).
+	fineUnitOrder bool
 
 	// units is the frame's unit slice the child indices point into.
 	units []frame.UnitView
@@ -199,6 +205,7 @@ type worldBuckets struct {
 }
 
 func (b *worldBuckets) reset() {
+	b.fineUnitOrder = false
 	for i := range b.bucket {
 		b.bucket[i].items = b.bucket[i].items[:0]
 	}
@@ -366,15 +373,16 @@ func (b *worldBuckets) add(v worldDrawable) {
 	b.bucket[len(b.bucket)-1].items = append(b.bucket[len(b.bucket)-1].items, idx)
 }
 
-// ordered returns this frame's drawables in ascending bucket row, stable
-// within a row. It is idempotent: the two unit passes are two walks over one
-// bucket build, so both call it and both see the same sequence
-// [03 R-RAST-01 §7].
+// ordered returns this frame's drawables in ascending bucket row. Original
+// keeps source order within a row; Enhanced sorts that row's units by full Z.
+// It is idempotent: the two unit passes are two walks over one bucket build,
+// so both call it and both see the same sequence [03 R-RAST-01 §7]
+// (DESIGN_GPU_RENDERER §5.5).
 func (b *worldBuckets) ordered() []worldDrawable {
 	b.orderedItems = b.orderedItems[:0]
 	// Insertion sort is allocation-free and the bucket count is bounded by the
 	// distinct rows admitted for this frame. Existing bucket order is not a
-	// contract; equal-row item order remains source enumeration order [03 §1].
+	// contract; row items start in source enumeration order [03 §1].
 	for i := 1; i < len(b.bucket); i++ {
 		v := b.bucket[i]
 		j := i
@@ -385,8 +393,38 @@ func (b *worldBuckets) ordered() []worldDrawable {
 		b.bucket[j] = v
 	}
 	for _, row := range b.bucket {
+		start := len(b.orderedItems)
 		for _, idx := range row.items {
 			b.orderedItems = append(b.orderedItems, b.items[idx])
+		}
+		if b.fineUnitOrder {
+			// Full Z makes unit order continuous across the 16-pixel bucket
+			// boundary. Retain the row's feature tail and slot ties; no render
+			// history or simulation state participates (GPU design §5.5).
+			slices.SortStableFunc(b.orderedItems[start:], func(a, d worldDrawable) int {
+				if a.unit == nil {
+					if d.unit == nil {
+						return 0
+					}
+					return 1
+				}
+				if d.unit == nil {
+					return -1
+				}
+				if a.unit.Z < d.unit.Z {
+					return -1
+				}
+				if a.unit.Z > d.unit.Z {
+					return 1
+				}
+				if a.unit.Slot < d.unit.Slot {
+					return -1
+				}
+				if a.unit.Slot > d.unit.Slot {
+					return 1
+				}
+				return 0
+			})
 		}
 	}
 	return b.orderedItems
@@ -623,6 +661,9 @@ func featureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
 func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	b := &c.worldBuckets
 	b.reset()
+	// The comparison capture can enable Enhanced art while recording its
+	// Classic half. Only the modern geometry record selects this painter policy.
+	b.fineUnitOrder = c.geometryOnlyModels
 	if !ok || cur == nil || c.cam == nil {
 		return
 	}
@@ -635,8 +676,8 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	// [03 R-RAST-01 §7].
 	b.indexChildren(cur.Units)
 	// The bucket build walks the units the viewer may see, in slot order, and
-	// appends each to its row. Appends are stable, so in-row draw order is
-	// ascending unit slot in both passes [03 R-RAST-01 §7].
+	// appends each to its row. Original keeps that in-row slot order; Enhanced
+	// refines it after the build (DESIGN_GPU_RENDERER §5.5).
 	for i := range cur.Units {
 		u := &cur.Units[i]
 		// Hull admission already selects visible units [03 R-RAST-01 §7].
@@ -762,10 +803,10 @@ func isCarried(v frame.UnitView) bool {
 //
 // This is the play-test defect the unit fixes. Cargo hangs at the carrier's
 // attach piece, so it lands in the same 16-pixel plot row as its carrier, where
-// in-row order is ascending unit slot. An Atlas built before the unit it lifts
-// therefore had its cargo painted a second time, straight to the framebuffer,
-// after the carrier's staging blit — which is exactly the per-pixel occlusion
-// [R-REN-03A §4] exists to produce, undone one blit later. The reverse slot
+// Original's in-row order is ascending unit slot. An Atlas built before the
+// unit it lifts therefore had its cargo painted a second time, straight to the
+// framebuffer after the carrier's staging blit — undoing the per-pixel
+// occlusion [R-REN-03A §4] exists to produce. The reverse slot
 // order hid the bug rather than fixing it.
 //
 // The selected-unit footprint quad is NOT inside the present and is still drawn

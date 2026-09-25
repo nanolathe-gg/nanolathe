@@ -798,10 +798,10 @@ are C1 and C3 of §3.1.
 * **C11 Backend.** There is one Ebitengine game loop and one window. Its fixed
   logical size is distinct from the negotiated outside size, so Ebitengine can
   letterbox without changing authored HUD coordinates.
-* **C13 Draw order.** Units and comparable world objects reach the draw loops
-  through per-row screen-Y bucket insertion, appended in enumeration order.
-  Paint order is Y-sorted rows with in-row enumeration order, and there is **no
-  depth test** `[03 §1]` `[03 R-RAST-01 §7]`.
+* **C13 Draw order.** Units reach the draw loops through world-Z plot-row
+  buckets, appended in ascending slot order. Original paints each row in that
+  order with **no scene depth test** `[03 §1]` `[03 R-RAST-01 §7]`.
+  Enhanced refines the order of units within a row (DESIGN_GPU_RENDERER §5.5).
 
 C2 (scroll magnitude) and C5 (the 30-entry keyboard ring and 24-record mouse
 ring) belong to `internal/camera` and `internal/input`; the interface design

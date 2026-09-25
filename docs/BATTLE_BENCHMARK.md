@@ -18,7 +18,7 @@ changes use the quick simulation benchmark instead of both windowed renderers.
 
 The benchmark uses **Expanded Confluence**, seed 7, at 1920×1080. Its shoreline
 anchor at (7296, 10592) frames sea, beach and forested land; 29.3% of the installed
-map's terrain samples lie below sea level. This is the sole battle fixture
+map's terrain samples lie below sea level. This is the default battle fixture
 (scene version 5), replacing the Great Divide scene. It requires this map;
 `--map` cannot substitute an unmeasured coast.
 
@@ -241,6 +241,33 @@ as well. `moving_units` counts surviving instances whose committed position chan
 the previous simulation tick and `damaged_units` counts
 complete units below maximum health. Missing counters in older reports are
 unknown, not zero.
+
+## Replaying the scale of a diagnostic capture
+
+`--benchmark-capture` stages the live units in an F11 diagnostic bundle on the
+same map, at their recorded positions and health, and copies simple move,
+patrol, attack and follow orders. Factory build queues are reissued through the
+ordinary construction API. The benchmark records the source capture ID, tick,
+unit-file SHA-256, staged counts and omitted order count in `frames.json`.
+Supply the Survival player count and the captured viewport explicitly. For
+example, the Moon Quartet wave-13 capture can be measured with:
+
+```
+tools/battle-bench --battle-benchmark=/tmp/survival-capture-modern \
+  --benchmark-capture=/path/to/F11-diagnostic-directory \
+  --survival --survival-buddies=2 --map='Moon Quartet' \
+  --shot-size=1280x827 --renderer=modern --benchmark-tps=60 \
+  --benchmark-pre-ticks=0 --benchmark-frames=600 --seed=1893983080
+```
+
+The diagnostic bundle is a snapshot, not a save. The benchmark creates fresh
+path, COB, AI, economy, visibility and effect state, and begins with the normal
+Survival starting units in addition to the captured units. Orders that cannot
+be safely reissued are counted as omitted. Its two-second renderer warmup lets
+the battle evolve before measurement. Compare its unit, in-view and renderer
+counters with the original capture before attributing a performance difference
+to the unit count. It also bypasses the menu and interactive catch-up scheduler,
+so it cannot reproduce costs retained by the menu or a live input sequence.
 
 - `Step`: host viewer step, including simulation and publication. In version 2
   this is zero on nonstep draws; the report computes its statistics only from

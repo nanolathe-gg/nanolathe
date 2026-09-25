@@ -597,6 +597,27 @@ Lighting, glow and antialiasing are no longer deferred: model antialiasing is
 with its own section, its own switch (§30) and its own verification. The
 classic executor composes identical pixels whatever any of them says.
 
+### 5.5 Enhanced unit overlap order
+
+Retail and Original draw units in 16-pixel world-Z rows, with ascending slot
+order inside a row `[03 R-RAST-01 §7]`. Two overlapping units can reverse
+which one covers the other when just one crosses a row boundary, even if their
+front-to-back positions never reverse. Enhanced keeps the same row admission,
+grounded/airborne passes, feature tail, and per-subject height planes, but
+orders units within each row by their full 16.16 world Z, then by slot on an
+exact tie. Adjacent rows already have that Z order, so an unrelated row
+boundary cannot reverse an overlapping pair. `RecordModernFrame` selects
+this order while recording the modern list. Classic composition retains the
+retail order even in a two-renderer comparison capture where Enhanced art is
+enabled for the modern half. This is a presentation policy only:
+it does not change occupancy, collision, selection, RNG, or the simulation
+frame. Units that genuinely pass one another in Z can still exchange visual
+priority. The Classic list preserves retail's slot tie.
+
+The boundary fixture draws the same overlapping pair just before and after a
+plot-row edge in both executors. The enhanced bucket check also holds equal-Z
+slot ties, feature order, repeated walks, and warm-frame allocation behavior.
+
 ## 6. Verification
 
 Three independent gates replace a single tolerance gate:
