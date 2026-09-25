@@ -9,7 +9,8 @@ lock, so the two never run at once.
 Run from a worktree with the retail installation available. The wrapper bounds
 Go runtime workers and build jobs to two, honoring `GOMAXPROCS` and
 `NANOLATHE_TEST_P`. Compilation and native benchmark execution each take the
-same host lock used by verification gates across worktrees. Match the runtime
+host lock exclusively, so they wait for running verification gates and gates
+wait for them ([ARCHITECTURE §6](ARCHITECTURE.md#6-verification)). Match the runtime
 worker setting as well as scene metadata when comparing runs. The existing
 180-frame measurement is already six seconds at 30 draws/s; retain its warm-up
 and census rather than shortening it for every change. Authoritative-tick-only

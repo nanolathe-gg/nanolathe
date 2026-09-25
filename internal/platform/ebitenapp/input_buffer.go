@@ -36,6 +36,7 @@ func (b *hostInputBuffer) add(sample sampledInput) {
 	p.panX += sample.panX
 	p.panY += sample.panY
 	p.pinches = append(p.pinches, sample.pinches...)
+	p.dropped = append(p.dropped, sample.dropped...)
 
 	// Filter each character batch with the modifiers that accompanied it.
 	// A later Alt/Cmd chord must not suppress earlier ordinary text, nor may

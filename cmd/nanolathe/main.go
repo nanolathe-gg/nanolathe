@@ -53,7 +53,7 @@ func mainOptions(args []string, out io.Writer) (Options, int, bool) {
 
 // runOptions executes a parsed command line and returns the process exit code.
 func runOptions(opts Options, out, errOut *os.File) int {
-	if err := run(opts, out); err != nil {
+	if err := run(opts, out, errOut); err != nil {
 		if errors.Is(err, errHeadlessTickLimit) {
 			return 2
 		}
@@ -80,7 +80,31 @@ func seedsFor(opts Options) (sim, crt uint32) {
 	return uint32(now.UnixNano()), uint32(now.Unix())
 }
 
-func run(opts Options, out *os.File) error {
+// checkInstall is --check-install: it validates the content a start would
+// mount. The saved mod never stops a start (docs/DESIGN_MODS_MUTATORS.md
+// §4.3 "A missing mod at start"), so a broken or missing saved mod is checked
+// the way the start treats it: the base install is validated without it, and
+// the mod is reported as a warning on errOut rather than as a failure. A mod
+// named by --mod that fails stays an error.
+func checkInstall(opts Options, errOut io.Writer) error {
+	content, err := openContent(opts)
+	var saved *savedModError
+	if errors.As(err, &saved) {
+		fmt.Fprintf(errOut, "nanolathe: warning: the saved mod %s does not start, so the game would start without it: %v\n", modSelectorOf(saved.mod.ID, saved.mod.Version), saved.err)
+		without := opts
+		without.Mod, without.ModSet = "none", true
+		content, err = openContent(without)
+	}
+	if err != nil {
+		return err
+	}
+	if content.modNotice != "" {
+		fmt.Fprintf(errOut, "nanolathe: warning: %s, so the game would start without it\n", content.modNotice)
+	}
+	return content.Close()
+}
+
+func run(opts Options, out, errOut *os.File) error {
 	// Installer diagnostics are host policy (DESIGN_CONTENT_VFS §5). Resolve
 	// and validate before the banner, benchmark lock, or game startup.
 	if opts.ListInstalls || opts.CheckInstall {
@@ -103,11 +127,7 @@ func run(opts Options, out *os.File) error {
 			}
 			return nil
 		}
-		content, err := openContent(opts)
-		if err != nil {
-			return err
-		}
-		return content.Close()
+		return checkInstall(opts, errOut)
 	}
 
 	if opts.InstallMod != "" {

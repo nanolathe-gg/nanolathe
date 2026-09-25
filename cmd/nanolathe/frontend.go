@@ -163,6 +163,10 @@ type gameShell struct {
 	// (docs/DESIGN_MODS_MUTATORS.md §4.3, §6).
 	modSetting     settings.ModSelection
 	mutatorSetting map[string]string
+	// controlsOffered is the saved list of content whose recommended
+	// settings have been offered, so each is offered once
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+	controlsOffered []string
 	// messages is the message-column ring configuration (`textlines`,
 	// `textscroll`, `screenchat`, `unitchattext`). The options family's
 	// interface page writes `textscroll`, `textlines` and `unitchattext`;
@@ -181,7 +185,8 @@ type gameShell struct {
 	// `LEFTCLICK` two-stage button writes [07 R-CAM-01 §5].
 	interfaceType int
 	// switchAlt is the persisted digit-key mux bit [07 R-CAM-01 §4]. It has
-	// no authored options-page gadget; the shell carries it into each battle.
+	// no authored options-page gadget; the Orders page adds Nanolathe's, and
+	// the shell carries it into each battle.
 	switchAlt bool
 	// clockVisible is the persisted stand-alone battle-clock bit. It has no
 	// options-page gadget; `+Clock` changes it during battle and the shell
@@ -363,7 +368,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 // mod remounts from.
 func runGameShell(launch, opts Options, cs *contentSet) error {
 	if opts.Map != "" {
-		return runBattleView(opts, cs)
+		return runBattleView(launch, opts, cs)
 	}
 
 	const winW, winH = 640, 480
@@ -420,22 +425,37 @@ func runGameShell(launch, opts Options, cs *contentSet) error {
 // cannot be built or bound on it, the start remounts with no mod and says why
 // on the main menu. A --mod that fails stays an error.
 func startWindowedShell(launch, opts Options, cs *contentSet, cl *client.Client) (*gameShell, error) {
-	shell, err := buildWindowedShell(opts, cs, cl)
-	if err == nil || !cs.savedMod {
-		return shell, err
+	shell, _, err := startWithSavedModFallback(launch, opts, cs, func(opts Options, cs *contentSet) (*gameShell, error) {
+		return buildWindowedShell(opts, cs, cl)
+	})
+	return shell, err
+}
+
+// startWithSavedModFallback runs start on cs. When start fails and the saved
+// choice, not --mod, selected cs's mod, the mod failed to build or bind, so
+// the start remounts with no mod (startWithoutSavedMod names the mod and the
+// reason) and runs start once more on that set
+// (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"). It returns
+// the set start succeeded on, which the caller owns; a replaced cs is closed.
+// launch is the command line as given.
+func startWithSavedModFallback[T any](launch, opts Options, cs *contentSet, start func(Options, *contentSet) (T, error)) (T, *contentSet, error) {
+	result, err := start(opts, cs)
+	if err == nil || !cs.savedMod || cs.mod == nil {
+		return result, cs, err
 	}
+	var zero T
 	fresh, err := startWithoutSavedMod(launch, *cs.mod, err)
 	if err != nil {
-		return nil, err
+		return zero, cs, err
 	}
 	_ = cs.Close()
 	opts.Root, opts.Roots, opts.ContentProfile = fresh.root, fresh.roots, fresh.profile
-	shell, err = buildWindowedShell(opts, fresh, cl)
+	result, err = start(opts, fresh)
 	if err != nil {
 		_ = fresh.Close()
-		return nil, err
+		return zero, nil, err
 	}
-	return shell, nil
+	return result, fresh, nil
 }
 
 // buildWindowedShell composes the menu shell on cs, reads the persisted
@@ -881,7 +901,14 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		return
 	}
 	pumpAudio(time.Now())
+	// A drop's outcome is taken before the download poll, so the Get more mods
+	// dialog never reports a drop install as its own download.
+	g.pollModDrop(cl)
 	g.pollModsFetch()
+	// A mod's recommended settings are offered once, over the bare main
+	// menu, however the mod came to be running (docs/DESIGN_MODS_MUTATORS.md
+	// §4.3).
+	g.pollControlsOffer()
 	if cl != nil && cl.IsFocused() && g.audioOwner != nil && g.audioOwner.Music != nil {
 		serviceMusic(g.audioOwner)
 	}

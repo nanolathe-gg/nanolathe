@@ -360,8 +360,14 @@ type Settings struct {
 	// Mod is the saved mod choice (docs/DESIGN_MODS_MUTATORS.md §4.3). It is
 	// only stored and round-tripped here; the mod library resolves it. The
 	// zero value selects no mod and is omitted from the file.
-	Mod     ModSelection `json:"mod,omitzero"`
-	Version int          `json:"version"`
+	Mod ModSelection `json:"mod,omitzero"`
+	// ControlsOffered lists the content whose recommended settings (a
+	// controls preset) the player has already been offered, one entry per mod
+	// id, or `profile:<name>` for a content profile mounted without a mod
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3). The offer is made once per entry,
+	// whatever the answer.
+	ControlsOffered []string `json:"controlsOffered,omitempty"`
+	Version         int      `json:"version"`
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
@@ -790,6 +796,7 @@ func (s *Settings) Normalize() {
 	if len(s.Mutators) == 0 {
 		s.Mutators = nil
 	}
+	s.ControlsOffered = normalizeOffered(s.ControlsOffered)
 	if s.Version == 0 {
 		s.Version = FileVersion
 	}
@@ -968,4 +975,34 @@ func (s Settings) SaveTo(path string) error {
 		return fmt.Errorf("settings: rename onto %s: %w", path, err)
 	}
 	return nil
+}
+
+// ControlsWereOffered reports whether the recommended settings for key have
+// already been offered (docs/DESIGN_MODS_MUTATORS.md §4.3).
+func ControlsWereOffered(offered []string, key string) bool {
+	for _, entry := range offered {
+		if entry == key {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkControlsOffered records that key's recommended settings were offered.
+// The list keeps its order and never holds an entry twice.
+func MarkControlsOffered(offered []string, key string) []string {
+	if key == "" || ControlsWereOffered(offered, key) {
+		return offered
+	}
+	return append(append([]string(nil), offered...), key)
+}
+
+// normalizeOffered drops empty and repeated entries from a hand-edited list,
+// and folds an empty list to absent.
+func normalizeOffered(offered []string) []string {
+	var out []string
+	for _, entry := range offered {
+		out = MarkControlsOffered(out, strings.TrimSpace(entry))
+	}
+	return out
 }

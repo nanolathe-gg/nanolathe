@@ -373,22 +373,37 @@ document; none is replaced by a plausible default [I9].
 ## 6. Verification
 
 **Verification cost.** During iteration, run `tools/check ./internal/changed-package`
-(or a focused `go test -run` with `GOMAXPROCS=2` and `-p 2`). Use the whole-tree
+(or a focused `go test -run` with `GOMAXPROCS=4`, `-p 4` and `GOFLAGS=-trimpath`,
+which reuses the gates' cache). Use the whole-tree
 `tools/check` and `tools/check-retail` once on the integrated landing candidate,
 then again after landing; do not repeat them after each edit or delegate the
 same whole-tree run to every reviewer. Reviewers run the affected contracts in
 the assigned worktree; the landing owner runs the integrated gates. Documentation
 changes need diff/link review and `go test ./internal/docs` when citations change.
 
-The scripts default to `GOMAXPROCS=2` and `NANOLATHE_TEST_P=2`. This bounds
+The gate scripts default to `GOMAXPROCS=4` and `NANOLATHE_TEST_P=4`; the
+benchmark wrappers pin their own documented two-worker budget. This bounds
 runtime/GC workers as well as package builds and nested Go commands; it is not
 a strict aggregate CPU quota. Explicit caller values override these defaults.
-`tools/host-run` uses Python 3's standard library on macOS/Linux to hold the
-same per-user advisory lock as native benchmarks. Whole gates, standalone lint,
-GPU benchmarks and benchmark compilation therefore wait rather than compete
-across worktrees. The inherited descriptor releases on process exit, including
-crashes; never delete the lock file. Already-running older scripts and raw
-commands do not participate. Keep the machine quiet when comparing timings.
+`tools/go-budget` also adds `-trimpath` to `GOFLAGS`, which keeps each
+worktree's absolute path out of Go's cache keys: identical packages share
+compiled output and cached test results across worktrees, so a merge from
+`main` rebuilds only the packages it changed. A test must therefore locate its
+fixtures relative to the package directory, never through `runtime.Caller`.
+
+`tools/host-run` (Python 3 standard library, macOS/Linux) coordinates two
+classes of work through per-user advisory locks. `tools/host-run --gate`, which
+`tools/check`, `tools/check-retail` and `tools/lint` take, claims one of
+`NANOLATHE_GATE_SLOTS` gate slots (default 3, four workers each on a
+twelve-core host) and holds the benchmark lock *shared*. Plain
+`tools/host-run`, used by the benchmark wrappers, and the native benchmark
+binaries hold the benchmark lock *exclusively*. Gates therefore run side by
+side, a benchmark waits for running gates to finish, and a gate waits only
+while a benchmark measures. Focused `go test` runs, probes and long research
+sweeps take **no** lock: wrapping them in `tools/host-run` stalls every gate on
+the host for their whole duration. Inherited descriptors release on process
+exit, including crashes; never delete the lock files. Keep the machine quiet
+when comparing timings.
 
 **Test tiers.** `tools/check` clears retail-asset variables and runs tracked-file
 `gofmt`, build, vet and cached short synthetic tests. Package arguments narrow

@@ -22,6 +22,7 @@ import (
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 
 	// The rule sets this build can select beyond the two reserved ones, so a
@@ -192,6 +193,14 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		mutatorArgs = append(mutatorArgs, text)
 		return nil
 	})
+	modSelector := "none"
+	flags.Func("mod", "installed mod to mount as the last content root, <id>, <id>@<version> or none (docs/DESIGN_MODS_MUTATORS.md §4.3); only this flag selects one, never the settings file, and nothing is fetched", func(text string) error {
+		if _, _, err := modlibrary.ParseSelector(text); err != nil {
+			return err
+		}
+		modSelector = text
+		return nil
+	})
 	flags.StringVar(&contentProfile, "content-profile", "", "content profile: "+strings.Join(contentprofiles.Names(), ", ")+", or the path of a profile JSON file; omitted detects it from the mounted content set (docs/DESIGN_CONTENT_VFS.md §5)")
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
 	var survivalPace string
@@ -229,19 +238,45 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	if request.SurvivalBuddies < 0 || request.SurvivalBuddies > session.SurvivalMaxBuddies {
 		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid survival buddies: logical path <command line>, providers searched [survival-buddies], expected 0..%d", session.SurvivalMaxBuddies)
 	}
-	unitLimitSet := false
+	unitLimitSet, gameplaySet := false, false
 	flags.Visit(func(f *flag.Flag) {
-		if f.Name == "unit-limit" {
+		switch f.Name {
+		case "unit-limit":
 			unitLimitSet = true
+		case "gameplay":
+			gameplaySet = true
 		}
 	})
+	mod, err := resolveHeadlessMod(modSelector, request.Roots)
+	if err != nil {
+		return request, reportPath, profiles, bench, err
+	}
+	if mod != nil {
+		// The simulation-cost benchmark measures a fixed retail scene.
+		if bench.OutputDir != "" {
+			return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: a mod is not mounted for the simulation-cost benchmark: logical path <command line>, providers searched [mod], expected no --mod with --sim-benchmark")
+		}
+		if gameplaySet {
+			if err := mod.checkGameplay(request.Gameplay); err != nil {
+				return request, reportPath, profiles, bench, err
+			}
+		}
+		request.Roots = mod.roots()
+		request.Root = request.Roots[0]
+		request.Mod = mod.selector()
+	}
 	if unitLimitSet && (unitLimit < settings.MinUnitLimit || unitLimit > settings.MaxUnitLimit) {
 		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid unit limit: logical path <command line>, providers searched [unit-limit], expected %d..%d", settings.MinUnitLimit, settings.MaxUnitLimit)
 	}
 	// Precedence is explicit flag, stored preference, then detection — the
 	// same order the unit limit follows. An unknown selector is rejected at
 	// the mount boundary, where the mounted providers can be named.
-	if contentProfile == "" {
+	// A selected mod names its own profile, or means detection when it names
+	// none; the saved preference never applies another content set's table
+	// to a mod (docs/DESIGN_MODS_MUTATORS.md §4.3, D12).
+	if contentProfile == "" && mod != nil {
+		contentProfile = mod.mod.ContentProfileSelector()
+	} else if contentProfile == "" {
 		stored, _ := settings.Load()
 		contentProfile = stored.ContentProfile
 	}

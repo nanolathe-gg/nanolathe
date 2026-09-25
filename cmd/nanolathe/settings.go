@@ -65,6 +65,7 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.setGameplay(startupGameplay(g.opts, s.Gameplay))
 	g.gameplayFeatures = s.GameplayFeatures
 	g.modSetting, g.mutatorSetting = s.Mod, s.Mutators
+	g.controlsOffered = s.ControlsOffered
 	g.builderOptions = s.BuilderOptions
 	g.fullscreen = s.Fullscreen
 	// The message-column ring configuration is the interface page's
@@ -204,6 +205,7 @@ func (g *gameShell) captureSettings() settings.Settings {
 		BuilderOptions:   g.builderOptions,
 		Mod:              g.modSetting,
 		Mutators:         g.mutatorSetting,
+		ControlsOffered:  g.controlsOffered,
 		// The interface page's three message controls write into this block;
 		// `screenchat` rides through unchanged [02 §3][07 R-CAM-01 §7].
 		Messages: g.messages,

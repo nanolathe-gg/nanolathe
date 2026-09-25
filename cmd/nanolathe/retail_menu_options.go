@@ -142,6 +142,7 @@ type retailOptionsSnapshot struct {
 	scrollSpeed         int
 	gameSpeed           int
 	interfaceType       int
+	switchAlt           bool
 	categories          [retailMusicCategoryCount]int
 }
 
@@ -605,6 +606,7 @@ func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 		scrollSpeed:         g.scrollSpeed,
 		gameSpeed:           g.gameSpeed,
 		interfaceType:       g.interfaceType,
+		switchAlt:           g.switchAlt,
 		categories:          retailDefaultCategories(),
 	}
 	if optionsState != nil {
@@ -627,6 +629,7 @@ func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.scrollSpeed = s.scrollSpeed
 	g.gameSpeed = s.gameSpeed
 	g.interfaceType = s.interfaceType
+	g.setSwitchAlt(s.switchAlt)
 	if optionsState != nil {
 		optionsState.categories = s.categories
 		g.applyRetailMusicMode()
@@ -1299,6 +1302,7 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 	case "builders":
 		g.setBuilderOptions(settings.DefaultBuilderOptions())
 		g.setSelectionPreferences(settings.DefaultPresentation())
+		g.setSwitchAlt(settings.DefaultSwitchAlt != 0)
 	case "nanolathe":
 		// The page also owns the glow bit, which lives in the display block
 		// (DESIGN_GPU_RENDERER §19.4, §30).
@@ -1372,6 +1376,7 @@ func (g *gameShell) undoRetailOptionsPage() {
 	case "builders":
 		g.setBuilderOptions(s.builderOptions)
 		g.setSelectionPreferences(s.presentation)
+		g.setSwitchAlt(s.switchAlt)
 	case "nanolathe":
 		g.setNanolathePreferences(s.presentation)
 		g.setGameplay(s.gameplay)
@@ -1481,7 +1486,7 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 func retailOptionsCue(key string) string {
 	switch key {
 	case "communityhud", "nhealth", "ncounters", "nreload", "nveteran", "ngroups", "nallies", "nweather",
-		"builders", "bghold", "bgman", "bgroam", "bphold", "bpman", "bproam", "ncycle", "ndouble",
+		"builders", "bghold", "bgman", "bgroam", "bphold", "bpman", "bproam", "ncycle", "ndouble", "nswitchalt",
 		"placement", "npreview", "nroverlay", "norderdrag", "nteamnano", "nmexsnap", "nwrecksnap", "nsnapmod",
 		"nanolathe", "ngameplay", "nrender", "nfps", "nsidebar",
 		"nglow", "nwater", "nlights", "nfinish", "nheat", "nmarks", "nnano",
@@ -1513,7 +1518,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	switch name {
 	case "NHEALTH", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
 		return g.activateCommunityHUDOption(name)
-	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE":
+	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE", "NSWITCHALT":
 		return g.activateBuilderOption(name)
 	case "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR":
 		return g.activateNanolatheOption(name)
@@ -1808,7 +1813,7 @@ func retailOptionsCueKey(name string) string {
 	switch name {
 	case "COMMUNITYHUD", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
 		return strings.ToLower(name)
-	case "BUILDERS", "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM":
+	case "BUILDERS", "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE", "NSWITCHALT":
 		return strings.ToLower(name)
 	case "NANOLATHE":
 		return "nanolathe"

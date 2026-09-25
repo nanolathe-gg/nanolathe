@@ -1008,16 +1008,22 @@ type SurvivalStatus struct {
 	Phase       uint8
 	SecondsLeft int32
 	Attackers   int32
+	Score       int64 // the team's Survival score so far
 }
 
-// SurvivalResult is the local player's Survival outcome.
+// SurvivalResult is the survivors' Survival outcome; the score and its
+// counters are the team's (docs/DESIGN_SURVIVAL.md §8).
 type SurvivalResult struct {
 	Waves      int32  `json:"waves_survived"`
 	Reached    int32  `json:"wave_reached"`
 	TicksAlive uint32 `json:"ticks_alive"`
+	Damage     int64  `json:"damage_value"`
+	WavePoints int64  `json:"wave_points"`
 	Destroyed  int64  `json:"value_destroyed"`
 	Lost       int64  `json:"value_lost"`
 	Score      int64  `json:"score"`
+	// SlotDamage is each survivor slot's share of Damage.
+	SlotDamage [PlayerRowSlots]int64 `json:"slot_damage"`
 }
 
 // Copy returns an independent copy, nil for nil.

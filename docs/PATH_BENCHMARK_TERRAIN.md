@@ -47,5 +47,5 @@ patrol boat's four-cell footprint from the cruiser's five-cell footprint.
 Set `NANOLATHE_PATH_BENCH_TERRAIN_SMOKE=1` to build every supported size and
 run 31 authoritative ticks. Add `NANOLATHE_PATH_BENCH_TERRAIN_FULL=1` to run
 their full fixed windows and all event callbacks. Run with the retail asset
-environment and `tools/host-run`, as in the fixture contract. Full benchmark
+environment, as in the fixture contract; a smoke takes no host lock. Full benchmark
 cost and outcome artifacts belong to the shared runner.

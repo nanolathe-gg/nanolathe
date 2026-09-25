@@ -1,6 +1,8 @@
 {
   "gameplay": {"table": "prota"},
   "name": "prota",
+  "controls": "community",
+  "minimumGameplay": "community-3.9",
   "detect": [
     "downloadP",
     "gamedatP",

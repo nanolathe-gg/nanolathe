@@ -145,6 +145,10 @@ type loadingState struct {
 
 	remaster atomic.Pointer[remasterProgress]
 
+	// unitLimitText is the selection line's resolved unit-limit field
+	// (docs/DESIGN_MODS_MUTATORS.md §8.3), filled on first draw.
+	unitLimitText string
+
 	// Renderer-side only.
 	remasterElapsed float64
 	flash           [retailLoadStages]int

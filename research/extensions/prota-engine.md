@@ -53,7 +53,10 @@ here. **Evidence provenance:** earlier binary-derived findings were retained as
 background under the [extension evidence policy](README.md#evidence-policy).
 On 22 September 2026 the user explicitly authorized disassembly of third-party
 patches for this remaining-gap investigation. The shipped-binary audit below
-uses that authorization for the identified ProTA 4.8 artifacts. Its raw traces
+uses that authorization for the identified ProTA 4.8 artifacts; the
+24 September 2026 follow-up (order-handler slot patches, player-11 feature
+drawing, victory cue, resurrection text, megamap, and the two former AI
+Unknowns) uses the same authorization and artifacts. Its raw traces
 remain in the private analysis corpus; only independently worded behavioral
 contracts enter this document. Current-source findings retain their own revision
 scope and are not substituted for historical binary behavior.
@@ -83,10 +86,10 @@ changelogs. Sources: `OTA 3.1 to ProTA 4.3 changelog.txt`,
   `DoubleClickMoveMegamap`, `UnderAttackFlash`, `MegamapFPSLimit`,
   `MegaMapConfig`, per-sensor minimum ring distances, `PlayerNDotColors`,
   `PlayerMarkerPcx`). The icon configuration lives in `Icon/iconcfg.ini`; the
-  release adds custom megamap icons. The shared renderer interface behind
-  these keys — held view key, eleven zoom steps, ring thresholds, icon
-  selection — is recorded in
-  [Shared draw-DLL interface](draw-engine-interface.md).
+  release adds custom megamap icons. The shipped 4.8 renderer's contract —
+  a view toggled by key release or entered/left by the wheel, with no zoom
+  steps, plus its input, rings, flash and colour rules — is recorded in
+  [Shared draw-DLL interface, ProTA 4.8 shipped megamap](draw-engine-interface.md#prota-48-shipped-megamap).
 - **Click snap.** `ClickSnap` snaps a reclaim command to the nearest reclaimable
   feature; release notes also name mex/geo snapping and an override key
   (`ClickSnapOverrideKey` in the DLL, configurable in the ctrl-f2 menu).
@@ -131,11 +134,16 @@ changelogs. Sources: `OTA 3.1 to ProTA 4.3 changelog.txt`,
   (Hard 4.0×, Medium 1.0×, Easy 0.5×; 4.8), AI nuke and anti-nuke build/fire
   behaviour and stockpile-queue limiting (4.5), scoreboard completeness,
   reclaim-sound fixes, the Necro "Resurrection failed" text, and the AI
-  builder-count threshold (4.5). The shipped executable matches the reference
-  image; the loader applies these changes at runtime. The established boundaries
-  and the separate current-source contract are recorded under
-  [AI and economy evidence audit](#ai-and-economy-evidence-audit); the release
-  notes alone do not supply missing arithmetic or ordering.
+  builder-count threshold (4.5); weapons acquiring targets during five kinds
+  of construction work and map-owned player-11 features drawn regardless of
+  LOS (4.6); and a victory sound for multiplayer/skirmish wins (4.7). The
+  shipped executable matches the reference image; the loader applies these
+  changes at runtime. The established AI boundaries and the separate
+  current-source contract are recorded under
+  [AI and economy evidence audit](#ai-and-economy-evidence-audit); the order,
+  drawing, sound and text patches under
+  [Shipped order, drawing, sound and text patches](#shipped-order-drawing-sound-and-text-patches).
+  The release notes alone do not supply missing arithmetic or ordering.
 - **Display and hosting defaults.** `ProTA.ini` documents engine defaults that
   differ from retail 3.1: unit limit 1500, pathfinding cycles 66650, effect
   limit 20480, unit model buffer 1280×1280, unit and weapon identifier limits
@@ -335,6 +343,21 @@ and its completion cap retain [06 §11.1]. The two mobile anti-nuke units
 `ARMSCAB` and `CORMABM` have CANBUILD sections but author `builder=0` and
 `BMCode=1`; this group-task patch does not establish generation for them.
 
+**Established — no shipped route generates mobile anti-nuke rounds for the
+computer player.** A compiled build-option list exists only for a definition
+that authors `builder` [02 R-CAT-01 §5], so `ARMSCAB` and `CORMABM` have none,
+whatever their CANBUILD sections say. In the reference executable the only
+computer-player caller of the product-submission helper — the helper that
+turns a chosen `MAKENUKE`/`MAKEANTI` product into `BuildWeapon` — is the
+resource/queue task above, and its product branch first requires a nonempty
+compiled list [08 R-AI-01 §2]. The loader redirects no other task to it, and
+none of the three shipped DLLs contains either product name, a CANBUILD
+reader, or another stockpile-queue hook. The 4.8 computer player therefore
+never queues rounds for these two units; any stock they hold comes from human
+orders. This is a bounded static negative over the shipped package, not a
+manual observation, and it does not describe the later source's mobile
+helper below.
+
 **Established — shipped target retention and firing boundary.** A separate
 loader patch modifies the ordinary rotating three-slot weapon-maintenance scan.
 It retains the sweep cadence and slot order, enabled/autonomous admission and
@@ -474,6 +497,198 @@ not change Nanolathe's rules. The existing
 gameplay-selection requirements remain in
 [DESIGN_GAMEPLAY_RULES §9](../../docs/DESIGN_GAMEPLAY_RULES.md#9-extending-the-existing-mechanism).
 
+### Shipped order, drawing, sound and text patches
+
+This audit covers the rest of the "`.exe` hacks" that the 4.5–4.7 release
+notes list, as the identified 4.8 loader and renderer implement them. It uses
+the same authorized static method and scope as the audit above. Each contract
+is stated as a change to the named retail contract. Anything not listed keeps
+that retail contract.
+
+#### Weapons acquire targets while working
+
+**Established — documented intent.** The 4.6 release note (kept in the 4.8
+package) lists five changes: weapons may acquire targets while reclaiming a
+unit, capturing a unit, repairing a unit, assisting ("assist-nanolating") a
+new unit and building a new unit.
+
+**Established — retail baseline.** Each weapon slot's control byte has an
+autonomy bit, and only slots with that bit set take part in autonomous
+acquisition and the retaliation offer [06 §3.2][04 R-ORD-01 §7]. Two order
+verbs write it. Retail calls them *release* and *inhibit*, and the names are
+misleading: *release* takes a slot away from autonomy, and *inhibit* gives it
+back and clears its target. Both skip a slot whose enabled bit is clear, or
+whose autonomy bit already has the requested value. When a verb does change a
+slot, it also clears a nonempty target pair and schedules `TargetCleared`
+[04 R-ORDER-02 §3]. Several ground work handlers call "release all three
+slots" (the all-slots form covers slots 0, 1 and 2, in that order) at a fixed
+point [04 R-ORD-01 §5]. The record destructor gives the slots back when the
+order is removed [04 R-ORD-01 §7], so in retail the builder's weapons are
+silent for the rest of the job.
+
+**Established — the shipped change.** The loader redirects exactly five of
+those all-slot *release* calls to the all-slot *inhibit* verb. The call site
+and its argument stay the same. The five sites are:
+
+| Handler | Retail moment of the replaced call [04 R-ORD-01 §5] |
+|---|---|
+| `MobileBuild` | phase 1, after the reach test and a legal placement check, before the site is prepared and the nanoframe created |
+| `HelpBuild` | phase 1, after the unreachable and already-complete exits, before `StartBuilding` |
+| `Capture` | phase 0, after the admission, caption and capture-timer steps, before the goal is installed |
+| `ReclaimUnit` | phase 0, inside the admission-pass arm, after the `Reclaiming` caption |
+| `RepairUnit` | phase 1, in the in-reach arm, before `StartBuilding` |
+
+At each site, every enabled slot not yet autonomous becomes autonomous. If
+its target pair was nonempty, the pair is cleared and `TargetCleared` is
+scheduled with the slot index. Slots that were already autonomous are left
+alone, target included. Normally all three slots are autonomous when a work
+order starts, so in practice the builder simply keeps its weapons for the
+whole job. The call is not a no-op, though: a slot that an earlier order still
+held would be handed back here. The rest of the pipeline is unchanged:
+autonomous acquisition still needs a complete, armed builder in the
+fire-at-will stance and the usual per-slot tests [06 §3.2], and the destructor
+still gives the slots back when the order ends.
+
+**Established — what stays retail.** The following work paths keep the
+all-slot *release*: `RepairUnitNoMove`, `VTOL_MobileBuild` [04 R-ORD-02 §2]
+and all five VTOL work twins [04 R-ORD-01 §7], whose shared preamble takes the
+slots (so construction aircraft still silence their weapons while working).
+The factory `BuildingBuild` machine calls neither verb, in retail or in 4.8.
+**Feature reclaim is not included:** retail `Reclaim` (feature) and
+`Resurrect` never touch the slot verbs [04 R-ORD-01 §5], so their weapons
+were already autonomous. The pump's unconditional three-slot target clear for
+records that are satisfied with the `0x10000` gate bit is unchanged
+[04 R-ORDER-02 §2].
+
+**Established — two related weapon-slot patches in the same list.** The
+loader also changes two attack handlers. The same edits appear in
+TA: Escalation's patched executable. None of the bundled changelogs (3.1
+through 4.8) lists them; only the loader's embedded patch definitions
+describe them.
+
+- *`Attack_Chase` phase 1* (the shot gate admits slot `p1` [04 R-ORD-01 §3]):
+  retail takes slots 0 and 2 before binding slot `p1`. The patch takes only
+  one slot: slot 2 when `p1` is greater than 1 (signed), otherwise slot 0. The
+  other slots stay autonomous while the unit fires at its ordered target.
+  Phase 3's retail "take slots 0 and 2" is unchanged.
+- *`Suppress` phase 1 with `p1 = 2`* (fire at a position with the third
+  weapon, the D-gun path): retail takes all three slots before binding slot 2
+  to the goal. The patch takes only slot 2, so slots 0 and 1 keep acquiring.
+  The `p1 ≠ 2` branch (take slots 0 and 1, bind both) is unchanged.
+
+**Established — comparison with TA: Escalation.** Escalation's patched
+executable makes the same swap only at the `MobileBuild` site
+([TA: Escalation, "Weapons stay active while building"](taesc-engine.md)).
+Its bytes at the `HelpBuild`, `Capture`, `ReclaimUnit` and `RepairUnit` sites
+match the reference executable, and its `Attack_Chase` and `Suppress` sites
+match the ProTA edits above. The only change common to both packages is
+therefore the build-a-new-unit case. The Escalation doc's "switches them on"
+wording is correct in effect: the replacement verb is the one that gives
+slots back to autonomy.
+
+#### Map-owned features drawn without line of sight
+
+**Established — retail baseline.** The feature stamp service writes a
+four-bit *placer nibble* into each anchor cell. Terrain-file, mission-file,
+successor, reproduction and reload stamps write 10; a corpse writes its owner's
+slot [05 R-FEAT-01 §3]. The composer's two feature passes draw a feature when
+its definition lacks `nodrawundergray`, when the placer nibble equals the
+local player's slot, or when the two-corner LOS test passes. There is no
+separate explored-state term [03 §5.1.5][03 R-RAST-01 §6]. Four section names
+(`DragonsTeeth`, `DragonsTeeth_Core`, `Fortification`, `Fortification_Core`)
+force `nodrawundergray` on [02 "Feature record"]. Retail map-owned walls
+therefore needed current LOS to be drawn.
+
+**Established — loader half.** The loader changes the placer argument of the
+battle-entry terrain-file stamping from 10 to 11. This covers both terrain
+attribute layouts and the void pass; a void stamp never writes the nibble.
+Mission-file `[features]` placement, burnt successors, reproduction, save
+reload and corpse stamping are unchanged. A player slot is never 11, so this
+edit alone changes no drawing decision.
+
+**Established — renderer half.** The shipped `tdraw.dll` installs one hook at
+startup, with no preference gate: `ProTA.ini` has no such key, and the
+source's compile-time `VISIBLE_MAP_DTS` switch
+([Community patch engine behavior](community-patch-engine.md) CP-ENV-3) is
+built in. The hook sits on the **second (tall-feature) pass only**, after the
+`nodrawundergray` and placer-equals-local-slot tests have failed and before
+the LOS test. A placer nibble of 11 draws the feature without that LOS test.
+The renderer does not write owner 11 itself: the three owner-rewrite
+addresses are present in its data but never used. The loader edit above
+supplies them, which is why CP-ENV-3's "inert" finding does not apply to the
+shipped package.
+
+**Established — resulting contract.** A feature is drawn regardless of LOS
+when all of these hold: it came from the map's terrain file; its definition
+has `height` of 10 or more (the tall-feature pass); and its definition has
+`nodrawundergray`, authored or forced. Features without `nodrawundergray`
+already drew unconditionally. ProTA's `DragonsTeeth`, `DragonsTeeth_Core`
+(height 20) and `Fortification` (height 55) are forced. `FloatingTeeth`
+(height 75) authors the flag. Short `nodrawundergray` features (height
+below 10) keep the retail first-pass gate, so they still need LOS. Mission-placed walls, and
+walls that players built or wrecked (whose corpses carry the owner's slot),
+are unaffected. The feature is still composed under the fog overlay, which
+keeps unexplored cells dark ([03 §5.1.5]). What changes is that map walls in
+explored cells outside current LOS are no longer skipped.
+
+**Established — no effect beyond drawing.** No simulation reader compares the
+placer nibble. Retail's only readers are the two composer gates and the save
+file's `PlayerFeatures` blob [08 R-SAVE-02 §12], which packs and restores the
+nibble; this is the bounded census of [03 §3.3]. A 4.8 save made in battle therefore stores 11 for these cells and
+restores it on load. Targeting, pathing, reclaim and the economy never read
+it. The retail minimap contacts pass never draws features
+[03 §3.9], and the 4.8 megamap has no feature layer
+([Shared draw-DLL interface](draw-engine-interface.md#prota-48-shipped-megamap)),
+so neither map surface shows these features.
+
+#### Victory cue on multiplayer and skirmish wins
+
+**Established — mechanism.** The shipped renderer hooks the battle frame
+composer where it is about to draw the in-game victory title (`igvictory`).
+That branch is reached only when the end latch has set the won-path title bit
+and the composer's existing gate before both end titles passes
+[07 §11][08 R-TRIG-01 §6]. The hook is installed at startup with no
+preference gate. It keeps one process-wide "last call" game tick, zero at
+start. Each time the title branch runs, it compares the current global tick
+with that value. If the current tick is lower, or more than 300 ticks later,
+it plays the sound alias `Victory Condition` through the same retail
+sound-alias routine and no-broadcast argument that the campaign victory
+trigger uses [08 R-TRIG-01 §8]. It then stores the current tick. No packet is
+sent.
+
+**Established — asset.** ProTA's `gamedatP/ALLSOUND.TDF` maps
+`[Victory Condition]` to `sound=victory2`, the same alias and stock sample as
+retail. The release note calls it the "Mission Complete" sound. **Supported
+inference:** the note is describing how the `victory2` sample sounds, not
+naming a different asset; nothing in the DLL names another sound.
+
+**Established — conditions and timing.** The cue plays locally for the
+viewer whose session latched *won*. A defeated or resigned client never
+reaches the victory-title branch. Nothing checks the session kind, so the hook
+also runs for campaign wins. There it adds one cue when the title first
+appears, on top of the per-condition `Victory Condition` cues that retail
+plays when each victory condition is satisfied [08 R-TRIG-01 §8]. While the
+title is on screen, the stored tick is refreshed every frame, so the cue does
+not repeat. Two edge cases follow from the stored value. First, a win whose
+title first appears at global tick 300 or earlier in the first battle of a
+process plays no cue. Second, a later battle plays the cue only when its
+title tick is below the stored value or more than 300 ticks above it. These
+edges are properties of the shipped hook, not of retail.
+
+#### Resurrection failure text
+
+**Established — retail baseline.** `Resurrect` has two failure captions.
+When the feature lookup fails it shows status 7 `Resurrection failed`. When
+phase 3 cannot resolve the corpse name to a unit definition, it shows status
+7 `Ressurection failed` (retail's spelling) [04 R-ORD-01 §5]. Both strings
+are in the reference executable.
+
+**Established — shipped change.** The loader repoints the phase-3 caption to
+the executable's existing correctly spelled string. In 4.8 both failure arms
+therefore display `Resurrection failed`, with the same status code 7 and the
+same control flow. The misspelled string is left unused. No new text or
+localization is involved.
+
 ## Authored package, interface and single-player coverage
 
 **Established — archive namespace.** The identified `ProTA.gp3` uses
@@ -499,8 +714,18 @@ gadgets into counted factory queues while preserving empty CANBUILD membership.
 No inferred alias or GUI-to-AI membership conversion is needed for that path.
 Sources: the archive's unit definitions, physical GUI pages and
 `gamedatP/SIDEDATA.TDF`; `TestRetailProTADirectionalCoreShipyardClicks` and
-`TestProTA48PackageAcceptance` exercise the Nanolathe boundary. Whether the
-historical patch supplies different AI membership remains **Unknown**.
+`TestProTA48PackageAcceptance` exercise the Nanolathe boundary.
+
+**Established — the shipped package adds no AI membership for these yards.**
+The loader's patch list has no build-list or shipyard entry. The renderer's
+only hooks inside the catalog compiler enlarge a build-list allocation (a
+memory-safety fix) and signal the end of catalog loading so that the
+extension can rebuild its selection category masks; neither renames or
+aliases a CANBUILD section. No shipped DLL contains a CANBUILD or `SIDEDATA`
+reader. Retail exact-name membership therefore stands: `CORSYE` and `CORSYW`
+have empty compiled build lists, so a computer player never chooses a product
+from them, while their GUI gadgets still work for humans as described above.
+Nanolathe's empty membership matches the shipped package.
 
 **Established — authored interface.** `SIDEDATA` orders Arm then Core, with
 commanders `ARMCOM` and `CORCOM`, interface GAFs `ARMINT` and `CORINT`, and
@@ -568,6 +793,11 @@ not reported passing tests or new gameplay authorization:
 - Exercise campaign and skirmish AI separately, including low-energy
   shutdown, stockpiles and the named difficulty resource factors; do not infer
   the patched AI behavior from successful catalog loading.
+- Give a fire-at-will armed constructor each of the five patched work orders
+  with an enemy in range, then the same with a construction aircraft and with
+  `RepairUnitNoMove`; only the five ground cases should fire while working.
+  Place map-authored and mission-authored walls outside LOS and compare which
+  are drawn.
 - Verify music configuration with an explicitly identified backend and
   user-supplied tracks. A silent launch without that backend evidence is not
   evidence of music compatibility.
@@ -688,21 +918,14 @@ proxy binary instead.
 
 ## Unknown
 
-- **Unknown — regular Core east/west shipyard AI membership.** Does the
-  historical patch make `CORSYE`/`CORSYW` consume the differently named
-  `CORSYNE`/`CORSYNW` CANBUILD lists? Human GUI activation does not settle this:
-  its product gadgets are an independent source. Primary ProTA documentation,
-  appropriately licensed source, or a bounded manual observation of AI product
-  choices from those yards in ProTA 4.8 would establish any extra membership
-  rule. Nanolathe leaves CANBUILD membership empty rather than inventing one.
-- **Unknown — mobile anti-nuke generation.** The shipped loader's audited
-  stockpile task reaches the six stationary producers, not `ARMSCAB` or
-  `CORMABM`. Whether another shipped route services those mobile units needs a
-  broader recorder/caller trace or bounded observation. Their authored CANBUILD
-  sections and the later source's mobile helper do not establish that route.
-  The income, appliance, construction-threshold and stationary-stockpile patch
-  boundaries are now established in
-  [AI and economy evidence audit](#ai-and-economy-evidence-audit).
+- **Settled (2026-09-24) — regular Core east/west shipyard AI membership and
+  mobile anti-nuke generation.** Both former Unknowns are closed as bounded
+  static negatives over the shipped package. See the directional-shipyard
+  paragraph under
+  [Authored package, interface and single-player coverage](#authored-package-interface-and-single-player-coverage)
+  and "no shipped route generates mobile anti-nuke rounds" under
+  [AI and economy evidence audit](#ai-and-economy-evidence-audit). A manual 4.8
+  observation would only corroborate them.
 - **Unknown — engine-family provenance (settled for the current line).** The
   relationship between `tdraw.dll`, TA: Escalation's `TAESC.dll` and TA Zero's
   `zdraw.dll` is established for the current generation: one MIT-licensed

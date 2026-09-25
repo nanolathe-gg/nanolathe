@@ -3142,8 +3142,15 @@ The path may name the exact INI or a package/config directory containing
 exactly one case-insensitive `iconcfg.ini` at its root, `Icon/`, or `ZIcon/`.
 No match or multiple matches reports the searched directory and retains the
 generated catalog; an exact file path always remains the user's selection.
-Empty keeps the generated
-catalog above. `UseDefaultIcon=true`, including its source default when the key
+Empty discovers the running content's own configuration, silently: with a mod
+from the Mods & Mutators library (DESIGN_MODS_MUTATORS §4) the mod's directory
+is searched, and with a manual `--root` stack its roots are searched from the
+last to the first, the order in which they win. The first root holding exactly
+one configuration in the recognised places supplies it; a root holding none is
+passed over without a diagnostic, and a root holding several reports the
+ambiguity and keeps the generated catalog rather than trying the next root.
+The base install alone is never searched. When nothing is found the generated
+catalog above is kept. `UseDefaultIcon=true`, including its source default when the key
 is absent, also keeps that catalog and does not open any PCX named by `[Icon]`.
 An unreadable INI, malformed PCX or atlas outside the host bound reports the
 config and art paths and falls back to the complete generated catalog; a partly

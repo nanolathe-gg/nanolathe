@@ -74,6 +74,10 @@ type Report struct {
 	// "buildCost=0.5,buildSpeed=2"; empty for the unmutated catalog
 	// (docs/DESIGN_MODS_MUTATORS.md §6.6).
 	Mutators string `json:"mutators"`
+	// Mod is the mounted installed mod, `<id>@<version>`, or `none`
+	// (docs/DESIGN_MODS_MUTATORS.md §6.6), spelled as the battle benchmark's
+	// scene metadata spells it.
+	Mod string `json:"mod"`
 	// ContentProfile is the resolved content profile: `retail` for an
 	// unmodified install, otherwise the profile whose markers the mounted
 	// overlay presented or the one the host selected explicitly
@@ -191,6 +195,7 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 		Gameplay:         sess.Gameplay.Normalize(),
 		Rules:            sess.Rules.Name,
 		Mutators:         sess.Mutators.String(),
+		Mod:              reportedMod(request.Mod),
 		Community:        sess.Community,
 		EntryCommunity:   sess.EntryCommunity,
 		CommunityDigest:  sess.Community.Digest(),
@@ -264,3 +269,11 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 // descriptorName is the small indirection the observer uses so the attack
 // classification and the intent census read the same descriptor table.
 func descriptorName(id orders.ID) string { return orders.DescriptorFor(id).Name }
+
+// reportedMod spells the report's mod field: the mounted mod, or `none`.
+func reportedMod(mod string) string {
+	if mod == "" {
+		return "none"
+	}
+	return mod
+}

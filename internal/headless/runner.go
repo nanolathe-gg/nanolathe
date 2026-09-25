@@ -132,6 +132,10 @@ type Request struct {
 	// Mutators are the battle's global multipliers; the report prints the
 	// canonical set the session bound (docs/DESIGN_MODS_MUTATORS.md §6.6).
 	Mutators content.Mutators
+	// Mod names the installed mod mounted as the last of Roots,
+	// `<id>@<version>`, for the report; empty when none is mounted. The host
+	// resolves and mounts it; the runner only reports it (§6.6).
+	Mod string
 }
 
 // Run mounts a retail install and enters the ordinary session composition and

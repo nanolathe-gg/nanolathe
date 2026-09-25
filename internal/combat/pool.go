@@ -304,6 +304,11 @@ type Service struct {
 	// DamageActivity observes accepted non-heal intake after reaction and
 	// provenance writes, before the paralyzer branch [03 R-AUD-01 §5].
 	DamageActivity func(victim, attacker *units.Unit, tick uint32) `json:"-"`
+	// HealthLost observes the health an accepted damage packet removed from a
+	// live unit, after the write: the victim, the packet's attacker record (nil
+	// when it named none) and the health lost, never more than the victim had.
+	// Scenario scoring reads it (DESIGN_SURVIVAL §8); it changes nothing.
+	HealthLost func(victim, attacker *units.Unit, lost int32) `json:"-"`
 
 	// Features is the feature runtime the area walk of [06 §9.3] hands its
 	// accepted feature candidates to. Every cell inside a blast offers one, and

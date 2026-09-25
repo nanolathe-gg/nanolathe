@@ -42,12 +42,13 @@ The smoke checks run 32 traffic or 40 lifecycle phase cycles per case in both
 modes and assert that the intended initial order is present. With
 `NANOLATHE_PATH_BENCH_SMOKE_FULL=1`, they include every supported size, run
 the first sustained-wave event through tick 152, and run stop/reverse through
-tick 52. Use the shared host lock and reference install:
+tick 52. A smoke measures nothing, so it takes no host lock; use the reference
+install:
 
 ```sh
 NANOLATHE_RETAIL_ASSETS=/Users/daniel/TotalAnnihilation \
 GOMAXPROCS=2 NANOLATHE_PATH_BENCH_SMOKE=1 \
-tools/host-run go test -p 2 -tags 'pathbench retail' ./internal/session \
+go test -p 2 -tags 'pathbench retail' ./internal/session \
   -run '^TestPathBench(Traffic|Lifecycle)Smoke$' -count=1
 ```
 

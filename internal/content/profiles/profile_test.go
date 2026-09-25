@@ -207,3 +207,35 @@ func TestAuthoredProfileRejectsShapesNoLoaderCouldUse(t *testing.T) {
 		})
 	}
 }
+
+// The optional recommendations are the fallback for a mod whose metadata
+// names none (docs/DESIGN_MODS_MUTATORS.md §4.3); only ProTA ships them, and
+// an unknown value is refused like any other malformed profile.
+func TestProfileRecommendations(t *testing.T) {
+	for _, name := range profiles.Names() {
+		profile, err := profiles.Lookup(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantControls, wantMinimum := "", ""
+		if name == "prota" {
+			wantControls, wantMinimum = "community", "community-3.9"
+		}
+		if profile.Controls != wantControls || profile.MinimumGameplay != wantMinimum {
+			t.Errorf("%s recommends controls %q, minimum %q", name, profile.Controls, profile.MinimumGameplay)
+		}
+	}
+	dir := t.TempDir()
+	for field, body := range map[string]string{
+		"controls":        `{"name":"x","controls":"fancy"}`,
+		"minimumGameplay": `{"name":"x","minimumGameplay":"strict"}`,
+	} {
+		path := filepath.Join(dir, field+".json")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := profiles.Lookup(path); err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("an invalid %s = %v, want it refused and named", field, err)
+		}
+	}
+}

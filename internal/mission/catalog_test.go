@@ -3,7 +3,6 @@ package mission
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -333,8 +332,9 @@ func TestDiscoverFromTestdata(t *testing.T) {
 	// Walk the real testdata/camps/*.tdf via VFS mount to ensure the fixture
 	// files on disk are correctly discovered. This satisfies the requirement that
 	// "fixture TDF bytes you author under internal/mission/testdata/..."
-	_, filename, _, _ := runtime.Caller(0)
-	testdataDir := filepath.Join(filepath.Dir(filename), "testdata")
+	// go test runs in the package directory; the relative path also holds
+	// under -trimpath, where runtime.Caller reports a module path.
+	testdataDir := "testdata"
 	if _, err := os.Stat(testdataDir); err != nil {
 		t.Skipf("testdata not found at %q: %v", testdataDir, err)
 	}

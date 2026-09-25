@@ -1303,9 +1303,13 @@ plain digit pages and Alt+digit recalls, and with the option set the two swap.
 `SwitchAlt` is a persisted low-bit preference: an absent value is clear, the
 frontend shell carries its normalized bit into battle, and a direct battle
 captures it at install time. Digit handling reads that captured bit and never
-opens settings on a keypress. The option has no authored options-page gadget.
-Partial I10 implements its local chat command through the shared TALK command
-path (§3.9).
+opens settings on a keypress. The option has no authored options-page gadget;
+Nanolathe's Orders page adds one, *Digits: Pages / Groups*, beside Idle keys
+and 2-click. It shares that page's options transaction (Undo, Restore Defaults
+to the clear retail bit, Cancel, and OK persisting it), and a change made in
+battle also updates the running battle's captured bit. Partial I10 implements
+its local chat command through the shared TALK command path (§3.9), which
+keeps working beside the control.
 The page number lives in unit-flag bits 23–25 with bit 22 marking paged, guarded
 by the builder's page count. Generated menu records author `PAGE` and `BUTTON`
 explicitly, and the generated `<unit>N.GUI` pages determine page existence and

@@ -85,6 +85,11 @@ func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedS
 		Mission:        opts.Mission,
 		Difficulty:     opts.Difficulty,
 	}
+	if cs != nil && cs.mod != nil {
+		// The report names the mounted mod as the displayless command's does
+		// (docs/DESIGN_MODS_MUTATORS.md §6.6).
+		reportRequest.Mod = cs.modSelector()
+	}
 	if cs == nil || cs.fs == nil {
 		return freshBattleRequest{}, reportRequest, unavailableBattleContentError()
 	}

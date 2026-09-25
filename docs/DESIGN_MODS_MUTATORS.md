@@ -8,12 +8,13 @@ are selected and locked for a battle; and how a Nanolathe save records all of
 it so that loading the save restores the same match.
 
 **Status: implemented (2026-09-24)** apart from the follow-ups in §13 unit 9.
-The mutators, the mod library, the remote catalogue client and the hosted
-catalogue, the in-process reload, the screens, the save sidecar and mod
-switching on load are in place (§13 units 1–8). A load that needs a mod which
-is not installed is refused with a message naming it and saying whether
-*Get more mods* offers it; the load does not start the download itself
-(§7.3 step 2). The maintainer's decisions of 2026-09-23 are in §2. The
+The mutators, the mod library with drop-to-install, the remote catalogue
+client and the hosted catalogue, the in-process reload, the screens, the save
+sidecar and mod switching on load are in place (§13 units 1–8), and the
+displayless command mounts an installed mod with `--mod`. A load that needs a
+mod which is not installed is refused with a message naming it and saying
+whether *Get more mods* offers it; the load does not start the download
+itself (§7.3 step 2). The maintainer's decisions of 2026-09-23 are in §2. The
 proposals this document made were confirmed the same day and are listed in
 §12.
 
@@ -77,7 +78,10 @@ To keep the two apart, code for this feature never uses the bare identifier
 | D14 | The Mods & Mutators screen shows the installed mods and the mutators side by side. Mods that can be downloaded appear only in a separate *Get more mods* dialog (§8.2). |
 
 D9–D13 were proposed in review and accepted with the rest of the design
-direction. D14 is the maintainer's layout for the screen.
+direction. D14 is the maintainer's layout for the screen. D13's offer was
+extended on 2026-09-24: a mod that starts by any other route is offered its
+preset once on the main menu, and the preset became the mod's full recommended
+settings (§4.3).
 
 ## 3. The match selection
 
@@ -145,6 +149,12 @@ mod:
   the mod root. Omitted means detection, exactly as today.
 - `minimumGameplay` is a reserved word; omitted means none.
 - `controls` names a controls preset (§4.3); omitted means none.
+- A mod that omits `minimumGameplay` or `controls` takes the value its
+  resolved content profile names, if any: shipped and user profiles carry the
+  same two optional keys (`internal/content/profiles`; the shipped `prota`
+  profile names `community` and `community-3.9`). The metadata always wins.
+  This is what gives a metadata-less local package (§4.5) its content set's
+  recommendations.
 - `requires` lists logical paths that the **base** install must resolve, for
   example a map from an expansion the mod overlays. A mod whose requirements
   fail is listed but cannot be selected, and the screen names the missing
@@ -157,8 +167,9 @@ mod:
   choice, written by the Mods & Mutators screen. The flag wins over the
   setting. `--shot`, `--film`, `--battle-benchmark` and `--headless` never
   read the setting, so a capture or benchmark reproduces from its command
-  line; `--mod` still applies to them. A missing version selects the newest
-  installed version.
+  line; `--mod` still applies to them. The displayless command
+  (`nanolathe-headless`) takes `--mod` alone, never the setting, and never
+  fetches. A missing version selects the newest installed version.
 - **Roots.** The base install is resolved as today (discovery,
   `$NANOLATHE_TA_ROOT` or one `--root`). The selected mod's directory is
   appended as the last root, so it wins over the base
@@ -174,7 +185,8 @@ mod:
   (D12). A mod that names none, such as a local package (§4.5), is detected;
   the saved preference never applies to a mod. With no mod, today's
   precedence (flag, saved preference, detection) is unchanged.
-- **Gameplay minimum.** While a mod with `minimumGameplay` is selected, the
+- **Gameplay minimum.** While a mod with `minimumGameplay` (its own or its
+  content profile's, §4.2) is selected, the
   options control skips the reserved sets below it in the derivation order
   Strict 3.1 → Community 3.9 → Modern. A registered set qualifies when its base
   does (`session.BaseModeOf`). If the current selection is below the minimum
@@ -186,20 +198,71 @@ mod:
   never a hidden selector ([DESIGN_GAMEPLAY_RULES §9](DESIGN_GAMEPLAY_RULES.md#9-extending-the-existing-mechanism)
   "Content profiles are a separate input").
 - **Controls preset.** A preset is a named assignment of existing host
-  options. `community` enables the Community host options in the settings
-  `presentation` block (`communitySelection`, `doubleClickSelection` and the
-  Community HUD options;
-  [DESIGN_COMMUNITY_PATCH §7](DESIGN_COMMUNITY_PATCH.md#7-host-and-presentation-features-out-of-the-profile));
-  `retail` disables them. When the player switches to a mod that names a
-  preset, the Mods & Mutators screen shows *Use ProTA controls*, checked by
-  default. Applying it writes those options once. Later changes by the player stick,
-  and switching back does not restore anything automatically.
+  options: a mod's recommended settings. Each row writes a value the player
+  can already change on an options page or with a chat command; a preset adds
+  no behaviour and no setting. `community` is ProTA's recommended settings:
+  the Community host options
+  ([DESIGN_COMMUNITY_PATCH §7](DESIGN_COMMUNITY_PATCH.md#7-host-and-presentation-features-out-of-the-profile))
+  plus the preferences ProTA 4.8's `ProTA.ini` pins through its `[REG]`
+  block ([community patch engine §4.1](../research/extensions/community-patch-engine.md#41-key-inventory)).
+  `retail` writes each row's retail default. The rows are defined once, in
+  `controlsPresetRows` (`cmd/nanolathe/controls_preset.go`):
+
+  | Setting | Where the player changes it | `community` | `retail` |
+  |---|---|---|---|
+  | `presentation.communitySelection` (idle unit keys) | Options → Orders | 1 | 0 |
+  | `presentation.doubleClickSelection` | Options → Orders | 1 | 0 |
+  | `presentation.queuedOrderDrag` | Options → Placement | 1 | 0 |
+  | `switchAlt` (digits recall groups) | Options → Orders, `+switchalt` | 1 | 0 |
+  | `presentation.communityCounters` | Options → HUD | 1 | 0 |
+  | `presentation.reloadBars` | Options → HUD | 1 | 0 |
+  | `presentation.veteranLabels` | Options → HUD | 1 | 0 |
+  | `presentation.groupNumbers` | Options → HUD | 1 | 0 |
+  | `presentation.weatherReport` (wind and tide readout) | Options → HUD | 1 | 0 |
+  | `clock` (stand-alone battle clock) | `+clock` | 1 | 0 |
+  | `audio.soundMode` | Options → Sound | 2 (3D) | 1 (Mono) |
+  | `audio.mixingBuffers` | settings file | 128 | 8 |
+  | `audio.cdMode` | Options → Music | 2 (Random) | 4 (Custom) |
+  | `skirmish.numPlayers` (skirmish rows shown, `NumSkirmishPlayers`) | the `*III`…`*X` selector | 10 | unchanged |
+
+  3D sound is the positional placement the audio device already implements
+  (DESIGN_PRESENTATION_CLIENT §2.6). 128 voices exceeds the mixer's 32 tracked
+  slots, so no sound is cut off for the voice limit, which is ProTA's
+  "unlimited" [03 R-AUD-01 §1]. Ten skirmish rows only shows more rows: each
+  row keeps its controller, so a skirmish starts with the same players, and
+  the retail preset never removes rows. ProTA's `Player1..10DotColors`
+  minimap dot colours are not in the preset, because Nanolathe has no setting
+  for per-slot minimap dot colours; the unit limit is not either, because the
+  Community feature table already sets it (§8.3).
+
+  A preset is **offered, never forced**, and each mod's offer is made once.
+  When the player switches to a mod that names a preset (or whose content
+  profile does), the Mods & Mutators screen shows a *Yes / No* toggle
+  captioned *Use recommended settings*, *Yes* by default (P10); *Apply*
+  writes the rows once when it is *Yes*. A mod that starts by any other route
+  — `--mod`, the saved choice, a save that switches mod (§7.3), a local
+  install selected later — is offered its preset once on the main menu, in a
+  *Recommended settings* window built like the Mods & Mutators screen: it
+  lists every row with its new value and, where different, the player's
+  current one, and offers *Apply* and *Keep mine*. The offer is never shown
+  during a battle, by a capture or benchmark, or where the settings file
+  cannot be written. A content profile mounted without a mod
+  (`--root … --content-profile prota`, or detection) is offered its profile's
+  preset the same way. Either answer, and either way of offering, records the
+  mod id — `profile:<name>` for a profile without a mod — in the settings
+  key `controlsOffered`, so it is not asked again. Later changes by the
+  player stick, and switching back does not restore anything automatically.
 - **A missing mod at start.** If the saved mod's directory has gone, its base
   requirements (§4.2) are unmet, or it fails to open, build or bind, the game
   starts with no mod and the main menu shows one message naming the mod and
   the reason; the saved choice is kept, and start-up never fails for this.
-  The same failures of a mod named by `--mod` are errors; one whose
-  requirements are unmet names the missing paths.
+  The direct battle view (`--map`) falls back the same way when the saved
+  mod's battle cannot be built or bound, naming the mod and the reason on
+  standard error. `--check-install` checks what a start would mount: a
+  broken or missing saved mod is a warning on standard error, the base
+  install is validated without it, and the exit status follows the base.
+  The same failures of a mod named by `--mod` are errors, in every mode;
+  one whose requirements are unmet names the missing paths.
 
 ### 4.4 Applying a switch
 
@@ -238,10 +301,22 @@ sidecar names another mod switches the same way and then loads the save
 
 Dropping a `.zip` or a folder onto the window (Ebitengine's dropped-files
 input) installs it through the same extraction and validation path as a
-download (§5.3). A package with `nanolathe-mod.json` installs as that mod.
+download (§5.3), with the content check against the base install; the
+desktop command's `--install-mod` takes the same path from the command line.
+Ebitengine reports the real path of each dropped item, so a folder is
+copied and an archive hashed from disk. A drop is accepted on the menus and
+the Mods & Mutators screen, one item at a time; a drop during a battle or
+its loading screen is ignored. The install runs off the render thread as
+the process's one mod install, so it never overlaps a catalogue download
+(§8.2), and its outcome is shown on the Mods & Mutators screen when it is
+open, whose list then includes the mod, else as the main-menu notice. The
+installed mod is not selected. A package with `nanolathe-mod.json` installs
+as that mod.
 Without metadata, it installs as `local-<sanitized name>` with version
-`local`, no minimum, no preset and a detected content profile, and the Mods &
-Mutators screen marks it *Local*. Copying a prepared directory into the
+`local` and a detected content profile, and the Mods & Mutators screen marks
+it *Local*. Its gameplay minimum and controls preset are its detected
+profile's, if the profile names them (§4.2): a ProTA package dropped without
+metadata gets ProTA's. Copying a prepared directory into the
 data directory by hand also works; it needs a metadata file and a receipt,
 which the screen can write with *Adopt*.
 
@@ -512,7 +587,8 @@ and lists anything it finds here.
   the catalog identity instead.
 - Headless and simulation-cost reports, battle-benchmark scene metadata and
   debug captures gain `mod` and `mutators` fields beside `rules` and
-  `content_profile`.
+  `content_profile`. The headless report of both commands and the battle
+  benchmark's metadata spell the mod `<id>@<version>`, or `none`.
 - `--mutator <name>=<factor>` (repeatable) on both commands selects them. In
   the desktop window the settings key `mutators` selects them when no flag
   is given. The desktop command's `--shot`, `--film`, `--battle-benchmark`
@@ -651,8 +727,9 @@ in two columns, so that no list competes with another for space (D14):
 - **Mods (left).** Installed mods only, with *Total Annihilation* (no mod)
   first. Each row shows the name and version, and flags an unmet base
   requirement. Selecting a row shows its summary, its minimum gameplay and the
-  gameplay selection that applying will produce (§4.3). It also shows
-  *Use <mod> controls* when the mod names a preset (§4.3), and *Remove*.
+  gameplay selection that applying will produce (§4.3). It also shows the
+  *Use recommended settings* toggle when switching to a mod that names a
+  preset (§4.3), and *Remove*.
   *Get more mods…* sits beneath the list.
 - **Mutators (right).** A summary, not the editor, so the column never grows
   with the catalogue: up to four active mutators (then *and N more*),
@@ -703,7 +780,11 @@ Up to three lines in the retail font and title colour, above the existing map
 line:
 
 1. `<mod> <version> · <gameplay> · Unit limit <n>`, with *Total
-   Annihilation* when there is no mod;
+   Annihilation* when there is no mod. `<n>` is the limit the battle enters
+   with: when a Community feature table sets one it overrides the player's
+   `unitLimit` (DESIGN_COMMUNITY_PATCH §3.2), and the field then names the
+   source, as in *Unit limit 1500 (set by ProTA)*. Strict 3.1 ignores the
+   table and shows the setting;
 2. `Mutators: Build speed ×2, Health ×1.5`, omitted when there are none;
 3. any warning from §7.3.
 
@@ -730,7 +811,7 @@ leaves the line empty (DESIGN_INTERFACE_HUD_INPUT §2.6).
 | `internal/session` | mutators and recorded Community sources in battle-entry and restore requests; building the sidecar value; reports | commands |
 | `internal/settings` | the `mod` and `mutators` keys | commands |
 | `cmd/nanolathe` | chip, screen, in-process reload, loading-screen lines, drop-to-install, `--mod`, `--mutator` | — |
-| `cmd/nanolathe-headless` | `--mutator` (flags only, never the settings file). It takes content from `--root`; a `--mod` selector that mounts an installed mod is a follow-up, and it never fetches | — |
+| `cmd/nanolathe-headless` | `--mutator` and `--mod` (flags only, never the settings file). `--mod` mounts an installed mod from the library as the last root with its content profile, through `modlibrary`'s command-line selection; it is refused beside several `--root` flags, and the command never fetches | — |
 
 **Guards.** New architecture tests: only `internal/modfetch` imports
 `net/http`; only `cmd/nanolathe` imports `internal/modfetch`; no simulation
@@ -747,6 +828,9 @@ dependencies.
 | Extraction refuses absolute paths, `..`, symlinks and case-folded duplicates; skips executables and `__MACOSX`; enforces the caps; an interrupted install leaves nothing installed | `modlibrary` tests on authored fixture zips |
 | Metadata disagreeing with the manifest refuses the install; unmet `requires` block selection | `modlibrary` |
 | Precedence: `--mod` over setting, a manual stack disables both, a mod's profile beats a saved `contentProfile`, a command line below the minimum is rejected | `modlibrary`, `cmd/nanolathe` |
+| A mod without `controls` or `minimumGameplay` takes its content profile's; metadata wins; only `prota` ships them | `modlibrary.TestLocalPackageTakesItsProfileRecommendations`, `profiles.TestProfileRecommendations` |
+| Preset contents, and the retail preset keeping skirmish rows; the offer key and its once-only record | `main.TestCommunityControlsPresetContents`, `main.TestRetailControlsPresetKeepsSkirmishRows`, `main.TestControlsOfferIsRememberedPerMod` |
+| A local ProTA package is offered its preset on the Mods & Mutators screen and once on the main menu after `--mod`; the loading line names the effective unit limit | `main.TestProTARecommendedSettingsAreOfferedOnce` (retail tier) |
 | SHA-256 and size mismatch, truncated download, resume, off-origin redirect refused, offline cache shown | `modfetch` against `httptest` |
 | Zero mutators leave the clone deep-equal with an equal `Hash`; each mutator changes exactly its fields; rounding, minimum-one, saturation and `v ≤ 0` boundaries; the hash is independent of field order | `content` |
 | Mutators reach fresh skirmish, mission entry and restore; all six fingerprint locks unchanged | `session`, `headless` |

@@ -21,10 +21,11 @@ tools/path-bench /tmp/maze --cases 'maze|winding|concave' --rules modern --repea
 
 Without filters the suite runs all supported sizes and all three reserved rule
 sets, with three timed repeats per case. A custom registered `RuleSet` name can
-be selected with `--rules`. The wrapper serializes expensive commands with the
-same host lock as the battle benchmarks. A new output directory is required;
-artifacts belong outside the repository. `--ticks` is a fixture-debug override,
-not a comparable replacement for the normal observation window.
+be selected with `--rules`. The wrapper holds the host lock exclusively, as the
+battle benchmarks do, so it waits for running verification gates. A new output
+directory is required; artifacts belong outside the repository. `--ticks` is a
+fixture-debug override, not a comparable replacement for the normal observation
+window.
 
 The directory contains `manifest.json` (revision, host/runtime and settings),
 `cases.json`, exact production Alt+drag inputs and separate assignment timings

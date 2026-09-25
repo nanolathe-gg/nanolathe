@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 
+	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 )
 
@@ -146,10 +147,11 @@ func (m Metadata) Validate() error {
 	return nil
 }
 
-// Controls presets a mod may name (§4.3).
+// Controls presets a mod may name (§4.3), spelled as content profiles spell
+// them.
 const (
-	controlsCommunity = "community"
-	controlsRetail    = "retail"
+	controlsCommunity = contentprofiles.ControlsCommunity
+	controlsRetail    = contentprofiles.ControlsRetail
 )
 
 // ParseSelector reads a `--mod` argument: `<id>`, `<id>@<version>`, or

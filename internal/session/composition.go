@@ -2556,6 +2556,9 @@ func (s *Session) bindDamageReaction() {
 			s.emitMusicIntensity(tick, victim.Handle, 1)
 		}
 	}
+	// Survival scoring prices the health survivors remove from attacker
+	// units (DESIGN_SURVIVAL §8); outside Survival it returns at once.
+	s.Combat.HealthLost = s.survivalNoteDamage
 	s.Combat.Reaction = &combat.ReactionSeams{
 		// Part 1: pending bit 0x10 on every order record observing the victim
 		// [06 R-WPN-04 §2 part 1][04 R-MOV-03 §7].

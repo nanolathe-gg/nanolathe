@@ -171,6 +171,9 @@ type battleSession struct {
 	dragScrollLastX      int32
 	dragScrollLastY      int32
 
+	// iconRoots is where an empty strategicIconConfig preference looks for
+	// the running content's icon configuration (DESIGN_GPU_RENDERER §18.7).
+	iconRoots []string
 	// switchAlt is captured once when the battle installs its settings. It is
 	// presentation input state only; routeDigit reads this cached bit rather
 	// than opening the settings file on a keypress [07 R-CAM-01 §4][I6].
@@ -300,12 +303,30 @@ func stockpileClickDelta(modifiers input.Modifiers, rightClick bool) int {
 
 var clPtr *client.Client
 
+// directBattleView is a composed direct battle view and its client.
+type directBattleView struct {
+	shell *gameShell
+	cl    *client.Client
+}
+
 // runBattleView launches the windowed battle view over the real session.
-func runBattleView(opts Options, cs *contentSet) error {
-	shell, cl, err := newDirectBattleView(opts, cs)
+// Like the menu start, it never fails because of the saved mod: a saved mod
+// whose battle cannot be built or bound falls back to no mod, naming the mod
+// and the reason on standard error, while a --mod failure stays an error
+// (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"). launch is the
+// command line as given.
+func runBattleView(launch, opts Options, cs *contentSet) error {
+	view, running, err := startWithSavedModFallback(launch, opts, cs, func(opts Options, cs *contentSet) (directBattleView, error) {
+		shell, cl, err := newDirectBattleView(opts, cs)
+		return directBattleView{shell: shell, cl: cl}, err
+	})
 	if err != nil {
 		return err
 	}
+	if running != cs {
+		defer running.Close()
+	}
+	shell, cl := view.shell, view.cl
 	shell.settingsWritable = true
 	defer shell.teardownBattle(cl)
 	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
@@ -329,6 +350,14 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	if err != nil {
 		return nil, nil, err
 	}
+	// A view that fails from here releases the shell's audio, so a start that
+	// falls back from the saved mod leaves no voices of the abandoned shell.
+	entered := false
+	defer func() {
+		if !entered {
+			shell.releaseAudio()
+		}
+	}()
 	shell.applySettings(saved)
 	if err := validatePresentationZoom(shell.opts); err != nil {
 		return nil, nil, err
@@ -371,6 +400,7 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	if err := shell.enterBattle(sess, sess.Catalog); err != nil {
 		return nil, nil, err
 	}
+	entered = true
 	return shell, cl, nil
 }
 
@@ -469,7 +499,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 		return nil, err
 	}
 	b := &battleSession{
-		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
+		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell, iconRoots: strategicIconSearchRoots(cs),
 		showRanges: cs.presentation.ShowRanges, rangePreferences: cs.presentation,
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 	}
@@ -565,7 +595,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetMessageLogos(b.hud.logos)
 	// Strategic icons use the HUD team logos; generic contacts retain the radar
 	// art/options bindings (DESIGN_GPU_RENDERER §18.4).
-	icons, iconErr := configuredStrategicIcons(b.cat, b.hostPreferences().StrategicIconConfig)
+	icons, iconErr := battleStrategicIcons(b.cat, b.hostPreferences().StrategicIconConfig, b.iconRoots)
 	if iconErr != nil {
 		fmt.Fprintln(os.Stderr, iconErr)
 	}

@@ -13,7 +13,7 @@ The export test calls production `dragSamplePath` and
 the window package or a display:
 
 ```sh
-tools/host-run env GOMAXPROCS=2 \
+env GOMAXPROCS=2 \
   NANOLATHE_PATH_BENCH_FORMATIONS=/private/tmp/nanolathe-formations.json \
   go test -tags 'pathbench retail' \
   cmd/nanolathe/battle_drag_geometry.go \
@@ -26,7 +26,7 @@ every case, including three authoritative ticks and the exact assigned orders,
 is:
 
 ```sh
-tools/host-run env GOMAXPROCS=2 \
+env GOMAXPROCS=2 \
   NANOLATHE_RETAIL_ASSETS=/Users/daniel/TotalAnnihilation \
   NANOLATHE_PATH_BENCH_FORMATIONS=/private/tmp/nanolathe-formations.json \
   NANOLATHE_PATH_BENCH_FORMATION_SMOKE=1 \

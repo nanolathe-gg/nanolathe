@@ -444,14 +444,45 @@ picture; other admitted projectiles draw a clipped 2×2 marker. Source:
 `IsPosInPlayerLos`, `DrawProjectile`, `DrawNuke`, `DrawWeapon`.
 
 **Unknown — inherited visibility and malformed boundaries.** The full
-hot-radar list predicate, LOS-helper semantics, shared attack-flash cadence
-and per-slot dotted-state production belong to the engine; this module alone
-does not establish them. The projectile bounds predicate rejects coordinates
+hot-radar list predicate, LOS-helper semantics and per-slot dotted-state
+production belong to the engine; this module alone does not establish them.
+The shared attack-flash cadence is the retail radar blink phase, which
+toggles every eight sub-ticks [01 R-CORE-03]. In the shipped ProTA 4.8 build
+the dotted state is the slot's interceptor flag byte, which the retail minimap
+ring also reads [03 §3.9]. That this source's per-slot indicator is the same
+byte is **Supported inference** from the matching use; its field offset was
+not compared. The projectile bounds predicate rejects coordinates
 strictly greater than LOS dimensions, leaving equality admitted to subsequent
 checks; its unsigned-coordinate checks do not independently establish safe
 negative-edge handling. A retail caller contract or bounded edge observation
 would settle those cases. No extra reveal, cloak or safe-clamping rule is
 implied by this reference.
+
+**Established — differences from the shipped ProTA 4.8 build.** The
+authorized audit of ProTA 4.8's `tdraw.dll`
+([Shared draw-DLL interface, ProTA 4.8 shipped megamap](draw-engine-interface.md#prota-48-shipped-megamap))
+differs from this pinned source in these contract-level ways:
+
+- **Scale extents.** 4.8 scales icons and projectiles by the TNT-derived
+  `(Width − 1) × 16` by `(Height − 4) × 16` extent. This source uses the
+  play-area extents.
+- **Pointer conversion.** 4.8's has no height-shear search.
+- **Hover hit area.** 4.8 tests a box offset by one footprint from the drawn
+  icon, where this source tests pixels.
+- **Weapon rings.** 4.8 uses raw authored `range` (no ballistic limit) and
+  reads Shift as the asynchronous key state.
+- **Interceptor rings.** 4.8 keeps retail's `coverage − 512` radius.
+- **Nuke marker.** 4.8 requires `twophase`, `cruise` and `targetable`
+  together, with no interceptor clause and no zero-damage suppression.
+- **Fog image.** 4.8 has no per-tick cache.
+- **Features.** 4.8 has no feature layer.
+- **Icon clipping.** 4.8 shifts clipped edge icons instead of cutting them.
+
+The thresholds' defaults, the radar-jammer threshold quirk, the fog table,
+the projectile admission test, picture choice and the redraw-rate gate match.
+This source's view toggle on key release and its wheel-enter/wheel-leave
+behaviour also match the shipped build; neither build has zoom steps. None
+of these differences is evidence about Escalation or Zero builds.
 
 ## Visual acceptance cases
 
@@ -484,8 +515,9 @@ player colour and viewpoint for comparisons. Keep captures outside the repo.
   helper redirects the explicit `objects3d` argument in every mod package;
   settle with that helper's contract or a substitute-model observation.
 - **Unknown — engine-owned inputs:** particle phase/order, unit-bar traversal,
-  contact-list admission, LOS helper, blink cadence and interceptor dotted
-  flags; settle in their owning retail contracts or with bounded observations.
+  contact-list admission and the LOS helper; settle in their owning retail
+  contracts or with bounded observations. The blink cadence and the
+  interceptor dotted flag are now tied to [01 R-CORE-03] and [03 §3.9].
 - **Unknown — full visual equality:** no source-matched runtime captures were
   made in this pass. The acceptance table defines useful comparisons, including
   current-source limitations, rather than claiming finished compatibility.

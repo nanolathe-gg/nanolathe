@@ -1,8 +1,15 @@
 # Sourced by local verification and benchmark tools. These are host limits,
 # never simulation settings. Explicit caller settings take precedence.
-: "${GOMAXPROCS:=2}"
-: "${NANOLATHE_TEST_P:=2}"
+#
+# Gates default to four workers so three gate slots (tools/host-run --gate)
+# fill a twelve-core host. Benchmark scripts pin their own documented budget
+# before sourcing this file, so their timings stay comparable.
+: "${GOMAXPROCS:=4}"
+: "${NANOLATHE_TEST_P:=4}"
 export GOMAXPROCS NANOLATHE_TEST_P
 # Also bound nested go commands (architecture guards and analyzer builds).
-GOFLAGS="${GOFLAGS:-} -p=$NANOLATHE_TEST_P"
+# -trimpath keeps each worktree's absolute path out of Go's cache keys, so
+# identical packages share compiled output and test results across worktrees
+# and a merge rebuilds only what it changed.
+GOFLAGS="${GOFLAGS:-} -trimpath -p=$NANOLATHE_TEST_P"
 export GOFLAGS

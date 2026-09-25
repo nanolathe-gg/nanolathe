@@ -24,6 +24,72 @@ func configuredStrategicIcons(cat *content.Catalog, path string) (*client.Strate
 	return client.LoadStrategicIconCatalog(cat, resolved)
 }
 
+// battleStrategicIcons loads a battle's strategic icons. An explicit
+// `presentation.strategicIconConfig` always wins. Left empty, the running
+// content's own configuration is used when one of roots holds exactly one
+// (DESIGN_GPU_RENDERER §18.7); finding none there is silent and keeps the
+// generated catalog.
+func battleStrategicIcons(cat *content.Catalog, preference string, roots []string) (*client.StrategicIconCatalog, error) {
+	if strings.TrimSpace(preference) == "" {
+		found, err := automaticStrategicIconConfig(roots)
+		if err != nil {
+			icons, _ := client.LoadStrategicIconCatalog(cat, "")
+			return icons, err
+		}
+		preference = found
+	}
+	return configuredStrategicIcons(cat, preference)
+}
+
+// strategicIconSearchRoots is where an empty preference looks: the running
+// mod's directory, or a manual root stack from its last root to its first,
+// the order in which the stack's roots win. The base install alone is never
+// searched.
+func strategicIconSearchRoots(cs *contentSet) []string {
+	if cs == nil {
+		return nil
+	}
+	if cs.mod != nil {
+		return []string{cs.mod.Dir}
+	}
+	if !cs.manualRoots {
+		return nil
+	}
+	roots := make([]string, 0, len(cs.roots))
+	for i := len(cs.roots) - 1; i >= 0; i-- {
+		roots = append(roots, cs.roots[i])
+	}
+	return roots
+}
+
+// automaticStrategicIconConfig takes the first root, in order, that holds an
+// icon configuration in one of the recognised places. A root with none, or
+// one that cannot be read, is passed over silently; a root with several is
+// ambiguous and reported, so one package is never chosen over another by
+// directory order. It returns "" when no root holds one.
+func automaticStrategicIconConfig(roots []string) (string, error) {
+	for _, root := range roots {
+		absolute, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		candidates, err := strategicIconConfigsInDirectory(absolute)
+		if err != nil {
+			continue
+		}
+		sort.Strings(candidates)
+		switch len(candidates) {
+		case 0:
+			continue
+		case 1:
+			return candidates[0], nil
+		default:
+			return "", strategicIconDiscoveryError(absolute, candidates, nil)
+		}
+	}
+	return "", nil
+}
+
 // discoverStrategicIconConfig lets the existing host preference name either
 // its exact INI or one package/config directory. The recognized relative
 // locations are the ones authored by the inspected community draw packages;

@@ -47,6 +47,50 @@ func profileSelector(dir string, meta Metadata) string {
 // contentProfile preference never applies one mod's table to another (D12).
 func (m Mod) ContentProfileSelector() string { return profileSelector(m.Dir, m.Metadata) }
 
+// WithProfileDefaults returns the mod with the controls preset and gameplay
+// minimum its metadata leaves empty taken from its resolved content profile
+// (docs/DESIGN_MODS_MUTATORS.md §4.3). The metadata always wins; the profile
+// is the fallback that gives a metadata-less local package (§4.5) its
+// content set's recommendations.
+func (m Mod) WithProfileDefaults(profile contentprofiles.Profile) Mod {
+	if m.Controls == "" {
+		m.Controls = profile.Controls
+	}
+	if m.MinimumGameplay == "" {
+		m.MinimumGameplay = profile.MinimumGameplay
+	}
+	return m
+}
+
+// ResolveProfileDefaults is WithProfileDefaults for a mod that is not
+// mounted: it resolves the content profile the mount would, mounting the base
+// install plus the mod only when the profile is detected rather than named. A
+// mod whose metadata supplies both values, or whose profile does not resolve,
+// is returned unchanged. baseRoots are the resolved base install roots.
+func ResolveProfileDefaults(baseRoots []string, m Mod) Mod {
+	if m.Controls != "" && m.MinimumGameplay != "" {
+		return m
+	}
+	selector := m.ContentProfileSelector()
+	if selector != "" {
+		profile, err := contentprofiles.Lookup(selector)
+		if err != nil {
+			return m
+		}
+		return m.WithProfileDefaults(profile)
+	}
+	fileSystem := vfs.New()
+	defer fileSystem.Close()
+	if err := fileSystem.MountGameDirectories(append(append([]string(nil), baseRoots...), m.Dir)); err != nil {
+		return m
+	}
+	profile, err := contentprofiles.Detect(fileSystem)
+	if err != nil {
+		return m
+	}
+	return m.WithProfileDefaults(profile)
+}
+
 // ContentValidator is the standard §5.3 step 4 check for InstallOptions:
 // mount the base install plus the staged root in a scratch overlay, resolve
 // the mod's content profile, and require what the desktop command requires

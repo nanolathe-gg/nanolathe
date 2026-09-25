@@ -62,6 +62,10 @@ type contentSet struct {
 	// modNotice is a one-line player-facing notice about the mod selection,
 	// shown on the main menu (for example a saved mod that has gone).
 	modNotice string
+	// profileControls is the resolved content profile's recommended controls
+	// preset. It is offered once when the profile is mounted without a mod
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3); a mod carries its own in mod.
+	profileControls string
 }
 
 func (c *contentSet) Close() error {
@@ -176,6 +180,14 @@ func mountContent(opts Options, baseRoots []string, selection modSelection) (*co
 		fileSystem.Close()
 		return nil, err
 	}
+	mod := selection.mod
+	if mod != nil {
+		// A mod whose metadata names no controls preset or gameplay minimum,
+		// such as a metadata-less local package, takes its content profile's
+		// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+		withDefaults := mod.WithProfileDefaults(profile)
+		mod = &withDefaults
+	}
 	set := &contentSet{
 		fs:               profile.Layout().Apply(fileSystem),
 		unmappedMount:    fileSystem,
@@ -184,8 +196,8 @@ func mountContent(opts Options, baseRoots []string, selection modSelection) (*co
 		presentation:     profile.Presentation,
 		gameplayFeatures: profile.GameplaySources(),
 		root:             roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes(),
-		mod: selection.mod, baseRoots: append([]string(nil), baseRoots...), manualRoots: selection.manual, modNotice: selection.notice,
-		savedMod: selection.saved,
+		mod: mod, baseRoots: append([]string(nil), baseRoots...), manualRoots: selection.manual, modNotice: selection.notice,
+		savedMod: selection.saved, profileControls: profile.Controls,
 	}
 
 	// One required product proves the mount produced game data rather than an

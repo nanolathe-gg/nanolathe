@@ -48,6 +48,12 @@ type Tuning struct {
 	// when a wave counts as survived, up to their storage.
 	WaveReward float32
 
+	// A survived wave scores its budget, plus FastClearBonus percent of it
+	// for a wave destroyed at once after arriving, falling linearly to none at
+	// the next wave's deadline, plus CleanWaveBonus percent when no finished
+	// structure fell to it (§8).
+	FastClearBonus, CleanWaveBonus int64
+
 	BaseUnits int64  // the budget at battle start, in median tier-1 units
 	Doubling  uint32 // ticks for the budget to double
 
@@ -77,6 +83,8 @@ func DefaultTuning(p Pace) Tuning {
 		DowntimePerUnit: 5 * TicksPerSecond / 2,
 		DowntimeMax:     150 * TicksPerSecond,
 		WaveReward:      1000,
+		FastClearBonus:  50,
+		CleanWaveBonus:  25,
 		BaseUnits:       2,
 		Doubling:        5 * minute,
 		UnlockUnits:     8,
