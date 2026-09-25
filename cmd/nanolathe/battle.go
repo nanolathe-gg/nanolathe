@@ -987,6 +987,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// cursor own the presentation sequence; no live-world value is read
 		// [03 §2.4][08 R-CAMP-01 §6].
 		b.ensurePostBattleController()
+		if cur, ok := b.currentSnapshot(); ok {
+			b.serviceVictoryCue(cur)
+		}
 		b.stepPostBattle(delta, in, cl)
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return

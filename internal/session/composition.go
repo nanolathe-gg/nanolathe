@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
@@ -611,7 +612,13 @@ func strictCatalogWithProgress(fs vfs.FSOps, cat *content.Catalog, limits conten
 // applies the selected schema including surface metal before any SampleMetal.
 // [03 §2.2][05 "Terrain metal extraction"] Callers must not sample metal before
 // this point [C14].
-func loadTerrainStrict(fs vfs.FSOps, cat *content.Catalog, m *mission.Mission) (*world.Terrain, error) {
+//
+// entry is the battle's resolved community feature table, read once here
+// (docs/DESIGN_COMMUNITY_PATCH.md §3.1): its MapFeatureOwnerEleven switch
+// selects the ProTA 4.8 package's terrain-file placer nibble 11 in place of
+// retail's 10 (§4.7). Strict 3.1 resolves the zero table, so it always loads
+// with 10.
+func loadTerrainStrict(fs vfs.FSOps, cat *content.Catalog, m *mission.Mission, entry community.Features) (*world.Terrain, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("session: nil filesystem for terrain")
 	}
@@ -625,7 +632,11 @@ func loadTerrainStrict(fs vfs.FSOps, cat *content.Catalog, m *mission.Mission) (
 	if key == "" {
 		return nil, fmt.Errorf("session: empty terrain key")
 	}
-	terrain, err := world.Load(fs, cat, key)
+	placer := world.TerrainFeaturePlacer
+	if entry.MapFeatureOwnerEleven {
+		placer = world.MapOwnedFeaturePlacer
+	}
+	terrain, err := world.Load(fs, cat, key, world.WithTerrainFeaturePlacer(placer))
 	if err != nil {
 		return nil, fmt.Errorf("session: terrain %q: %w", key, err)
 	}

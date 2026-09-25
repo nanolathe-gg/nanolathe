@@ -39,7 +39,7 @@ func TestFeatureStampSourceOrderAndOrphans(t *testing.T) {
 			{FootprintX: 3, FootprintZ: 3},
 		},
 	}
-	terrain.stampFeatureAnchors()
+	terrain.stampFeatureAnchors(TerrainFeaturePlacer)
 
 	if got, ok := ResolveFeature(terrain.Plot, int(width), int(height), 3, 3); !ok || got != 1 {
 		t.Fatalf("shared seam resolved to %d/%v, want later feature 1", got, ok)
@@ -64,7 +64,7 @@ func TestFeatureStampSignedFieldLimit(t *testing.T) {
 		Plot:        ExpandPlot(attrs, int(width), int(height)),
 		FeatureDefs: []*content.FeatureDef{{FootprintX: width, FootprintZ: 1}},
 	}
-	terrain.stampFeatureAnchors()
+	terrain.stampFeatureAnchors(TerrainFeaturePlacer)
 	if got, ok := ResolveFeature(terrain.Plot, int(width), int(height), 128, 0); !ok || got != 0 {
 		t.Fatalf("representable -128 delta resolved to %d/%v, want feature 0", got, ok)
 	}
@@ -165,7 +165,7 @@ func TestDensePackOverAnIndestructibleFeatureVetoesTheStamp(t *testing.T) {
 func TestFeatureStampWritesFringeOverAuthoredEmptyCells(t *testing.T) {
 	attrs := []formats.TNTAttribute{{Height: 1, Feature: 0}, {Height: 1, Feature: PlotFeatureNone}, {Height: 1, Feature: PlotFeatureNone}, {Height: 1, Feature: PlotFeatureNone}}
 	terrain := &Terrain{CellW: 2, CellH: 2, Plot: ExpandPlot(attrs, 2, 2), FeatureDefs: []*content.FeatureDef{{FootprintX: 2, FootprintZ: 2}}}
-	terrain.stampFeatureAnchors()
+	terrain.stampFeatureAnchors(TerrainFeaturePlacer)
 	for _, c := range [][2]int32{{1, 0}, {0, 1}, {1, 1}} {
 		if got := terrain.PlotAt(c[0], c[1]).Feature(); got != PlotFeatureFringe {
 			t.Fatalf("covered cell (%d,%d) = %#x, want fringe %#x [05 R-FEAT-01 §17]", c[0], c[1], got, PlotFeatureFringe)
@@ -174,5 +174,38 @@ func TestFeatureStampWritesFringeOverAuthoredEmptyCells(t *testing.T) {
 	// Every synthesized fringe still resolves back to the one anchor.
 	if got, ok := ResolveFeature(terrain.Plot, 2, 2, 1, 1); !ok || got != 0 {
 		t.Fatalf("synthesized fringe resolved to %d/%v, want feature 0", got, ok)
+	}
+}
+
+// The ProTA 4.8 package's loader passes placer 11 to the terrain-file stamps
+// only: each completed anchor takes it, while fringe and empty cells keep the
+// nibble plot expansion wrote and every other flag bit is preserved
+// (research/extensions/prota-engine.md "Map-owned features drawn without line
+// of sight"; [05 R-FEAT-01 §3] steps 6-7).
+func TestTerrainFileStampWritesPlacerToAnchorsOnly(t *testing.T) {
+	const width, height = int32(6), int32(6)
+	attrs := flat(width, height, 5)
+	attrs[1*width+1].Feature = 0
+	attrs[4*width+4].Feature = 1
+	plot := ExpandPlot(attrs, int(width), int(height))
+	plot[1*width+1].SetFlagByte(plot[1*width+1].FlagByte() | 0x81)
+	terrain := &Terrain{
+		CellW: width, CellH: height, Plot: plot,
+		FeatureDefs: []*content.FeatureDef{{FootprintX: 2, FootprintZ: 2}, {FootprintX: 1, FootprintZ: 1}},
+	}
+	terrain.stampFeatureAnchors(MapOwnedFeaturePlacer)
+	for z := int32(0); z < height; z++ {
+		for x := int32(0); x < width; x++ {
+			want := TerrainFeaturePlacer
+			if x == 1 && z == 1 || x == 4 && z == 4 {
+				want = MapOwnedFeaturePlacer
+			}
+			if got := terrain.PlotAt(x, z).PlacerNibble(); got != want {
+				t.Fatalf("cell (%d,%d) placer %d, want %d", x, z, got, want)
+			}
+		}
+	}
+	if got := terrain.PlotAt(1, 1).FlagByte() &^ 0x78; got != 0x81 {
+		t.Fatalf("anchor retained flag bits %#x, want 0x81", got)
 	}
 }

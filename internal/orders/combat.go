@@ -699,7 +699,14 @@ func suppressHandler(u *units.Unit, n *Node, satisfied uint32, _ uint32) Code {
 		return Code(1) // *advance* [04 R-ORD-01 §3]
 	case 1:
 		if n.Param1 == 2 {
-			releaseSlot(u, slotAll)
+			// The ProTA 4.8 package takes only slot 2 here, so slots 0 and 1
+			// keep acquiring (research/extensions/prota-engine.md, the two
+			// related weapon-slot patches); retail takes all three.
+			if rulesOfUnit(u).AttackTakesOneSlot(u) {
+				releaseSlot(u, 2)
+			} else {
+				releaseSlot(u, slotAll)
+			}
 			bindSlotToPosition(u, 2, n.GoalX, n.GoalZ)
 		} else {
 			releaseSlot(u, 0)

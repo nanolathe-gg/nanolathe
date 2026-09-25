@@ -303,6 +303,9 @@ private; the raw accessors exist for the publication copy and for diagnostics
 `VisibleExtents`'s two-corner form belongs to the world composer's feature
 draw gate (`featureVisibleForFrame` in `internal/client/world_draw.go`), keyed
 additionally to `nodrawundergray` and the plot placer nibble `[03 §5.1.5]`.
+The tall-feature pass's gate (`tallFeatureVisibleForFrame`) adds the ProTA 4.8
+package's placer-11 bypass of the LOS test
+([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)).
 The minimap contacts pass's second walk is a *different* consumer: it walks
 the **projectile pool alone** and admits each projectile through a one-point
 sample at its own projected position, with owner-local identity as the only
@@ -471,7 +474,12 @@ metal byte is left for the schema seed; the fringe anchor offsets are left for
 the feature stamper; the two occupancy shorts are zeroed; the flag byte is
 stamped with the map-load placer value, preserving the live-instance,
 structure-yard, never-seen and residual bits `[03 §2.2]` `[03 R-TERR-01 §1]`
-`[fmt tnt]`.
+`[fmt tnt]`. The terrain-file feature stamps then write their own placer into
+each completed anchor: retail's 10 (`TerrainFeaturePlacer`), or 11
+(`MapOwnedFeaturePlacer`) when the session loads with `WithTerrainFeaturePlacer`
+under the community table's `MapFeatureOwnerEleven`
+([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours))
+`[05 R-FEAT-01 §3]`.
 
 **W7 — height and slope.** `HeightAt` is integer bilinear over four neighbouring
 heights using the low four bits of each cell-space coordinate with the signed

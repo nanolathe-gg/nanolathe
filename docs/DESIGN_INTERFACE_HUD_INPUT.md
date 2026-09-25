@@ -3070,6 +3070,45 @@ bank) and `megamap_draw.go` (surface record), `internal/session/megamap_query.go
 composition); `battle.go`, `battle_hud.go`, `battle_placement.go`,
 `battle_selection.go` and `battle_cursor.go` carry one-line hooks.
 
+### 3.16 Optional victory cue
+
+**Policy.** A host presentation preference modelled on ProTA 4.8's renderer,
+which plays a victory sound on every local win
+([ProTA engine, victory cue](../research/extensions/prota-engine.md#victory-cue-on-multiplayer-and-skirmish-wins)).
+It is audio presentation, not gameplay: it reads only the committed frame and
+host preferences, sends nothing and enters no digest, fingerprint or save
+[I6]. `presentation.victoryCue` is `0` by default, which is retail: only the
+campaign trigger cue plays, once per satisfied victory condition
+`[08 R-TRIG-01 §8]`. It is the HUD page's *Victory cue* switch and a row of
+the ProTA controls preset
+([DESIGN_MODS_MUTATORS §4.3](DESIGN_MODS_MUTATORS.md#43-selection-and-precedence)).
+
+**Behaviour (research contract).** With the switch on, each host frame that
+shows a committed result the local viewer won (not a draw) runs the hook with
+the committed global tick. The hook keeps one value for the process, zero at
+start and kept across battles and content reloads. When the tick is lower than
+that value, or more than 300 ticks after it, it plays the alias `Victory
+Condition` through the campaign cue's by-name path (`Audio.PlayUICue`); in
+every case it then stores the tick. Because the tick stops at the end, the cue
+plays once per shown win. A loss, a draw or a resignation never reaches it. No
+session kind is excluded: skirmish, Survival and campaign wins all play it.
+A campaign win therefore also plays one cue when the result first shows, on
+top of the per-condition cues retail played earlier. The hook's two edges are
+kept: a first win shown at tick 300 or earlier in a process plays nothing, and
+a later battle plays only when its tick is below the stored value or more than
+300 ticks above it. With the switch off the hook neither plays nor stores.
+
+**Unknown.** The research names a composer gate that both end titles pass
+without describing it, and Nanolathe draws no in-battle title; every shown
+local win is treated as passing it (`TODO(question)` in
+`cmd/nanolathe/victory_cue.go`). A description of that gate in `[07 §11]`
+would settle it.
+
+**Files.** `cmd/nanolathe/victory_cue.go` (the hook), a one-line call from the
+result branch of the battle update in `battle.go`, and the switch in
+`community_hud_options.go`. `TestVictoryCueTriggerRule` and
+`TestVictoryCueOffIsRetail` lock the rule and the retail default.
+
 ## 4. Retail behaviour that is not a bug
 
 * **The footer shows the *hovered* unit, never the selected one.** It persists

@@ -24,7 +24,7 @@ func synth(t *testing.T, cellW, cellH int32, attrs []formats.TNTAttribute, defs 
 		FeatureDefs: defs,
 	}
 	ter.BuildLOSHeightWordsForTest()
-	ter.stampFeatureAnchors()
+	ter.stampFeatureAnchors(TerrainFeaturePlacer)
 	return ter
 }
 

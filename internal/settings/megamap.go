@@ -13,10 +13,13 @@ const (
 )
 
 // DefaultPlayerDotColors are the draw engine's own `Player1..10DotColors`
-// defaults, indexed by a player's logo colour. ProTA 4.8's INI replaces them
-// with 227, 249, 18, 250, 67, 149, 208, 117, 210, 34, which the ProTA controls
-// preset can apply.
+// defaults, indexed by a player's logo colour.
 var DefaultPlayerDotColors = [10]int{227, 212, 80, 235, 108, 219, 208, 93, 130, 67}
+
+// ProTAPlayerDotColors are the palette indices ProTA 4.8's INI pins for
+// `Player1..10DotColors`; the ProTA controls preset applies them
+// ([draw-engine-interface](../../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap)).
+var ProTAPlayerDotColors = [10]int{227, 249, 18, 250, 67, 149, 208, 117, 210, 34}
 
 // normalizeMegamap repairs hand-edited megamap values: booleans keep their low
 // bit, a negative ring minimum becomes zero, and a dot colour outside the

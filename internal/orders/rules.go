@@ -71,6 +71,20 @@ type Rules interface {
 	// selected and the actor whose weapon slot 0 the patch contract reads.
 	ScriptAttackSurfaceFire(q ScriptAttackSurfaceFireRequest) bool
 
+	// WorkLeavesWeaponsAutonomous selects the verb at the fixed all-slot call
+	// of four ground work handlers — `HelpBuild` phase 1, `Capture` phase 0,
+	// `ReclaimUnit` phase 0 and `RepairUnit` phase 1's in-reach arm
+	// [04 R-ORD-01 §5]. False is retail's *release*, which takes the slots
+	// from autonomy; true is the *inhibit* verb, which hands them back.
+	WorkLeavesWeaponsAutonomous(u *units.Unit) bool
+	// AttackTakesOneSlot selects the slot take at `Attack_Chase` phase 1 and
+	// at `Suppress` phase 1's `p1 = 2` arm [04 R-ORD-01 §3]: false takes
+	// retail's slots, true only the one slot the ProTA 4.8 package takes.
+	AttackTakesOneSlot(u *units.Unit) bool
+	// ResurrectionFailureText is `Resurrect` phase 3's status-7 caption when
+	// the corpse name resolves no unit definition [04 R-ORD-01 §5].
+	ResurrectionFailureText(u *units.Unit) string
+
 	// HoldsFire reports whether the shooter's standing Hold Fire keeps automatic
 	// combat off its weapon slots: it refuses a combat join, including the
 	// guard's forced join whose force flag bypasses both retail standing-order
@@ -209,6 +223,21 @@ func (StrictRules) BeforeCommand(*Queue)                           {}
 // ScriptAttackSurfaceFire preserves retail's submersible gate. Parsed
 // surfacefire metadata is inert under Strict 3.1 [02 R-KEYS-01].
 func (StrictRules) ScriptAttackSurfaceFire(ScriptAttackSurfaceFireRequest) bool { return false }
+
+// WorkLeavesWeaponsAutonomous is retail's answer: the four ground work
+// handlers release all three slots, so a builder's weapons are silent until
+// the record's destructor gives them back [04 R-ORD-01 §5][04 R-ORD-01 §7].
+func (StrictRules) WorkLeavesWeaponsAutonomous(*units.Unit) bool { return false }
+
+// AttackTakesOneSlot is retail's answer: `Attack_Chase` phase 1 releases slots
+// 0 and 2, and `Suppress` phase 1 with p1 = 2 releases all three
+// [04 R-ORD-01 §3].
+func (StrictRules) AttackTakesOneSlot(*units.Unit) bool { return false }
+
+// ResurrectionFailureText is retail's phase-3 caption, verbatim with its
+// doubled `s`; the feature-lookup failure's single-s text is a different
+// string [04 R-ORD-01 §5][05 R-WORK-01 §7].
+func (StrictRules) ResurrectionFailureText(*units.Unit) string { return "Ressurection failed" }
 
 func (StrictRules) RetaliationOrder(victim, attacker *units.Unit) bool {
 	return strictRetaliationOrder(victim, attacker)

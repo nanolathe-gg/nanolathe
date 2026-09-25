@@ -611,7 +611,7 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		return nil, fmt.Errorf("session: skirmish map %q: %w", cfg.MapName, err)
 	}
 	// 3. load terrain and apply selected schema including surface metal [03 §2.2][05]
-	terrain, err := loadTerrainStrict(fs, cat, m)
+	terrain, err := loadTerrainStrict(fs, cat, m, entryFeatures)
 	if err != nil {
 		return nil, err
 	}

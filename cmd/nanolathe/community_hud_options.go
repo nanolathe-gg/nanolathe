@@ -20,6 +20,7 @@ func communityHUDSwitches(p *settings.Presentation) []communityHUDSwitch {
 		{"NGROUPS", "Group digits", "Assigned groups", &p.GroupNumbers},
 		{"NALLIES", "Allied bars", "Active allies", &p.AlliedResources},
 		{"NWEATHER", "Weather", "Wind/tide in game", &p.WeatherReport},
+		{"NVICTORY", "Victory cue", "Sound on any win", &p.VictoryCue},
 	}
 }
 

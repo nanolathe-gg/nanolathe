@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
@@ -28,11 +29,18 @@ func TestCommunityControlsPresetContents(t *testing.T) {
 		"communitySelection": p.CommunitySelection, "doubleClickSelection": p.DoubleClickSelection,
 		"queuedOrderDrag": p.QueuedOrderDrag, "communityCounters": p.CommunityCounters,
 		"reloadBars": p.ReloadBars, "veteranLabels": p.VeteranLabels, "groupNumbers": p.GroupNumbers,
-		"weatherReport": p.WeatherReport,
+		"weatherReport": p.WeatherReport, "overview": p.Overview, "megamapWheel": p.MegamapWheel,
+		"megamapWheelMove": p.MegamapWheelMove, "megamapFlash": p.MegamapFlash, "victoryCue": p.VictoryCue,
 	} {
 		if value != 1 {
 			t.Errorf("presentation.%s = %d, want 1", name, value)
 		}
+	}
+	if p.MegamapDoubleClickMove != 0 || p.MegamapRadarMinimum != 0 || p.MegamapSonarMinimum != 0 || p.MegamapSonarJamMinimum != 0 || p.MegamapAntiNukeMinimum != 0 {
+		t.Error("the megamap double-click move and ring minimums are not ProTA's zeros")
+	}
+	if p.PlayerDotColors != [10]int{227, 249, 18, 250, 67, 149, 208, 117, 210, 34} {
+		t.Errorf("dot colours = %v, want ProTA.ini's", p.PlayerDotColors)
 	}
 	if !g.switchAlt || !g.clockVisible {
 		t.Errorf("switchAlt %v, clock %v; want both set", g.switchAlt, g.clockVisible)
@@ -69,9 +77,61 @@ func TestRetailControlsPresetKeepsSkirmishRows(t *testing.T) {
 	if g.setup.NumPlayers != settings.MaxPlayers {
 		t.Errorf("the retail preset changed the skirmish rows to %d", g.setup.NumPlayers)
 	}
+	if p.Overview != settings.OverviewZoom || p.VictoryCue != 0 || p.PlayerDotColors != settings.DefaultPlayerDotColors {
+		t.Errorf("overview %d, victory cue %d, dot colours %v; want Zoom, off and the draw engine's defaults", p.Overview, p.VictoryCue, p.PlayerDotColors)
+	}
+	// The megamap's own preferences are the player's, whichever overview.
+	g.presentation.MegamapFlash, g.presentation.MegamapRadarMinimum = 0, 64
+	g.applyControlsPreset(controlsPresetRetail)
+	if g.presentation.MegamapFlash != 0 || g.presentation.MegamapRadarMinimum != 64 {
+		t.Error("the retail preset changed a megamap preference")
+	}
+	p = g.presentation
 	g.applyControlsPreset("unknown")
 	if g.presentation != p {
 		t.Error("an unknown preset changed a setting")
+	}
+}
+
+// TestDotColoursRowRoundTrip: the dot colour table is one row naming its
+// two tables. Each survives a settings round trip, and any other table
+// reads as Custom, which the ProTA preset replaces.
+func TestDotColoursRowRoundTrip(t *testing.T) {
+	var row controlsPresetRow
+	for _, r := range controlsPresetRows {
+		if r.label == "Dot colours" {
+			row = r
+		}
+	}
+	if row.get == nil {
+		t.Fatal("no Dot colours row")
+	}
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	for _, preset := range []string{controlsPresetCommunity, controlsPresetRetail} {
+		g := presetTestShell(t)
+		g.applyControlsPreset(preset)
+		stored := settings.Defaults()
+		stored.Presentation = g.presentation
+		if err := stored.Save(); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := settings.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.presentation = loaded.Presentation
+		if got, want := row.get(g), row.presetValue(preset); got != want {
+			t.Errorf("%s: reloaded row = %s, want %s", preset, row.valueText(got), row.valueText(want))
+		}
+	}
+	g := presetTestShell(t)
+	g.presentation.PlayerDotColors[3] = 1
+	if got := row.get(g); got != presetCustom || row.valueText(got) != "Custom" {
+		t.Fatalf("an edited table reads %d", got)
+	}
+	rows, _ := g.controlsOfferRows(controlsPresetCommunity)
+	if !slices.Contains(rows, "Dot colours: ProTA (now Custom)") {
+		t.Fatalf("offer rows %q", rows)
 	}
 }
 

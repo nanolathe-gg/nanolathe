@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // px converts whole map pixels to the 16.16 world scale [03 §2.1].
@@ -318,5 +319,50 @@ func TestFeatureVisibilityGate(t *testing.T) {
 	los.Visibility.Visible[10] = 0
 	if featureVisibleForFrame(los, base) {
 		t.Fatal("flagged feature with both LOS corners denied was admitted")
+	}
+}
+
+// TestMapOwnedFeatureDrawsWithoutLOSInTallPassOnly locks the ProTA 4.8
+// renderer hook (research/extensions/prota-engine.md "Map-owned features
+// drawn without line of sight"): a nodrawundergray feature whose placer selector is 11 is
+// drawn by the second (tall-feature) pass with no LOS, while a short one with
+// the same selector keeps the first pass's gate and is skipped, and a tall
+// retail map feature (selector 10) still needs LOS.
+func TestMapOwnedFeatureDrawsWithoutLOSInTallPassOnly(t *testing.T) {
+	c := newTestClient(t)
+	flatModel(c, "m_short", 40, 50)
+	flatModel(c, "m_tall", 40, 60)
+
+	owned := world.MapOwnedFeaturePlacer
+	short := frame.FeatureView{CX: 26, CZ: 10, X: px(430), Z: px(160), Height: 5, Model: "m_short",
+		Owner: owned, OwnerKnown: true, NoDrawUnderGray: true, FootX: 1, FootZ: 1}
+	tall := frame.FeatureView{CX: 29, CZ: 10, X: px(470), Z: px(160), Height: 20, Model: "m_tall",
+		Owner: owned, OwnerKnown: true, NoDrawUnderGray: true, FootX: 1, FootZ: 1}
+	noLOS := frame.VisibilityView{W: 32, H: 32, Valid: true, CoverageBytes: true, Visible: make([]uint8, 32*32)}
+	cur := &frame.Frame{
+		Selection:  frame.SelectionView{LocalPlayer: 0},
+		Fog:        frame.FogView{Valid: true, W: 32, H: 32, Ch0: make([]byte, 32*32), Ch1: make([]byte, 32*32)},
+		Visibility: noLOS,
+		Features:   []frame.FeatureView{short, tall},
+	}
+	draw := func() {
+		clearIndexed(c)
+		c.resetListForTest()
+		c.drawFeaturePass(cur, true)
+		c.drawWorldPass(cur, true)
+		c.replayForTest()
+	}
+	draw()
+	if got := c.indexed[165*c.width+472]; got != 60 {
+		t.Fatalf("tall owner-11 feature outside LOS: pixel = %d, want the feature's 60", got)
+	}
+	if got := c.indexed[165*c.width+432]; got == 50 {
+		t.Fatal("short owner-11 feature outside LOS was drawn; the hook is on the tall pass only")
+	}
+
+	cur.Features[1].Owner = world.TerrainFeaturePlacer
+	draw()
+	if got := c.indexed[165*c.width+472]; got == 60 {
+		t.Fatal("tall selector-10 feature outside LOS was drawn")
 	}
 }

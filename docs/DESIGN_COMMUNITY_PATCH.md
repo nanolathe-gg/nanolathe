@@ -396,19 +396,31 @@ Community, so each row's Modern answer is Community's.
 | Target-lock release (`TargetLockRelease`) | `combat.Rules.TargetLockRelease` (Strict false, Community the projected switch), asked by the autonomous maintenance scan (`internal/combat/autonomous.go`) | the scan admits exactly Fire at Will and retains a target through alliance, category and stunned checks `[06 §3.2]` | the scan admits standing-fire values two and three; a retained unit target failing the unit-to-unit physical gate `[06 R-WPN-05 §9]` is set to the empty encoding without `TargetCleared`, the inherited checks still run on the old target, and reacquisition waits for the next visit when they accept; unit acquisition still requires exactly two |
 | Low-energy appliances (`AIApplianceEnergy`) | `ai.Manager.Community`, `activationBranch` | the authored `makesmetal` byte selects the activation arm `[08 R-AI-01 §2]` | the signed top byte of the binary32 `energyuse` must be at least 66 (`energyuse >= 32` for finite nonnegative values); the retail disable/enable order, the bound-five draw and the no-fallthrough rule are unchanged |
 | Builder stop threshold (`AIBuilderStopThreshold`) | `ai.Manager.Community`, construction placement pass | a capture-capable member skips placement at five build-capable units `[08 R-AI-01 §3]` | the placement cutoff is ten; the reposition pass keeps five, so counts five through nine are eligible for both passes |
+| Weapons while working (`WorkingWeaponsAutonomous`) | `orders.Rules.WorkLeavesWeaponsAutonomous` (Strict false, Community the projected switch), asked by `takeWorkSlots` at `HelpBuild` phase 1, `Capture` phase 0, `ReclaimUnit` phase 0 and `RepairUnit` phase 1's in-reach arm (`internal/orders/work.go`) | each site releases all three slots, so the builder's weapons are silent until the record's destructor gives them back `[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]` | the same call with the inhibit verb: a slot an earlier order held becomes autonomous with its target cleared and `TargetCleared` raised, an autonomous slot keeps its target, and autonomous acquisition then runs under its ordinary gates `[06 §3.2]`; `SelfRepair`, `RepairUnitNoMove`, the VTOL twins' preamble, `BuildingBuild` and the destructor are unchanged. The fifth site, `MobileBuild` phase 1, is not implemented: construction's ground placement visit makes no slot call at all, which is also a Strict gap (below) |
+| Single-slot attack take (`AttackSingleSlotTake`) | `orders.Rules.AttackTakesOneSlot`, asked by `Attack_Chase` phase 1 (`internal/orders/guard.go`) and `Suppress` phase 1 (`internal/orders/combat.go`) | `Attack_Chase` phase 1 releases slots 0 and 2 before binding slot `p1`; `Suppress` phase 1 with `p1 = 2` releases all three `[04 R-ORD-01 §3]` | `Attack_Chase` phase 1 releases only slot 2 when `p1 > 1` (signed), else only slot 0; `Suppress` with `p1 = 2` releases only slot 2. `Attack_Chase` phase 3 and `Suppress`'s `p1 ≠ 2` arm keep retail's take |
+| Resurrection failure text (`ResurrectionTextFix`) | `orders.Rules.ResurrectionFailureText`, asked by `Resurrect` phase 3 (`internal/orders/work.go`) | the unresolved-corpse failure shows status 7 `Ressurection failed`, retail's spelling `[04 R-ORD-01 §5]` | status 7 `Resurrection failed`, the feature-lookup failure's string; status, abandon and every other caption are unchanged |
+| Map-owned features drawn without LOS (`MapFeatureOwnerEleven`) | read once at battle entry by `loadTerrainStrict` (`internal/session/composition.go`), which passes the placer to `world.Load` through `world.WithTerrainFeaturePlacer`; the draw hook is `tallFeatureVisibleForFrame` (`internal/client/world_draw.go`), shared by the Classic and Modern executors | terrain-file anchors take placer nibble 10; a `nodrawundergray` feature in either feature pass draws only for the local slot or when the two-corner LOS test passes `[05 R-FEAT-01 §3]` `[03 R-RAST-01 §6]` | terrain-file anchors in both attribute layouts take 11 and void cells take none; mission-file, successor, reproduction, reload and corpse stamps are unchanged; the second (tall, height ≥ 10) pass draws a selector-11 feature without the LOS test once the `nodrawundergray` and local-slot tests fail; the first pass and the fog overlay are unchanged, so unexplored cells stay dark; the PlayerFeatures image stores and restores 11 `[08 R-SAVE-02 §12]`. The draw hook reads no table, as the shipped renderer's has no gate: no retail stamp writes 11, so it is unreachable under Strict |
 
-The same loader's order, drawing and text patches
-([ProTA 4.8 engine package, "Shipped order, drawing, sound and text patches"](../research/extensions/prota-engine.md#shipped-order-drawing-sound-and-text-patches))
-follow the same policy through four more switches, `WorkingWeaponsAutonomous`,
-`AttackSingleSlotTake`, `MapFeatureOwnerEleven` and `ResurrectionTextFix`; each
-gains its row here when its rule is implemented. Until then a switch has no
-reader and changes nothing.
+The last four rows are the same loader's order, drawing and text patches
+([ProTA 4.8 engine package, "Shipped order, drawing, sound and text patches"](../research/extensions/prota-engine.md#shipped-order-drawing-sound-and-text-patches)).
+
+*The `MobileBuild` slot call.* Retail's `MobileBuild` phase 1 releases all
+three slots after a legal placement check and before the site is prepared
+`[04 R-ORD-01 §5]`; `VTOL_MobileBuild` takes them in its takeoff preamble. The
+ground row's placement visit (`internal/construction/states.go`,
+`mobilePlacementVisit`) makes no slot call, so under every rule set a ground
+builder's autonomous weapons keep acquiring while it builds, and a slot an
+earlier order held is not handed back. Adding retail's release there is a
+Strict parity fix owned by the construction package; it can move the
+fingerprint locks and needs its own landing. Once it lands, `WorkLeavesWeaponsAutonomous` at
+that call completes the fifth ProTA site.
 
 *No new seam.* The economy and the computer player read their projected copy
 of the table, like the combat interceptor and corpse rows; Strict's zero table
 is the bypass. The target-lock row adds one method to the existing
 `combat.Rules`, because it changes an acquisition decision the combat seam
-already owns.
+already owns, and the three order rows add three methods to `orders.Rules`,
+whose Community answers read the queue binding's projected copy.
 
 *Content.* The switches need the package's authored data to matter: the six
 stationary stockpile producers (`ARMAMD`, `ARMEMP`, `ARMSILO`, `CORFMD`,
@@ -474,7 +486,9 @@ boundary is explicit and nothing is silently dropped:
 
 | Patch feature | Nanolathe home | Status |
 |---|---|---|
-| Megamap, wheel zoom, dither, icon config | the strategic view and smooth zoom (DESIGN_GPU_RENDERER §16) | existing view and zoom; optional ordered INI/PCX icon configuration in `presentation.strategicIconConfig` |
+| Megamap, its wheel entry and exit, under-attack flash, ring minimums, `Player1..10DotColors` | the optional megamap overview ([DESIGN_INTERFACE_HUD_INPUT §3.15](DESIGN_INTERFACE_HUD_INPUT.md#315-optional-megamap)) | implemented as an optional overview, `presentation.overview` (Zoom by default) with the `megamap*` and `playerDotColors` keys; the ProTA controls preset selects it |
+| Wheel zoom, dither, icon config | the strategic view and smooth zoom (DESIGN_GPU_RENDERER §16) | existing view and zoom; optional ordered INI/PCX icon configuration in `presentation.strategicIconConfig`, which the megamap's icons also use |
+| ProTA 4.8 victory cue on every local win | end-of-battle audio ([DESIGN_INTERFACE_HUD_INPUT §3.16](DESIGN_INTERFACE_HUD_INPUT.md#316-optional-victory-cue)) | implemented as the host option `presentation.victoryCue` (Options → HUD), off by default; the ProTA controls preset turns it on |
 | Whiteboard, chat drawer, fonts, Unicode | HUD messages | not planned |
 | Stockpile and transport counters, reload bars, `Vet<n>` label, group numbers | battle HUD | implemented as host HUD options |
 | Team-coloured nanolathe, stream/frame colours | shared effect presentation | implemented; optional team switch and per-player stream/frame lists |

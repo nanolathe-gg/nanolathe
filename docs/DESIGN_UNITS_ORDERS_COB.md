@@ -319,6 +319,23 @@ primary segment then the secondary, continuing one sequence across both, and
 carries the handler-private phase byte verbatim because handlers own its
 interpretation `[08 R-SAVE-ORDER-01]` `[08 R-SAVE-02 §6]`.
 
+**ProTA 4.8 package order rules.** Three `orders.Rules` methods carry the
+package's order and text switches; Strict answers retail and Community (and
+Modern, which embeds it) reads the queue binding's projected table copy, so no
+handler reads the table by name
+([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)).
+`WorkLeavesWeaponsAutonomous` picks the verb at `takeWorkSlots`, the fixed
+all-slot call of `HelpBuild` phase 1, `Capture` phase 0, `ReclaimUnit` phase 0
+and `RepairUnit` phase 1's in-reach arm: retail's release, or the inhibit verb
+at the same site `[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]`. `SelfRepair`,
+`RepairUnitNoMove` and `airWorkPreamble` call the release directly and do not
+ask. `AttackTakesOneSlot` narrows `Attack_Chase` phase 1's take to slot 2 when
+`p1 > 1` (signed) and slot 0 otherwise, and `Suppress` phase 1's `p1 = 2` take
+to slot 2 `[04 R-ORD-01 §3]`. `ResurrectionFailureText` is `Resurrect` phase
+3's caption: retail's verbatim `Ressurection failed`, or `Resurrection failed`.
+`prota_orders_test.go` locks each site under Strict, Community off, Community
+on and Modern.
+
 ### Modern Hold Fire
 
 **Nanolathe Modern policy (user-authorized).** The central `gameplay.Mode`
@@ -754,11 +771,36 @@ marker `[04 R-COB-03 §3]` `[04 R-COB-03 §4]`.
 **The binding** (`binding.go`). `BindingRequest` is the strict production bind:
 program, model, piece list, required entry points, streams and sinks. Its
 diagnostics are coded, not prose-matched, so composition and unit creation can
-classify a missing program, a piece-count mismatch or a failed `Create` start
-without parsing text.
-Duplicate model-piece names remain valid: every COB name maps to the first
-matching piece in model order, so stock models such as ARMCH bind and allocate
-normally `[02 R-MALF-01 §2]`.
+classify a missing program, a missing model, an empty model-piece name, a
+missing required entry point or a failed `Create` start without parsing text.
+
+Piece names never refuse a bind. `LinkPieces` is retail's link pass: the model's
+piece slots are permuted in place, script piece `s` taking the first
+case-folded name match from slot `s` onward, or, with no match, the unclaimed
+model piece already in slot `s`; a script piece at or beyond the model's piece
+count maps to `-1` `[04 R-COB-01 §4]`. The map is one-to-one. Duplicate
+model-piece names bind to successive script entries, so stock models such as
+ARMCH bind and allocate normally `[02 R-MALF-01 §2]`; for all retail 3.1
+content the pass equals a first-match lookup. Unmatched entries are recorded
+as `Binding.LinkNotes` under the historical `unresolved-piece` and
+`piece-count-mismatch` codes, informational only. ProTA 4.8's CORSILO
+(`blastpt`) and CORAMPH (`launch`) each declare one trailing piece their model
+lacks and never use it; under the former refusal neither could be created.
+
+A piece beyond the model has VM animation state but no render record. Retail
+reaches memory past its table if a script animates, flags or explodes such a
+piece, and whenever the unit is saved or loaded `[04 R-COB-01 §4]`; that is
+undefined, so Nanolathe fixes it deterministically, an I11-style divergence:
+the VM pose still animates; the flag writer drops the write and the thread
+continues (a flag read answers draw clear, cache and shade set); the locator
+declines, which the piece-position ports and the muzzle treat as the zero
+offset retail's bounded locator gives; an explosion from it spawns no debris
+(a physical request still takes its six draws); and the save writes the
+VM pose and those flags instead of stray bytes. Presentation still pairs pieces
+by name, so an in-range alias (a missing name that takes another piece's
+slot) animates on the authoritative side but not on screen; the open
+question is a `TODO(question)` at `LinkPieces`. No shipped script animates an
+alias.
 
 **Save boxes** (`retail_save.go`, `retail_restore.go`). The per-piece image and
 the thread windows. The writer persists each piece's current draw, cache and
@@ -1593,6 +1635,13 @@ producer that drives this package's queued-order toggle.
   the side panel's own buttons issue no world point, and nothing says whether a
   Shift-held press of one runs the test — which would make a second Shift-press
   cancel the first. A trace of those button handlers settles it `[07 R-P0-11 §6]`.
+
+One retail call is missing outside these packages: `MobileBuild` phase 1's
+release of all three weapon slots after a legal placement check
+`[04 R-ORD-01 §5]`. The ground placement visit in `internal/construction` makes
+no slot call, so a ground builder's weapons keep acquiring while it builds under
+every rule set, and the ProTA working-weapons switch has no call to redirect at
+that site ([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)).
 
 The questions the contracts above still carry, each with the observation that
 would settle it:

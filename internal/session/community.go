@@ -111,6 +111,9 @@ func (s *Session) orderCommunity() community.Features {
 		GuardingBuildersHold: f.GuardingBuildersHold, PatrollingBuilderFilters: f.PatrollingBuilderFilters,
 		ReclaimToggleKeepsBuild: f.ReclaimToggleKeepsBuild, ConstructionKickout: f.ConstructionKickout,
 		WeaponTargetKeys: f.WeaponTargetKeys, Veterancy: f.Veterancy, BuildWeaponSlotGuard: f.BuildWeaponSlotGuard,
+		// The ProTA 4.8 package's order switches (DESIGN_COMMUNITY_PATCH §4.7).
+		WorkingWeaponsAutonomous: f.WorkingWeaponsAutonomous, AttackSingleSlotTake: f.AttackSingleSlotTake,
+		ResurrectionTextFix: f.ResurrectionTextFix,
 	}
 }
 

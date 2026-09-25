@@ -138,8 +138,29 @@ func (p PlotCell) IsUnexplored() bool { return p[0xC]&0x04 != 0 }
 
 // PlacerNibble returns bits 3-6 of the flag byte, byte 0x0C (placer argument
 // nibble written at stamp time) [03 §3.3][02 "Terrain file"].
-// Map load stamps 10; corpse stamps pass the dying unit's player slot.
+// Map load stamps 10 (11 for terrain-file anchors under the ProTA 4.8 switch,
+// MapOwnedFeaturePlacer); corpse stamps pass the dying unit's player slot.
 func (p PlotCell) PlacerNibble() uint8 { return (p[0xC] >> 3) & 0x0F }
+
+// SetPlacerNibble writes bits 3-6 of the flag byte to placer & 0xF and
+// preserves every other bit, as the stamp's step 6 does [05 R-FEAT-01 §3].
+func (p *PlotCell) SetPlacerNibble(placer uint8) {
+	p[0xC] = (p[0xC] &^ 0x78) | ((placer & 0x0F) << 3)
+}
+
+// TerrainFeaturePlacer is the placer nibble retail's terrain-file and
+// mission-file loaders pass to the stamp: a selector no player slot takes
+// [05 R-FEAT-01 §3].
+const TerrainFeaturePlacer uint8 = 10
+
+// MapOwnedFeaturePlacer is the nibble the ProTA 4.8 package's loader passes
+// to the terrain-file stamps instead of TerrainFeaturePlacer. No player slot
+// and no retail stamp uses it; the composer's tall-feature pass draws a
+// feature carrying it without the LOS test
+// (research/extensions/prota-engine.md "Map-owned features drawn without
+// line of sight";
+// docs/DESIGN_COMMUNITY_PATCH.md §4.7).
+const MapOwnedFeaturePlacer uint8 = 11
 
 // IsRealFeature reports whether the feature field holds a real feature-table
 // index (< 0xFFFB) [GAP T14].

@@ -204,7 +204,11 @@ mod:
   the Community host options
   ([DESIGN_COMMUNITY_PATCH §7](DESIGN_COMMUNITY_PATCH.md#7-host-and-presentation-features-out-of-the-profile))
   plus the preferences ProTA 4.8's `ProTA.ini` pins through its `[REG]`
-  block ([community patch engine §4.1](../research/extensions/community-patch-engine.md#41-key-inventory)).
+  block ([community patch engine §4.1](../research/extensions/community-patch-engine.md#41-key-inventory)),
+  its draw-engine megamap keys
+  ([draw engine interface](../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap))
+  and the victory cue its renderer always plays
+  ([ProTA engine](../research/extensions/prota-engine.md#victory-cue-on-multiplayer-and-skirmish-wins)).
   `retail` writes each row's retail default. The rows are defined once, in
   `controlsPresetRows` (`cmd/nanolathe/controls_preset.go`):
 
@@ -219,6 +223,12 @@ mod:
   | `presentation.veteranLabels` | Options → HUD | 1 | 0 |
   | `presentation.groupNumbers` | Options → HUD | 1 | 0 |
   | `presentation.weatherReport` (wind and tide readout) | Options → HUD | 1 | 0 |
+  | `presentation.overview` | settings file | 1 (Megamap) | 0 (Zoom) |
+  | `presentation.megamapWheel`, `megamapWheelMove`, `megamapFlash` | settings file | 1 each | unchanged |
+  | `presentation.megamapDoubleClickMove` | settings file | 0 | unchanged |
+  | `presentation.megamapRadarMinimum`, `megamapSonarMinimum`, `megamapSonarJamMinimum`, `megamapAntiNukeMinimum` (one row) | settings file | 0 each | unchanged |
+  | `presentation.playerDotColors` (one row, *Dot colours*) | settings file | ProTA: 227, 249, 18, 250, 67, 149, 208, 117, 210, 34 | Default: 227, 212, 80, 235, 108, 219, 208, 93, 130, 67 |
+  | `presentation.victoryCue` | Options → HUD | 1 | 0 |
   | `clock` (stand-alone battle clock) | `+clock` | 1 | 0 |
   | `audio.soundMode` | Options → Sound | 2 (3D) | 1 (Mono) |
   | `audio.mixingBuffers` | settings file | 128 | 8 |
@@ -230,10 +240,19 @@ mod:
   slots, so no sound is cut off for the voice limit, which is ProTA's
   "unlimited" [03 R-AUD-01 §1]. Ten skirmish rows only shows more rows: each
   row keeps its controller, so a skirmish starts with the same players, and
-  the retail preset never removes rows. ProTA's `Player1..10DotColors`
-  minimap dot colours are not in the preset, because Nanolathe has no setting
-  for per-slot minimap dot colours; the unit limit is not either, because the
-  Community feature table already sets it (§8.3).
+  the retail preset never removes rows. The megamap rows are the optional
+  overview of [DESIGN_INTERFACE_HUD_INPUT §3.15](DESIGN_INTERFACE_HUD_INPUT.md#315-optional-megamap);
+  the retail preset returns the overview to Zoom and leaves the megamap's own
+  preferences as the player set them. The four ring minimums are one row
+  because ProTA sets them alike, and the ten dot colours are one row naming
+  the draw engine's defaults or ProTA's table; a table matching neither, or
+  unequal minimums, read *Custom* in the offer. The dot colours are read by
+  the megamap's icons only: the draw engine's table is not read by the
+  retail minimap's contacts, so ProTA's minimap dots come from its content.
+  The victory cue is
+  [DESIGN_INTERFACE_HUD_INPUT §3.16](DESIGN_INTERFACE_HUD_INPUT.md#316-optional-victory-cue).
+  The unit limit is not in the preset, because the Community feature table
+  already sets it (§8.3).
 
   A preset is **offered, never forced**, and each mod's offer is made once.
   When the player switches to a mod that names a preset (or whose content

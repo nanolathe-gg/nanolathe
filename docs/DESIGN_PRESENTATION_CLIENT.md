@@ -377,7 +377,7 @@ files:
 |---|---|
 | `client.go` | the type, its caches, options, size, present, exit |
 | `frame.go` | `Frame`, the compose entry, fog draw, visibility predicates for units, features and projectiles |
-| `world_draw.go` | the ten barriers, the plot-cell window, the screen-Y buckets, the two feature passes and the two unit passes |
+| `world_draw.go` | the ten barriers, the plot-cell window, the screen-Y buckets, the two feature passes (the tall pass carries the ProTA placer-11 LOS bypass, [DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)) and the two unit passes |
 | `terrain.go` | the tile blitter: source block plus intra-tile remainder, clipped at map bounds |
 | `model*.go` | the model rasterizer — see §2.3 |
 | `strip_draw.go`, `effect_draw.go` | the per-barrier strip walk and the fixed-effect pool draw |

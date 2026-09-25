@@ -232,7 +232,15 @@ func (t *Terrain) stampableAnchor(cx, cz int32, feature uint16) bool {
 // describe. Void sentinels are not cleared — they are the loader's own step-1
 // markers — and neither is an ordinal this catalog cannot stamp, which the plot
 // preserves verbatim as it always has.
-func (t *Terrain) stampFeatureAnchors() {
+//
+// Every completed stamp writes placer into its anchor's flag-byte nibble
+// [05 R-FEAT-01 §3 step 6]; a vetoed stamp returns before that step and
+// leaves the anchor's nibble as plot expansion wrote it. Expansion already
+// wrote TerrainFeaturePlacer into every cell, so the retail placer rewrites
+// the same bits. A void cell is never stamped here and never takes the
+// nibble (research/extensions/prota-engine.md "Map-owned features drawn
+// without line of sight").
+func (t *Terrain) stampFeatureAnchors(placer uint8) {
 	if t == nil || t.CellW <= 0 || t.CellH <= 0 || len(t.Plot) < int(t.CellW*t.CellH) {
 		return
 	}
@@ -263,7 +271,9 @@ func (t *Terrain) stampFeatureAnchors() {
 			// far torn, which is retail's outcome for a footprint overlapping
 			// an indestructible feature [05 R-FEAT-01 §3-A]; the loader has no
 			// other recourse and continues with the next source cell.
-			_ = t.writeFeatureRect(cx, cz, authored[idx], def.FootprintX, def.FootprintZ, owned)
+			if t.writeFeatureRect(cx, cz, authored[idx], def.FootprintX, def.FootprintZ, owned) {
+				t.Plot[idx].SetPlacerNibble(placer)
+			}
 		}
 	}
 	for i := range t.Plot {

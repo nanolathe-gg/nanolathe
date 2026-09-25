@@ -26,6 +26,10 @@ const (
 // presetUnchanged is a row value the preset leaves alone.
 const presetUnchanged = -1
 
+// presetCustom is what a row that stands for several stored values reads
+// when they match none of its named choices; no preset writes it.
+const presetCustom = -2
+
 // controlsPresetRow is one existing host option a preset assigns. Each value
 // is the option's own stored integer. A row owns no new behaviour: it writes
 // a setting the player can already change on an options page or with a chat
@@ -42,6 +46,12 @@ type controlsPresetRow struct {
 }
 
 var onOffNames = []string{"Off", "On"}
+
+// The Dot colours row's two named tables.
+const (
+	playerColoursDefault = 0
+	playerColoursProTA   = 1
+)
 
 // presentationRow assigns one field of the presentation block.
 func presentationRow(label string, community, retail int, field func(*settings.Presentation) *int) controlsPresetRow {
@@ -61,10 +71,11 @@ func presentationRow(label string, community, retail int, field func(*settings.P
 
 // controlsPresetRows is the whole content of both presets. The `community`
 // column is ProTA 4.8's recommended settings: the Community host options
-// (DESIGN_COMMUNITY_PATCH §7) plus the preferences ProTA's `ProTA.ini`
-// pins through its `[REG]` block (research/extensions/community-patch-engine.md
-// §4.1). The `retail` column is the retail default of each; a row the
-// retail preset leaves alone says presetUnchanged.
+// (DESIGN_COMMUNITY_PATCH §7), the preferences ProTA's `ProTA.ini` pins
+// through its `[REG]` block (research/extensions/community-patch-engine.md
+// §4.1), its draw-engine megamap keys, and the victory cue its renderer
+// always plays. The `retail` column is the retail default of each; a row
+// the retail preset leaves alone says presetUnchanged.
 var controlsPresetRows = []controlsPresetRow{
 	presentationRow("Idle unit keys", 1, 0, func(p *settings.Presentation) *int { return &p.CommunitySelection }),
 	presentationRow("Double-click select", 1, 0, func(p *settings.Presentation) *int { return &p.DoubleClickSelection }),
@@ -80,6 +91,63 @@ var controlsPresetRows = []controlsPresetRow{
 	presentationRow("Veterancy", 1, 0, func(p *settings.Presentation) *int { return &p.VeteranLabels }),
 	presentationRow("Group digits", 1, 0, func(p *settings.Presentation) *int { return &p.GroupNumbers }),
 	presentationRow("Wind/tide readout", 1, 0, func(p *settings.Presentation) *int { return &p.WeatherReport }),
+	// The megamap rows are ProTA.ini's draw-engine keys
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15). The retail preset returns the
+	// overview to Zoom and leaves the megamap's own preferences alone.
+	{
+		label: "Overview", community: settings.OverviewMegamap, retail: settings.OverviewZoom,
+		names: []string{"Zoom", "Megamap"},
+		get:   func(g *gameShell) int { return g.presentation.Overview },
+		set: func(g *gameShell, value int) {
+			p := g.presentation
+			p.Overview = value
+			g.setPresentation(p)
+		},
+	},
+	presentationRow("Megamap wheel", 1, presetUnchanged, func(p *settings.Presentation) *int { return &p.MegamapWheel }),
+	presentationRow("Wheel out moves camera", 1, presetUnchanged, func(p *settings.Presentation) *int { return &p.MegamapWheelMove }),
+	presentationRow("Megamap double-click move", 0, presetUnchanged, func(p *settings.Presentation) *int { return &p.MegamapDoubleClickMove }),
+	presentationRow("Under-attack flash", 1, presetUnchanged, func(p *settings.Presentation) *int { return &p.MegamapFlash }),
+	{
+		// One row for the four ring minimums, which ProTA.ini sets alike.
+		label: "Megamap ring minimums", community: 0, retail: presetUnchanged,
+		get: func(g *gameShell) int {
+			p := g.presentation
+			value := p.MegamapRadarMinimum
+			if p.MegamapSonarMinimum != value || p.MegamapSonarJamMinimum != value || p.MegamapAntiNukeMinimum != value {
+				return presetCustom
+			}
+			return value
+		},
+		set: func(g *gameShell, value int) {
+			p := g.presentation
+			p.MegamapRadarMinimum, p.MegamapSonarMinimum, p.MegamapSonarJamMinimum, p.MegamapAntiNukeMinimum = value, value, value, value
+			g.setPresentation(p)
+		},
+	},
+	{
+		// The ten-entry dot colour table as one choice: the draw engine's
+		// defaults (retail) or ProTA.ini's palette.
+		label: "Dot colours", community: playerColoursProTA, retail: playerColoursDefault,
+		names: []string{"Default", "ProTA"},
+		get: func(g *gameShell) int {
+			switch g.presentation.PlayerDotColors {
+			case settings.DefaultPlayerDotColors:
+				return playerColoursDefault
+			case settings.ProTAPlayerDotColors:
+				return playerColoursProTA
+			}
+			return presetCustom
+		},
+		set: func(g *gameShell, value int) {
+			p := g.presentation
+			p.PlayerDotColors = settings.DefaultPlayerDotColors
+			if value == playerColoursProTA {
+				p.PlayerDotColors = settings.ProTAPlayerDotColors
+			}
+			g.setPresentation(p)
+		},
+	},
 	{
 		label: "Game clock", community: 1, retail: settings.DefaultClock, names: onOffNames,
 		get: func(g *gameShell) int { return boolInt(g.clockVisible) },
@@ -91,6 +159,7 @@ var controlsPresetRows = []controlsPresetRow{
 		get:   func(g *gameShell) int { return g.audioPrefs.SoundMode },
 		set:   func(g *gameShell, value int) { g.audioPrefs.SoundMode = value },
 	},
+	presentationRow("Victory cue", 1, 0, func(p *settings.Presentation) *int { return &p.VictoryCue }),
 	{
 		// 128 voices is more than the mixer's 32 tracked slots, so no sound
 		// is cut off for the voice limit [03 R-AUD-01 §1].
@@ -131,6 +200,9 @@ func (r controlsPresetRow) presetValue(preset string) int {
 }
 
 func (r controlsPresetRow) valueText(value int) string {
+	if value == presetCustom {
+		return "Custom"
+	}
 	if value >= 0 && value < len(r.names) && r.names[value] != "" {
 		return r.names[value]
 	}

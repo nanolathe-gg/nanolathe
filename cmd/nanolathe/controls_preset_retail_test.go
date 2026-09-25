@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -130,6 +131,15 @@ func TestProTARecommendedSettingsAreOfferedOnce(t *testing.T) {
 		t.Fatal("the main menu did not offer the running mod's preset")
 	}
 	presetCapture(t, cl, "offer")
+	// The table's last rows, scrolled into view: the dot colour table reads
+	// as one named choice.
+	rows, _ := shell.controlsOfferRows(controlsOfferUI.preset)
+	if !slices.Contains(rows, "Dot colours: ProTA (now Default)") {
+		t.Fatalf("the offer's rows %q do not name the ProTA dot colours", rows)
+	}
+	controlsOfferUI.selected = len(rows) - 1
+	shell.refreshControlsOffer()
+	presetCapture(t, cl, "offer-end")
 	shell.activateGadget("LOAD")
 	if controlsOfferUI != nil {
 		t.Fatal("Apply did not close the offer")

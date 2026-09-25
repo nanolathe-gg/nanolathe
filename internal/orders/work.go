@@ -614,7 +614,7 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 			n.DynamicGate |= gateWorkApproach
 			return deadlineHold(n, tick, wait) // the phase stays 1: the goal is re-issued on every wake
 		}
-		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
+		takeWorkSlots(u) // "release all slots" [04 R-ORD-01 §5]; see takeWorkSlots
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
@@ -788,7 +788,7 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 		if target.Remaining == 0 {
 			return 5 // complete: nothing left to assist
 		}
-		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
+		takeWorkSlots(u) // "release all slots" [04 R-ORD-01 §5]; see takeWorkSlots
 		EmitStartBuilding(u, n)
 		return 1
 	case 2:
@@ -970,7 +970,7 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 			Binding: bindingOfUnit(u), Definition: target.Def, Kills: uint16(target.Kills),
 		})
 		n.Param2 = uint32(captureBudget(target.Def.BuildCostEnergy, target.Def.BuildCostMetal, target.Health, target.Def.MaxDamage, target.Kills, level))
-		releaseSlot(u, slotAll) // "release all slots": k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
+		takeWorkSlots(u) // "release all slots" [04 R-ORD-01 §5]; see takeWorkSlots
 		if !installWorkGoal(u, n, target.X, target.Y, target.Z) {
 			return 7
 		}
@@ -1462,7 +1462,9 @@ func resurrectHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 			return 7 // cancel-all; see boundResurrect
 		}
 		if !ok {
-			workStatus(u, statusCant, "Ressurection failed")
+			// The rule answers retail's verbatim text; the ProTA 4.8 package
+			// repoints it to the single-s string [04 R-ORD-01 §5].
+			workStatus(u, statusCant, rulesOfUnit(u).ResurrectionFailureText(u))
 			return 8 // abandon
 		}
 		workStatus(u, statusWorking, "")
@@ -1605,6 +1607,24 @@ func ensureWorkHandlers() {
 
 func init() { ensureWorkHandlers() }
 
+// takeWorkSlots is the fixed all-slot weapon call of four ground work handlers:
+// `HelpBuild` phase 1, `Capture` phase 0, `ReclaimUnit` phase 0 and
+// `RepairUnit` phase 1's in-reach arm [04 R-ORD-01 §5]. Retail releases all
+// three slots there, which takes them from autonomy until the record's
+// destructor hands them back [04 R-ORD-01 §7]. The rule set may select the
+// inhibit verb at the same site with the same argument, which is how the
+// ProTA 4.8 package lets a builder's weapons keep acquiring while it works
+// (research/extensions/prota-engine.md "Weapons acquire targets while
+// working"). `SelfRepair`, `RepairUnitNoMove` and the VTOL twins' shared
+// preamble keep the release in every mode.
+func takeWorkSlots(u *units.Unit) {
+	if rulesOfUnit(u).WorkLeavesWeaponsAutonomous(u) {
+		inhibitSlot(u, slotAll)
+		return
+	}
+	releaseSlot(u, slotAll)
+}
+
 // GroundUnitReclaimSetup supplies the order-owned callback and stance phases
 // for construction's per-queue executor [04 R-ORD-01 §5]. The caller owns
 // admission, approach, pulse arithmetic and the work window.
@@ -1612,7 +1632,7 @@ func GroundUnitReclaimSetup(u *units.Unit, n *Node, satisfied, tick uint32) Code
 	switch n.Phase {
 	case 0:
 		captionClearText(u, n, "Reclaiming")
-		releaseSlot(u, slotAll)
+		takeWorkSlots(u) // "release all slots" [04 R-ORD-01 §5]; see takeWorkSlots
 		return 1
 	case 2:
 		if satisfied&gateNoRoute != 0 {

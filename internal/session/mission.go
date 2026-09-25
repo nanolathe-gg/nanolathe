@@ -134,7 +134,7 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 	if err != nil {
 		return nil, err
 	}
-	terrain, err := loadTerrainStrict(fs, cat, m)
+	terrain, err := loadTerrainStrict(fs, cat, m, entryFeatures)
 	if err != nil {
 		return nil, err
 	}

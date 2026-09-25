@@ -6876,6 +6876,23 @@ level up, to decide whether this routine is reached at all.) An
 implementation that switched on the product would invert the rule for a
 mobile builder producing a mobile product.
 
+**Established — the stockpile alias test.** The routine is handed the product
+as a *name*: the clicked toy's name on this click path, and the product
+definition's unit name when the computer player's resource/queue task calls
+the same routine [08 R-AI-01 §2]. After the cue it searches that name for the
+substring `MAKENUKE` and, only when that is absent, for `MAKEANTI`, with the C
+runtime's ordinary substring search: a byte-exact, therefore
+**case-sensitive**, match anywhere in the name (`ARMMAKEANTI` and
+`MAKENUKEARM` both qualify; `makenuke` does not). Either hit selects
+`BUILDWEAPON` with an id operand of **zero** — the first weapon slot — and
+passes the signed count through unchanged, so a right-click subtracts rounds
+exactly as it subtracts products. No catalogue lookup is made on this arm, so
+an alias name need not name a unit definition. Only a name with neither
+substring is resolved to a definition id, through the catalogue's sorted-name
+lookup, which compares **case-insensitively**; a name that resolves to no
+definition returns at once with nothing queued (the cue has already played).
+A resolved name then takes the `MOBILEBUILD`/`BUILDINGBUILD` choice above.
+
 * Positive count: the queue head is chosen by a descriptor flag that selects
   the secondary order list when set and the primary order list otherwise. If
   the tail node of the chosen list matches the descriptor's kind and product

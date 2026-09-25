@@ -25,7 +25,7 @@ func TestCommunityHUDOptionsTransaction(t *testing.T) {
 	if optionsPanel.Index("HELPTEXT") < 0 {
 		t.Fatal("HUD applicability hints have no visible help target")
 	}
-	for _, name := range []string{"NHEALTH", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER"} {
+	for _, name := range []string{"NHEALTH", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER", "NVICTORY"} {
 		if optionsPanel.HelpOf(name) == "" {
 			t.Fatalf("%s has no applicability hint", name)
 		}

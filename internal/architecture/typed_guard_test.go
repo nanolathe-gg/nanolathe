@@ -500,7 +500,10 @@ var mapFunctionHashes = map[string]string{
 	// precision [08 "Arithmetic and clamping"]. The key union, its sort and the
 	// order every consumer sees are unchanged (I1).
 	"internal/ai/strategic.go *Strategic.recomputeClassVectors": "5d879af01880139d273155d9a616fbd7256484085ee699ffb0d8e22e7f9bb9f3",
-	"internal/cob/binding.go BindStrict":                        "833dd320728882053831252fe1cf9315c0a42c67042b3f2ae9d510bb912ef0f4",
+	// Re-audited: the piece link now uses retail's slot pass and records link
+	// notes [04 R-COB-01 §4]. The two port-install ranges are unchanged and
+	// still only install handlers by key (I1).
+	"internal/cob/binding.go BindStrict":                        "0cbb3d03f9c57fd1b3a93bcaa6964a92a743639c281abc0aa15e97dbdd937f0a",
 	"internal/construction/placement.go *Service.BuilderLinks":  "ab64326b5234a8e82416673727052e72d47df694047af752dba5b34341f3c0bf",
 	"internal/construction/placement.go *Service.SnapshotLinks": "c001891b664d5693829dc524e5c7bad19b8a14c4341d396557013d6a5c1b40ca",
 	// Re-audited: the rebuild now also fills the parallel value row the two

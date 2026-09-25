@@ -155,6 +155,38 @@ func (CommunityRules) PatrolWork(req PatrolWorkRequest) PatrolWorkOption {
 	return patrolOption(req.Builder)
 }
 
+// WorkLeavesWeaponsAutonomous applies the ProTA 4.8 package's working-weapons
+// patch only when this unit's projected table enables it. The call site and
+// argument stay retail's; only the verb changes, so a slot an earlier order
+// still held is handed back with its target cleared and `TargetCleared`
+// raised, and an already autonomous slot is left alone
+// (research/extensions/prota-engine.md "Weapons acquire targets while
+// working").
+func (CommunityRules) WorkLeavesWeaponsAutonomous(u *units.Unit) bool {
+	b := bindingOfUnit(u)
+	return b != nil && b.Community.WorkingWeaponsAutonomous
+}
+
+// AttackTakesOneSlot applies the ProTA 4.8 package's single-slot attack take
+// only when this unit's projected table enables it
+// (research/extensions/prota-engine.md, the two related weapon-slot patches).
+func (CommunityRules) AttackTakesOneSlot(u *units.Unit) bool {
+	b := bindingOfUnit(u)
+	return b != nil && b.Community.AttackSingleSlotTake
+}
+
+// ResurrectionFailureText applies the ProTA 4.8 package's caption repoint only
+// when this unit's projected table enables it: the phase-3 failure then shows
+// the feature-lookup failure's correctly spelled string, with the same status
+// and control flow (research/extensions/prota-engine.md "Resurrection failure
+// text").
+func (CommunityRules) ResurrectionFailureText(u *units.Unit) string {
+	if b := bindingOfUnit(u); b != nil && b.Community.ResurrectionTextFix {
+		return "Resurrection failed"
+	}
+	return StrictRules{}.ResurrectionFailureText(u)
+}
+
 // ScriptAttackSurfaceFire applies CP-WPN-3 only when the selected Community
 // table enables weapon target keys, and consults weapon slot 0 only. A tagged
 // later slot cannot open the COB script-action ATTACK gate

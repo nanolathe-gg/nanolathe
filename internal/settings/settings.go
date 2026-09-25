@@ -533,6 +533,12 @@ type Presentation struct {
 	MegamapSonarJamMinimum int     `json:"megamapSonarJamMinimum"`
 	MegamapAntiNukeMinimum int     `json:"megamapAntiNukeMinimum"`
 	PlayerDotColors        [10]int `json:"playerDotColors"`
+
+	// VictoryCue plays the `Victory Condition` alias when the local viewer's
+	// won result first shows, as ProTA 4.8 does for every win
+	// (DESIGN_INTERFACE_HUD_INPUT §3.16). Zero, the default, is retail: only
+	// the campaign trigger cue plays [08 R-TRIG-01 §8].
+	VictoryCue int `json:"victoryCue"`
 }
 
 // DefaultPresentation selects the modern executor with a 60 FPS cap and every
@@ -578,7 +584,7 @@ func (p *Presentation) Normalize() {
 	if p.ExpandedSidebar < 0 {
 		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
 	}
-	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe} {
+	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe, &p.VictoryCue} {
 		if *value < 0 {
 			*value = 0
 		} else {

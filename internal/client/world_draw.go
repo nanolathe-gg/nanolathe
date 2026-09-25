@@ -619,12 +619,36 @@ func (c *Client) drawFeaturePass(cur *frame.Frame, ok bool) {
 // definitions draw only for a local-player placer selector or when either of
 // the two footprint corners is visible in the committed visibility mask; the
 // fog/explored channels are deliberately not consulted [03 R-RAST-01 §6]
-// [03 §5.1.5].
+// [03 §5.1.5]. This is the first (short-feature) pass's gate;
+// tallFeatureVisibleForFrame is the second pass's.
 func featureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
+	return featureDrawGate(cur, f, false)
+}
+
+// tallFeatureVisibleForFrame is the second (tall-feature) pass's gate: the
+// first pass's gate plus the ProTA 4.8 package's renderer hook, which draws a
+// feature whose placer selector is 11 without the LOS test once the
+// nodrawundergray and local-slot tests have failed
+// (research/extensions/prota-engine.md "Map-owned features drawn without
+// line of sight"). The hook has no gate of its own: retail never stamps 11, so only
+// the ProTA terrain-file stamp (the community table's MapFeatureOwnerEleven,
+// docs/DESIGN_COMMUNITY_PATCH.md §4.7) can reach it. Fog still darkens the
+// feature afterwards, so unexplored cells stay dark.
+func tallFeatureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
+	return featureDrawGate(cur, f, true)
+}
+
+func featureDrawGate(cur *frame.Frame, f frame.FeatureView, tall bool) bool {
 	if cur == nil {
 		return false
 	}
 	if !f.NoDrawUnderGray {
+		return true
+	}
+	// The local-slot test cannot also pass for selector 11 (no player slot is
+	// 11), so taking the hook first is the hook's order; it precedes the
+	// viewer guard because it reads no viewer state.
+	if tall && f.OwnerKnown && f.Owner == world.MapOwnedFeaturePlacer {
 		return true
 	}
 	viewer := cur.ViewingPlayer
@@ -696,7 +720,8 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		b.add(worldDrawable{row: row, unit: u, screenX: sx, screenY: sy, index: int32(i)})
 	}
 	// The deferred tall features take the same gate as pass 1: the window, and
-	// nothing that reads fog or LOS [03 R-RAST-01 §6].
+	// nothing that reads fog [03 R-RAST-01 §6]. The ProTA owner-11 hook lives
+	// on this pass alone (tallFeatureVisibleForFrame).
 	for i := range cur.Features {
 		f := &cur.Features[i]
 		if f.Height < 10 {
@@ -705,7 +730,7 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		if !win.admitsCell(f.CX, f.CZ) {
 			continue
 		}
-		if !featureVisibleForFrame(cur, *f) {
+		if !tallFeatureVisibleForFrame(cur, *f) {
 			continue
 		}
 		sx, sy := c.featureScreenPos(*f)

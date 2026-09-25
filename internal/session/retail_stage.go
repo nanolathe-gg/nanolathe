@@ -170,7 +170,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err != nil {
 		return nil, err
 	}
-	terrain, err := loadTerrainStrict(deps.FS, cat, m)
+	terrain, err := loadTerrainStrict(deps.FS, cat, m, entryFeatures)
 	if err != nil {
 		return nil, fmt.Errorf("session: retail map resolution: %w", err)
 	}
