@@ -23,7 +23,8 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 // RepathDelay is asked only for an armed follower's staging test and poll;
 // FirstRequestSpread once per scheduler call and per staged first request;
 // UnreachableMoves once per cannot-get-there publication and, while a
-// certificate is live, per follower visit.
+// certificate is live, per follower visit; WedgeEscape at most once per ground
+// visit whose proposal fails a static cell test, and once per opened search.
 // Every implementation is a zero-size value or a pointer to one, so dispatch
 // allocates nothing; the learned grid and the unreachable-move certificates
 // belong to the System.
@@ -117,6 +118,20 @@ type Rules interface {
 	// retail's occupant test [04 R-COLL-01 §1]. It is asked once per ground
 	// mover visit and once per search opening, and must be a pure answer.
 	JamRelease(s *System) (jamAfter uint16, lifetime uint32)
+
+	// WedgeEscape reports whether a ground mover whose committed footprint
+	// covers ground the commit's static test rejects — a wreck stamped over
+	// it — may leave that ground: the commit's static test passes the cells
+	// the committed footprint already covers, a search opened for the mover
+	// reads those cells as passable for it alone, and a mover wedged under a
+	// route planned elsewhere re-plans at the next scheduler call
+	// (docs/DESIGN_MOVEMENT_PATH.md "Modern wedge escape"). false is retail's
+	// validator, which tests every cell of the proposed footprint
+	// [04 R-COLL-01 §2], and retail's search, which rejects a blocked start
+	// without seeding [04 R-PATH-01 §4]. It is asked at most once per ground
+	// mover visit, only after a proposed cell has failed the static test, and
+	// once per opened search; it must be a pure answer: no writes, no RNG.
+	WedgeEscape(s *System) bool
 }
 
 // StrictRules is the retail baseline: nothing is learned and nothing learned
@@ -184,6 +199,12 @@ func (StrictRules) UnreachableMoves(*System) (int32, uint32) { return 0, 0 }
 // commit and every search reads the occupancy layer [04 R-COLL-01 §1].
 func (StrictRules) JamRelease(*System) (uint16, uint32) { return 0, 0 }
 
+// WedgeEscape is off under Strict 3.1: the validator tests every cell of the
+// proposed footprint, including cells the mover already covers, and a search
+// whose start anchor the class layer walls is rejected at setup
+// [04 R-COLL-01 §2][04 R-PATH-01 §4].
+func (StrictRules) WedgeEscape(*System) bool { return false }
+
 // retailRepathDelay is the follower poll's throttle period [04 R-MOV-01 §7].
 const retailRepathDelay = 60
 
@@ -241,9 +262,10 @@ func (*ModernRules) FirstRequestSpread(*System) (int, int) {
 }
 
 // ModernRules carries the approved learned-terrain, re-route staggering,
-// group-order spreading, bounded path work, group destination slot,
-// allied pass-through, unreachable-move and jam-release policies. It is zero size and is held by pointer so a
-// later set may embed it and override one answer.
+// group-order spreading, bounded path work, group destination slot, allied
+// pass-through, unreachable-move, jam-release and wedge-escape policies. It is
+// zero size and is held by pointer so a later set may embed it and override
+// one answer.
 type ModernRules struct{ CommunityRules }
 
 // StaticRejection teaches the owner the mapping blocks the route search reads

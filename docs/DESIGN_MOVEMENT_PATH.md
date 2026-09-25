@@ -42,8 +42,9 @@ else `[04 R-COLL-01 §7]` `[04 R-MOV-01 §7]`. Unapproved additions in this area
 Modern construction-clearance contract below,
 [Modern learned terrain](#modern-learned-terrain),
 [Modern re-route staggering](#modern-re-route-staggering),
-[Modern group-order spreading](#modern-group-order-spreading) and
-[Modern unreachable moves](#modern-unreachable-moves) are
+[Modern group-order spreading](#modern-group-order-spreading),
+[Modern unreachable moves](#modern-unreachable-moves) and
+[Modern wedge escape](#modern-wedge-escape) are
 user-authorized exceptions and must not be removed as parity defects.
 
 ### Modern construction clearance priority
@@ -287,8 +288,9 @@ answers as Strict 3.1. It carries
 [Modern learned terrain](#modern-learned-terrain),
 [Modern re-route staggering](#modern-re-route-staggering),
 [Modern group-order spreading](#modern-group-order-spreading),
-[Modern bounded path work](#modern-bounded-path-work) and
-[Modern unreachable moves](#modern-unreachable-moves), and `LearnedTerrain`
+[Modern bounded path work](#modern-bounded-path-work),
+[Modern unreachable moves](#modern-unreachable-moves) and
+[Modern wedge escape](#modern-wedge-escape), and `LearnedTerrain`
 is the per-owner grid the learned-terrain policy keeps on the `System`.
 
 **Routes** (`route.go`). `Route` is up to twenty published points plus the
@@ -2246,9 +2248,9 @@ apart.
 sweep's slot order; Modern stays deterministic and bit-identical across hosts.
 Strict and Community fingerprints do not move, nor does the 6,000-tick
 Modern Ashap Plateau lock at the time it landed; the current Modern locks
-are listed under [Modern route straightening](#modern-route-straightening),
-which moved them again. Those battles contain friendly jams that now
-drain. Because the policy can end
+are listed under [Modern wedge escape](#modern-wedge-escape), after
+[Modern route straightening](#modern-route-straightening) moved them again.
+Those battles contain friendly jams that now drain. Because the policy can end
 a battle sooner, a change to it must run `tools/check-retail --full`, whose
 long trajectory is the only lock on the end tick.
 
@@ -2345,9 +2347,11 @@ near-destination start that landed with this policy: the 6,000-tick Modern
 Ashap lock to `partial-v1:320cbaa11e9fd28a` (it had equalled Community's),
 the long Modern Ashap battle runs to its 54,000-tick bound again, and the
 benchmark-fixture warm and final locks moved with it. Jam release's wedge
-rule then moved them to their current values: the long Modern Ashap battle
-`partial-v1:d7f48d704d2eb5d3` (still to 54,000 ticks) and the benchmark
-fixture `partial-v1:6d06c2320bc9cd10` / `partial-v1:28977ed152d78088`.
+rule then moved them again: the long Modern Ashap battle
+`partial-v1:d7f48d704d2eb5d3` (still to 54,000 ticks), which is still
+current, and the benchmark fixture `partial-v1:6d06c2320bc9cd10` /
+`partial-v1:28977ed152d78088`, which
+[Modern wedge escape](#modern-wedge-escape) has since moved.
 
 **Verification.** `path.TestStraightenRemovesSawtoothTurns` (a two-row
 sawtooth becomes one row; probes are charged; the route publishes on the
@@ -2356,3 +2360,180 @@ slice the retail search finishes, not before),
 diagonal approaches and shortcuts longer than 16 cells are never taken);
 `session.TestReservedRuleSetsBindTheirSearchKernels`; the Strict, Community
 and Modern `headless` fingerprint locks.
+
+### Modern wedge escape
+
+**Nanolathe Modern policy.** A ground mover whose committed footprint covers
+ground the commit's static test rejects — in play, a wreck stamped over it —
+may step off that ground and is given a route off it. It never steps onto
+rejected ground it does not already cover, and a mover the wreck encloses
+gets nothing.
+
+**Strict 3.1 behavior.** The feature stamp tests no unit occupancy
+`[05 R-FEAT-01 §3]`, and a corpse is stamped at the dying unit's committed
+anchor `[05 R-FEAT-01 §13]`, so a wreck can land over a live unit. The
+commit validator tests every cell of the proposed footprint, static test
+first `[04 R-COLL-01 §2]`: a step whose new anchor still covers a wreck cell
+is rejected, and when every neighbouring anchor overlaps the wreck, every
+step is. The route search reads the start anchor from the class layer, which
+walls it; the setup ray returns the start's own heuristic at once and the
+request publishes empty without seeding `[04 R-PATH-01 §4]`, the empty
+publication raises cannot-get-there `[04 R-PATH-01 §7]`, and the move's retry
+re-installs its goal with the synthetic line suppressed. The unit therefore
+stays until the wreck goes, unless a route published before the wreck, or the
+first synthetic line of a later order, uncovers every wreck cell in one
+anchor step. `StrictRules.WedgeEscape` answers false; Community inherits it
+and an unbound `System` answers the same.
+
+**Where wedges come from.** Among ground units only the Arm Jammer's corpse
+(3x3 over a 2x2 movement footprint) is larger than its unit in the reference
+install; the other larger corpses are ships' and do not block. In battle,
+wedges come from overlap: [allied pass-through](#modern-allied-pass-through)
+and [jam release](#modern-jam-release) let friendly units overlap, and a unit
+that dies inside a friend leaves its wreck over it. In the three-army
+simulation-benchmark battle on Town & Country (clean spawn sites, seeds 7, 11
+and 23, 6,000 ticks; research branch `research/r7-wedge`) every one of the 19
+wedge events was the wreck of a unit that died overlapping the covered one —
+by a row, a column or a single corner cell, and once exactly on top of it.
+That covered `corak` stood in the wreck until the battle ended, every
+proposal under its attack orders refused.
+
+**Modern behavior.** `ModernRules.WedgeEscape` answers true. Three pieces
+apply, all keyed to the mover's committed footprint:
+
+1. *Commit exemption.* In the ground commit's per-cell test, a cell that
+   fails the static test (`Profile.IsPassableCommitCell`: feature, depth,
+   slope) does not reject when the committed footprint already covers it.
+   The rule is asked at the first failing cell of a visit, so a proposal that
+   passes the static test never asks. Cells entering the footprint are tested
+   as always, and every cell still takes the occupant test, with allied
+   pass-through and jam release unchanged. The set of rejected cells a mover
+   covers can therefore only shrink: it can leave a wreck and never walk
+   further into one.
+2. *A way out.* A search opened for a live, grounded, uncarried mobile unit
+   whose committed footprint covers such a cell, and equals its profile
+   footprint, wraps the request's passability read once at request open. An
+   anchor that overlaps the committed footprint and that the request's own
+   view reads 0 is re-read cell by cell: the requester's own cells pass, and
+   every other cell must pass that view's per-cell chain — the class layer's
+   (terrain, features, buildings, stale occupants) for the ordinary and
+   [learned-terrain](#modern-learned-terrain) views, and terrain, features,
+   buildings and hostile movers for [jam release](#modern-jam-release)'s
+   static view — inside the view's own bounds. A passing anchor answers the
+   steep tier: passable, and charged the steep cost `[04 R-PATH-01 §3]`, so
+   the search prefers the shortest way off. The start now reads passable, so
+   the setup ray walks, the search seeds and an ordinary route is published
+   through the ordinary scheduler; [route straightening](#modern-route-straightening)
+   probes through the same wrapped port. Every other anchor, every anchor the
+   view already admits (unexplored ground included) and every request of a
+   unit that is not wedged read exactly as before.
+3. *Prompt re-plan.* When the static test refused a commit, the mover covers
+   rejected ground and its route's first point is not its own anchor's
+   published point `[04 R-PATH-01 §7]` — it was wedged under a route planned
+   before the wreck, or holds an order's synthetic line — its wants-repath bit
+   is set and its request tick cleared, as a jam release does, so the next
+   scheduler call admits the search of piece 2 instead of the ordinary
+   60–67-tick re-request `[04 R-MOV-01 §7]`. A route planned from where the
+   unit stands is left alone: the unit is turning toward the way that search
+   found, and re-planning would only repeat it.
+
+The scheduler, its budgets and admission order, the full-or-empty
+publication, the follower, arrival and every order rule are unchanged; no
+second search, local escape route or push is involved. Integer arithmetic
+only, no RNG, no map iteration; the commit's per-cell closure still does not
+escape, and the wrapper is one closure per wedged request.
+
+**Cost to the player.** A freed unit walks through its own crowd instead of
+standing in a wreck, which shows as blocked ticks where friends are in its
+way. A unit straddling a one-cell-thick obstacle — only a stamp, a spawn, an
+unload or an overlap claim can put it there — may leave on either side,
+because it covers the obstacle already; it never crosses ground it does not
+cover. The rule is not specific to wrecks: a unit spawned or unloaded on
+terrain its profile rejects walks off it too.
+
+**Measured effect.** Opt-in path benchmark, family `wreck`
+([traffic and lifecycle](PATH_BENCHMARK_TRAFFIC.md#wrecks-over-live-units)),
+one deterministic repeat, `modern-no-wedge` against Modern:
+
+| case / size | wedged units that leave | near/goals | pending | blocked unit-ticks | searches |
+|---|---|---|---|---|---|
+| `wreck/jam_corpses` 16 | 0 → 4 of 4 | 10 → 14 of 14 | 4 → 0 | 97 → 246 | 150 → 40 |
+| `wreck/jam_corpses` 64 | 0 → 23 of 23 | 29 → 38 of 52 | 23 → 14 | 2,126 → 7,544 | 954 → 670 |
+| `wreck/wreck_over` 8 | 0 → 4 of 4 | 4 → 8 of 8 | 4 → 0 | 4 → 28 | 109 → 11 |
+| `wreck/wreck_over` 32 | 0 → 16 of 16 | 16 → 26 of 32 | 16 → 6 | 310 → 1,767 | 461 → 178 |
+
+The leave counts come from a per-tick scan of committed footprints over the
+same runs on the research branch. Without the policy every wedged unit stands
+at its start for the whole window, after its first rejected search, and the
+pending count is exactly the wedged count; with it every wedged unit leaves and the objectives still
+pending are in the destination crowd. Searches fall because a wedged unit's
+request is otherwise repeated and rejected for the rest of the window. The
+rest of the corpus is bit-identical — no other case puts a unit on rejected
+ground — which was checked on the research branch over all 183 case/size
+combinations, the scripted waves included.
+
+In the battle, each of the 19 wedge events was replayed from the identical
+state with the policy switched on at the tick the wreck lands (a
+command-boundary switch, [DESIGN_GAMEPLAY_RULES §5](DESIGN_GAMEPLAY_RULES.md#5-switch-timing))
+and followed for 600 ticks: wedged ticks fell from 2,775 to 1,395 and ticks
+spent wedged while trying to move from 1,212 to 652; the two units that never
+left in 600 ticks, the corak among them, left in 42 and 30. The pieces were
+also measured apart: the commit exemption alone frees none of the 47 fixture
+units, because nothing gives them a route (2,427 battle ticks); adding the
+search re-read frees all 47 (1,672); the prompt re-plan changes no fixture
+result but frees the corak in 30 ticks instead of 321. Over the three whole
+battles, units left wedged at the end with a movement order fell from 3 to 0.
+Tick cost did not rise: on the 256- and 1,500-unit scripted waves, three
+repeats each, the thread CPU p95, p99 and total overlapped repeat for repeat,
+with identical trajectories and allocation (measured before the prompt
+re-plan was added; it runs only after a refused static step).
+
+**Boundaries.** Only mode-1 ground movers, hover and surface ships included;
+structures never reach the commit, aircraft commit on the air plane, and
+carried units take the carried branch and are never wrapped. The occupant
+test, enemies and structures are unchanged. A mover the wreck encloses —
+every neighbouring anchor adds a rejected cell — gets an empty search and no
+movement: nothing is fabricated. An idle wedged unit is not moved; it leaves
+when ordered. The goal-sealed probe of [unreachable moves](#modern-unreachable-moves)
+still reads its static view, in which a wedged start is blocked, so a wedged
+unit whose goal is also sealed is certified only once it has stepped off. The
+prompt re-plan costs searches: an enclosed unit whose order keeps
+re-installing a synthetic line re-plans once per line rather than once per
+throttle period, each search rejected at setup for about a hundred charged
+steps. A wedged unit hemmed in by parked friends still gets no route, since
+they wall every anchor its re-read admits, and jam release does not count it
+jammed while an order keeps handing it synthetic lines. The policy keeps no
+state: the re-plan writes only the follower's existing wants-repath bit and
+request tick, which a save does not carry either `[08 R-SAVE-02 §8]`, and a
+switch to Strict applies the retail validator and search from the next commit
+and request.
+
+**Determinism and fingerprints.** The commit and re-plan read committed state
+in the sweep's slot order, the re-read is a pure function of the request's
+own view, and Modern stays deterministic and bit-identical across hosts.
+Strict and Community fingerprints do not move, nor do the Modern Ashap
+Plateau locks (6,000 ticks `partial-v1:320cbaa11e9fd28a`; the long battle
+`partial-v1:d7f48d704d2eb5d3`, still to its 54,000-tick bound). The Modern
+benchmark-fixture warm and final locks move to `partial-v1:020c5588af463a71`
+and `partial-v1:8566bce851e216f7`: that scene composes 86 mobile units on
+cells the static test rejects, and from tick 92 seven computer-player
+constructors among them get routes where the retail search rejected them at
+setup.
+
+**Verification.** `movement.TestWedgeEscapeAnswers` (Strict, Community and
+unbound answer off, Modern on, dispatch allocates nothing),
+`TestWedgeEscapeLeavesAWreckStampedOverTheMover` (Strict and Community: the
+search from the wedged start publishes nothing and the straight line is
+refused, drawing from neither stream; Modern: the straight line is still
+refused, its search leads off the wreck and the mover leaves without ever
+covering more rejected cells), `TestWedgeEscapeFabricatesNothingWhenEnclosed`,
+`TestWedgeEscapeLeavesOtherSearchesAlone` (a mover beside a wreck searches as
+it does without the policy), `TestWedgeExitValueKeepsTheViewsOtherCells`
+(both views, a stale parked mobile, a building, a kept mover) and
+`TestWedgeEscapeReplansAWedgedRoutePromptly` (a route planned elsewhere loses
+its throttle at the first refused step, one planned from here keeps it, and
+Strict and Community never touch it); in the opt-in `pathbench` build,
+`session.TestPathBenchWreckEscape` (in `wreck/wreck_over` with eight units no
+wedged unit leaves under Strict or `modern-no-wedge`, all four leave under
+Modern); the Strict, Community and Modern `headless` fingerprint locks,
+including the long Modern Ashap end tick (`tools/check-retail --full`).

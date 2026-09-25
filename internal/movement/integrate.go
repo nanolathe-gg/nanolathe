@@ -2922,11 +2922,34 @@ func (s *System) searchFunc(r path.Request, scale int32, budget int) path.WorkRe
 			// mover still walls its anchor: the release never lets a unit
 			// through an enemy (docs/DESIGN_MOVEMENT_PATH.md "Modern jam
 			// release").
+			staticView := false
+			var hostile func(id int) bool
 			if jamAfter, _ := s.rules().JamRelease(s); jamAfter > 0 && s.releasing(requester, s.tick) {
 				learned := s.rules().LearnedTerrain(s)
-				hostile := s.hostileMover(owner)
+				staticView, hostile = true, s.hostileMover(owner)
 				cfg.PassableValue = func(c path.Cell) uint8 {
 					return layer.staticPassableKeeping(c.X, c.Z, footX, footZ, owner, learned, hostile)
+				}
+			}
+			// Nanolathe Modern wedge escape: a requester whose committed
+			// footprint covers ground the commit's static test rejects reads
+			// the anchors overlapping that footprint with its own cells
+			// passable, so its route can lead off the wreck the commit lets it
+			// leave; retail rejects such a start at setup [04 R-PATH-01 §4].
+			// Asked once per opened search; every other request, and every
+			// anchor the chosen view admits, keeps that view's read
+			// (docs/DESIGN_MOVEMENT_PATH.md "Modern wedge escape").
+			if s.rules().WedgeEscape(s) {
+				if start, wedged := s.wedgedStart(requester, profile); wedged {
+					base := cfg.PassableValue
+					fx, fz := profile.footprintSize()
+					cfg.PassableValue = func(c path.Cell) uint8 {
+						v := base(c)
+						if v != LayerBlocked || c.X <= start.X-fx || c.X >= start.X+fx || c.Z <= start.Z-fz || c.Z >= start.Z+fz {
+							return v
+						}
+						return layer.wedgeExitValue(c.X, c.Z, footX, footZ, start, staticView, hostile)
+					}
 				}
 			}
 		} else {
@@ -3623,6 +3646,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	if coll.Mode == 1 && !orderless {
 		jamAfter, jamLifetime = s.rules().JamRelease(s)
 	}
+	// Nanolathe Modern wedge escape: asked at the first proposed cell that
+	// fails the static test, so at most once a visit and never on a visit
+	// whose proposal passes it.
+	wedgeAsked, wedgeEscape := false, false
 	perCell := func(c Cell) bool {
 		if !inBounds {
 			return coll.Mode == 2
@@ -3631,8 +3658,20 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			return true
 		}
 		if s.Terrain != nil && !moverProfile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
-			staticReject = true
-			return false
+			if !wedgeAsked {
+				wedgeAsked = true
+				wedgeEscape = s.rules().WedgeEscape(s)
+			}
+			// Retail rejects every proposed cell the static test fails
+			// [04 R-COLL-01 §2]. Under Modern wedge escape a cell the
+			// committed footprint already covers does not reject, so a mover a
+			// wreck was stamped over may step off it; a cell entering the
+			// footprint is tested as always, so it never walks further in
+			// (docs/DESIGN_MOVEMENT_PATH.md "Modern wedge escape").
+			if !wedgeEscape || !coveredByFootprint(c, coll.CachedAnchor, int32(max(fx, 1)), int32(max(fz, 1))) {
+				staticReject = true
+				return false
+			}
 		}
 		if s.Grid != nil {
 			if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
@@ -3678,6 +3717,14 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// Strict does nothing here, as retail does [04 R-MOV-01 §7]
 		// (docs/DESIGN_MOVEMENT_PATH.md "Modern learned terrain").
 		s.rules().StaticRejection(s, u, proposedAnchor, moverProfile.FootPrintX, moverProfile.FootPrintZ)
+		// Nanolathe Modern wedge escape: a mover this refusal leaves on
+		// rejected ground under a route planned elsewhere re-plans at the next
+		// scheduler call instead of after the re-request throttle
+		// [04 R-MOV-01 §7] (docs/DESIGN_MOVEMENT_PATH.md "Modern wedge
+		// escape").
+		if wedgeEscape && !orderless {
+			s.promptWedgeReplan(route, coll, moverProfile)
+		}
 	}
 	// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
 	// the unit's occupancy-commit tick so the request revision pass of
