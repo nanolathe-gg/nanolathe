@@ -208,18 +208,32 @@ changes in the image** (the legacy provenance note applies; this is not a
 comparison of licensed source). String, registry, directory, savegame and import
 renames are excluded:
 
-- **Weapon-slot handling on orders.** The special/disintegrator order
-  deactivates only its own weapon slot instead of slots 1 and 3 together, so
-  weapons 1–2 keep acquiring targets while the special is used; two further
-  order states deactivate one slot chosen by the order's weapon index.
+- **Weapon-slot handling on orders.** Two attack-order sites take fewer
+  weapon slots away from autonomous acquisition than retail does; the bytes
+  at both sites match ProTA's edits, recorded as the two related weapon-slot
+  patches under
+  [ProTA "Weapons acquire targets while working"](prota-engine.md#weapons-acquire-targets-while-working).
+  In the fire-at-position order with the third (special, disintegrator)
+  weapon, retail takes all three slots before binding the third to the goal;
+  Escalation takes only the third, so weapons 1–2 keep acquiring targets
+  while the special is used. In the chase-attack order's first phase, retail
+  takes the first and third slots before binding the ordered weapon;
+  Escalation takes one slot chosen by the order's weapon index (the third
+  when the index is above 1, otherwise the first). The chase-attack order's
+  later "take the first and third" step is unchanged.
 - **Weapons stay active while building.** In the build (nanolathe) order
   handler's placement state, on the builder and immediately before the
-  construction site is spawned as a nanoframe, retail switched the builder's
-  three weapon/nanolathe slots off and Escalation switches them on, so they
-  remain active for the whole build. This is the only such swap in the image;
-  it matches the documented "allow weapons to acquire targets while building a
-  new unit" (**Supported inference** for that match, established for the
-  change).
+  construction site is spawned as a nanoframe, retail calls the all-slot verb
+  that takes the builder's three weapon slots away from autonomous
+  acquisition. Escalation redirects that one call to the paired verb that
+  gives slots back to autonomy (clearing a changed slot's target and
+  scheduling `TargetCleared`), so the builder's weapons keep acquiring for
+  the whole build; ProTA records both verbs and their misleading retail names
+  under the same heading. This is the only such swap in the image: the
+  help-build, capture, unit-reclaim and repair sites that ProTA also swaps
+  keep the retail verb here. It matches the documented "allow weapons to
+  acquire targets while building a new unit" (**Supported inference** for
+  that match, established for the change).
 - **`CantBeTransported`.** Units whose definition sets the flag are excluded
   from VTOL repair-pad landing, from a transport set-up path and from a
   repair/nanolathe path, with cursor fallbacks; this matches the release note

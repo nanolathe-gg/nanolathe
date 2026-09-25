@@ -2335,8 +2335,9 @@ in practice.
 into the session difficulty global, sets the `Difficulty` gadget's state to
 it and lights the matching label (`Easy`, `Medium`, `Hard`), resolves the
 record's map name against the map catalog (falling back to the first entry
-when it no longer exists), then the row builder runs: if every row's
-controller is `0` it forces row 0 to `Player` and row 1 to `Computer`; it
+when it no longer exists), then the row builder runs: if every **shown**
+row's controller is `0` it forces row 0 to `Player` and row 1 to `Computer`
+(see "Shown rows only" below); it
 zeroes every `TEAMICONSx` frame; for each row it writes the `Player%d`
 caption (`Open`/`Player`/`Computer`), the `Side%d` state, the decimal
 `Metal%d`/`Energy%d` text, the `Color%d` gadget's image set (`logos.gaf`)
@@ -2356,9 +2357,10 @@ affect a unit's view.` Finally the `MapName` text is set. Row geometry is in
 
 **Callbacks — control to field, exactly.** The clicked gadget's trailing
 digits select the row. `Player%d` cycles controller `0 → 2`, `1 → 0`, and
-`2 → 1` only when no other row is `Player`, else `2 → 0`; on becoming live
-the row's colour is checked against every live row and, on a conflict, the
-callback rescans logo indices `0..9` for one no configured row holds
+`2 → 1` only when no shown row is `Player`, else `2 → 0`; whenever the
+row's new controller is live — after `0 → 2` and after `2 → 1` alike — the
+row's colour is checked against every other shown live row and, on a
+conflict, the callback rescans logo indices `0..9` for one no configured row holds
 (**this scan ignores the controller word, so an open row's colour also
 blocks**) and stores `-1` when all ten are taken. `Side%d` sets
 `side = (side + 1) mod sideCount`. `Allies%d` sets `group = (group + 1) mod
@@ -2398,6 +2400,30 @@ row has a different group — open rows and group-5 rows are skipped). The
 diagnostics are quoted above. On success the player count global becomes
 `players + computers`, the row-to-player conversion runs (§2), the
 preferences are written, and the front end switches to the battle state.
+
+**Shown rows only (Established, 2026-09-24).** Every setup-screen test that
+walks the row array stops at `NumSkirmishPlayers`; none reads a row at or
+above the count:
+
+- the controller cycle's "is any row `Player`" count for `2 → 1` (the row
+  being cycled is `Computer` at that moment, so it never counts itself);
+- the colour-conflict test and the rescan that follows it;
+- the `Color%d` step's "a live row already shows this colour" re-step test;
+- the `Allies%d` icon refresher's per-group live-row count;
+- the screen build's all-`Open` test. It runs every time the rows are built —
+  on screen entry and after each player-count change — and when no shown row
+  is live it writes `Player` into row 0 and `Computer` into row 1 and nothing
+  else: no colour check, no side or ally-group change. It tests only the
+  rows below the count, so with a count of 0 the test passes vacuously and
+  with a count of 1 the forced `Computer` lands in a hidden row;
+- the Start preflight's `Player`/`Computer` counts and its ally-group test,
+  and the row-to-player conversion (§2).
+
+A row above the count therefore keeps whatever controller it held when the
+count was lowered, invisibly and without effect, until a later count shows
+it again. The preferences loader has no all-`Open` fallback of its own: it
+stores the registry values (or the miss defaults) as read, and the screen
+build's test above is the only place a live pair is forced.
 
 ### Battle entry: what the record becomes [R-SKIR-01 §2]
 
@@ -7982,9 +8008,14 @@ unsigned division of the 32-bit tick count, a two-second unit at 30 Hz; the
 exact expression is in §7.
 
 **Entry.** The battle pump's end transition fires when the latch word of
-[R-TRIG-01 §6] has either the *won* (`0x10`) or *lost* (`0x04`) bit set —
-for a multiplayer session only once a peer-side predicate also holds (out of
-scope). It runs the
+[R-TRIG-01 §6] has the *ending* bit (bit 2, `0x04`) or the won-path bit 4
+(`0x10`) set. The lost path is bit 6 (`0x40`), and it always comes with the
+ending bit, so the transition does not test it separately. Earlier text named
+`0x04` as the lost bit; it is the ending bit that every end writer sets
+[07 §11]. A multiplayer session also waits for a peer-side predicate (out of
+scope). The pump tests the latch after it has composed and presented that
+pass's battle frame, so the frame after the latching tick carries the
+in-battle end title [07 §11]. It runs the
 *battle teardown* (which calls the score helper of §7 — the only site that
 writes the W/L mark), stops the battle sound, sets the session state to 7
 (results) and installs the *results handler* as the session pump. Every
@@ -8001,8 +8032,8 @@ presentation "unit" below is one tick of the presentation clock of §2.
 | 4 | Campaign session (kind 1) and the campaign-CD check (§5) fails: open `CDCHECK.GUI` (its `OK` re-checks and, on success, sets state 5), go to 8. Otherwise 5. |
 | 5 | Run the *outcome-art preparer* (below). Let `hasNext` = Has-mission(index + 1). If kind 1 and won and **not** `hasNext` and the mission's `nomovie` is 0: the campaign is complete — windowed display goes straight to the main-menu shell state; full-screen goes to the Core ending-movie state when the local player's side byte is non-zero, else the Arm ending-movie state; session state 2 (front end). Otherwise: if kind 1 and won and a glamour image was loaded: build the fade table with 5 steps, deadline `now + 1`, blit the glamour image at (0, 0), go to 6; else populate `ENDMSN.GUI` (§8), fill the score fields (§7), apply the control set (§8), go to 7. |
 | 6 | While the fade is not done: apply one fade step per unit (below); when the current palette equals the target the fade is done, then the glamour deadline is `now + rate` (one second). Once done: play slot 8 (glamour sound) once; after the deadline, any key press or mouse click populates `ENDMSN.GUI` (§8, §7) and goes to 7; after five further seconds `Click to continue.` (translated) is drawn at the bottom of the screen (y = height − 20). |
-| 7 | `ENDMSN.GUI` is up; the statistic bars are revealed in seven groups (§7). |
-| 8 | Idle with the panel up (used by the CD-check dialog). |
+| 7 | `ENDMSN.GUI` is up; the statistic bars are revealed in seven groups (§7). Once no bar is left to reveal or animate, it shows the normal cursor and goes to 8. |
+| 8 | Idle with the panel up: after the statistics reveal (from 7), and behind the CD-check dialog (from 4). Each pass only redraws and presents the open windows. It neither recomposes nor shades the picture beneath, so behind `CDCHECK.GUI` the retained battle picture stays as the ten darkening steps of state 3 left it. |
 
 **Cursor visibility (Established).** Arming the darkening countdown hides the
 software cursor. It remains hidden through the darkening, glamour fade,
@@ -8226,7 +8257,9 @@ refreshed from the difficulty word.
 
 **Established:** the victory/defeat glyph uses frame 0 of `igvictory` from
 `anims/igtitles.gaf` when won and the local slot is not a watcher, otherwise
-frame 0 of `igdefeat` from that bank. The draw anchor is `(width/2, 28)`;
+frame 0 of `igdefeat` from that bank. A watcher therefore sees the defeat
+title on a won result here, while the in-battle composer gives a watcher
+neither title [07 §11]. The draw anchor is `(width/2, 28)`;
 the ordinary frame blitter subtracts the frame’s authored X/Y offsets. When the session was launched from an external
 lobby (multiplayer, out of scope) the `MainMenu` control is relabelled `OK`.
 

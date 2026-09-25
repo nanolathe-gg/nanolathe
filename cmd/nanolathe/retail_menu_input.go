@@ -532,8 +532,10 @@ func (g *gameShell) cycleRetailController(slot int) {
 	case 1:
 		g.retailControllers[slot] = 0
 	case 2:
+		// Only the shown rows are asked; the row itself is Computer here, so
+		// it never counts [08 R-SKIR-01 §1] "Shown rows only".
 		human := false
-		for i := 0; i < session.SkirmishMaxPlayers; i++ {
+		for i := 0; i < g.shownSkirmishRows(); i++ {
 			if g.retailControllers[i] == 1 {
 				human = true
 				break
@@ -556,13 +558,9 @@ func (g *gameShell) cycleRetailController(slot int) {
 		g.setup.Players[slot].Controller = 1
 	}
 	// The colour-collision scan is this callback's, not the Color gadget's:
-	// it runs on becoming live, which is the Open→live transition here
-	// [08 R-SKIR-01 §1].
-	// TODO(question): whether the 2→1 step, which leaves an already-live row
-	// live, re-runs the scan is not stated; it only matters when two live
-	// rows already share a colour. Settled by tracing the controller callback
-	// for a second call site of the scan.
-	if current == 0 && g.retailControllers[slot] != 0 {
+	// it runs whenever the cycled row ends live, so after 2→1 as well as
+	// 0→2 [08 R-SKIR-01 §1].
+	if g.retailControllers[slot] != 0 {
 		g.resolveRetailColorConflict(slot)
 	}
 }

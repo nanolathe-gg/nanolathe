@@ -324,17 +324,30 @@ package's order and text switches; Strict answers retail and Community (and
 Modern, which embeds it) reads the queue binding's projected table copy, so no
 handler reads the table by name
 ([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)).
-`WorkLeavesWeaponsAutonomous` picks the verb at `takeWorkSlots`, the fixed
-all-slot call of `HelpBuild` phase 1, `Capture` phase 0, `ReclaimUnit` phase 0
-and `RepairUnit` phase 1's in-reach arm: retail's release, or the inhibit verb
-at the same site `[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]`. `SelfRepair`,
-`RepairUnitNoMove` and `airWorkPreamble` call the release directly and do not
-ask. `AttackTakesOneSlot` narrows `Attack_Chase` phase 1's take to slot 2 when
-`p1 > 1` (signed) and slot 0 otherwise, and `Suppress` phase 1's `p1 = 2` take
+`WorkLeavesWeaponsAutonomous` picks the verb at `TakeWorkSlots`, the fixed
+all-slot call of `HelpBuild` phase 1, `Capture` phase 0, `ReclaimUnit` phase 0,
+`RepairUnit` phase 1's in-reach arm and `MobileBuild` phase 1's legal-placement
+arm (construction's placement visit calls the exported helper): retail's
+release, or the inhibit verb at the same site `[04 R-ORD-01 §5]`
+`[04 R-ORD-01 §7]`. `SelfRepair`, `RepairUnitNoMove` and `airWorkPreamble` call
+the release directly and do not ask. `AttackTakesOneSlot` narrows
+`Attack_Chase` phase 1's take to slot 2 when `p1 > 1` (signed) and slot 0
+otherwise, and `Suppress` phase 1's `p1 = 2` take
 to slot 2 `[04 R-ORD-01 §3]`. `ResurrectionFailureText` is `Resurrect` phase
 3's caption: retail's verbatim `Ressurection failed`, or `Resurrection failed`.
 `prota_orders_test.go` locks each site under Strict, Community off, Community
 on and Modern.
+
+`MobileBuild` phase 1's slot call is made outside these packages, by
+construction's ground placement visit (`mobilePlacementVisit`,
+`internal/construction/states.go`). When the placement check passes, the visit
+calls `TakeWorkSlots` before it writes the site height and allocates the
+nanoframe `[04 R-ORD-01 §5]`. Under Strict, a ground builder's weapons
+therefore stop acquiring while it builds, and the record destructor's all-slot
+return hands them back when the record ends `[04 R-ORD-01 §7]`. A blocked visit
+makes no call. `VTOL_MobileBuild` shares the visit but makes no call there,
+because its takeoff preamble already released the slots `[04 R-ORD-02 §2]`.
+`mobile_build_slots_test.go` locks both verbs at this site.
 
 ### Modern Hold Fire
 
@@ -796,11 +809,12 @@ continues (a flag read answers draw clear, cache and shade set); the locator
 declines, which the piece-position ports and the muzzle treat as the zero
 offset retail's bounded locator gives; an explosion from it spawns no debris
 (a physical request still takes its six draws); and the save writes the
-VM pose and those flags instead of stray bytes. Presentation still pairs pieces
-by name, so an in-range alias (a missing name that takes another piece's
-slot) animates on the authoritative side but not on screen; the open
-question is a `TODO(question)` at `LinkPieces`. No shipped script animates an
-alias.
+VM pose and those flags instead of stray bytes. Presentation draws through the
+same link: publication copies `Binding.PieceMap` into each committed piece
+lane, so an in-range alias (a missing name that takes another piece's slot)
+animates on screen exactly as it does in the simulation, and a piece beyond
+the model draws nothing (DESIGN_PRESENTATION_CLIENT C12). No shipped retail
+script animates an alias.
 
 **Save boxes** (`retail_save.go`, `retail_restore.go`). The per-piece image and
 the thread windows. The writer persists each piece's current draw, cache and
@@ -1635,13 +1649,6 @@ producer that drives this package's queued-order toggle.
   the side panel's own buttons issue no world point, and nothing says whether a
   Shift-held press of one runs the test — which would make a second Shift-press
   cancel the first. A trace of those button handlers settles it `[07 R-P0-11 §6]`.
-
-One retail call is missing outside these packages: `MobileBuild` phase 1's
-release of all three weapon slots after a legal placement check
-`[04 R-ORD-01 §5]`. The ground placement visit in `internal/construction` makes
-no slot call, so a ground builder's weapons keep acquiring while it builds under
-every rule set, and the ProTA working-weapons switch has no call to redirect at
-that site ([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)).
 
 The questions the contracts above still carry, each with the observation that
 would settle it:

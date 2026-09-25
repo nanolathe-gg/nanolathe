@@ -31,6 +31,7 @@ func TestCommunityControlsPresetContents(t *testing.T) {
 		"reloadBars": p.ReloadBars, "veteranLabels": p.VeteranLabels, "groupNumbers": p.GroupNumbers,
 		"weatherReport": p.WeatherReport, "overview": p.Overview, "megamapWheel": p.MegamapWheel,
 		"megamapWheelMove": p.MegamapWheelMove, "megamapFlash": p.MegamapFlash, "victoryCue": p.VictoryCue,
+		"alliedDotSwatches": p.AlliedDotSwatches,
 	} {
 		if value != 1 {
 			t.Errorf("presentation.%s = %d, want 1", name, value)
@@ -77,7 +78,7 @@ func TestRetailControlsPresetKeepsSkirmishRows(t *testing.T) {
 	if g.setup.NumPlayers != settings.MaxPlayers {
 		t.Errorf("the retail preset changed the skirmish rows to %d", g.setup.NumPlayers)
 	}
-	if p.Overview != settings.OverviewZoom || p.VictoryCue != 0 || p.PlayerDotColors != settings.DefaultPlayerDotColors {
+	if p.Overview != settings.OverviewZoom || p.VictoryCue != 0 || p.AlliedDotSwatches != 0 || p.PlayerDotColors != settings.DefaultPlayerDotColors {
 		t.Errorf("overview %d, victory cue %d, dot colours %v; want Zoom, off and the draw engine's defaults", p.Overview, p.VictoryCue, p.PlayerDotColors)
 	}
 	// The megamap's own preferences are the player's, whichever overview.

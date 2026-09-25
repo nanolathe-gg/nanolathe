@@ -43,8 +43,9 @@ Modern construction-clearance contract below,
 [Modern learned terrain](#modern-learned-terrain),
 [Modern re-route staggering](#modern-re-route-staggering),
 [Modern group-order spreading](#modern-group-order-spreading),
-[Modern unreachable moves](#modern-unreachable-moves) and
-[Modern wedge escape](#modern-wedge-escape) are
+[Modern unreachable moves](#modern-unreachable-moves),
+[Modern wedge escape](#modern-wedge-escape) and
+[Modern pocket release](#modern-pocket-release) are
 user-authorized exceptions and must not be removed as parity defects.
 
 ### Modern construction clearance priority
@@ -289,8 +290,9 @@ answers as Strict 3.1. It carries
 [Modern re-route staggering](#modern-re-route-staggering),
 [Modern group-order spreading](#modern-group-order-spreading),
 [Modern bounded path work](#modern-bounded-path-work),
-[Modern unreachable moves](#modern-unreachable-moves) and
-[Modern wedge escape](#modern-wedge-escape), and `LearnedTerrain`
+[Modern unreachable moves](#modern-unreachable-moves),
+[Modern wedge escape](#modern-wedge-escape) and
+[Modern pocket release](#modern-pocket-release), and `LearnedTerrain`
 is the per-owner grid the learned-terrain policy keeps on the `System`.
 
 **Routes** (`route.go`). `Route` is up to twenty published points plus the
@@ -2267,6 +2269,192 @@ friend keeps queuing; a route-less unit inside a friend is released; Strict
 releases neither), `TestStaticPassableSeesThroughMobilesOnly`
 (kept movers wall their anchors); the Strict, Community and Modern
 `headless` fingerprint locks, including the long Modern Ashap end tick
+(`tools/check-retail --full`).
+
+#### Modern pocket release
+
+**Nanolathe Modern policy.** A ground mover sealed out of its own free
+destination — a packed formation filled in around its slot before it got
+there, so the slot is free but every way in is held by parked friends — is
+granted a jam release into the slot. It is jam release's trigger for a unit
+that cannot count jammed ticks.
+
+**Strict 3.1 behavior.** The class layer walls stationary units once their
+occupant age passes `[04 R-PATH-01 §14]`, so from outside the ring the setup
+ray finds nothing nearer the goal than the start and the request publishes
+empty without seeding `[04 R-PATH-01 §4]`, raising cannot-get-there
+`[04 R-PATH-01 §7]`. `Move_Ground`, the last primary record, re-arms its
+phase-0 retry and keeps re-installing its goal with the synthetic line
+suppressed `[04 R-ORD-01 §4]`, and every later search is rejected the same
+way, so the unit stands for ever. `StrictRules.PocketRelease` answers
+`(0, 0)`; Community inherits it and an unbound `System` answers the same.
+
+**Why the other Modern policies do not reach it.** Jam release counts
+rejected commits, and a route-less unit at rest commits nothing;
+[crowded arrival](#modern-crowded-arrival) needs the goal footprint itself
+held by a stationary friend; [unreachable moves](#modern-unreachable-moves)
+certify over a static view in which every mobile is transparent, where the
+slot looks reachable. In the opt-in path benchmark's dense group moves, run
+past their windows to 2,400 ticks, Modern without this rule leaves 9 of 64
+units in `avoid/through_idle_army` and 8 of 256 in `avoid/open_big_a` in
+this state from about tick 1,500 to the end; at the standard windows these
+units are still in an entrance jam between moving units, which no completion
+or release rule addresses (research branch `research/r7-enclosed`,
+`docs/PATH_PROTOTYPE_R7_enclosed.md` there).
+
+**Modern behavior.** `ModernRules.PocketRelease` answers `(16, 30)`; the
+answer is off whenever `JamRelease` is.
+
+1. *Certificate.* At the one site where an empty publication raises
+   cannot-get-there on the live order, after unreachable moves, a move that
+   passes the record test the Modern completion policies share
+   (`orders.UnreachableMoveArrival`), whose unit stands within 16 cells per
+   axis of its goal anchor (and not on it) and against a parked friend, is
+   judged by a bounded flood. A *parked friend* is a live, grounded,
+   uncarried, complete mobile of the unit's owner or a mutually allied owner,
+   with zero speed and no active route. The flood walks footprint anchors in
+   a 33×33 window centred on the goal anchor, from the goal footprint, in the
+   search's eight directions and testing only the destination footprint
+   `[04 §7.1]`. An anchor is open when no cell of its footprint is held by a
+   parked friend and it is statically passable in the owner's static view —
+   terrain, features and buildings as the unreachable-move probe reads them,
+   unexplored ground optimistic. Every other occupant — moving friends,
+   enemies, the unit itself — is transparent, so it can only open the pocket.
+   The pocket is *sealed* when the goal footprint is open and the flood closes
+   without reaching the unit's anchor or one of its eight neighbours and
+   without stepping past the window onto the map; off the map is a wall. A
+   goal a parked friend holds is crowded arrival's and a statically blocked
+   one is unreachable moves'; neither is certified. Re-certification keeps
+   the tick of the order's first certificate; a route published for the
+   order clears it, except the pocket release's own.
+2. *Release.* Thirty ticks after the first certificate — jam release's own
+   jammed-tick trigger — the follower's closing check, asked only while some
+   certificate is live and never while a release of the unit is running or
+   cooling down, runs the flood again from where the unit stands against the
+   ring. If the pocket is still sealed it grants a jam release marked as a
+   pocket release, with jam release's 90-tick window, hold limit and
+   cooldown, and asks for a prompt re-plan. The released search reads jam
+   release's static view, so the route leads through the ring; the commit
+   passes friendly occupants as any release does, and the unit completes by
+   ordinary arrival in its slot.
+3. *End.* Jam release's near-destination rule closes a pocket release only
+   on the unit's own goal anchor: a unit standing against the ring is already
+   clear of every friend, and so is one crossing a free slot inside the
+   formation. The window, the hold-open while inside a friend and the
+   cooldown are jam release's.
+4. *Through the retry.* The move's code-9 retry re-installs its goal every
+   30–59 ticks, which drops the released route, and the goal installer keeps a
+   request stamp under ten ticks old `[04 R-PATH-01 §8]`; each new activation
+   during the release is re-planned at the next poll, once, instead of
+   waiting out the re-route throttle behind the grant's own search.
+5. *Finish.* After two grants that did not get the unit in, a closing flood
+   that still finds the pocket sealed finishes the move where the unit
+   stands, through the crowded-arrival completion: phase 1, the arrival gate
+   armed, `Arrived`, idle refill
+   ([DESIGN_UNITS_ORDERS_COB](DESIGN_UNITS_ORDERS_COB.md#modern-crowded-arrival)).
+
+Integer arithmetic only, no RNG draw, no resource effect, no map iteration.
+The flood runs depth first, nearest the unit first — a traversal order that
+changes its work and never its verdict — and reuses its scratch.
+
+**Cost to the player.** The released unit visibly passes through the parked
+friends between it and its slot, drawn inside one or two at a time. Over the
+21 releases in the long runs below the overlap lasted 11–51 ticks, 27 on
+average (0.4–1.7 s), and none of the 56 parked friends passed changed
+position. Two of those units had been left wedged into friends by earlier
+jam releases; the pocket release carries them out as well.
+
+**Measured effect.** Opt-in path benchmark, one deterministic repeat,
+`modern-no-pocket` against Modern. Past the windows, to 2,400 ticks, where the
+sealed-out units are the end state:
+
+| case / size | near/goals | pending | searches |
+|---|---|---|---|
+| `avoid/through_idle_army` 64 | 54 → 64 of 64 | 9 → 0 | 968 → 765 |
+| `avoid/open_big_a` 256 | 246 → 256 of 256 | 8 → 0 | 1,556 → 1,305 |
+| `r7/open_flea_rev` 256 (research branch) | 252 → 256 of 256 | 2 → 0 | 1,139 → 1,074 |
+
+Without the rule the pending units stand still from about tick 1,500 to the
+end, each re-requesting a search every 60–67 ticks; with it every one
+reaches its own slot. At the standard windows, over the whole corpus without
+the scripted waves: near-goal arrivals 4,275 → 4,281 of 5,862 and pending
+moves 1,485 → 1,479, three cases gaining (`wreck/wreck_over` 32 26 → 30, the
+friendly head-on meeting with 64 units 62 → 63, the friendly four-cell choke
+with 64 units 63 → 64) and none losing; the scripted waves at every size and
+the three-army simulation-benchmark battle on Town & Country (seeds 7, 11 and
+23, 6,000 ticks) are bit-identical, since no unit there is certified long
+enough to be released. One more pair of units is left overlapping at the end
+of a window across the corpus (538 against 537): in the perpendicular
+crossing with 64 units the window closes two ticks before a released unit
+reaches its slot.
+
+Tick cost did not rise. On the 256- and 1,500-unit scripted waves, where
+nothing is released, two alternating rounds of three repeats each of the
+build before this rule and the build with it gave total thread CPU of
+611 → 591 ms and 5,620 → 5,614 ms (medians of six), the p95, p99 and
+slowest tick overlapping run for run, and identical trajectories; the
+certificate row and the flood's reused scratch add 9–14 allocations
+(20–31 KB) a run. Where the rule fires, in the two 2,400-tick runs above
+(three repeats each), total thread CPU stayed within the repeats' spread
+(283 → 289 ms at 64 units, 443 → 424 ms at 256) and allocations fell about
+7% with the searches (29,007 → 26,858 and 38,153 → 35,465): the floods and
+the released searches cost no more than the rejected searches they replace.
+A flood is bounded by its 33×33 window and runs only at a candidate's
+rejected publication and when its dwell or a release's cooldown ends.
+
+The dwell was chosen against a 90-tick one on the same runs (research
+branch): equal or better everywhere, with every release starting sooner. At
+90 ticks one unit in `r7/open_flea_rev` 256 is finished 1.1 cells from its
+slot, because a second sealed-out unit holds the slot and crowded arrival's
+own 90-tick dwell finishes the first before the holder's release frees it.
+The research prototype also measured and rejected finishing sealed-out units
+where they stand, or moving their goals to the nearest reachable free
+footprint: both change no arrival in any window and leave the formation's
+holes and the stuck units' positions exactly as they were.
+
+**Boundaries.** Only mode-1 ground movers with a plain terminal move: queued
+moves, patrol, guard, work approaches, attacks, danger responses and aircraft
+keep their own handling. Enemies are never passed: a hostile unit is
+transparent to the flood, so a ring with an enemy in it is open and nothing
+is certified, and a released search keeps hostile movers as walls. Parked
+friends are never moved; the release moves only the released unit. The
+per-handle certificate (`System.pockets`: order, first-certificate tick,
+grants, the activation the release planned for) is written only when the
+bound rules release pockets, so Strict never allocates it; it is cleared with
+the order binding (`DeactivateMove`, hence `ForgetUnit`), on a restored unit,
+and at the first follower visit after a switch to a set that answers off. It
+is not saved: a load starts with none and the next cannot-get-there
+publication certifies afresh, with a fresh dwell. A switch to Strict or
+Community mid-release leaves the running release to jam release's own state,
+which Strict never reads ([DESIGN_GAMEPLAY_RULES §5](DESIGN_GAMEPLAY_RULES.md#5-switch-timing)).
+**Open item:** units left inside parked friends after allied pass-through or
+jam release stay there. `insideFriend` reads grid ownership, and a unit that
+won the contested cells under the lower-index claim rule never looks inside
+its friend, so jam release's wedge rule does not fire for it; the pocket
+release frees such a unit only when it also holds a sealed slot.
+
+**Determinism and fingerprints.** The certificate and the closing check read
+committed state in the sweep's slot order and the flood is a pure function of
+it; Modern stays deterministic and bit-identical across hosts. No fingerprint
+lock moves — Strict, Community and Modern, the long Modern Ashap battle
+included (still `partial-v1:d7f48d704d2eb5d3` to its 54,000-tick bound):
+none of the locked scenes seals a unit out of a free slot.
+
+**Verification.** `movement.TestPocketReleaseAnswers` (Strict and Community
+answer off, Modern on, off whenever jam release is, dispatch allocates
+nothing), `TestPocketReleaseLeavesStrictAndCommunityUntouched` (no
+certificate, grant, finish or allocation), `TestPocketReleaseCertifiesOnlyASealedPocket`
+(only at an empty publication; an open side, a moving or routed friend, an
+enemy, a blocked or held goal, a unit not against the ring or beyond the near
+bound get nothing), `TestPocketReleaseWindowIsOpenAndTheMapEdgeIsAWall`,
+`TestPocketReleaseEndsOnlyOnItsGoal` and `TestPocketReleaseGrantCapFinishesInPlace`;
+in the retail tier, on an authored block of parked fleas around a free slot,
+`session.TestModernPocketReleaseTakesASealedOutUnitIntoItsSlot` (Modern
+reaches the slot, Modern without the rule does not, the block never moves),
+`TestStrictAndCommunityNeverGrantAPocketRelease`,
+`TestPocketReleaseLeavesAHeldGoalToCrowdedArrival` (identical with and
+without the rule) and `TestPocketReleaseNeverPassesAnEnemy`; the Strict,
+Community and Modern `headless` fingerprint locks
 (`tools/check-retail --full`).
 
 ### Modern route straightening

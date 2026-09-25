@@ -79,9 +79,19 @@ type DebrisView struct {
 	Fire  bool
 }
 
-// PieceView carries one committed COB piece transform [03 §2.4].
+// PieceView carries one committed COB piece transform [03 §2.4]. A unit's
+// lanes are in script piece order: lane i is script piece i.
 type PieceView struct {
-	Index            int
+	// Index is the model piece this lane poses. The publisher copies it from
+	// the unit's script-to-model link [04 R-COB-01 §4], so a script piece whose
+	// name the model lacks poses the model piece its slot took, as it does in
+	// the simulation, and a script piece beyond the model's piece count is -1
+	// and poses nothing.
+	Index int
+	// Name, when set, addresses the model piece by name instead of Index. Only
+	// lanes with no link use it: authored preview poses, and a script attached
+	// without a model binding. Committed lanes of a bound unit leave it empty,
+	// because a name cannot express the link's slot aliasing.
 	Name             string
 	RotX, RotY, RotZ uint16
 	Tx, Ty, Tz       numeric.Fixed

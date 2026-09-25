@@ -41,6 +41,14 @@ type jamRelease struct {
 	until    uint32
 	limit    uint32
 	cooldown uint32
+	// pocket marks a release the Modern pocket release granted to take a
+	// sealed-out unit through the ring of parked friends into its free slot
+	// (pocket_release.go). The near-destination end rule closes such a
+	// release only on the unit's own goal anchor: a unit standing against the
+	// ring is already clear of every friend, and so is one crossing a free
+	// slot inside the formation. It stays false unless the bound rules release
+	// pockets.
+	pocket bool
 }
 
 // JamRelease releases a unit after jamAfter jammed ticks for lifetime ticks
@@ -152,7 +160,7 @@ func (s *System) noteJamRelease(u *units.Unit, coll *CollisionState, blocked boo
 	if st.until > tick {
 		inside := s.insideFriend(u, coll)
 		switch {
-		case !inside && !s.jamReleaseEndOK(u, route, x, z):
+		case !inside && !s.jamReleaseEndOK(u, route, x, z) && (!st.pocket || s.pocketAtGoal(u, coll)):
 			st.until = tick
 			st.cooldown = tick + jamReleaseCooldown
 		case inside && st.until <= tick+1 && tick+1 < st.limit:
@@ -212,6 +220,7 @@ func (s *System) noteJamRelease(u *units.Unit, coll *CollisionState, blocked boo
 		st.limit = tick + 2*lifetime
 		st.cooldown = st.until + jamReleaseCooldown
 		st.replan = true
+		st.pocket = false
 		if route != nil {
 			// Re-plan promptly: the release's searches read the static view.
 			route.WantsRepath = true

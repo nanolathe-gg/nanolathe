@@ -1223,7 +1223,16 @@ end.
   destination factor source-alpha, so `out = dst · (src.rgb + src.a)`; the
   fragment carries `(min(k,1), min(k,1), min(k,1), max(k−1, 0))`. A factor above
   2 clamps at 2 (SHD row 31 is 2.13; the difference is below the quantization
-  floor).
+  floor). Repeated scaling of one picture compounds the difference. The results
+  darkening is the case that shows it: ten `FillShadeRect` steps, rows 13 down
+  to 4, over the retained battle picture `[08 R-CAMP-01 §6]`. The classic
+  chain re-quantizes to the palette after every step, while the composite
+  keeps the product. On the retail tables, one row's lookup already differs
+  from its formula by a mean of about 10 and up to 22–35 levels per channel at
+  rows 4–8. Mid-sequence a battle view differs by up to about 30 levels per
+  channel between executors, and both converge to black by the last step. This
+  is the intended consequence of the true-colour composite, not a parity
+  defect, and it predates the in-battle end titles.
 * *Fog keeps one read copy.* The gray remap is a desaturation, which no
   fixed-function blend expresses, so the fog command stays a shader run over a
   copy of its region: luminance `floor((r+g+b)/3)` for the gray fills and gray
@@ -4151,7 +4160,9 @@ Client wake ownership is `water_wakes.go`, hooked from `world_draw.go` and
 `trails.go`. The hooks observe every committed tick through the session
 publication observer, **including catch-up ticks**, reset with trails at battle,
 source and renderer changes, and record the batch immediately after terrain. The
-producer uses authored `CanHover`, COB wake routines and committed piece poses; hidden,
+producer uses authored `CanHover`, COB wake routines and committed piece poses;
+the wake routine's pieces are linked to the model exactly as the unit's own
+script is `[04 R-COB-01 §4]`, so an emitter beyond the model emits nothing; hidden,
 carried, airborne and unfinished units have no active visual wake script;
 every emitted mark starts at a player-visible position, and existing fog
 composites cover the batch. A bounded ring holds the recent spray. Land emissions

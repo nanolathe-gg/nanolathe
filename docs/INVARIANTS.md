@@ -304,7 +304,8 @@ Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission) and
 "Modern danger escape", "Modern learned terrain", "Modern re-route
 staggering", "Modern group-order spreading", "Modern bounded path work",
 "Modern allied pass-through", "Modern unreachable moves", "Modern jam
-release", "Modern route straightening" and "Modern wedge escape",
+release" with its "Modern pocket release", "Modern route straightening" and
+"Modern wedge escape",
 DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
 "Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE

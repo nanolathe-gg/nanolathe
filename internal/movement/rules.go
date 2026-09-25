@@ -24,10 +24,12 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 // FirstRequestSpread once per scheduler call and per staged first request;
 // UnreachableMoves once per cannot-get-there publication and, while a
 // certificate is live, per follower visit; WedgeEscape at most once per ground
-// visit whose proposal fails a static cell test, and once per opened search.
+// visit whose proposal fails a static cell test, and once per opened search;
+// PocketRelease once per cannot-get-there publication and, while a pocket
+// certificate is live, per follower visit.
 // Every implementation is a zero-size value or a pointer to one, so dispatch
-// allocates nothing; the learned grid and the unreachable-move certificates
-// belong to the System.
+// allocates nothing; the learned grid and the unreachable-move and
+// pocket-release certificates belong to the System.
 type Rules interface {
 	// ClaimConflict reports whether claimant displaces incumbent from one
 	// contested occupancy cell. ArbitrateOverlap asks it for every ground,
@@ -132,6 +134,22 @@ type Rules interface {
 	// mover visit, only after a proposed cell has failed the static test, and
 	// once per opened search; it must be a pure answer: no writes, no RNG.
 	WedgeEscape(s *System) bool
+
+	// PocketRelease extends JamRelease to a unit sealed out of its own free
+	// destination (docs/DESIGN_MOVEMENT_PATH.md "Modern pocket release"):
+	// nearCells > 0 certifies, at the empty publication that raises the
+	// cannot-get-there bit on an eligible terminal ground move, a goal within
+	// nearCells per axis whose free footprint a bounded flood finds closed
+	// off by parked friendly units and static ground, with the unit standing
+	// against a parked friend; dwell ticks after the order's first
+	// certificate a closing flood grants a jam release that takes the unit
+	// through the ring into its slot, and after two such releases the move
+	// finishes where the unit stands. (0, 0) is retail's retry for as long
+	// as the record is the last primary one [04 R-ORD-01 §4]; the answer is
+	// off whenever JamRelease is. It is asked once per such empty publication
+	// and, while a certificate is live, per follower visit, and must be a
+	// pure answer: no writes, no RNG.
+	PocketRelease(s *System) (nearCells int32, dwell uint32)
 }
 
 // StrictRules is the retail baseline: nothing is learned and nothing learned
@@ -263,9 +281,9 @@ func (*ModernRules) FirstRequestSpread(*System) (int, int) {
 
 // ModernRules carries the approved learned-terrain, re-route staggering,
 // group-order spreading, bounded path work, group destination slot, allied
-// pass-through, unreachable-move, jam-release and wedge-escape policies. It is
-// zero size and is held by pointer so a later set may embed it and override
-// one answer.
+// pass-through, unreachable-move, jam-release, pocket-release and
+// wedge-escape policies. It is zero size and is held by pointer so a later
+// set may embed it and override one answer.
 type ModernRules struct{ CommunityRules }
 
 // StaticRejection teaches the owner the mapping blocks the route search reads

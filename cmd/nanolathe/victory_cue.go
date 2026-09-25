@@ -39,14 +39,10 @@ func (v *victoryCue) due(tick uint32) bool {
 var processVictoryCue victoryCue
 
 // serviceVictoryCue runs once per host frame while the committed result is
-// shown. The hook sits in the branch that draws the local won title, which
-// the latch reaches only for the local viewer's win, so a loss, a draw or a
-// resignation never calls it [07 §11][08 R-TRIG-01 §6].
-//
-// TODO(question): the research names a composer gate before both end titles
-// without describing it, and Nanolathe draws no in-battle title, so the cue
-// treats every shown local win as passing that gate. Settled by: a
-// description of that gate in [07 §11].
+// shown. The hook sits in the composer branch that draws the victory title.
+// That branch needs the latch's won-path bit, so a loss, a draw or a
+// resignation never reaches it. It also needs the gate before both end titles
+// to pass: the local slot must not be a watcher [07 §11][08 R-TRIG-01 §6].
 func (b *battleSession) serviceVictoryCue(cur *frame.Frame) {
 	if b != nil && processVictoryCue.step(b.hostPreferences().VictoryCue != 0, cur) {
 		b.playUICue(nil, victoryCueAlias)
@@ -54,10 +50,22 @@ func (b *battleSession) serviceVictoryCue(cur *frame.Frame) {
 }
 
 // step is one host frame of the hook: whether the cue plays for the committed
-// frame cur. With the preference off it neither plays nor stores anything.
+// frame cur. With the preference off, or when the title branch is not reached,
+// it neither plays nor stores anything.
 func (v *victoryCue) step(enabled bool, cur *frame.Frame) bool {
-	if !enabled || cur == nil || !resultWon(cur.Result) {
+	if !enabled || cur == nil || !resultWon(cur.Result) || localSlotWatching(cur) {
 		return false
 	}
 	return v.due(cur.Tick)
+}
+
+// localSlotWatching is the composer's gate before both end titles: the local
+// slot's lobby-record watcher bit skips both titles [07 §11]. The published
+// row's Watcher is that bit ORed with this build's observer controller, the
+// same exclusion the result rows and the battle-start camera apply. Retail
+// sets the bit only in multiplayer, so an ordinary campaign or skirmish slot
+// always passes.
+func localSlotWatching(cur *frame.Frame) bool {
+	slot := int(cur.Selection.LocalPlayer)
+	return slot < len(cur.Players) && cur.Players[slot].Watcher
 }

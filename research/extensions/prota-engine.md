@@ -86,10 +86,17 @@ changelogs. Sources: `OTA 3.1 to ProTA 4.3 changelog.txt`,
   `DoubleClickMoveMegamap`, `UnderAttackFlash`, `MegamapFPSLimit`,
   `MegaMapConfig`, per-sensor minimum ring distances, `PlayerNDotColors`,
   `PlayerMarkerPcx`). The icon configuration lives in `Icon/iconcfg.ini`; the
-  release adds custom megamap icons. The shipped 4.8 renderer's contract —
-  a view toggled by key release or entered/left by the wheel, with no zoom
-  steps, plus its input, rings, flash and colour rules — is recorded in
+  release adds custom megamap icons. The shipped 4.8 renderer's contract is
+  recorded in
   [Shared draw-DLL interface, ProTA 4.8 shipped megamap](draw-engine-interface.md#prota-48-shipped-megamap).
+  It covers the view, toggled by key release or entered and left by the
+  wheel, with no zoom steps. It also covers the point-sampled tile-art
+  terrain picture, the input rules and the orders they send, build
+  placement, rings and the `Megamap*Color` keys, the Shift-held order
+  overlay, flash, projectiles, and the dot-colour readers. `ProTA.ini` sets
+  none of the `Megamap*Color` keys. Its `PlayerNDotColors` values also colour
+  the player swatch that begins each allied resource-bar row, and
+  `PlayerMarkerPcx` affects only the whiteboard.
 - **Click snap.** `ClickSnap` snaps a reclaim command to the nearest reclaimable
   feature; release notes also name mex/geo snapping and an override key
   (`ClickSnapOverrideKey` in the DLL, configurable in the ctrl-f2 menu).
@@ -581,10 +588,10 @@ executable makes the same swap only at the `MobileBuild` site
 ([TA: Escalation, "Weapons stay active while building"](taesc-engine.md)).
 Its bytes at the `HelpBuild`, `Capture`, `ReclaimUnit` and `RepairUnit` sites
 match the reference executable, and its `Attack_Chase` and `Suppress` sites
-match the ProTA edits above. The only change common to both packages is
-therefore the build-a-new-unit case. The Escalation doc's "switches them on"
-wording is correct in effect: the replacement verb is the one that gives
-slots back to autonomy.
+match the ProTA edits above. Of the five working-weapons swaps, only the
+build-a-new-unit case is therefore common to both packages, and
+[the Escalation document](taesc-engine.md) describes the same replacement
+verb: the one that gives slots back to autonomy.
 
 #### Map-owned features drawn without line of sight
 
@@ -646,8 +653,9 @@ so neither map surface shows these features.
 **Established — mechanism.** The shipped renderer hooks the battle frame
 composer where it is about to draw the in-game victory title (`igvictory`).
 That branch is reached only when the end latch has set the won-path title bit
-and the composer's existing gate before both end titles passes
-[07 §11][08 R-TRIG-01 §6]. The hook is installed at startup with no
+and the composer's gate before both end titles passes. That gate requires the
+local slot's watcher bit to be clear, so a watcher gets neither title. In
+single-player sessions the bit is always clear [07 §11][08 R-TRIG-01 §6]. The hook is installed at startup with no
 preference gate. It keeps one process-wide "last call" game tick, zero at
 start. Each time the title branch runs, it compares the current global tick
 with that value. If the current tick is lower, or more than 300 ticks later,

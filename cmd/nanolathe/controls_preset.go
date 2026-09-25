@@ -148,6 +148,9 @@ var controlsPresetRows = []controlsPresetRow{
 			g.setPresentation(p)
 		},
 	},
+	// ProTA's draw engine squares each allied resource row in the player's
+	// dot colour (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	presentationRow("Allied dot swatches", 1, 0, func(p *settings.Presentation) *int { return &p.AlliedDotSwatches }),
 	{
 		label: "Game clock", community: 1, retail: settings.DefaultClock, names: onOffNames,
 		get: func(g *gameShell) int { return boolInt(g.clockVisible) },

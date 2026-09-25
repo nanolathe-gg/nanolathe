@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
@@ -117,21 +118,33 @@ func TestBattleSwitchAltCapturesShellOrAttachedSettings(t *testing.T) {
 	}
 }
 
-// TestApplySettingsRecoversFromAllRowsOpen guards the one stored state that
-// would deadlock the screen: a block whose every row is Open leaves Start
-// permanently refused, so the shell rebuilds the human row instead.
-func TestApplySettingsRecoversFromAllRowsOpen(t *testing.T) {
+// TestAllOpenSettingsGetLivePairAtRowBuild locks [08 R-SKIR-01 §1] "Shown
+// rows only": the settings load stores an all-Open block as read, and the
+// SKIRMISH row build then makes row 0 Player and row 1 Computer, so Start is
+// not left permanently refused. A live row the player count hides does not
+// stop the build's test.
+func TestAllOpenSettingsGetLivePairAtRowBuild(t *testing.T) {
 	shell := &gameShell{maps: []string{"Anteer Straight"}}
 	shell.setup = newSkirmishMenuConfig("Anteer Straight")
 
 	blob := settings.Defaults()
+	blob.Skirmish.NumPlayers = 3
 	for i := range blob.Skirmish.Players {
 		blob.Skirmish.Players[i].Controller = 0
+		blob.Skirmish.Players[i].AllyGroup = 5
 	}
+	blob.Skirmish.Players[5].Controller = 2
 	shell.applySettings(blob)
+	if got := shell.retailControllers; got != [session.SkirmishMaxPlayers]int{0, 0, 0, 0, 0, 2} {
+		t.Fatalf("loaded controllers = %v, want the block as stored", got)
+	}
 
-	if shell.retailControllers[0] != 1 {
-		t.Fatalf("controllers = %v, want a human in row 0", shell.retailControllers)
+	shell.installSkirmishDynamicGadgets(&gui.Window{})
+	if got := shell.retailControllers; got != [session.SkirmishMaxPlayers]int{1, 2, 0, 0, 0, 2} {
+		t.Fatalf("row build controllers = %v, want Player, Computer and the hidden row untouched", got)
+	}
+	if shell.setup.Players[0].AllyGroup != 5 || shell.setup.Players[1].AllyGroup != 5 {
+		t.Fatal("the row build's fallback changed an ally group")
 	}
 }
 

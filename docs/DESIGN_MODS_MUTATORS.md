@@ -228,6 +228,7 @@ mod:
   | `presentation.megamapDoubleClickMove` | settings file | 0 | unchanged |
   | `presentation.megamapRadarMinimum`, `megamapSonarMinimum`, `megamapSonarJamMinimum`, `megamapAntiNukeMinimum` (one row) | settings file | 0 each | unchanged |
   | `presentation.playerDotColors` (one row, *Dot colours*) | settings file | ProTA: 227, 249, 18, 250, 67, 149, 208, 117, 210, 34 | Default: 227, 212, 80, 235, 108, 219, 208, 93, 130, 67 |
+  | `presentation.alliedDotSwatches` (allied resource rows' player-colour squares) | settings file | 1 | 0 |
   | `presentation.victoryCue` | Options → HUD | 1 | 0 |
   | `clock` (stand-alone battle clock) | `+clock` | 1 | 0 |
   | `audio.soundMode` | Options → Sound | 2 (3D) | 1 (Mono) |
@@ -247,8 +248,11 @@ mod:
   because ProTA sets them alike, and the ten dot colours are one row naming
   the draw engine's defaults or ProTA's table; a table matching neither, or
   unequal minimums, read *Custom* in the offer. The dot colours are read by
-  the megamap's icons only: the draw engine's table is not read by the
-  retail minimap's contacts, so ProTA's minimap dots come from its content.
+  the megamap's icons and, with `alliedDotSwatches` on, by the allied
+  resource rows' squares (the draw engine's own two readers in Nanolathe): the
+  table is not read by the retail minimap's contacts, so ProTA's minimap dots
+  come from its content. The eight `Megamap*Color` ring colours are not in
+  the preset, because ProTA's `ProTA.ini` sets none of them.
   The victory cue is
   [DESIGN_INTERFACE_HUD_INPUT §3.16](DESIGN_INTERFACE_HUD_INPUT.md#316-optional-victory-cue).
   The unit limit is not in the preset, because the Community feature table

@@ -533,6 +533,19 @@ type Presentation struct {
 	MegamapSonarJamMinimum int     `json:"megamapSonarJamMinimum"`
 	MegamapAntiNukeMinimum int     `json:"megamapAntiNukeMinimum"`
 	PlayerDotColors        [10]int `json:"playerDotColors"`
+	// The eight `Megamap*Color` ring colours: -1 keeps the ring's research
+	// default, any other value is the palette index it draws in.
+	MegamapWeapon1Color  int `json:"megamapWeapon1Color"`
+	MegamapWeapon2Color  int `json:"megamapWeapon2Color"`
+	MegamapWeapon3Color  int `json:"megamapWeapon3Color"`
+	MegamapRadarColor    int `json:"megamapRadarColor"`
+	MegamapSonarColor    int `json:"megamapSonarColor"`
+	MegamapRadarJamColor int `json:"megamapRadarJamColor"`
+	MegamapSonarJamColor int `json:"megamapSonarJamColor"`
+	MegamapAntinukeColor int `json:"megamapAntinukeColor"`
+	// AlliedDotSwatches draws each allied resource row's 8×8 player-colour
+	// square (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	AlliedDotSwatches int `json:"alliedDotSwatches"`
 
 	// VictoryCue plays the `Victory Condition` alias when the local viewer's
 	// won result first shows, as ProTA 4.8 does for every win
@@ -551,7 +564,11 @@ func DefaultPresentation() Presentation {
 		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
 		TrailStrength: DefaultTrailStrength,
 		MegamapWheel:  1, MegamapWheelMove: 1, MegamapFlash: 1,
-		PlayerDotColors: DefaultPlayerDotColors,
+		PlayerDotColors:     DefaultPlayerDotColors,
+		MegamapWeapon1Color: MegamapColorDefault, MegamapWeapon2Color: MegamapColorDefault, MegamapWeapon3Color: MegamapColorDefault,
+		MegamapRadarColor: MegamapColorDefault, MegamapSonarColor: MegamapColorDefault,
+		MegamapRadarJamColor: MegamapColorDefault, MegamapSonarJamColor: MegamapColorDefault,
+		MegamapAntinukeColor: MegamapColorDefault,
 	}
 }
 
@@ -584,7 +601,7 @@ func (p *Presentation) Normalize() {
 	if p.ExpandedSidebar < 0 {
 		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
 	}
-	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe, &p.VictoryCue} {
+	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe, &p.VictoryCue, &p.AlliedDotSwatches} {
 		if *value < 0 {
 			*value = 0
 		} else {

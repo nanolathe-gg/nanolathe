@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
@@ -176,5 +177,54 @@ func TestMegamapBoxSelectsOwnUnitsAndHidesTheClick(t *testing.T) {
 	}
 	if !selected {
 		t.Fatalf("box selection did not select the own unit: %+v", s.PendingHumanCommands())
+	}
+}
+
+// Each `Megamap*Color` of -1 keeps the ring's research default — entry 6 for
+// weapon slot 1, raw index 1 for slots 2 and 3, entry 10 for radar and sonar,
+// entry 12 for the jammers, entry 15 for interceptors — and any other value
+// is the palette index itself [draw-engine-interface "`Megamap*Color` keys"].
+func TestMegamapRingColorOverrides(t *testing.T) {
+	logical := func(entry byte) byte { return 100 + entry }
+	defaults := megamapRingColors([8]int{-1, -1, -1, -1, -1, -1, -1, -1}, logical)
+	if defaults != [8]byte{106, 1, 1, 110, 110, 112, 112, 115} {
+		t.Fatalf("defaults = %v", defaults)
+	}
+	got := megamapRingColors([8]int{0, -1, 250, -1, 7, -1, -1, 3}, logical)
+	if got != [8]byte{0, 1, 250, 110, 7, 112, 112, 3} {
+		t.Fatalf("overrides = %v", got)
+	}
+}
+
+// The megamap dash chain is spaced by the world length of a 20×20
+// image-pixel diagonal, phased by (age mod 20) of that spacing, and measured
+// along the segment clamped to the map while sprites start from the
+// unclamped anchor [draw-engine-interface "Selection and order overlay"].
+func TestMegamapDashChainSpacingAndPhase(t *testing.T) {
+	type sprite struct {
+		frame int
+		x     float64
+	}
+	var got []sprite
+	emit := func(frame int, x, _ float64) { got = append(got, sprite{frame, x}) }
+	// Half scale: trunc(20/0.5) = 40 on both axes, spacing √3200.
+	spacing := math.Sqrt(3200)
+	megamapDashChain([2]float64{0, 0}, [2]float64{200, 0}, 0.5, 0.5, 1000, 1000, 25, 2, 3, emit)
+	// age 25: phase (25 mod 20) × spacing / 20, frame (25/2) mod 3 = 0.
+	if len(got) != 4 || got[0].frame != 0 || got[1].frame != 1 || math.Abs(got[0].x-5*spacing/20) > 1e-9 || math.Abs(got[1].x-got[0].x-spacing) > 1e-9 {
+		t.Fatalf("chain = %+v", got)
+	}
+	// A segment no longer than one spacing draws nothing.
+	got = nil
+	megamapDashChain([2]float64{0, 0}, [2]float64{56, 0}, 0.5, 0.5, 1000, 1000, 0, 1, 1, emit)
+	if len(got) != 0 {
+		t.Fatalf("short segment drew %+v", got)
+	}
+	// The length comes from the clamped endpoints, the positions from the
+	// unclamped anchor: -100..200 clamps to 0..200.
+	got = nil
+	megamapDashChain([2]float64{-100, 0}, [2]float64{200, 0}, 0.5, 0.5, 1000, 1000, 0, 1, 1, emit)
+	if len(got) != 4 || got[0].x != -100 || got[3].x >= 100 {
+		t.Fatalf("clamped chain = %+v", got)
 	}
 }

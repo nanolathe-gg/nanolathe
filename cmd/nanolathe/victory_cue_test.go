@@ -57,3 +57,25 @@ func TestVictoryCueOffIsRetail(t *testing.T) {
 		t.Fatal("the victory cue is on by default")
 	}
 }
+
+// TestVictoryCueWatcherGate locks the composer's gate before both end titles
+// [07 §11]: when the local slot is a watcher the title branch is never reached,
+// so the cue neither plays nor stores the tick. Another slot's watcher bit does
+// not affect it.
+func TestVictoryCueWatcherGate(t *testing.T) {
+	win := func(local uint8, watcher int) *frame.Frame {
+		f := &frame.Frame{Tick: 9000, Result: frame.ResultView{Ended: true, Kind: "victory", Tick: 9000}}
+		f.Selection.LocalPlayer = local
+		if watcher >= 0 {
+			f.Players[watcher].Watcher = true
+		}
+		return f
+	}
+	var cue victoryCue
+	if cue.step(true, win(2, 2)) || cue.last != 0 {
+		t.Fatal("a watching local slot reached the victory title branch")
+	}
+	if !cue.step(true, win(2, 5)) {
+		t.Fatal("another slot's watcher bit closed the local gate")
+	}
+}

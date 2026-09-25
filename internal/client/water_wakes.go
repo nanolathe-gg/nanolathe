@@ -2,7 +2,6 @@ package client
 
 import (
 	"math"
-	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/cob"
@@ -93,17 +92,18 @@ func (s *hoverWakeScript) EmitSFX(piece int, kind int32, _ cob.SFXKind) {
 }
 
 func newHoverWakeScript(prog *cob.Program, m *unitModel, defID uint16) *hoverWakeScript {
-	if prog == nil || m == nil {
+	if prog == nil || m == nil || m.compiled == nil {
 		return nil
 	}
-	s := &hoverWakeScript{vm: cob.NewPresentationVM(prog, 4096), defID: defID}
-	for _, name := range prog.Pieces {
-		index, ok := m.pieceByName[strings.ToLower(name)]
-		if !ok {
-			return nil
-		}
-		s.pieceMap = append(s.pieceMap, index)
+	// The wake emitters are linked to the model the way the unit's own script
+	// is, so an emission names the model piece the simulation would compose
+	// for it; a piece beyond the model links to -1 and emits nothing
+	// [04 R-COB-01 §4].
+	modelPieces := make([]string, len(m.compiled.Pieces))
+	for i := range m.compiled.Pieces {
+		modelPieces[i] = m.compiled.Pieces[i].Name
 	}
+	s := &hoverWakeScript{vm: cob.NewPresentationVM(prog, 4096), defID: defID, pieceMap: cob.LinkPieces(prog.Pieces, modelPieces)}
 	bridge := cob.NewCallbackBridge(s.vm)
 	s.vm.SetSFXSink(s)
 	s.vm.SetSFXVisible(func(_ int, kind int32) bool { return kind >= 2 && kind <= 5 })
@@ -179,6 +179,9 @@ func (c *Client) placeSurfaceWakes(cur *frame.Frame) {
 				continue
 			}
 			piece := script.pieceMap[ev.piece]
+			if piece < 0 || piece >= len(m.compiled.Pieces) {
+				continue
+			}
 			vertices := m.compiled.Pieces[piece].Vertices
 			if len(vertices) < 2 {
 				continue

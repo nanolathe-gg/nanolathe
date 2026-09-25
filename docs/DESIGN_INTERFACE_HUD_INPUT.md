@@ -793,6 +793,12 @@ count is saved immediately and the runtime rows are rebuilt at their new
 spacing; `*V`, `*VI` and `*VII` keep the prefix so the longer numerals can
 complete. The setup still requires a map with enough start positions and at
 least one computer opponent `[07 R-FE-02 §10]` `[08 R-SKIR-01 §1]`.
+Lowering the count hides rows without clearing their controllers, so
+`skirmishConfigForStart` reads only the shown rows: a hidden live row never
+becomes a player, matching the row-to-player conversion `[08 R-SKIR-01 §2]`.
+The controller cycle and the row build's all-Open fallback (row 0 Player,
+row 1 Computer, applied when the rows are built, not at settings load) also
+read only the shown rows `[08 R-SKIR-01 §1]`.
 
 `activateGadget`,
 `activateSkirmishGadget` and `activateDynamicSkirmishGadget`
@@ -2053,7 +2059,32 @@ ENDMSN delegates its populated mission list and scrollbar to these same
 frontend painters, preserving mark bytes, selection and scroll state. Initial
 selection uses the fill-time scroll limit. Its outcome title reuses the loaded
 `igvictory`/`igdefeat` frames at `(W/2, 28)` with ordinary authored offsets
-`[08 R-CAMP-01 §8]`. Selected Core briefings use the installed `mbriefcor`
+`[08 R-CAMP-01 §8]`. The selector applies retail's watcher test: `igvictory`
+only when the result was won and the local slot is not watching, otherwise
+`igdefeat`. `Players[Selection.LocalPlayer].Watcher` is the watcher bit ORed
+with this build's observer controller. A draw has no title.
+
+**In-battle end titles.** The same two frames are drawn over the battle view
+`[07 §11]`. They use the pause title's view-centre anchor
+`((W + 128) / 2, H / 2)`, less the frame's authored offsets. They sit in the
+pause title's layer: over the world and chrome, and under the clock line, the
+open windows and the result overlay. One gate covers both titles: a watching
+local slot gets neither. Otherwise a won result draws `igvictory` and a lost
+one draws `igdefeat`. A draw, or an ending without an outcome, has no title.
+The first frame that shows the latched result is composed before the results
+controller exists. That frame is retail's one live battle frame after the
+latching tick, so `drawResultOverlay` draws nothing on it. The title then
+stays on the retained battle picture, and the post-battle darkening
+(`applyPostBattleFade`) shades it with the view. It stays, including behind
+the campaign CD-check dialog, until the glamour image or the ENDMSN background
+replaces the picture. Retail's handler shades
+the retained frame and was not found to clear it. That the title stays under
+the darkening is therefore **Supported inference**. No retail capture in the
+reference set shows a battle ending, and the Unknown entry in `[07 §11]`
+stays open until one does. `drawEndTitle` and `endTitleOnPicture` live in
+`result.go`. `TestEndTitleGateAndOutcome`, `TestEndTitleAnchorAndWatcherGate`,
+`TestEndTitleStaysUntilEndMission`, `TestResultTitleFrameWatcherTakesDefeat`
+and `TestResultOverlayWaitsForTheResultsController` lock the contract. Selected Core briefings use the installed `mbriefcor`
 background key `[08 R-CAMP-01 §2]`.
 
 ### 3.9 Partial I10 and exclusions
@@ -2947,12 +2978,17 @@ with ProTA 4.8's `ProTA.ini` values as defaults except where noted:
 | `megamapFlash` | 1 | `UnderAttackFlash` |
 | `megamapRadarMinimum`, `megamapSonarMinimum`, `megamapSonarJamMinimum`, `megamapAntiNukeMinimum` | 0 | `Megamap*Minimum` (ProTA's INI sets all to 0) |
 | `playerDotColors` | 227, 212, 80, 235, 108, 219, 208, 93, 130, 67 (the draw engine's own defaults) | `Player1..10DotColors` |
+| `megamapWeapon1Color`, `megamapWeapon2Color`, `megamapWeapon3Color`, `megamapRadarColor`, `megamapSonarColor`, `megamapRadarJamColor`, `megamapSonarJamColor`, `megamapAntinukeColor` | −1 each (keep the ring's default) | `Megamap*Color` (ProTA's INI sets none) |
+| `alliedDotSwatches` | 0 | none: the draw engine always draws the square (below) |
 
 `MegamapRadarJamMinimum` has no setting: the shipped build reads it and never
 uses it, and the radar-jammer ring compares against the radar minimum. Icons
 come from the existing `strategicIconConfig` resolution (§18.7 of
 DESIGN_GPU_RENDERER, including its mod-directory discovery), so a mounted ProTA
-uses its own `Icon/iconcfg.ini`.
+uses its own `Icon/iconcfg.ini`. A `Megamap*Color` value of −1 keeps its
+ring's research default (below); any other value is the palette index the ring
+draws in. The shipped build passes any value unchecked; a Nanolathe palette
+index is a byte, so a value outside 0..255 normalizes back to −1 (host choice).
 
 **Input (research contract unless marked host choice).**
 
@@ -2966,8 +3002,8 @@ uses its own `Icon/iconcfg.ini`.
 | Left press in the image | no prepared order | starts a box, clamped to the image |
 | Left release | box extents both ≥ 9 pixels | own completed selectable units whose `(x, z − y/2)` lies strictly inside the converted rectangle: replace without Shift, toggle each with Shift |
 | Left release in the image | selection nonempty and an order or placement prepared | the world-click handler at the megamap point, with Shift (host choice: in the margin, or with no selection, a prepared order issues nothing) |
-| Other left release (not at the last double-click position) | — | own selectable hovered unit: select (Shift toggles); otherwise with a selection: right-click interface clears it, left-click interface sends the neutral order |
-| Right release | — | a prepared order or placement is cancelled; else left-click interface clears a selection; right-click interface sends the neutral order (Guard over an own hovered unit) |
+| Other left release (not at the last double-click position) | — | with the select cursor showing: an own selectable, completed hovered unit is selected (Shift toggles); otherwise with a selection: right-click interface clears it, left-click interface sends the neutral order |
+| Right release | — | a prepared order or placement is cancelled; else left-click interface clears a selection; right-click interface sends the neutral order, or Guard when the select cursor shows |
 | Double-click on an own hovered unit | `doubleClickSelection` on | that unit's definition across the whole map (the Ctrl+Z set); view stays open |
 
 Entering plays alias `Options`, leaving `Previous`. Entering clears the
@@ -2992,48 +3028,109 @@ terrain height at that point, or sea level where terrain has none
 the cursor shape, the footer and every order agree on one point and one unit.
 The hovered unit is the research's first admitted contact whose reference
 point `(x + footX·8, z + footZ·8)` lies strictly inside both the 22×22-pixel
-search box and its picture box, each converted to world units.
+search box and its picture box, each converted to world units. While the view
+owns the pointer the feature lookup at the pointer cell reports no feature, as
+the shipped build redirects it, so the cursor and footer see none; the order
+resolver's own feature probe at the point is unaffected.
 
-**Unknowns, resolved here as documented host choices.**
-`TODO(question)` sites carry both.
+**Orders the view sends itself.** They bypass the world click and its
+armed-click shape gate [07 R-CAM-01 §14] and go straight into the selection
+broadcast [04 R-STANCE-01 §5]: the numeric code, the hovered unit as target,
+the pointer's world point and Shift as the queue flag
+(`megamapSend`). The broadcast's own rules apply unchanged, including the
+target exclusion and the nearby offsets of positioned move and patrol results.
 
-* *Build placement from the megamap.* The research leaves open whether the
-  engine revalidates the site while the game view is suppressed. Nanolathe
-  follows the existing minimap semantics — a prepared placement consults the
-  site-valid bit — and lets the ordinary placement preview keep revalidating at
-  the megamap point, so a valid site builds and an invalid one plays
-  `notoktobuild`. A manual ProTA 4.8 build click on the megamap would settle it.
-* *The neutral order.* Which concrete order the engine sends for a neutral
-  prepared order is not traced. Nanolathe sends the minimap's contextual order
-  (code 1, resolved by `orders.Resolve` from the target and point). Tracing the
-  order sender would settle it.
+* The *neutral* send is code 1. Each selected unit resolves it separately
+  through the Interface Type contextual rule [04 R-ORD-02 §1] ("Code 1 —
+  contextual"): attack, assistance, resurrect or reclaim of a mapped
+  reclaimable feature, or a move; a unit that resolves nothing gets no order.
+* *Guard* is code 7 on the hovered unit: each selected `canguard` unit gets
+  the ground or air follow order, the others nothing. After the send the
+  latch-to-idle side effects run (Shift persistence cleared, Stop radio group
+  reset) and the latch is restored to Guard, so the prepared order stays Guard
+  until the next right release cancels it — the shipped build's quirk, kept.
+* The *select-cursor* test in both interfaces is the ordinary cursor chooser's
+  shape over the hovered unit with the prepared latch [07 §8], not an
+  ownership test.
+
+**Build placement.** A left release with a build armed and a selection reads
+the site-valid bit as last written: set, each selected builder gets the
+mobile-build order and `oktobuild` plays (the placement stays armed with
+Shift, otherwise returns to neutral); clear, `notoktobuild` plays, no order is
+issued and the placement stays armed. *Host choice, departing from a
+Supported inference:* the shipped build revalidates only through the engine's
+per-frame preview, which needs the engine's own pointer record inside the game
+view; the research infers that record stays frozen at the last position the
+game saw, so after the pointer crosses the build menu every megamap build
+would play `notoktobuild` and an own-unit click would not select. Nanolathe
+keeps its ordinary preview revalidating at the megamap point, so a building
+chosen from the build menu can still be placed. A manual ProTA 4.8 test
+settles it: open the view with the pointer over the battlefield, choose a
+building by hotkey and click a legal site (predicted to build), then choose
+one from the build menu and click a legal site (predicted `notoktobuild`).
+The `TODO(question)` at `megamapWorldClick` carries it.
+
+*Click snapping* on the megamap stays **Unknown**: whether the extensions'
+mex and wreck snap finds a site from the megamap's point was not traced. The
+megamap takes no click snap: the placement preview skips the build snap while
+the view owns the pointer, and a megamap world click never takes the reclaim
+snap. A ProTA 4.8 observation with a nonzero Mex-Snap radius would settle it.
+
+**One shared frame (host choice).** Every layer — terrain, fog, icons,
+projectiles, rings, the overlay — and the pointer conversion share one extent:
+the retail play area [fmt tnt], `(TNT width − 2) × 16` by
+`(TNT height − 8) × 16` world units (`camera.MegamapExtent`). The shipped
+build fits and samples its terrain picture over the play area but scales
+everything drawn over it, and the pointer, by the larger
+`(width − 1) × 16` by `(height − 4) × 16`, so its overlays sit up and left of
+the terrain by up to 16 and 64 map pixels; Nanolathe does not copy that
+defect.
 
 **Layers.** One indexed surface of the battle viewport, composed on change
-(tick, hover, Shift, box, blink or layout) and uploaded with a stable
-identity and revision; the patch's `MegamapFpsLimit` is therefore not a
-setting (ProTA sets it to 0, unlimited). In order:
+(tick, hover, tracked unit, Shift, box, placement pointer, blink or layout) and
+uploaded with a stable identity and revision; the patch's `MegamapFpsLimit` is
+therefore not a setting (ProTA sets it to 0, unlimited). In order:
 
-1. *Margins* in palette index 95. The image fits the extent
-   `(TNT width − 1) × 16` by `(TNT height − 4) × 16` with preserved aspect,
-   centred when a spare margin exceeds two pixels.
-2. *Terrain.* Host choice, because the 4.8 picture algorithm is not
-   recorded: the pinned current source's reduction of the tile art over the
-   extent — area-averaged gamma RGB, nearest OKLab index among the palette
-   indices the map's tiles use
-   ([community-patch-rendering](../research/extensions/community-patch-rendering.md#megamap-images-palette-reduction-and-composition))
-   — without error diffusion, built once per image size.
+1. *Margins* in palette index 95. The image is fitted to the play area's
+   aspect in single-precision floats as the shipped picture is: a wider extent
+   keeps the view width and takes `trunc(w / cols × rows)` rows, a taller one
+   keeps the height and takes `trunc(h / rows × cols)` columns; centred when a
+   spare margin exceeds two pixels. Host choice: when the two aspects are
+   exactly equal the shipped build makes a square of the smaller side;
+   Nanolathe keeps the width branch, so the picture always has the play area's
+   aspect.
+2. *Terrain.* The shipped picture: the map's own tile art point-sampled over
+   the play area, keeping raw palette indices — no averaging, colour matching
+   or dithering — drawn through the battle palette. Column `c` samples source
+   column `trunc(c × stepX)` with `stepX = extentW / imageW` in single
+   precision (rows likewise), reading the tile grid at `(col/32, row/32)` and
+   the byte `(col mod 32, row mod 32)` of that tile. It is built once per
+   battle, and again only if the image size changes. Host choice: the shipped
+   build never lets the step fall below one pixel, so a picture larger than
+   the play area runs on into the excluded edge tiles and then reads past the
+   tile grid (content undefined); Nanolathe keeps the fractional step, so the
+   picture magnifies the play area and never reads past the grid.
 3. *Fog.* The research's table from the committed grids: index 0 where the
    viewer's mapped bit is clear, the gray table where current LOS is absent.
-   Sampling steps through the `(CellW/2) × (CellH/2)` LOS grid by float
-   additions, rows starting at `−(sea level / 20)` and clamped at zero. The
-   grids themselves encode the mapping/LOS mode (a disabled mode fills them),
-   so no separate flag test is needed.
-4. *Projectiles.* Host choice for admission: the world painter's retail
-   projectile gate with the owner/ally bypass (the 4.8 test's flag mapping is
-   not recorded). A weapon with `twophase`, `cruise` and `targetable` together
-   draws `nukeicon` in the owner's dot colour, or the `nuclogo` frame when no
-   such picture exists; any other draws a 2×2 block in the minimap's
-   projectile colour.
+   Sampling steps by float additions over the play area's span of the LOS grid
+   (`extent / 32` cells, the shared frame), rows starting at
+   `−(sea level / 20)` and clamped at zero. The grids themselves encode the
+   mapping/LOS mode (a disabled mode fills them), so no separate flag test is
+   needed.
+4. *Projectiles.* The shipped gate (`render.MegamapProjectileAdmitted`). The
+   cell is `x / 32`, `(z − y/2) / 32` in whole world units, signed divisions
+   truncated toward zero with `y/2` first; a negative cell is rejected, and so
+   is one **strictly greater** than the viewing player's LOS-grid width or
+   height, so one equal to them passes. Then: the owner is the viewing player
+   or in its alliance row; otherwise, with current sight on (mode bit 1), the
+   viewer's current-sight byte at the cell; otherwise Unmapped (mode bit 0)
+   admits every projectile; otherwise the viewer's bit in the mapping word. A
+   cell equal to the width reads the next row's first cell, as the row-major
+   index does; host choice: an index past the grid's end is not read and
+   rejects. A weapon with `twophase`, `cruise` and `targetable` together draws
+   `nukeicon` in the owner's dot colour, or the `nuclogo` frame when no such
+   picture exists; any other draws a 2×2 block in the minimap's projectile
+   colour.
 5. *Unit icons* for the admitted minimap contacts [03 §3.9] with a
    definition. An identified unit (own, or passing the painter's visibility
    predicate) takes its configured `[Icon]` row, else `unknow`; an unidentified
@@ -3049,26 +3146,84 @@ setting (ProTA sets it to 0, unlimited). In order:
    halo, or a half-pixel black body, claims a pixel), `nothing` becomes
    the minimap's own `radlogo` frame, and `unknow` is the generated fallback.
 6. *Rings* centred on the icon, radius `distance × rowPitch / extentW`: for a
-   selected allied unit, radar/sonar (logical entry 10) and jammers (entry 12)
-   above their minimums with no activation test; interceptor slots of an
-   `antiweapons` unit above the antinuke minimum at `(coverage − 512)` in entry
-   15, dashed by the published slot indicator and the blink phase; and, while
-   Shift is physically held, the hovered allied unit's enabled slots 3, 2, 1 at
-   raw `range` (slot 1 entry 6, slots 2 and 3 palette index 1).
-7. *Box* outline in the selection-quad colour (host choice; the patch's
-   selection/order overlay is not traced).
+   selected allied unit, radar/sonar and jammers above their minimums with no
+   activation test; interceptor slots of an `antiweapons` unit above the
+   antinuke minimum at `(coverage − 512)`, dashed by the published slot
+   indicator and the blink phase; and, while Shift is physically held, the
+   enabled slots 3, 2, 1 at raw `range` of the hovered allied unit and of the
+   allied unit whose command page is open. Each ring takes its
+   `Megamap*Color` setting, or at −1 its default: weapon slot 1 colour-map
+   entry 6, slots 2 and 3 raw palette index 1, radar and sonar entry 10,
+   jammers entry 12, interceptors entry 15.
+7. *Selection box.* While a box drag is in progress and both screen extents
+   exceed eight pixels, one outline in colour-map entry 15 joins the press
+   point and the clamped pointer; there is no inner frame.
+8. *Placement ghost.* With a build armed and the pointer on the image, the
+   armed footprint (`footX × 16` by `footZ × 16` world units, scaled and
+   truncated) centred on the projection of the pointer's world point with the
+   half-height shear, moved back inside the image at an edge; entry 10 over a
+   valid site, entry 4 over a refused one. The shipped row-building mode draws
+   each queued row position instead (valid 240, or 234 under an unidentified
+   engine condition, refused 214). Nanolathe has no row-building mode over the
+   megamap — the Modern command drag cannot start there — so no row ghost is
+   drawn; the `TODO(question)` in `drawMegamapOverlay` records that a row
+   ghost added later would use 240, the colour tied to no unidentified
+   condition.
+9. *Queued orders*, only while Shift is physically held
+   (`drawMegamapQueuedOrders`). The walk covers the local player's units in
+   slot order, in play and not death-marked. *Focus* units are the hovered
+   unit, the camera-tracked unit and the command-page subject; another unit
+   is drawn only if selected, or if a focus unit allied with the local player
+   has a build list (the builder context). From a running anchor that starts
+   at the unit, each primary-list node's descriptor draw-mask selects: bit 1,
+   the build-site outline with the ghost's geometry (entry 10 for a selected
+   unit, entry 1 otherwise), a focus unit's dash chain to it, and the anchor
+   moving to the site; bit 2, the resolved anchor — a target unit's committed
+   position while the local player can see it, else the order position —
+   with the order icon for focus and selected units (once per exact point per
+   frame), a focus unit's chain, and the anchor advancing; bit 8, the icon
+   alone; bit 16, for a cloaked focus unit, an entry-15 circle of radius
+   `trunc(mincloakdistance × scaleX)`. Icons are the cursor-art entry of the
+   descriptor's icon byte (1–20) at frame `(tick / (2 × ticksPerFrame)) mod
+   frames`. The chain places `pathicon` sprites from anchor to anchor, both as
+   `(x, z − y/2)`, spaced by the world length of a 20×20 image-pixel diagonal
+   (`√(trunc(20/scaleX)² + trunc(20/scaleY)²)`), none unless the segment is
+   longer than one spacing, the first `(age mod 20) × spacing / 20` along at
+   frame `(age / ticksPerFrame) mod frames` and each later one the next frame;
+   length and direction use the endpoints clamped to the extent, positions
+   start from the unclamped anchor. Two `TODO(question)` sites remain: the
+   unpublished cached position of a target the local player cannot see (the
+   stored position stands in), and the cloak circle's centre, which the
+   research does not name (the unit's projected position, where retail's own
+   overlay centres its range rings [07 R-P0-11 §3]).
 
-The software cursor stays the client's ordinary top layer. Not implemented:
-the `Megamap*Color` overrides, the order/selection overlay, and the per-player
-whiteboard marker strip (`PlayerMarkerPcx`, which the research ties to the
-whiteboard, not the megamap).
+The software cursor stays the client's ordinary top layer. The megamap draws
+no whiteboard: `PlayerMarkerPcx` is the whiteboard's dot-marker strip only,
+the shipped megamap never draws the strip, markers or lines, and its blit
+covers any whiteboard content inside the game view
+([draw-engine-interface "`PlayerMarkerPcx` is whiteboard-only"](../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap)).
+Nanolathe has no whiteboard, so nothing reads it.
 
-**Files.** `internal/camera/megamap.go` (lens), `internal/render/megamap.go`
-(fog, icon blit, rings), `internal/client/megamap_icons.go` (indexed icon
-bank) and `megamap_draw.go` (surface record), `internal/session/megamap_query.go`
-(ground point), and `cmd/nanolathe/battle_megamap*.go` (state, input,
-composition); `battle.go`, `battle_hud.go`, `battle_placement.go`,
-`battle_selection.go` and `battle_cursor.go` carry one-line hooks.
+**Allied resource bars.** With `alliedDotSwatches` on, each allied row of the
+optional allied income panel begins with an 8×8 filled square in that player's
+`playerDotColors` entry, indexed by the player's logo colour (so a logo change
+moves it; a player index above 9 gives palette index 0), 36 pixels right of
+and one pixel below the row's origin; the name moves past it (host layout).
+It is the table's only use in the panel
+([draw-engine-interface "Allied resource bars"](../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap)).
+The draw engine always draws it; the setting keeps the retail default off, and
+the ProTA controls preset turns it on
+([DESIGN_MODS_MUTATORS §4.3](DESIGN_MODS_MUTATORS.md#43-selection-and-precedence)).
+
+**Files.** `internal/camera/megamap.go` (lens and shared frame),
+`internal/render/megamap.go` (fog, icon blit, rings, projectile gate, overlay
+geometry) and `megamap_picture.go` (terrain picture),
+`internal/client/megamap_icons.go` (indexed icon bank) and `megamap_draw.go`
+(surface record), `internal/session/megamap_query.go` (ground point), and
+`cmd/nanolathe/battle_megamap*.go` (state, input, composition, overlay);
+`community_income.go` draws the allied swatch; `battle.go`, `battle_hud.go`,
+`battle_placement.go`, `battle_selection.go` and `battle_cursor.go` carry
+one-line hooks.
 
 ### 3.16 Optional victory cue
 
@@ -3084,30 +3239,41 @@ the ProTA controls preset
 ([DESIGN_MODS_MUTATORS §4.3](DESIGN_MODS_MUTATORS.md#43-selection-and-precedence)).
 
 **Behaviour (research contract).** With the switch on, each host frame that
-shows a committed result the local viewer won (not a draw) runs the hook with
-the committed global tick. The hook keeps one value for the process, zero at
-start and kept across battles and content reloads. When the tick is lower than
-that value, or more than 300 ticks after it, it plays the alias `Victory
-Condition` through the campaign cue's by-name path (`Audio.PlayUICue`); in
-every case it then stores the tick. Because the tick stops at the end, the cue
-plays once per shown win. A loss, a draw or a resignation never reaches it. No
-session kind is excluded: skirmish, Survival and campaign wins all play it.
-A campaign win therefore also plays one cue when the result first shows, on
-top of the per-condition cues retail played earlier. The hook's two edges are
-kept: a first win shown at tick 300 or earlier in a process plays nothing, and
-a later battle plays only when its tick is below the stored value or more than
-300 ticks above it. With the switch off the hook neither plays nor stores.
+shows a committed result the local viewer won (not a draw), with the local
+slot not watching, runs the hook with the committed global tick. The hook
+keeps one value for the process, zero at start and kept across battles and
+content reloads. When the tick is lower than that value, or more than 300 ticks
+after it, it plays the alias `Victory Condition` through the campaign cue's
+by-name path (`Audio.PlayUICue`); in every case it then stores the tick.
+Because the tick stops at the end, the cue plays once per shown win. A loss, a
+draw or a resignation never reaches it. No session kind is excluded: skirmish,
+Survival and campaign wins all play it. A campaign win therefore also plays one
+cue when the result first shows, on top of the per-condition cues retail played
+earlier. The hook's two edges are kept: a first win shown at tick 300 or
+earlier in a process plays nothing, and a later battle plays only when its tick
+is below the stored value or more than 300 ticks above it. With the switch off
+the hook neither plays nor stores.
 
-**Unknown.** The research names a composer gate that both end titles pass
-without describing it, and Nanolathe draws no in-battle title; every shown
-local win is treated as passing it (`TODO(question)` in
-`cmd/nanolathe/victory_cue.go`). A description of that gate in `[07 §11]`
-would settle it.
+**The title gate.** The hook is reached only through the composer's gate
+before both end titles `[07 §11]`. That gate skips both titles when the local
+slot's lobby-record watcher bit is set, and it tests nothing else. Nanolathe
+maps the gate to the committed frame: `Players[Selection.LocalPlayer].Watcher`,
+which publishes the watcher bit ORed with this build's observer controller.
+The result rows and the battle-start camera apply the same exclusion. When the
+gate fails, the hook neither plays nor stores, as in the shipped hook. Retail
+sets the bit only in multiplayer, so an ordinary campaign, skirmish or Survival
+slot always passes. The retail title is composed into one live battle frame,
+the one after the latching tick `[07 §11]`. Nanolathe instead runs the hook on
+every frame that shows the result. The stored tick keeps that to one cue,
+because the committed tick no longer advances. Nanolathe also draws the in-battle end
+title (§3.8 "In-battle end titles"), but the cue does not depend on it
+being drawn.
 
 **Files.** `cmd/nanolathe/victory_cue.go` (the hook), a one-line call from the
 result branch of the battle update in `battle.go`, and the switch in
-`community_hud_options.go`. `TestVictoryCueTriggerRule` and
-`TestVictoryCueOffIsRetail` lock the rule and the retail default.
+`community_hud_options.go`. `TestVictoryCueTriggerRule`,
+`TestVictoryCueWatcherGate` and `TestVictoryCueOffIsRetail` lock the rule, the
+title gate and the retail default.
 
 ## 4. Retail behaviour that is not a bug
 

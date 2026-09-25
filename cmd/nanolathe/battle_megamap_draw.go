@@ -58,6 +58,7 @@ type megamapComposeKey struct {
 	tick         uint32
 	lens         camera.MegamapLens
 	hover        pool.Handle
+	tracked      pool.Handle
 	shift        bool
 	box          bool
 	bx0, by0     int32
@@ -66,6 +67,17 @@ type megamapComposeKey struct {
 	icons        *client.MegamapIconBank
 	radarOptions uint32
 	pal          *palette.Tables
+	ghost        megamapGhostKey
+}
+
+// megamapGhostKey is the placement ghost's input: the armed footprint, the
+// site-valid bit and the pointer it follows. It is zero with no build armed
+// or the pointer off the image.
+type megamapGhostKey struct {
+	shown        bool
+	x, y         int32
+	footX, footZ int32
+	valid        bool
 }
 
 // megamapIconBank loads the pictures once, from the same resolved icon
@@ -122,18 +134,23 @@ func (b *battleSession) drawMegamap(c *client.Client, cur *frame.Frame) {
 		m.identity = megamapSurfaceIdentity.Add(1) | 1<<62
 	}
 	icons := b.megamapIconBank()
-	shift := false
-	if in := c.Input(); in != nil && in.Kbd != nil {
-		// Weapon rings follow Shift's physical state [draw-engine-interface "Rings"].
-		shift = in.Kbd.HasShift()
-	}
+	// Weapon rings and the queued-order overlay follow Shift's physical state
+	// [draw-engine-interface "Rings", "Selection and order overlay"]; the
+	// battle input writes it from the keyboard every frame.
+	state := b.battleState().Input
 	key := megamapComposeKey{
-		frame: cur, tick: cur.Tick, lens: lens, hover: b.footerHoverUnit, shift: shift,
+		frame: cur, tick: cur.Tick, lens: lens, hover: b.footerHoverUnit, shift: state.ShiftHeld,
 		box: b.megamap.boxActive, options: b.megamapOptions(), icons: icons,
 		radarOptions: b.radarOptions, pal: b.hud.pal,
 	}
+	if b.cam != nil {
+		key.tracked = b.cam.Tracked()
+	}
 	if key.box {
 		key.bx0, key.by0, key.bx1, key.by1 = b.megamap.boxX0, b.megamap.boxY0, b.megamap.boxX1, b.megamap.boxY1
+	}
+	if b.battleState().PlacementArmed() && lens.ContainsScreen(state.PointerX, state.PointerY) && b.megamapOwnsPointer(state.PointerX, state.PointerY) {
+		key.ghost = megamapGhostKey{shown: true, x: state.PointerX, y: state.PointerY, footX: state.BuildFootX, footZ: state.BuildFootZ, valid: state.BuildOK}
 	}
 	if !m.valid || m.key != key {
 		b.composeMegamap(cur, lens, icons, key)
@@ -144,17 +161,16 @@ func (b *battleSession) drawMegamap(c *client.Client, cur *frame.Frame) {
 }
 
 // composeMegamap rebuilds the surface: margins, terrain, fog, projectiles,
-// unit icons with their rings, and the box.
+// unit icons with their rings, then the selection and order overlay.
 func (b *battleSession) composeMegamap(cur *frame.Frame, lens camera.MegamapLens, icons *client.MegamapIconBank, key megamapComposeKey) {
 	m := &b.megamap.composition
 	w, h := int(lens.W), int(lens.H)
 	terrain := b.sess.World
-	// Host choice: the terrain picture is the current source's documented
-	// area-averaged reduction of the tile art (render.BuildMegamapPicture);
-	// the shipped build's own picture algorithm is not recorded. It is built
-	// once per image size.
+	// The terrain picture is the shipped build's point sample of the tile art
+	// over the play area, built once per battle. Nanolathe rebuilds it only if
+	// the image size changes (render.BuildMegamapPicture).
 	if m.picture == nil || m.pictureW != w || m.pictureH != h || m.pictureTerrain != terrain {
-		pic := render.BuildMegamapPicture(terrain, lens.ExtentW, lens.ExtentH, w, h, b.hud.pal)
+		pic := render.BuildMegamapPicture(terrain, lens.ExtentW, lens.ExtentH, w, h)
 		m.picture, m.pictureW, m.pictureH, m.pictureTerrain = nil, w, h, terrain
 		if len(pic) == w*h {
 			m.picture = pic
@@ -178,7 +194,8 @@ func (b *battleSession) composeMegamap(cur *frame.Frame, lens camera.MegamapLens
 		m.fog = m.fog[:w*h]
 		sea := int32(cur.Visibility.SeaLevel >> 16)
 		if cur.Visibility.Valid {
-			render.ComposeMegamapFog(m.fog, m.picture, w, h, cur.Visibility.WordVisible, cur.Visibility.Visible, int(terrain.CellW/2), int(terrain.CellH/2), cur.ViewingPlayer, sea, &b.hud.pal.Gray)
+			render.ComposeMegamapFog(m.fog, m.picture, w, h, cur.Visibility.WordVisible, cur.Visibility.Visible, int(terrain.CellW/2), int(terrain.CellH/2),
+				float32(lens.ExtentW)/32, float32(lens.ExtentH)/32, cur.ViewingPlayer, sea, &b.hud.pal.Gray)
 		} else {
 			copy(m.fog, m.picture)
 		}
@@ -191,9 +208,7 @@ func (b *battleSession) composeMegamap(cur *frame.Frame, lens camera.MegamapLens
 	copy(m.image, m.fog)
 	b.drawMegamapProjectiles(cur, lens, icons, key.options)
 	b.drawMegamapUnits(cur, lens, icons, key)
-	if key.box {
-		render.StrokeMegamapRect(m.image, w, h, int(key.bx0), int(key.by0), int(key.bx1), int(key.by1), b.hud.paletteIndex(10))
-	}
+	b.drawMegamapOverlay(cur, lens, key)
 	// Margins in index 95, then the image at its fitted offset.
 	vw, vh := int(lens.ViewW), int(lens.ViewH)
 	if cap(m.surface) < vw*vh {
@@ -220,9 +235,9 @@ func megamapDot(o megamapOptions, selector uint8, known bool) byte {
 }
 
 // drawMegamapProjectiles visits every published projectile. Admission is the
-// LOS-grid bound check and then — host choice, because the shipped test's
-// flag mapping is not recorded — the world painter's retail projectile gate
-// with the owner/ally bypass. A weapon with `twophase`, `cruise` and
+// shipped build's: the cell bound against the viewing player's LOS grid, then
+// owner or ally, current sight, Unmapped, or the mapping word
+// (render.MegamapProjectileAdmitted). A weapon with `twophase`, `cruise` and
 // `targetable` together draws `nukeicon` in the owner's colour, or the
 // minimap's `nuclogo` frame without one; any other draws a 2×2 block in the
 // minimap's projectile colour [draw-engine-interface "Projectiles"].
@@ -230,9 +245,9 @@ func (b *battleSession) drawMegamapProjectiles(cur *frame.Frame, lens camera.Meg
 	m := &b.megamap.composition
 	w, h := int(lens.W), int(lens.H)
 	surf := &render.RadarSurface{W: w, H: h, Bits: m.image}
-	mode := uint8(0)
-	if cur.Visibility.CoverageBytes {
-		mode = client.ProjectileVisibilityModeBytes
+	sight := render.MegamapProjectileSight{
+		Mode: cur.Radar.MappingLOS, W: cur.Visibility.W, H: cur.Visibility.H,
+		Current: cur.Visibility.Visible, Mapped: cur.Visibility.WordVisible, Viewer: cur.ViewingPlayer,
 	}
 	dotColor := b.hud.paletteIndex(14)
 	contact := 0
@@ -252,13 +267,14 @@ func (b *battleSession) drawMegamapProjectiles(cur *frame.Frame, lens camera.Meg
 			}
 		}
 		x, y, z := radarMapPixel(p.X), radarMapPixel(p.Y), radarMapPixel(p.Z)
-		if cur.Visibility.Valid {
-			cx, cz := x/32, (z-y/2)/32
-			if cx < 0 || cz < 0 || cx > cur.Visibility.W || cz > cur.Visibility.H {
+		allied := p.OwnerKnown && megamapAllied(cur, p.Owner)
+		if !cur.Visibility.Valid {
+			// No published grid to bound or test against: only the owner and
+			// allies pass.
+			if !allied {
 				continue
 			}
-		}
-		if !(p.OwnerKnown && megamapAllied(cur, p.Owner)) && !(cur.ViewingPlayer < 10 && client.ProjectileVisible(cur.Visibility, *p, mode, cur.ViewingPlayer)) {
+		} else if cx, cz, inRange := render.MegamapProjectileCell(x, y, z, cur.Visibility.W, cur.Visibility.H); !inRange || !render.MegamapProjectileAdmitted(allied, cx, cz, sight) {
 			continue
 		}
 		px, py := lens.Project(x, y, z)
@@ -376,6 +392,35 @@ func (b *battleSession) drawMegamapUnits(cur *frame.Frame, lens camera.MegamapLe
 	}
 }
 
+// Ring-colour slots, in the `Megamap*Color` key order.
+const (
+	megamapRingWeapon1 = iota
+	megamapRingWeapon2
+	megamapRingWeapon3
+	megamapRingRadar
+	megamapRingSonar
+	megamapRingRadarJam
+	megamapRingSonarJam
+	megamapRingAntinuke
+)
+
+// megamapRingColors resolves the eight ring colours. Each `Megamap*Color`
+// setting of -1 keeps the research default — colour-map entry 6 for weapon
+// slot 1, raw palette index 1 for slots 2 and 3, entry 10 for radar and sonar,
+// entry 12 for both jammers and entry 15 for interceptor coverage — and any
+// other value is the palette index itself. Colour-map entries resolve through
+// the logical-to-physical map [draw-engine-interface "`Megamap*Color` keys"]
+// [03 R-MM-01 §2].
+func megamapRingColors(settingsColors [8]int, logical func(byte) byte) [8]byte {
+	out := [8]byte{logical(6), 1, 1, logical(10), logical(10), logical(12), logical(12), logical(15)}
+	for i, v := range settingsColors {
+		if v >= 0 && v <= 255 {
+			out[i] = byte(v)
+		}
+	}
+	return out
+}
+
 // drawMegamapRings draws a unit's sensor, interceptor and weapon rings
 // [draw-engine-interface "Rings"]. Radii use the four-aligned pitch over the
 // horizontal extent.
@@ -392,23 +437,23 @@ func (b *battleSession) drawMegamapRings(cur *frame.Frame, lens camera.MegamapLe
 	pitch := lens.RowPitch()
 	radius := func(d int32) int { return int(render.MegamapRingRadius(d, pitch, lens.ExtentW)) }
 	t := key.options.thresholds
+	colors := megamapRingColors(key.options.colors, b.hud.paletteIndex)
 	if p.Selected {
 		// Selected allied unit: no activation test, unlike the retail
 		// minimap's circle gate.
 		radar, sonar, radarJam, sonarJam := int32(int16(def.RadarDistance)), int32(int16(def.SonarDistance)), int32(int16(def.RadarDistanceJam)), int32(int16(def.SonarDistanceJam))
 		dRadar, dSonar, dRadarJam, dSonarJam := render.MegamapSensorRings(t, radar, sonar, radarJam, sonarJam)
-		sensor, jammer := b.hud.paletteIndex(10), b.hud.paletteIndex(12)
 		if dRadar {
-			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(radar), sensor)
+			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(radar), colors[megamapRingRadar])
 		}
 		if dSonar {
-			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(sonar), sensor)
+			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(sonar), colors[megamapRingSonar])
 		}
 		if dRadarJam {
-			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(radarJam), jammer)
+			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(radarJam), colors[megamapRingRadarJam])
 		}
 		if dSonarJam {
-			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(sonarJam), jammer)
+			render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(sonarJam), colors[megamapRingSonarJam])
 		}
 		if def.AntiWeapons {
 			ordinal := 0
@@ -430,7 +475,7 @@ func (b *battleSession) drawMegamapRings(cur *frame.Frame, lens camera.MegamapLe
 				if !draw {
 					continue
 				}
-				color := b.hud.paletteIndex(15)
+				color := colors[megamapRingAntinuke]
 				if dashed {
 					render.DrawMegamapDashedCircle(m.image, w, h, cx, cy, radius(r), color, cur.Radar.BlinkPhase&1 != 0)
 				} else {
@@ -439,21 +484,20 @@ func (b *battleSession) drawMegamapRings(cur *frame.Frame, lens camera.MegamapLe
 			}
 		}
 	}
-	// Weapon rings: the hovered allied unit, only while Shift is physically
-	// held, slots 3, 2, 1 with the enabled bit and a nonzero authored range,
-	// at that raw range (no ballistic limit). The engine's separate
-	// show-range unit word has no Nanolathe producer; only the hover source
-	// is drawn.
-	if !hovered || !key.shift {
+	// Weapon rings: the hovered allied unit and the allied unit whose command
+	// page is open, only while Shift is physically held, slots 3, 2, 1 with
+	// the enabled bit and a nonzero authored range, at that raw range (no
+	// ballistic limit) [07 R-P0-11 §3].
+	page := p.Handle != 0 && p.Handle == cur.CommandPage.Builder
+	if !(hovered || page) || !key.shift {
 		return
 	}
 	weapons := [3]*content.WeaponDef{def.Weapon1Def, def.Weapon2Def, def.Weapon3Def}
-	colors := [3]byte{b.hud.paletteIndex(6), 1, 1}
 	for slot := 2; slot >= 0; slot-- {
 		wd := weapons[slot]
 		if wd == nil || !u.EnabledWeaponSlots[slot] || wd.Range == 0 {
 			continue
 		}
-		render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(wd.Range), colors[slot])
+		render.DrawMegamapCircle(m.image, w, h, cx, cy, radius(wd.Range), colors[megamapRingWeapon1+slot])
 	}
 }

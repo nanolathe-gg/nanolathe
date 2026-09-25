@@ -2,12 +2,29 @@ package camera
 
 import "testing"
 
-// The megamap extent and fit are the shipped ProTA 4.8 lens
-// ([draw-engine-interface "Map scale", "What the view shows"]).
-func TestMegamapExtentUsesTNTCells(t *testing.T) {
+// The megamap's one shared frame is the retail play area, and the fit is the
+// shipped terrain picture's ([draw-engine-interface "Terrain picture", "What
+// the view shows"]; DESIGN_INTERFACE_HUD_INPUT §3.15).
+func TestMegamapExtentIsThePlayArea(t *testing.T) {
 	w, h := MegamapExtent(128, 64)
-	if w != 127*16 || h != 60*16 {
-		t.Fatalf("extent = %dx%d, want (W-1)*16 x (H-4)*16", w, h)
+	if w != 126*16 || h != 56*16 {
+		t.Fatalf("extent = %dx%d, want (W-2)*16 x (H-8)*16", w, h)
+	}
+}
+
+// The fit truncates `w / cols × rows` in single precision. An 18×15-tile play
+// area in a 600×600 view keeps the width, and 600/18×15 lands just below 500
+// in float32, so the height is 499 where exact integer arithmetic gives 500.
+func TestLayoutMegamapFloatFit(t *testing.T) {
+	l := LayoutMegamap(0, 0, 600, 600, 18*32, 15*32)
+	if l.W != 600 || l.H != 499 {
+		t.Fatalf("fit = %dx%d, want 600x499", l.W, l.H)
+	}
+	// Exactly equal aspects keep the width branch, not a square of the
+	// smaller side (host choice).
+	l = LayoutMegamap(0, 0, 800, 400, 64, 32)
+	if l.W != 800 || l.H != 400 {
+		t.Fatalf("equal-aspect fit = %dx%d, want 800x400", l.W, l.H)
 	}
 }
 

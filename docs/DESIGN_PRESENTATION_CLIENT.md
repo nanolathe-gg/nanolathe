@@ -475,6 +475,16 @@ PAL atlas row consume those same output colours. The logical and physical
 index-remap tables do not change, and no gamma value reaches simulation state
 `[07 R-FE-01 §11]` [I6].
 
+Results keep the battle picture until the outcome art replaces it. The frame
+that first shows the latched result is the live battle frame with the
+in-battle end title and no results art. Every later darkening frame
+recomposes that frozen picture, title included, and then shades it
+(DESIGN_INTERFACE_HUD_INPUT §3.8 "In-battle end titles", `[07 §11]`). The
+campaign CD-check idle (state 8) keeps the fully darkened picture behind its
+dialog, because retail's state 8 only redraws its windows
+(`postBattleShadesPicture`, `[08 R-CAMP-01 §6]`). The Modern executor darkens
+in true colour, so mid-sequence it differs from Classic by the compounded
+palette rounding that DESIGN_GPU_RENDERER §13.3 describes.
 Results retain the battle palette and gamma throughout darkening, then save
 the current factor and force neutral gamma for outcome art. The glamour
 entry installs its black palette before the first image composition; later
@@ -1056,7 +1066,14 @@ document carries them.
 * **C12 Committed sampling.** The client reads world positions, piece
   rotations, rotation accumulators and animation ticks from the one committed
   frame for the current tick. Retail does not interpolate between updates
-  `[03 §2.4]` [I6].
+  `[03 §2.4]` [I6]. Each committed piece lane carries the model piece it
+  poses: publication copies the unit binding's script-to-model link
+  (`Binding.PieceMap`), and `modelStates` poses through that index for both
+  renderers. A script piece whose name the model lacks therefore animates the
+  model piece its slot took, on screen as in the simulation, and a script
+  piece beyond the model's piece count (`-1`) poses nothing `[04 R-COB-01 §4]`.
+  Only lanes with no link — authored preview poses and a script attached
+  without a model binding — name their piece instead.
 
 ### 3.3 Audio — C13–C20
 

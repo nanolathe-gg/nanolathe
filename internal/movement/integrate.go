@@ -207,6 +207,18 @@ type System struct {
 	// with no unit released (docs/DESIGN_MOVEMENT_PATH.md "Modern jam
 	// release").
 	jamReleases []jamRelease
+	// pockets holds the Modern pocket-release certificates, dense by handle
+	// and never ranged; pocketLive counts the set rows so the follower asks
+	// nothing while it is zero, and the cells, seen and stack slices are the
+	// bounded flood's reused scratch. All stay empty unless the bound rules
+	// release pockets, are cleared with the order binding, and are not saved:
+	// a load starts with none (docs/DESIGN_MOVEMENT_PATH.md "Modern pocket
+	// release").
+	pockets     []pocketCert
+	pocketLive  int
+	pocketCells []uint8
+	pocketSeen  []bool
+	pocketStack []Cell
 	// AirSectors is the coarse second grid the map loader builds after the
 	// terrain is decoded: 128-world-unit cells whose smoothed byte is the
 	// maximum terrain height over the 3x3 block of sectors around each one
@@ -2499,8 +2511,11 @@ func (s *System) serviceGroundFollower(u *units.Unit, head *orders.Node, route *
 	// Its rule owns eligibility/dwell; ordinary arrival still owns the release.
 	// A move whose goal is certified sealed finishes the same way after its
 	// dwell (docs/DESIGN_MOVEMENT_PATH.md "Modern unreachable moves"); the
-	// question is not asked while no certificate is live.
-	if orders.CrowdedMoveArrival(u, head, tick) || s.unreachableArrival(u, head, tick) {
+	// question is not asked while no certificate is live. A pocket-release
+	// certificate is judged here too, granting its releases and finishing the
+	// move in place once they are used (docs/DESIGN_MOVEMENT_PATH.md "Modern
+	// pocket release").
+	if orders.CrowdedMoveArrival(u, head, tick) || s.unreachableArrival(u, head, tick) || s.pocketArrival(u, head, tick) {
 		head.Phase = 1
 		head.DynamicGate |= arrivalSatisfiedBit
 		s.raiseArrival(u, &arrivalHandle{order: head})
@@ -2619,6 +2634,7 @@ func (s *System) DeactivateMove(handle pool.Handle) {
 		setHandleRow(&s.activeOrders, handle, nil)
 	}
 	s.clearUnreachable(handle)
+	s.clearPocket(handle)
 	s.resetJamRun(handle)
 	if s.arrivalHandles != nil {
 		setHandleRow(&s.arrivalHandles, handle, nil)
@@ -3172,8 +3188,13 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 		// (docs/DESIGN_MOVEMENT_PATH.md "Modern unreachable moves"); Strict
 		// answers off and the retry above is the whole response.
 		s.noteRouteUnavailable(boundUnit, boundOrder, r)
+		// Nanolathe Modern policy: a unit sealed out of its own free slot
+		// is certified here (docs/DESIGN_MOVEMENT_PATH.md "Modern pocket
+		// release"); Strict answers off.
+		s.notePocketRejection(boundUnit, boundOrder)
 	} else if len(points) > 0 && liveBinding {
 		s.noteRouteFound(r.Unit, boundOrder, r.Goal, points)
+		s.notePocketRouteFound(r.Unit, boundOrder)
 	}
 	route := handleRow(s.Routes, r.Unit)
 	if route == nil {

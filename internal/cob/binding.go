@@ -475,10 +475,9 @@ func linkDiagnostics(program *Program, modelPieces, required []string, groups []
 // that name, and a name whose match was already claimed or moved below the
 // searching slot does not find it again.
 //
-// TODO(question): presentation pairs each published piece with a model piece
-// by name, not through this map, so an in-range alias animates here but not on
-// screen. Publishing the linked model index with each piece view would settle
-// it; no shipped script animates an alias [04 R-COB-01 §4].
+// Presentation draws through this same map: each committed piece view carries
+// its linked model index, so an in-range alias animates on screen as it does
+// here, and a piece beyond the model draws nothing.
 func LinkPieces(scriptPieces, modelPieces []string) []int {
 	pieceMap := make([]int, len(scriptPieces))
 	slots := make([]int, len(modelPieces))

@@ -917,6 +917,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	if paused {
 		h.drawPausedTitle(c)
 	}
+	// The end titles follow the pause title under one watcher gate
+	// [07 §11].
+	h.drawEndTitle(c, b, cur)
 	// The Space-held Kills/Losses panel is composed after the world and the
 	// chrome, and before the in-battle menus that can cover it
 	// [07 R-HUD-04 §1].
@@ -947,10 +950,12 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// linked window stack. TALK is the newer child and paints above it [07 §3].
 	h.drawTalk(c, b)
 	var result frame.ResultView
+	watching := false
 	if cur != nil {
 		result = cur.Result
+		watching = localSlotWatching(cur)
 	}
-	h.drawResultOverlay(c, b, result)
+	h.drawResultOverlay(c, b, result, watching)
 	// Last layer: the frontend save/load dialog and the shell's message box.
 	// ARMOPT opens them over the battle and ENDMSN over the results surface,
 	// so they sit above both [07 R-FE-01 §7][07 R-FE-01 §8].

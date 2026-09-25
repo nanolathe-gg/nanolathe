@@ -59,6 +59,9 @@ type megamapOptions struct {
 	enabled, wheel, wheelMove, doubleClickMove, flash bool
 	thresholds                                        render.MegamapRingThresholds
 	dots                                              [10]byte
+	// colors are the eight `Megamap*Color` settings in key order; -1 keeps
+	// the ring's research default.
+	colors [8]int
 }
 
 func (b *battleSession) megamapOptions() megamapOptions {
@@ -74,6 +77,9 @@ func (b *battleSession) megamapOptions() megamapOptions {
 	}
 	for i, v := range p.PlayerDotColors {
 		o.dots[i] = byte(v)
+	}
+	for i, v := range p.MegamapRingColors() {
+		o.colors[i] = *v
 	}
 	return o
 }
@@ -492,18 +498,30 @@ func (b *battleSession) megamapLeftRelease(cl *client.Client, lens camera.Megama
 }
 
 // megamapWorldClick hands a release with a prepared order to the world-click
-// handler at the view's pointer point, with Shift. Placement follows the
-// minimap: the site-valid bit decides between siting the building and
-// `notoktobuild`.
+// handler at the view's pointer point, with Shift. A build reads the
+// site-valid bit as last written: set, each selected builder gets the
+// mobile-build order and `oktobuild` plays, the placement staying armed only
+// with Shift; clear, `notoktobuild` plays, no order is issued and the
+// placement stays armed [draw-engine-interface "Build placement from the
+// megamap"][07 §9].
 //
-// TODO(question): whether the shipped build can place a building from the
-// megamap at all. Entering clears the site-valid bit and the view never runs
-// the validator itself; whether the engine's pointer update revalidates the
-// site while the game view is suppressed is Unknown [draw-engine-interface
-// "Input while shown"]. Nanolathe's ordinary placement preview keeps
-// revalidating at the megamap point, so a valid site builds. A manual ProTA
-// 4.8 build click on the megamap would settle it.
+// TODO(question): the shipped build revalidates the site only through the
+// engine's per-frame preview, which needs the engine's own pointer record
+// inside the game view. That record is a Supported inference: it would stay
+// frozen at the last position the game saw, so after the pointer has crossed
+// the build menu every megamap build click would play `notoktobuild` until
+// the view closes. Nanolathe keeps its ordinary preview revalidating at the
+// megamap point instead (host choice, DESIGN_INTERFACE_HUD_INPUT §3.15), so a
+// building chosen from the build menu can still be placed. A manual ProTA 4.8
+// test settles it: open the megamap with the pointer over the battlefield,
+// choose a building by hotkey and click a legal site (predicted to build),
+// then choose one from the build menu and click a legal site (predicted
+// `notoktobuild`) [draw-engine-interface "Build placement from the megamap"].
 func (b *battleSession) megamapWorldClick(cl *client.Client, mx, my int32, shift bool) {
+	// The extensions' mex and wreck click snapping is not taken from the
+	// megamap: whether its search finds a site from the megamap's point is
+	// Unknown [draw-engine-interface "Click snapping on the megamap"].
+	b.communityPlacement.reclaimSnapArmed = false
 	if b.battleState().PlacementArmed() {
 		if !b.battleState().Input.BuildOK {
 			b.playUICue(cl, "notoktobuild")
@@ -525,21 +543,15 @@ func (b *battleSession) megamapWorldClick(cl *client.Client, mx, my int32, shift
 	}
 }
 
-// megamapSelectCursor reports the select-cursor case: the latch is idle and
-// the hovered unit is an own selectable unit.
+// megamapSelectCursor reports the select-cursor case and the hovered unit.
+// The test is the cursor shape the ordinary chooser gives over the megamap's
+// hovered unit with the prepared latch, not an ownership test
+// [draw-engine-interface "What a megamap send becomes"][07 §8].
 func (b *battleSession) megamapSelectCursor(f *frame.Frame, mx, my int32) (pool.Handle, bool) {
-	if f == nil || b.battleState().Input.Latch != input.LatchNormal || b.battleState().PlacementArmed() {
+	if f == nil || b.cursorShapeAt(b.battleState().Input.Latch, mx, my) != render.CursorSelect {
 		return 0, false
 	}
-	h := b.megamapHoverUnit(f, mx, my)
-	if h == 0 {
-		return 0, false
-	}
-	v, ok := snapshotUnitByHandle(f, h)
-	if !ok || !b.ownSelectableUnit(f, v) {
-		return 0, false
-	}
-	return h, true
+	return b.megamapHoverUnit(f, mx, my), true
 }
 
 // megamapClick is an ordinary left release: select the own hovered unit, or,
@@ -551,6 +563,10 @@ func (b *battleSession) megamapClick(mx, my int32, shift bool) {
 		return
 	}
 	if h, ok := b.megamapSelectCursor(f, mx, my); ok {
+		// Only an own selectable, completed hovered unit changes.
+		if v, found := snapshotUnitByHandle(f, h); h == 0 || !found || !b.ownSelectableUnit(f, v) {
+			return
+		}
 		kind := session.HumanSelectionReplace
 		if shift {
 			kind = session.HumanSelectionToggle
@@ -570,20 +586,40 @@ func (b *battleSession) megamapClick(mx, my int32, shift bool) {
 }
 
 // megamapNeutralOrder sends the neutral prepared order at the pointer's world
-// point.
-//
-// TODO(question): which concrete order the engine's order sender makes of a
-// neutral-typed send from the megamap is Unknown; the audit did not trace that
-// sender [draw-engine-interface "Input while shown"]. Nanolathe sends the
-// minimap's contextual order (code 1, specialised by orders.Resolve from the
-// target and point). Tracing the order sender would settle it.
+// point: command code 1 through the ordinary selection broadcast, with the
+// hovered unit as target and Shift as the queue flag. Each selected unit
+// resolves it separately by the Interface Type contextual rule, and positioned
+// move and patrol results keep their nearby offsets
+// [draw-engine-interface "What a megamap send becomes"][04 R-ORD-02 §1]
+// [04 R-STANCE-01 §5].
 func (b *battleSession) megamapNeutralOrder(mx, my int32, shift bool) {
-	b.orderSelected(hud.LatchToCode(input.LatchNormal), mx, my, shift)
+	b.megamapSend(hud.LatchToCode(input.LatchNormal), mx, my, shift)
+}
+
+// megamapSend is an order the megamap sends itself: the numeric code, the
+// hovered unit as target, the pointer's world point and Shift as the queue
+// flag, straight into the selection broadcast. It is not a world click, so
+// the armed-click shape gate [07 R-CAM-01 §14] does not apply
+// [draw-engine-interface "What a megamap send becomes"].
+func (b *battleSession) megamapSend(code int, mx, my int32, shift bool) {
+	target, _, pos := b.pickTarget(mx, my)
+	if pos == nil {
+		return
+	}
+	_ = b.DispatchOrderCommand(session.HumanOrderCommand{Code: code, Target: target, Position: *pos, Queued: shift})
 }
 
 // megamapRightRelease cancels a prepared order; otherwise the left-click
 // interface clears a selection and the right-click interface sends the
 // prepared order type — Guard when the select cursor shows, else neutral.
+//
+// Guard is command code 7 on the hovered unit: each selected unit with
+// `canguard` gets the ground or air follow order and the others nothing.
+// After the send the tidy-up performs the latch-to-idle side effects —
+// clearing the Shift persistence bit and resetting the Stop radio group — and
+// then restores the latch, so the prepared order stays Guard until the next
+// right release cancels it, as the shipped build does
+// [draw-engine-interface "What a megamap send becomes"].
 func (b *battleSession) megamapRightRelease(cl *client.Client, mx, my int32, shift bool) {
 	if b.battleState().PlacementArmed() {
 		b.disarmPlacement()
@@ -603,7 +639,9 @@ func (b *battleSession) megamapRightRelease(cl *client.Client, mx, my int32, shi
 	}
 	if f, ok := b.currentSnapshot(); ok {
 		if _, guard := b.megamapSelectCursor(f, mx, my); guard {
-			b.orderSelected(hud.LatchToCode(input.LatchFollow), mx, my, shift)
+			b.megamapSend(hud.LatchToCode(input.LatchFollow), mx, my, shift)
+			b.resetOrderLatch()
+			b.battleState().SetLatch(input.LatchFollow)
 			return
 		}
 	}

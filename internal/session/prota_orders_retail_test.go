@@ -21,9 +21,8 @@ import (
 // autonomous scan acquires and fires [06 §3.2]
 // (research/extensions/prota-engine.md "Weapons acquire targets while
 // working"). The repair works in reach; the reclaim's verb is its phase 0, so
-// the case does not need the approach to finish. `MobileBuild` is absent: the
-// ground placement visit does not yet make retail's release call
-// (DESIGN_COMMUNITY_PATCH §4.7).
+// the case does not need the approach to finish. The `MobileBuild` site is
+// locked in internal/construction (mobile_build_slots_test.go).
 func TestProTAWorkingCommanderKeepsItsWeapons(t *testing.T) {
 	f := loadRetailFixture(t)
 	for _, work := range []string{"RepairUnit", "ReclaimUnit"} {

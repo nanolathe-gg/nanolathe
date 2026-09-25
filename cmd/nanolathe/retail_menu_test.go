@@ -1,11 +1,13 @@
 package main
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
@@ -150,4 +152,59 @@ func mustParseCampaignHeader(t *testing.T, side string) *formats.Document {
 		t.Fatalf("parse fixture campaign header: %v", err)
 	}
 	return doc
+}
+
+// TestSkirmishStartIgnoresRowsAboveShownCount locks [08 R-SKIR-01 §2]: the
+// row-to-player conversion walks only rows below the shown player count. A
+// row that was made live and then hidden by a lower *III..*X count keeps its
+// controller but must not join the battle, or the started skirmish would
+// hold players the screen never showed and the start gate never counted.
+func TestSkirmishStartIgnoresRowsAboveShownCount(t *testing.T) {
+	cfg := session.DirectSkirmishConfig("test")
+	cfg.NumPlayers = 3
+	for i := range cfg.Players {
+		cfg.Players[i].Nickname = "row " + strconv.Itoa(i)
+	}
+	g := &gameShell{setup: cfg, retailControllersSet: true,
+		retailControllers: [session.SkirmishMaxPlayers]int{1, 0, 2, 2, 2, 1, 0, 2, 2, 2}}
+	got := g.skirmishConfigForStart("test")
+	if got.NumPlayers != 2 {
+		t.Fatalf("started %d players from 3 shown rows, want 2", got.NumPlayers)
+	}
+	if got.Players[0].Nickname != "row 0" || got.Players[0].Controller != session.SkirmishDefaultController {
+		t.Fatalf("player 0 = %+v, want the human row 0", got.Players[0])
+	}
+	if got.Players[1].Nickname != "row 2" || got.Players[1].Controller != 1 {
+		t.Fatalf("player 1 = %+v, want the computer row 2", got.Players[1])
+	}
+	for i := 2; i < session.SkirmishMaxPlayers; i++ {
+		if got.Players[i].Nickname != "" {
+			t.Fatalf("hidden row reached player %d: %+v", i, got.Players[i])
+		}
+	}
+}
+
+// TestSkirmishControllerCycleAsksOnlyShownRows locks [08 R-SKIR-01 §1]
+// "Shown rows only": Computer→Player is refused only by a shown Player row,
+// and the colour-conflict scan also runs on that Computer→Player step.
+func TestSkirmishControllerCycleAsksOnlyShownRows(t *testing.T) {
+	cfg := session.DirectSkirmishConfig("test")
+	cfg.NumPlayers = 3
+	for i := range cfg.Players {
+		cfg.Players[i].Color = i
+	}
+	cfg.Players[2].Color = 1
+	g := &gameShell{setup: cfg, retailControllersSet: true,
+		retailControllers: [session.SkirmishMaxPlayers]int{0, 2, 2, 0, 0, 0, 1}}
+	g.cycleRetailController(2)
+	if g.retailControllers[2] != 1 {
+		t.Fatalf("row 2 = %d after Computer→Player with only a hidden Player row, want 1", g.retailControllers[2])
+	}
+	if g.setup.Players[2].Color == 1 {
+		t.Fatal("Computer→Player kept a colour a shown live row holds")
+	}
+	g.cycleRetailController(1)
+	if g.retailControllers[1] != 0 {
+		t.Fatalf("row 1 = %d after Computer→ with a shown Player row, want Open", g.retailControllers[1])
+	}
 }

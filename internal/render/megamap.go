@@ -23,12 +23,16 @@ const MegamapMarginIndex byte = 95
 // disabled LOS mode fills every byte — so the four-way flag table reduces to
 // these two tests.
 //
-// Sampling steps through the losW×losH grid by repeated floating-point
-// additions of losW/imageW and losH/imageH, truncating each accumulated
-// coordinate; rows start at `−(seaLevel / 20)` (integer quotient) and clamp
-// negative rows to zero, the offset both LOS branches of the source apply
+// Sampling steps by repeated floating-point additions of spanW/imageW and
+// spanH/imageH, truncating each accumulated coordinate; rows start at
+// `−(seaLevel / 20)` (integer quotient) and clamp negative rows to zero, the
+// offset both LOS branches of the source apply
 // [community-patch-rendering "Fog and draw order"].
-func ComposeMegamapFog(dst, picture []byte, w, h int, word []uint16, current []uint8, losW, losH int, viewer uint8, seaLevel int32, gray *[256]byte) {
+//
+// spanW × spanH is the part of the losW×losH grid the picture covers, in
+// 32-pixel LOS cells: the megamap's shared play-area frame, so the fog lies on
+// the terrain it darkens (host choice, DESIGN_INTERFACE_HUD_INPUT §3.15).
+func ComposeMegamapFog(dst, picture []byte, w, h int, word []uint16, current []uint8, losW, losH int, spanW, spanH float32, viewer uint8, seaLevel int32, gray *[256]byte) {
 	if w <= 0 || h <= 0 || len(dst) < w*h || len(picture) < w*h {
 		return
 	}
@@ -37,8 +41,8 @@ func ComposeMegamapFog(dst, picture []byte, w, h int, word []uint16, current []u
 		return
 	}
 	mask := uint16(1) << viewer
-	xStep := float32(losW) / float32(w)
-	yStep := float32(losH) / float32(h)
+	xStep := spanW / float32(w)
+	yStep := spanH / float32(h)
 	fy := float32(-(seaLevel / 20))
 	for y := 0; y < h; y++ {
 		row := int(fy)
@@ -215,6 +219,76 @@ func FillMegamapBlock(dst []byte, w, h, x, y, size int, color byte) {
 			}
 		}
 	}
+}
+
+// MegamapBoxOutlineShown is the selection box's draw gate: the outline shows
+// only while both screen extents between the press point and the pointer
+// exceed eight pixels [draw-engine-interface "Selection and order overlay"].
+func MegamapBoxOutlineShown(x0, y0, x1, y1 int32) bool {
+	dx, dy := x1-x0, y1-y0
+	return max(dx, -dx) > 8 && max(dy, -dy) > 8
+}
+
+// MegamapFootprintRect is the placement ghost's geometry, also used for a
+// queued build site: a `footX × 16` by `footZ × 16` world-unit footprint,
+// scaled and truncated to image pixels, centred on (cx, cy) and moved back
+// inside the w×h image where it would cross an edge. The result is the
+// inclusive outline corners [draw-engine-interface "Selection and order
+// overlay"].
+func MegamapFootprintRect(cx, cy int32, footX, footZ int32, scaleX, scaleY float64, w, h int32) (x0, y0, x1, y1 int32) {
+	fw := max(int32(float64(footX*16)*scaleX), 1)
+	fh := max(int32(float64(footZ*16)*scaleY), 1)
+	x0, y0 = cx-fw/2, cy-fh/2
+	x0 = max(min(x0, w-fw), 0)
+	y0 = max(min(y0, h-fh), 0)
+	return x0, y0, x0 + fw - 1, y0 + fh - 1
+}
+
+// MegamapProjectileCell is a projectile's LOS cell: `x / 32` and
+// `(z − y/2) / 32` in whole world units, each a signed division truncated
+// toward zero with `y/2` truncated first. A negative coordinate is rejected,
+// and so is one **strictly greater** than the grid's width or height, so a
+// coordinate equal to the width or height passes [draw-engine-interface
+// "Projectiles"].
+func MegamapProjectileCell(x, y, z, gridW, gridH int32) (cx, cz int32, ok bool) {
+	cx, cz = x/32, (z-y/2)/32
+	return cx, cz, cx >= 0 && cz >= 0 && cx <= gridW && cz <= gridH
+}
+
+// MegamapProjectileSight is the viewing player's sight input to the megamap's
+// projectile gate: the visibility mode word's two bits and the two grids.
+type MegamapProjectileSight struct {
+	// Mode is the visibility mode word: bit 1 is current-sight tracking,
+	// bit 0 is Unmapped [03 R-VIS-01 §1].
+	Mode    uint8
+	W, H    int32
+	Current []uint8  // the viewing player's current-sight bytes
+	Mapped  []uint16 // the mapping words, one bit per player
+	Viewer  uint8
+}
+
+// MegamapProjectileAdmitted is the shipped build's four-step projectile test
+// for an in-range cell: the owner is the viewer or in the viewer's alliance
+// row; otherwise with current sight on, the viewer's current-sight byte at
+// the cell; otherwise Unmapped admits everything; otherwise (Mapped with
+// Permanent sight) the viewer's bit in the mapping word at the cell
+// [draw-engine-interface "Projectiles"].
+//
+// A cell equal to the grid width passes the bound and reads the next row's
+// first cell, as the row-major index does. Host choice: an index past the
+// grid's end is not read and rejects the projectile.
+func MegamapProjectileAdmitted(allied bool, cx, cz int32, s MegamapProjectileSight) bool {
+	if allied {
+		return true
+	}
+	index := int(cz)*int(s.W) + int(cx)
+	switch {
+	case s.Mode&2 != 0:
+		return index < len(s.Current) && s.Current[index] != 0
+	case s.Mode&1 != 0:
+		return true
+	}
+	return s.Viewer < 16 && index < len(s.Mapped) && s.Mapped[index]&(1<<s.Viewer) != 0
 }
 
 // StrokeMegamapRect outlines an inclusive rectangle, clipped.

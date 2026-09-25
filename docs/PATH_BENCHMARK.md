@@ -154,10 +154,11 @@ corpus totals excluding the scripted waves.
 The suite registers rule sets for attributing a change to a Modern pathfinding
 policy (`internal/session/path_bench_before_test.go`): `modern-no-pathfinding`
 switches every one off (bounded path work, group destination slots, allied
-pass-through, unreachable moves, jam release, route straightening and wedge
-escape), and `modern-no-bound`, `-no-slots`, `-no-pass`, `-no-unreach`,
-`-no-jam`, `-no-straighten` and `-no-wedge` each switch off one. A new Modern
-pathfinding policy adds its own `-no-` set and joins `modern-no-pathfinding`.
+pass-through, unreachable moves, jam release and its pocket release, route
+straightening and wedge escape), and `modern-no-bound`, `-no-slots`,
+`-no-pass`, `-no-unreach`, `-no-jam`, `-no-pocket`, `-no-straighten` and
+`-no-wedge` each switch off one. A new Modern pathfinding policy adds its own
+`-no-` set and joins `modern-no-pathfinding`.
 
 Scenario details: [terrain, naval and knowledge](PATH_BENCHMARK_TERRAIN.md),
 [traffic, lifecycle and wrecks](PATH_BENCHMARK_TRAFFIC.md), and

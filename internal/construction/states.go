@@ -454,6 +454,21 @@ func (s *Service) mobilePlacementVisit(builder *units.Unit, node *orders.Node, t
 		}
 		return code
 	}
+	// The legal arm's first effect: "legal → release all slots, prepare the
+	// site, create the product" [04 R-ORD-01 §5]. The call takes all three
+	// slots from autonomous acquisition; the record destructor's all-slot
+	// return hands them back on every removal path, because the row's static
+	// mask lacks the slot-keeper bit [04 R-UNIT-06 §5][04 R-ORD-01 §7]. It
+	// precedes the site preparation below, and a visit after an allocation
+	// refusal makes it again, where the verb's guard makes it a no-op. The
+	// aircraft row makes no call here: its takeoff preamble released the slots
+	// in phase 0 [04 R-ORD-02 §2]. The shared orders helper asks the rule set
+	// for the verb, so the ProTA 4.8 working-weapons switch hands the slots
+	// back instead (research/extensions/prota-engine.md "Weapons acquire
+	// targets while working").
+	if node.ID != vtolMobileBuildRow {
+		orders.TakeWorkSlots(builder)
+	}
 	siteY := builder.Y
 	if s.Terrain != nil {
 		siteY = numeric.Fixed(int64(result.SiteHeight) * numeric.FractionOne)

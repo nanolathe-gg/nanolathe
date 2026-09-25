@@ -113,7 +113,7 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	}
 	rawX, rawZ := world.PlacementAnchor(wx, wz, footX, footZ)
 	buildX, buildZ := rawX, rawZ
-	if b.communityClickSnapAllowed(mx) {
+	if b.communityClickSnapAllowed(mx) && !b.megamapOwnsPointer(mx, my) { // no click snap from the megamap (§3.15)
 		buildX, buildZ = b.communityBuildSnap(def, rawX, rawZ, footX, footZ, self, wx, wz)
 	}
 	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = buildX, buildZ

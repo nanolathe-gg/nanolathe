@@ -72,8 +72,9 @@ type Rules interface {
 	ScriptAttackSurfaceFire(q ScriptAttackSurfaceFireRequest) bool
 
 	// WorkLeavesWeaponsAutonomous selects the verb at the fixed all-slot call
-	// of four ground work handlers — `HelpBuild` phase 1, `Capture` phase 0,
-	// `ReclaimUnit` phase 0 and `RepairUnit` phase 1's in-reach arm
+	// of five ground work handlers — `HelpBuild` phase 1, `Capture` phase 0,
+	// `ReclaimUnit` phase 0, `RepairUnit` phase 1's in-reach arm and
+	// `MobileBuild` phase 1 after a legal placement check (TakeWorkSlots)
 	// [04 R-ORD-01 §5]. False is retail's *release*, which takes the slots
 	// from autonomy; true is the *inhibit* verb, which hands them back.
 	WorkLeavesWeaponsAutonomous(u *units.Unit) bool
@@ -224,7 +225,7 @@ func (StrictRules) BeforeCommand(*Queue)                           {}
 // surfacefire metadata is inert under Strict 3.1 [02 R-KEYS-01].
 func (StrictRules) ScriptAttackSurfaceFire(ScriptAttackSurfaceFireRequest) bool { return false }
 
-// WorkLeavesWeaponsAutonomous is retail's answer: the four ground work
+// WorkLeavesWeaponsAutonomous is retail's answer: the five ground work
 // handlers release all three slots, so a builder's weapons are silent until
 // the record's destructor gives them back [04 R-ORD-01 §5][04 R-ORD-01 §7].
 func (StrictRules) WorkLeavesWeaponsAutonomous(*units.Unit) bool { return false }

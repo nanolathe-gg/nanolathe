@@ -56,7 +56,7 @@ They are off in every shipped table, so no other content sees them:
 | `targetLockRelease` | a weapon drops an autonomous unit target it can no longer hit, and looks for another |
 | `aiApplianceEnergy` | the computer player's low-energy task picks appliances by energy use |
 | `aiBuilderStopThreshold` | a computer builder stops placing buildings at ten builders, not five |
-| `workingWeaponsAutonomous` | a unit that is assisting, repairing, reclaiming or capturing keeps firing at targets of its own |
+| `workingWeaponsAutonomous` | a unit that is building, assisting, repairing, reclaiming or capturing keeps firing at targets of its own |
 | `attackSingleSlotTake` | an attack order takes one weapon, so the unit's other weapons keep picking targets |
 | `mapFeatureOwnerEleven` | walls and other tall map features stay drawn under fog once explored |
 | `resurrectionTextFix` | the failed-resurrection message is spelled *Resurrection failed* |
@@ -77,7 +77,8 @@ ordinary option you can change later
 - **Controls:** idle-unit keys, double-click selection, queued-order drag, and
   digits recalling groups (`SwitchAlt`).
 - **HUD:** Community counters, reload bars, veterancy labels, group digits,
-  the wind and tide readout, the game clock and the victory cue.
+  the wind and tide readout, the game clock, the victory cue, and a
+  dot-colour square on each allied resource bar.
 - **Megamap:** the megamap overview with ProTA's wheel, flash, ring and
   dot-colour preferences.
 - **Audio:** 3D sound, 128 voices, and random music.
@@ -112,7 +113,11 @@ opens them. Wheel back also shows it, and wheel forward returns to the battle
 centred on the pointer. On the megamap you can box-select, give orders, and
 place buildings; icons come from ProTA's `Icon/iconcfg.ini` in the player's dot
 colours, with radar, jammer and anti-nuke rings for selected units and a flash
-for units under attack. The simulation keeps running while it is shown.
+for units under attack. Holding Shift shows queued orders as dotted paths with
+their order icons and build sites, and a building being placed shows its
+footprint. The terrain picture samples the map's own tiles, as ProTA 4.8's
+does. The ring colours can be overridden with the `megamap*Color` settings.
+The simulation keeps running while it is shown.
 [DESIGN_INTERFACE_HUD_INPUT §3.15](DESIGN_INTERFACE_HUD_INPUT.md#315-optional-megamap)
 has the full input table. With the overview set to **Zoom**, Tab keeps
 Nanolathe's ordinary zoom-out overview.
@@ -205,18 +210,20 @@ assessment of AI strength.
 
 ## Remaining gaps
 
-- **Weapons while building a new structure.** Retail stops a mobile builder's
-  weapons picking targets while it places a new building, and ProTA 4.8
-  reverses that. Nanolathe never stops them, under any rule set, so ProTA
-  already behaves as intended here but Strict 3.1 differs from retail.
-- **Megamap details** that the research does not record are Nanolathe's
-  choices: the terrain picture, what a neutral order does, and build
-  placement from the megamap. The `Megamap*Color` overrides, the order and
-  selection overlay and the whiteboard marker strip are not implemented, and
-  the allied resource bars do not use the dot colours.
-- **Victory cue:** the engine checks something before it draws either end
-  title, and the research does not describe it; Nanolathe plays the cue on
-  every shown win.
+- **Megamap host choices.** Where ProTA 4.8's megamap behaves like a defect,
+  Nanolathe does not copy it: icons and terrain share one frame (4.8 draws
+  icons slightly up and left of the terrain), the picture never reads past the
+  map, and building placement always checks the site at the pointer. 4.8
+  probably refuses megamap builds after the build menu has been used; a
+  manual 4.8 test would settle that. Whether ProTA's metal and wreck click
+  snap applies on the megamap is unknown, and Nanolathe has no click snap.
+- **Megamap details still open:** the row-building ghost colour, where the
+  cloak circle is centred, and where a queued order to an unseen target is
+  drawn ([DESIGN_INTERFACE_HUD_INPUT §3.15](DESIGN_INTERFACE_HUD_INPUT.md#315-optional-megamap)).
+- **End title under the darkening.** Nanolathe draws the in-battle VICTORY or
+  DEFEAT title on the frame after the battle ends and keeps it while the view
+  darkens; that it survives the darkening is inferred, and a retail capture of
+  a won battle would confirm it.
 - **Directional shipyards and mobile anti-nukes.** The Core east- and
   west-facing shipyards (`CORSYE`, `CORSYW`) build from their buttons, but the
   computer player does not use them, and the mobile anti-nukes (`ARMSCAB`,
