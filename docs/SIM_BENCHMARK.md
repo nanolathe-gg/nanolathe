@@ -26,14 +26,14 @@ Explicit options after OUT override the quick defaults. The native command's
 defaults remain unchanged.
 
 The wrapper defaults to two Go runtime workers and two build jobs (override
-`GOMAXPROCS` / `NANOLATHE_TEST_P`). Compilation takes the host lock
-exclusively, waiting for running verification gates; the native benchmark
-acquires it again for setup and measurement.
+`GOMAXPROCS` / `NANOLATHE_TEST_P`). Compilation takes the benchmark lock; the
+native benchmark acquires it again for setup and measurement. Verification
+gates do not take it and may run beside a benchmark.
 Record and match the runtime worker setting when comparing. These limits reduce
 contention; they do not guarantee quiet-machine timings.
 
 Build the binary once and run it directly when comparing; use `tools/host-run`
-for compilation so it cannot overlap running gates or benchmarks:
+for compilation so it cannot overlap another benchmark:
 
 ```
 GOMAXPROCS=2 tools/host-run go build -p 2 -o /tmp/nanolathe-headless ./cmd/nanolathe-headless

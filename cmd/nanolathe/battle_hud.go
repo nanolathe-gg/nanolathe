@@ -820,6 +820,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		if overlay {
 			c.EndWorldOverlay()
 		}
+		// The megamap replaces the game view's picture; the chrome and every
+		// later layer still draw over it (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		b.drawMegamap(c, cur)
 	}
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. All three panel
 	// entries are static at their authored origins — PANELTOP (129,0),

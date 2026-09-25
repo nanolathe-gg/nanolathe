@@ -7,12 +7,12 @@ files must never be deleted: every checkout and native benchmark shares them.
   tools/host-run COMMAND ...          benchmark: exclusive host lock
   tools/host-run --gate COMMAND ...   verification gate: one of N gate slots
 
-A benchmark needs a quiet machine, so it holds the host lock exclusively; the
-native benchmark binaries take the same lock through internal/platform/
-benchlock. A gate holds that lock *shared*, so up to NANOLATHE_GATE_SLOTS gates
-(default 3) run side by side and a benchmark waits for them to finish, while
-gates wait only for a benchmark that is actually measuring. Research sweeps and
-focused `go test` runs take neither lock.
+Benchmarks exclude one another through the host lock, which the native
+benchmark binaries also take through internal/platform/benchlock. Up to
+NANOLATHE_GATE_SLOTS gates (default 3) run side by side. The two classes never
+wait for each other: a landing must not stall behind a long benchmark sweep, so
+a benchmark reports when gates are running beside it and its timings are
+noisier for that. Research sweeps and focused `go test` runs take neither lock.
 """
 import fcntl
 import os
@@ -58,6 +58,16 @@ def wait_message(what):
     print(f"==> waiting for {what}", flush=True)
 
 
+def gate_slot_count():
+    try:
+        slots = int(os.environ.get("NANOLATHE_GATE_SLOTS", "3"))
+    except ValueError:
+        slots = 0
+    if slots < 1:
+        sys.exit("nanolathe: NANOLATHE_GATE_SLOTS must be a positive integer")
+    return slots
+
+
 # Nested gates/lint inherit the held descriptors, so they must not reacquire.
 held = os.environ.get("NANOLATHE_HOST_LOCK_FD")
 if held:
@@ -67,14 +77,8 @@ if held:
         sys.exit("nanolathe: inherited host lock descriptor is invalid")
 else:
     directory = lock_dir()
-    host = open_lock(directory / "battle-bench.lock")
+    slots = gate_slot_count()
     if gate:
-        try:
-            slots = int(os.environ.get("NANOLATHE_GATE_SLOTS", "3"))
-        except ValueError:
-            slots = 0
-        if slots < 1:
-            sys.exit("nanolathe: NANOLATHE_GATE_SLOTS must be a positive integer")
         fds = [open_lock(directory / f"gate-slot-{i}.lock") for i in range(slots)]
         owned = None
         announced = False
@@ -88,15 +92,23 @@ else:
         for fd in fds:
             if fd != owned:
                 os.close(fd)
-        # Shared hold on the host lock: gates coexist, a benchmark excludes them.
-        if not try_lock(host, fcntl.LOCK_SH):
-            wait_message("a running benchmark")
-            fcntl.flock(host, fcntl.LOCK_SH)
         held_fd = owned
     else:
+        host = open_lock(directory / "battle-bench.lock")
         if not try_lock(host, fcntl.LOCK_EX):
-            wait_message("running verification gates or another benchmark")
+            wait_message("another benchmark")
             fcntl.flock(host, fcntl.LOCK_EX)
+        # Probe the slots without taking them: a held slot is a running gate.
+        busy = 0
+        for i in range(slots):
+            probe = os.open(directory / f"gate-slot-{i}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+            if try_lock(probe, fcntl.LOCK_EX):
+                fcntl.flock(probe, fcntl.LOCK_UN)
+            else:
+                busy += 1
+            os.close(probe)
+        if busy:
+            print(f"==> note: {busy} verification gate(s) running beside this benchmark; timings are noisier", flush=True)
         held_fd = host
     os.environ["NANOLATHE_HOST_LOCK_FD"] = str(held_fd)
 os.execvp(args[0], args)

@@ -105,6 +105,7 @@ type Options struct {
 	FilmOut            string      // --film destination: a directory of PNGs, or "-" for raw RGBA on stdout
 	FilmFrames         int         // stop a --film capture after this many frames; 0 captures the whole script
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit", "confirm", "settings", "help" or "briefing"
+	ShotMegamap        bool        // show the megamap overview in --shot (DESIGN_INTERFACE_HUD_INPUT §3.15)
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
 	FPSSet             bool        // explicit command-line override
@@ -227,6 +228,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.FilmOut, "film-out", "", "where --film writes: a directory of PNG frames, or \"-\" for a raw RGBA stream on stdout")
 	set.IntVar(&opts.FilmFrames, "film-frames", 0, "stop a --film capture after this many frames (0 captures the whole script)")
 	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\", \"confirm\", \"settings\", \"help\", or \"briefing\" (needs --mission)")
+	set.BoolVar(&opts.ShotMegamap, "shot-megamap", false, "select the Megamap overview and show it before --shot captures")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")

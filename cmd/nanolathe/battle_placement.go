@@ -27,6 +27,11 @@ func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	// conversion, not the view's cursor-to-world projection — the two paths do
 	// not share a routine in retail either — and the resulting map pixels then
 	// go through the same ground resolver [07 R-CAM-01 §11][03 §3.11].
+	// The megamap, while shown, owns the viewport's pointer and resolves its
+	// own world point (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	if wx, wy, wz, ok := b.megamapCursorWorld(sx, sy); ok {
+		return wx, wy, wz
+	}
 	if mpx, mpz, ok := b.minimapPointerWorld(sx, sy); ok {
 		if b.sess != nil {
 			if wx, wy, wz, ok := b.sess.CursorToWorld(mpx, mpz); ok {

@@ -407,10 +407,11 @@ fighting on one map, with per-phase attribution, a census that proves the
 workload, and CPU and allocation profiles of the measured window. It shares the
 same host lock, so it never runs beside the windowed benchmark.
 
-Benchmarks hold the host lock exclusively; verification gates share it through
-`tools/host-run --gate` slots. A focused test, probe or research sweep takes
-no lock; never wrap one in `tools/host-run`, which would stall every agent's
-gate for its whole duration ([ARCHITECTURE §6](docs/ARCHITECTURE.md#6-verification)).
+Benchmarks take the benchmark lock one at a time; verification gates take
+`tools/host-run --gate` slots and never wait for a benchmark. A focused test,
+probe or research sweep takes no lock; never wrap one in `tools/host-run`,
+which would stall every agent's benchmark for its whole duration
+([ARCHITECTURE §6](docs/ARCHITECTURE.md#6-verification)).
 
 For pathfinding and movement-policy changes, use the opt-in
 [path benchmark](docs/PATH_BENCHMARK.md) (`tools/path-bench`): authored

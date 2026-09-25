@@ -44,6 +44,17 @@ type Overrides struct {
 	MexSnap                  *bool `json:"mexSnap,omitempty"`
 	WreckSnap                *bool `json:"wreckSnap,omitempty"`
 
+	AIDifficultyIncome     *bool `json:"aiDifficultyIncome,omitempty"`
+	AIStockpileProducts    *bool `json:"aiStockpileProducts,omitempty"`
+	TargetLockRelease      *bool `json:"targetLockRelease,omitempty"`
+	AIApplianceEnergy      *bool `json:"aiApplianceEnergy,omitempty"`
+	AIBuilderStopThreshold *bool `json:"aiBuilderStopThreshold,omitempty"`
+
+	WorkingWeaponsAutonomous *bool `json:"workingWeaponsAutonomous,omitempty"`
+	AttackSingleSlotTake     *bool `json:"attackSingleSlotTake,omitempty"`
+	MapFeatureOwnerEleven    *bool `json:"mapFeatureOwnerEleven,omitempty"`
+	ResurrectionTextFix      *bool `json:"resurrectionTextFix,omitempty"`
+
 	RepairRate                *RepairRateOverrides `json:"repairRate,omitempty"`
 	OffMapAircraftMarginTiles *int                 `json:"offMapAircraftMarginTiles,omitempty"`
 	ProjectileCapacity        *int                 `json:"projectileCapacity,omitempty"`
@@ -135,6 +146,15 @@ func apply(base Features, o Overrides, logicalPath string) (Features, error) {
 	applyBool(&base.ScriptPorts, o.ScriptPorts)
 	applyBool(&base.MexSnap, o.MexSnap)
 	applyBool(&base.WreckSnap, o.WreckSnap)
+	applyBool(&base.AIDifficultyIncome, o.AIDifficultyIncome)
+	applyBool(&base.AIStockpileProducts, o.AIStockpileProducts)
+	applyBool(&base.TargetLockRelease, o.TargetLockRelease)
+	applyBool(&base.AIApplianceEnergy, o.AIApplianceEnergy)
+	applyBool(&base.AIBuilderStopThreshold, o.AIBuilderStopThreshold)
+	applyBool(&base.WorkingWeaponsAutonomous, o.WorkingWeaponsAutonomous)
+	applyBool(&base.AttackSingleSlotTake, o.AttackSingleSlotTake)
+	applyBool(&base.MapFeatureOwnerEleven, o.MapFeatureOwnerEleven)
+	applyBool(&base.ResurrectionTextFix, o.ResurrectionTextFix)
 
 	if o.RepairRate != nil {
 		applyBool(&base.RepairRate.Enabled, o.RepairRate.Enabled)
@@ -325,6 +345,24 @@ func boolField(o *Overrides, name string) **bool {
 		return &o.MexSnap
 	case "wreckSnap":
 		return &o.WreckSnap
+	case "aiDifficultyIncome":
+		return &o.AIDifficultyIncome
+	case "aiStockpileProducts":
+		return &o.AIStockpileProducts
+	case "targetLockRelease":
+		return &o.TargetLockRelease
+	case "aiApplianceEnergy":
+		return &o.AIApplianceEnergy
+	case "aiBuilderStopThreshold":
+		return &o.AIBuilderStopThreshold
+	case "workingWeaponsAutonomous":
+		return &o.WorkingWeaponsAutonomous
+	case "attackSingleSlotTake":
+		return &o.AttackSingleSlotTake
+	case "mapFeatureOwnerEleven":
+		return &o.MapFeatureOwnerEleven
+	case "resurrectionTextFix":
+		return &o.ResurrectionTextFix
 	case "repairRate.enabled":
 		if o.RepairRate == nil {
 			o.RepairRate = &RepairRateOverrides{}

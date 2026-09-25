@@ -204,6 +204,10 @@ func (b *battleSession) updateFooterHover(mx, my int32) {
 	}
 	var iconHover uint64
 	switch {
+	case b.megamapOwnsPointer(mx, my):
+		// The megamap writes the hovered-unit word while it owns the pointer
+		// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		b.footerHoverUnit = b.megamapHoverUnit(f, mx, my)
 	case b.classifyPointer(mx, my) == battlePointerMinimap:
 		b.footerHoverUnit = b.minimapHoverUnit(f, mx, my)
 	case b.overWorld(mx, my) && !b.battleState().Input.DragActive:

@@ -217,6 +217,10 @@ canvas. `Layout` also publishes the actual outside dimensions to the client,
 so camera edge scrolling includes letterbox bars and bounded overshoot on every
 side (DESIGN_INTERFACE_HUD_INPUT §3.1). Only the camera uses that adapted
 position; the raw pointer remains the source for picking and widgets.
+When fullscreen scales the canvas down, Ebitengine's integer logical pointer
+sample can stop short of the trailing logical pixel at the last physical
+display pixel. The edge adapter treats the final physical pixel's logical
+interval as the edge for camera scrolling.
 Neither executor renders the world at desktop resolution merely
 because the window is fullscreen.
 

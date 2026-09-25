@@ -395,15 +395,15 @@ fixtures relative to the package directory, never through `runtime.Caller`.
 classes of work through per-user advisory locks. `tools/host-run --gate`, which
 `tools/check`, `tools/check-retail` and `tools/lint` take, claims one of
 `NANOLATHE_GATE_SLOTS` gate slots (default 3, four workers each on a
-twelve-core host) and holds the benchmark lock *shared*. Plain
-`tools/host-run`, used by the benchmark wrappers, and the native benchmark
-binaries hold the benchmark lock *exclusively*. Gates therefore run side by
-side, a benchmark waits for running gates to finish, and a gate waits only
-while a benchmark measures. Focused `go test` runs, probes and long research
-sweeps take **no** lock: wrapping them in `tools/host-run` stalls every gate on
-the host for their whole duration. Inherited descriptors release on process
-exit, including crashes; never delete the lock files. Keep the machine quiet
-when comparing timings.
+twelve-core host). Plain `tools/host-run`, used by the benchmark wrappers, and
+the native benchmark binaries hold the benchmark lock, so benchmarks run one
+at a time. The two classes never wait for each other: a landing must not stall
+behind a long benchmark sweep. A benchmark therefore prints a note when gates
+are running beside it; its timings are noisier then, so compare alternating
+runs taken under similar load. Focused `go test` runs, probes and long
+research sweeps take **no** lock: wrapping them in `tools/host-run` stalls
+every benchmark on the host for their whole duration. Inherited descriptors
+release on process exit, including crashes; never delete the lock files.
 
 **Test tiers.** `tools/check` clears retail-asset variables and runs tracked-file
 `gofmt`, build, vet and cached short synthetic tests. Package arguments narrow

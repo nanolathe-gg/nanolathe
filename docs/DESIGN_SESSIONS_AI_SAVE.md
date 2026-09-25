@@ -477,8 +477,8 @@ owning its state, its save and its restore either way
 
 `TaskKind` is the ten-slot task vector and its order is load-bearing. Slot 0
 holds no task object at all — the dispatcher's null test skips it — while slot
-5 holds a real object of the null task class whose body returns immediately but
-which *owns group record 5*, the armed-buildings group the attack wave reads
+5 holds a real object of the null task class whose body returns immediately
+(unless the ProTA package switch of §2.8 is on) but which *owns group record 5*, the armed-buildings group the attack wave reads
 for its first-choice gather point. Collapsing the two misnumbers every group
 record `[08 R-P0-04 §2]`. The remaining eight are the resource and builder
 queue, the two attack waves, their two regroups, construction and positioning,
@@ -771,11 +771,53 @@ bounds `90..900`.
 
 This automated check does not cover the twelve-slot GUI, build hotkeys,
 portraits, palette colors, campaign GUI build submission, trigger-driven
-mission completion, a full autonomous AI match, the documented patch-side AI
-resource/appliance behavior, or music backends. Those remain separate visual,
+mission completion, a full autonomous AI match, or music backends. The
+package's AI and income behaviour is §2.8. Those remain separate visual,
 long-running or manual package acceptance work. The successor assertion proves
 campaign discovery and routing only; it does not claim that the bounded session
 won mission 1.
+
+### 2.8 ProTA 4.8 package computer-player behaviour
+
+The shipped ProTA 4.8 loader changes the computer player in four places, all
+**Established** for that package
+([ProTA 4.8 engine package, "AI and economy evidence audit"](../research/extensions/prota-engine.md#ai-and-economy-evidence-audit)).
+Each is a Community feature-table switch that no shipped table enables; the
+ProTA content profile's `gameplay` block turns them on, and Strict 3.1
+ignores them. Selection, the table and the combat half are
+[DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours).
+The session projects the three AI switches onto every manager's `Community`
+field at binding and at construction, beside `Planner`; the think step reads
+that copy, never the table.
+
+- **Income** (`AIDifficultyIncome`, owned by `internal/economy`). A computer
+  player's per-unit contributions and feature-reclaim credits take Easy
+  `0.5`, Medium `1`, Hard/other `4` at the retail store boundary. The
+  difficulty selector the plan gate reads is unchanged.
+- **Stockpile purchasing** (`AIStockpileProducts`). The null task slot runs the
+  resource/builder-queue body over group record 5 (armed buildings), writing
+  `tick + 30` first and walking the vector in order. In both records a live,
+  completed building that holds *any* secondary order is skipped for the whole
+  visit — the order's count and the completed rounds are not read — before the
+  activation and product branches. The product branch is the retail one; a
+  selected `MAKENUKE`/`MAKEANTI` product reaches the ordinary submission helper
+  (`bindAIQueue`), which inserts one counted slot-zero `BuildWeapon` round
+  instead of a unit order, sharing the build-page toy's insertion. Production,
+  its 200-round cap and launch are the retail stockpile path `[06 §11.1]`.
+- **Low-energy appliances** (`AIApplianceEnergy`). The activation arm is
+  selected by the signed top byte of the binary32 `energyuse` being at least
+  66 instead of by `makesmetal`; the C3 toggle, its draw and its
+  no-fallthrough rule are unchanged.
+- **Builder stop threshold** (`AIBuilderStopThreshold`). The construction
+  task's placement cutoff for a capture-capable member is ten; the reposition
+  pass keeps five, so counts five through nine run both passes.
+
+No manager state is added: the null deadline is ordinary task state, not
+saved, and rebuilt at battle entry like every other deadline. Two questions
+remain **Unknown** and are `TODO(question)` markers at the resource task:
+whether any shipped route services the mobile anti-nukes (`ARMSCAB`,
+`CORMABM`, which reach neither task), and whether the Core east/west
+shipyards consume the differently named CANBUILD lists.
 
 ## 3. Contracts
 

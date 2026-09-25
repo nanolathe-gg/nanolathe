@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Cheap process checks for gate slots, benchmark exclusion, inherited
-ownership, crash release and exit status."""
+"""Cheap process checks for gate slots, benchmark exclusion, gate/benchmark
+independence, inherited ownership, crash release and exit status."""
 import os
 from pathlib import Path
 import subprocess
@@ -41,29 +41,25 @@ with tempfile.TemporaryDirectory() as tmp:
         # waiter does not reacquire, and a killed holder releases.
         bench = holding(start(*HOLD))
         waiter = start(runner, sys.executable, "-c", "print('nested acquired')")
-        waiting(waiter, "waiting for running verification gates or another benchmark")
-        # A gate waits while a benchmark measures.
-        gate = start("--gate", *HOLD)
-        waiting(gate, "waiting for a running benchmark")
-        release(bench)
-        assert waiter.communicate(timeout=5)[0].strip() == "nested acquired"
-        assert waiter.returncode == 0
-        holding(gate)
-
-        # Gates share the host: a second gate runs beside the first, a third
-        # waits for a slot, and a benchmark waits for every gate.
+        waiting(waiter, "waiting for another benchmark")
+        # Gates never wait for a benchmark, and the slots admit two of them.
+        gate = holding(start("--gate", *HOLD))
         second = holding(start("--gate", *HOLD))
         third = start("--gate", *HOLD)
         waiting(third, "one of 2 verification gate slots")
-        bench = start(*HOLD)
-        waiting(bench, "waiting for running verification gates")
+        release(bench)
+        out = waiter.communicate(timeout=5)[0]
+        assert "2 verification gate(s) running beside" in out, out
+        assert out.strip().endswith("nested acquired"), out
+        assert waiter.returncode == 0
+        # A crashed gate frees its slot; a benchmark never waits for gates.
         release(gate)
         holding(third)
-        assert bench.poll() is None
-        release(second)
-        release(third)
+        bench = start(*HOLD)
+        assert "gate(s) running beside" in bench.stdout.readline()
         holding(bench)
-        release(bench)
+        for process in (bench, second, third):
+            release(process)
 
         # A command's failure must remain a failure at the gate boundary.
         for mode in ([], ["--gate"]):

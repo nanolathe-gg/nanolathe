@@ -56,6 +56,12 @@ type Rules interface {
 	SelectTarget(s *Service, q *TargetQuery) (pool.Handle, bool)
 	// ReconsiderTarget bypasses only the autonomous maintenance retention shortcut.
 	ReconsiderTarget(shooter *units.Unit, slot *units.Slot, target *units.Unit, vis *visibility.Service) bool
+	// TargetLockRelease selects the ProTA 4.8 package's change to the
+	// autonomous maintenance scan: standing-fire values two and three are
+	// admitted, and a retained unit target that fails the physical gate is
+	// released without a callback (DESIGN_COMMUNITY_PATCH §4.7). Strict 3.1
+	// answers false; Community returns the service's projected table switch.
+	TargetLockRelease(s *Service) bool
 	// CombatTick supplies the time of a decision without a second clock.
 	CombatTick(s *Service, tick uint32, afterProjectiles bool)
 	// ObserveDanger forwards a hostile launch or accepted damage observation.
@@ -213,6 +219,17 @@ func (StrictRules) AreaVictims(q AreaVictimQuery, visit func(pool.Handle)) {
 func (StrictRules) AreaIndexTick(AreaVictimQuery) {}
 
 func (StrictRules) OffMapAircraftMargin(*Service) int32 { return 0 }
+
+// TargetLockRelease is retail's answer: the scan admits exactly Fire at Will
+// and retains a target through the alliance, category and stunned checks
+// alone [06 §3.2].
+func (StrictRules) TargetLockRelease(*Service) bool { return false }
+
+// TargetLockRelease reads the projected ProTA package switch, which no shipped
+// table enables; only a content profile or a player override does.
+func (CommunityRules) TargetLockRelease(s *Service) bool {
+	return s != nil && s.Community.TargetLockRelease
+}
 
 // AreaVictims adds the source-defined six overflow selectors when CP-DMG-1
 // is enabled. Community retains the six-entry saturation limit.

@@ -47,6 +47,7 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile, sessionKi
 		// (docs/DESIGN_GAMEPLAY_RULES.md "The computer player's think step").
 		Planner:           s.Rules.Planner,
 		ConstructionRules: s.Rules.Construction,
+		Community:         s.aiCommunity(),
 	}
 	// Bind before Strategic.Init so the construction-time class vectors and
 	// every later gated refresh use the same live battle inputs. At battle

@@ -86,6 +86,9 @@ func builderOptionsPage(window *gui.Window) error {
 		// build pages (retail's default) or recall groups. `+switchalt`
 		// changes the same value from the message line.
 		{"NSWITCHALT", "Digits: Pages|Digits: Groups"},
+		// The overview Tab and the wheel open: today's smooth zoom, or the
+		// optional megamap (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		{"NOVERVIEW", "Tab: Options|Tab: Megamap"},
 	} {
 		control := button
 		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, 2
@@ -104,6 +107,7 @@ func (g *gameShell) syncBuilderOptions() {
 	optionsPanel.SetStageAt(optionsPanel.Index("NCYCLE"), g.presentation.CommunitySelection)
 	optionsPanel.SetStageAt(optionsPanel.Index("NDOUBLE"), g.presentation.DoubleClickSelection)
 	optionsPanel.SetStageAt(optionsPanel.Index("NSWITCHALT"), boolInt(g.switchAlt))
+	optionsPanel.SetStageAt(optionsPanel.Index("NOVERVIEW"), boolInt(g.presentation.Overview == settings.OverviewMegamap))
 	for group, names := range builderOptionNames {
 		values := g.builderOptions.Guard
 		if group == 1 {
@@ -118,6 +122,13 @@ func (g *gameShell) syncBuilderOptions() {
 func (g *gameShell) activateBuilderOption(name string) bool {
 	if name == "NSWITCHALT" {
 		g.setSwitchAlt(g.retailOptionsStage(name, 2, boolInt(g.switchAlt)) != 0)
+		g.syncBuilderOptions()
+		return true
+	}
+	if name == "NOVERVIEW" {
+		p := g.presentation
+		p.Overview = g.retailOptionsStage(name, 2, boolInt(p.Overview == settings.OverviewMegamap))
+		g.setPresentation(p)
 		g.syncBuilderOptions()
 		return true
 	}
@@ -154,6 +165,7 @@ func (g *gameShell) activateBuilderOption(name string) bool {
 func (g *gameShell) setSelectionPreferences(p settings.Presentation) {
 	next := g.presentation
 	next.CommunitySelection, next.DoubleClickSelection = p.CommunitySelection, p.DoubleClickSelection
+	next.Overview = p.Overview
 	g.setPresentation(next)
 }
 

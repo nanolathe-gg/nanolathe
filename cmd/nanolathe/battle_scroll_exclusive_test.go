@@ -66,6 +66,13 @@ func TestScrollPassAxisExclusivityAndBeyondEdgeGate(t *testing.T) {
 		{name: "wide host right edge", outsideW: 1920, outsideH: 1080, mouseX: 746, mouseY: 240, focused: true, wantX: unit},
 		{name: "tall host top edge", outsideW: 640, outsideH: 960, mouseX: 320, mouseY: -240, focused: true, wantZ: -unit},
 		{name: "tall host bottom edge", outsideW: 640, outsideH: 960, mouseX: 320, mouseY: 719, focused: true, wantZ: unit},
+		// A 640x480 canvas fitted onto a 320x240 display maps the last
+		// physical pixel to logical x=638/y=478. Neither axis can report
+		// its exact logical trailing edge (639/479).
+		{name: "downscaled host right edge", outsideW: 320, outsideH: 240, mouseX: 638, mouseY: 240, focused: true, wantX: unit},
+		{name: "downscaled host bottom edge", outsideW: 320, outsideH: 240, mouseX: 320, mouseY: 478, focused: true, wantZ: unit},
+		{name: "downscaled host right interior", outsideW: 320, outsideH: 240, mouseX: 636, mouseY: 240, focused: true},
+		{name: "downscaled host bottom interior", outsideW: 320, outsideH: 240, mouseX: 320, mouseY: 476, focused: true},
 		{name: "letterbox without focus", outsideW: 1920, outsideH: 1080, mouseX: -106, mouseY: 240},
 		{name: "letterbox but far below host", outsideW: 1920, outsideH: 1080, mouseX: -106, mouseY: 800, focused: true},
 		// Opposing arrows: the Left/Up predicate wins outright.

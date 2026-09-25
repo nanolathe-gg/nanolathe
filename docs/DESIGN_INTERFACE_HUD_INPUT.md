@@ -1882,7 +1882,7 @@ The rows below are the battle hotkey census
 | Keys | Effect |
 |---|---|
 | F2 | open and close the options window |
-| Tab | the same, except on an already paused battle with no modal open, where host policy resumes it directly instead — see §5, "Tab resumes an already paused battle" |
+| Tab | the same, except on an already paused battle with no modal open, where host policy resumes it directly instead — see §5, "Tab resumes an already paused battle"; with the Megamap overview a released Tab toggles the megamap instead (§3.15) |
 | Escape | close the options window, else cancel the latch, else deselect all |
 | `` ` `` `~` and Shift+1/3/8 (`!` `#` `*`) | flip the "label every unit" bit `[07 R-HUD-03 §7]` |
 | `+` `=` / `-` `_` | game speed up and down, with the ring announcement `[07 R-CAM-01 §3]` |
@@ -2919,6 +2919,156 @@ displays must not clamp the report over the energy readout. Current wind and
 clock read the committed frame; bounds, tidal strength
 and reference generators are immutable battle content. Source arithmetic is
 recorded in [community patch engine §5.10](../research/extensions/community-patch-engine.md#510-optional-resource-and-weather-presentation).
+
+### 3.15 Optional megamap
+
+**Policy.** The megamap is a host presentation preference modelled on the
+ProTA 4.8 draw engine's full-screen minimap
+([ProTA 4.8 shipped megamap](../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap)).
+It never selects gameplay: it does not read `gameplay.Mode`, enters no
+digest, fingerprint or save, and reads only the committed frame, the immutable
+catalog and terrain, and host input [I6]. `presentation.overview` chooses the
+overview: `0` (**Zoom**, the default) is today's behaviour — Tab and F2 open
+options and the modern wheel is §16's smooth zoom — and `1` (**Megamap**)
+installs the view below. Both renderers draw it identically because it is one
+indexed surface recorded after the world, not a camera factor: it is **not**
+§16's strategic view and changes no zoom step, floor or picker there. The
+simulation keeps running while it is shown.
+
+**Settings.** All live in the presentation block and are host preferences,
+with ProTA 4.8's `ProTA.ini` values as defaults except where noted:
+
+| Key | Default | Patch key |
+|---|---|---|
+| `overview` | 0 (Zoom) | `FullScreenMinimap` |
+| `megamapWheel` | 1 | `WheelZoom` |
+| `megamapWheelMove` | 1 | `WheelMoveMegaMap` |
+| `megamapDoubleClickMove` | 0 | `DoubleClickMoveMegamap` |
+| `megamapFlash` | 1 | `UnderAttackFlash` |
+| `megamapRadarMinimum`, `megamapSonarMinimum`, `megamapSonarJamMinimum`, `megamapAntiNukeMinimum` | 0 | `Megamap*Minimum` (ProTA's INI sets all to 0) |
+| `playerDotColors` | 227, 212, 80, 235, 108, 219, 208, 93, 130, 67 (the draw engine's own defaults) | `Player1..10DotColors` |
+
+`MegamapRadarJamMinimum` has no setting: the shipped build reads it and never
+uses it, and the radar-jammer ring compares against the radar minimum. Icons
+come from the existing `strategicIconConfig` resolution (§18.7 of
+DESIGN_GPU_RENDERER, including its mod-directory discovery), so a mounted ProTA
+uses its own `Icon/iconcfg.ini`.
+
+**Input (research contract unless marked host choice).**
+
+| Input | Condition | Effect |
+|---|---|---|
+| Tab pressed | overview Megamap, battle frame, TALK closed | consumed; nothing else. F2 still opens options; Tab does not close them |
+| Tab released | a consumed Tab press is pending | leaves the view if shown (camera unchanged), else enters it |
+| Wheel back (negative notch) | `megamapWheel` on, view hidden | enters the view |
+| Wheel forward (positive notch) | `megamapWheel` on, view shown | clears camera follow; with `megamapWheelMove` centres the camera on the pointer's map point (pointer clamped to the image) and clamps; leaves |
+| Double-click in the image | `megamapDoubleClickMove` on, own-unit double-click below not taken | centres the camera on the point; leaves |
+| Left press in the image | no prepared order | starts a box, clamped to the image |
+| Left release | box extents both ≥ 9 pixels | own completed selectable units whose `(x, z − y/2)` lies strictly inside the converted rectangle: replace without Shift, toggle each with Shift |
+| Left release in the image | selection nonempty and an order or placement prepared | the world-click handler at the megamap point, with Shift (host choice: in the margin, or with no selection, a prepared order issues nothing) |
+| Other left release (not at the last double-click position) | — | own selectable hovered unit: select (Shift toggles); otherwise with a selection: right-click interface clears it, left-click interface sends the neutral order |
+| Right release | — | a prepared order or placement is cancelled; else left-click interface clears a selection; right-click interface sends the neutral order (Guard over an own hovered unit) |
+| Double-click on an own hovered unit | `doubleClickSelection` on | that unit's definition across the whole map (the Ctrl+Z set); view stays open |
+
+Entering plays alias `Options`, leaving `Previous`. Entering clears the
+hovered-unit word, any box, the world drag state and the placement site-valid
+bit. While the view is shown every pointer record inside the battle viewport
+belongs to it — except a release whose press began outside, which reaches the
+HUD capture as before — so the world-click path never sees a hidden-world
+point. Host choices: the edge/arrow scroll pass and middle-drag are held while
+the view is shown, so leaving by key (or by wheel with `megamapWheelMove` off)
+returns to the camera the player left, which is what ProTA's preference text
+promises; §16's wheel zoom is not taken in Megamap mode while `megamapWheel` is
+on, because the same notch would both zoom and enter; a notch is one
+Ebitengine wheel unit of `ZoomScrollY` (precise trackpad scrolling excluded);
+the chrome's own wheel consumers still see the wheel, as the research says the
+patch never consumes it.
+
+Pointer conversion is the research's: image pixels divided by the float scale
+factors and truncated, with no half-height correction; the height is the
+terrain height at that point, or sea level where terrain has none
+(`Session.GroundPointAt`). The cursor, the footer hover, `pickTarget` and
+`cursorWorld` all take this megamap branch while the view owns the pointer, so
+the cursor shape, the footer and every order agree on one point and one unit.
+The hovered unit is the research's first admitted contact whose reference
+point `(x + footX·8, z + footZ·8)` lies strictly inside both the 22×22-pixel
+search box and its picture box, each converted to world units.
+
+**Unknowns, resolved here as documented host choices.**
+`TODO(question)` sites carry both.
+
+* *Build placement from the megamap.* The research leaves open whether the
+  engine revalidates the site while the game view is suppressed. Nanolathe
+  follows the existing minimap semantics — a prepared placement consults the
+  site-valid bit — and lets the ordinary placement preview keep revalidating at
+  the megamap point, so a valid site builds and an invalid one plays
+  `notoktobuild`. A manual ProTA 4.8 build click on the megamap would settle it.
+* *The neutral order.* Which concrete order the engine sends for a neutral
+  prepared order is not traced. Nanolathe sends the minimap's contextual order
+  (code 1, resolved by `orders.Resolve` from the target and point). Tracing the
+  order sender would settle it.
+
+**Layers.** One indexed surface of the battle viewport, composed on change
+(tick, hover, Shift, box, blink or layout) and uploaded with a stable
+identity and revision; the patch's `MegamapFpsLimit` is therefore not a
+setting (ProTA sets it to 0, unlimited). In order:
+
+1. *Margins* in palette index 95. The image fits the extent
+   `(TNT width − 1) × 16` by `(TNT height − 4) × 16` with preserved aspect,
+   centred when a spare margin exceeds two pixels.
+2. *Terrain.* Host choice, because the 4.8 picture algorithm is not
+   recorded: the pinned current source's reduction of the tile art over the
+   extent — area-averaged gamma RGB, nearest OKLab index among the palette
+   indices the map's tiles use
+   ([community-patch-rendering](../research/extensions/community-patch-rendering.md#megamap-images-palette-reduction-and-composition))
+   — without error diffusion, built once per image size.
+3. *Fog.* The research's table from the committed grids: index 0 where the
+   viewer's mapped bit is clear, the gray table where current LOS is absent.
+   Sampling steps through the `(CellW/2) × (CellH/2)` LOS grid by float
+   additions, rows starting at `−(sea level / 20)` and clamped at zero. The
+   grids themselves encode the mapping/LOS mode (a disabled mode fills them),
+   so no separate flag test is needed.
+4. *Projectiles.* Host choice for admission: the world painter's retail
+   projectile gate with the owner/ally bypass (the 4.8 test's flag mapping is
+   not recorded). A weapon with `twophase`, `cruise` and `targetable` together
+   draws `nukeicon` in the owner's dot colour, or the `nuclogo` frame when no
+   such picture exists; any other draws a 2×2 block in the minimap's
+   projectile colour.
+5. *Unit icons* for the admitted minimap contacts [03 §3.9] with a
+   definition. An identified unit (own, or passing the painter's visibility
+   predicate) takes its configured `[Icon]` row, else `unknow`; an unidentified
+   contact takes `nothing`. Selected art beats hover art; `FillColor` becomes
+   `playerDotColors[logo colour]`; the centre is the projection of the
+   position less half the footprint, with the half-height shear; left/top
+   clipping shifts instead of cutting and the right edge clips at the
+   four-aligned width. With `megamapFlash`, a unit whose damage-blink byte is
+   nonzero loses its icon pixels while the committed radar blink phase is
+   clear [01 R-CORE-03]; hover circles and rings still draw. Without a
+   community configuration the §18 generated vocabulary is quantised to
+   16-pixel indexed pictures (a quarter-pixel team contour, white glyph or
+   halo, or a half-pixel black body, claims a pixel), `nothing` becomes
+   the minimap's own `radlogo` frame, and `unknow` is the generated fallback.
+6. *Rings* centred on the icon, radius `distance × rowPitch / extentW`: for a
+   selected allied unit, radar/sonar (logical entry 10) and jammers (entry 12)
+   above their minimums with no activation test; interceptor slots of an
+   `antiweapons` unit above the antinuke minimum at `(coverage − 512)` in entry
+   15, dashed by the published slot indicator and the blink phase; and, while
+   Shift is physically held, the hovered allied unit's enabled slots 3, 2, 1 at
+   raw `range` (slot 1 entry 6, slots 2 and 3 palette index 1).
+7. *Box* outline in the selection-quad colour (host choice; the patch's
+   selection/order overlay is not traced).
+
+The software cursor stays the client's ordinary top layer. Not implemented:
+the `Megamap*Color` overrides, the order/selection overlay, and the per-player
+whiteboard marker strip (`PlayerMarkerPcx`, which the research ties to the
+whiteboard, not the megamap).
+
+**Files.** `internal/camera/megamap.go` (lens), `internal/render/megamap.go`
+(fog, icon blit, rings), `internal/client/megamap_icons.go` (indexed icon
+bank) and `megamap_draw.go` (surface record), `internal/session/megamap_query.go`
+(ground point), and `cmd/nanolathe/battle_megamap*.go` (state, input,
+composition); `battle.go`, `battle_hud.go`, `battle_placement.go`,
+`battle_selection.go` and `battle_cursor.go` carry one-line hooks.
 
 ## 4. Retail behaviour that is not a bug
 

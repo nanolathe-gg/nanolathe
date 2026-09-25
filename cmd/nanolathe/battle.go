@@ -171,6 +171,9 @@ type battleSession struct {
 	dragScrollLastX      int32
 	dragScrollLastY      int32
 
+	// megamap is the optional megamap overview's host state
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	megamap battleMegamap
 	// iconRoots is where an empty strategicIconConfig preference looks for
 	// the running content's icon configuration (DESIGN_GPU_RENDERER §18.7).
 	iconRoots []string
@@ -1026,7 +1029,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// options root and the save/load dialog both do — so the toggle is
 		// suppressed for as long as one is open and the modal dispatcher
 		// routes the frame to it instead [07 R-WGT-01 §1][07 R-FE-01 §6].
-		if (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !shortcutKeyboard.KeyHeld(input.KeyCtrl)) && state.Modal() == ui.BattleModalOptions &&
+		// In the Megamap overview Tab belongs to the megamap and closes nothing
+		// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		if (keyDown(input.KeyTab) && !b.megamapMode() || keyDown(input.KeyF2) && !shortcutKeyboard.KeyHeld(input.KeyCtrl)) && state.Modal() == ui.BattleModalOptions &&
 			!b.battlePrefsActive() && !(b.shell != nil && (b.shell.saveLoadPanelActive() || b.shell.frontend.Panels.Modal() != nil)) {
 			in.DiscardTokens(1)
 			b.closeBattleMenu()
@@ -1079,6 +1084,18 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		in = battleTokenInput(in, tokenClaimed)
 	}
 	shortcutKeyboard = battleShortcutKeyboard(in)
+	// The Megamap overview takes Tab: the press is consumed and its release
+	// toggles the view; the wheel enters and leaves it
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	if !talkOwned && b.serviceMegamapTab(keyDown(input.KeyTab), in, cl) {
+		residual := *in
+		residual.ShortcutToken, residual.ShortcutTokenMode = input.Token{}, true
+		in = &residual
+		shortcutKeyboard = battleShortcutKeyboard(in)
+	}
+	if !talkOwned {
+		b.serviceMegamapWheel(in.Mouse, cl)
+	}
 	shiftHeld := shortcutKeyboard != nil && shortcutKeyboard.HasShift()
 	ctrlHeld := shortcutKeyboard != nil && shortcutKeyboard.KeyHeld(input.KeyCtrl)
 	if !talkOwned && (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !ctrlHeld && !shiftHeld) {
@@ -1125,6 +1142,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		sample := b.pointerSample(in, delta)
 		if talkOwned {
 			sample = talkOwnedInput(producerIn, delta)
+		} else if !b.palettePointerOwned {
+			sample = b.serviceMegamapPointer(in, sample, cl)
 		}
 		b.controller.Step(sample, cl)
 		resourceInputServiced = true
@@ -1170,6 +1189,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// Every scroll-pass write is a jump by delta, and a jump by the scroll
 		// pass cancels the follow triple [07 R-CAM-01 §12].
 		scroll := func(dir camera.Direction, keyboard bool) {
+			if b.megamapShown() {
+				// Host choice: the camera the megamap hides holds still, so
+				// leaving returns to where the player left (§3.15).
+				return
+			}
 			if keyboard {
 				b.cam.ScrollScreen(scrollSetting, rawDelta, dir)
 			} else {
@@ -1216,7 +1240,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			scroll(camera.DirDown, heldDown)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
-		if !talkActive && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
+		if !talkActive && !b.megamapShown() && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
 			dx := int32(mouse.X - b.battleState().Input.PrevMouseX)
 			dy := int32(mouse.Y - b.battleState().Input.PrevMouseY)
 			if dx != 0 || dy != 0 {
@@ -1230,11 +1254,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// pass only ever sees a wheel the chrome did not want, and takes it only
 		// over the world, only outside TALK, and only in the executor that can
 		// present a free factor.
-		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap &&
+		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap && !b.megamapTakesWheel() &&
 			mouse.ZoomScrollY != 0 && !b.communityPlacementWheelOwned(in) && b.overBattleViewport(mx, my) {
 			b.wheelZoom(mx, my, float64(mouse.ZoomScrollY))
 		}
-		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned &&
+		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned && !b.megamapShown() &&
 			!modalActive && !overMinimap && !b.palettePointerOwned && !unitInfoOpen() &&
 			b.overBattleViewport(mx, my), mx, my)
 		gesturesServiced = true

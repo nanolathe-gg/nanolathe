@@ -1,5 +1,5 @@
 {
-  "gameplay": {"table": "prota"},
+  "gameplay": {"table": "prota", "aiDifficultyIncome": true, "aiStockpileProducts": true, "targetLockRelease": true, "aiApplianceEnergy": true, "aiBuilderStopThreshold": true, "workingWeaponsAutonomous": true, "attackSingleSlotTake": true, "mapFeatureOwnerEleven": true, "resurrectionTextFix": true},
   "name": "prota",
   "controls": "community",
   "minimumGameplay": "community-3.9",

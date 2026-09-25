@@ -182,3 +182,46 @@ func TestResolveDefaultsToMainlineAndDigestStable(t *testing.T) {
 		t.Fatalf("mainline digest = %s, want %s", firstDigest, wantDigest)
 	}
 }
+
+// TestProTAPackageSwitchesOffInEveryTableAndOverridable locks the selection
+// policy of DESIGN_COMMUNITY_PATCH §4.7: the five ProTA 4.8 package switches
+// are false in every shipped table (mainline prota included), so retail
+// content keeps its AI under Community 3.9 and Modern, and they are reachable
+// only through a gameplay source, which Strict ignores.
+func TestProTAPackageSwitchesOffInEveryTableAndOverridable(t *testing.T) {
+	for _, name := range tableNames() {
+		f, err := Table(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.AIDifficultyIncome || f.AIStockpileProducts || f.TargetLockRelease || f.AIApplianceEnergy || f.AIBuilderStopThreshold ||
+			f.WorkingWeaponsAutonomous || f.AttackSingleSlotTake || f.MapFeatureOwnerEleven || f.ResurrectionTextFix {
+			t.Fatalf("Table(%q) enables a ProTA package switch: %+v", name, f)
+		}
+	}
+	var profile Overrides
+	if err := json.Unmarshal([]byte(`{"table":"prota","aiDifficultyIncome":true,"aiStockpileProducts":true,"targetLockRelease":true,"aiApplianceEnergy":true,"aiBuilderStopThreshold":true}`), &profile); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve(false, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AIDifficultyIncome || !got.AIStockpileProducts || !got.TargetLockRelease || !got.AIApplianceEnergy || !got.AIBuilderStopThreshold {
+		t.Fatalf("content-profile block did not enable the package switches: %+v", got)
+	}
+	mainline, _ := Table(Mainline)
+	if got.Digest() == mainline.Digest() {
+		t.Fatal("enabled package switches did not enter the digest")
+	}
+	off, err := ParseOverride("aiDifficultyIncome=false")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = Resolve(false, profile, off); got.AIDifficultyIncome || !got.AIStockpileProducts {
+		t.Fatalf("command-line override did not win field by field: %+v", got)
+	}
+	if strict, _ := Resolve(true, profile); strict != (Features{}) {
+		t.Fatalf("Strict resolved package switches: %+v", strict)
+	}
+}

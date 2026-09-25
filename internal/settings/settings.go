@@ -520,6 +520,19 @@ type Presentation struct {
 	// TrailStrength is a percentage of the trail layer's tuned peak opacity.
 	// Zero hides trails while leaving the Marks switch's scorch layer intact.
 	TrailStrength int `json:"trailStrength"`
+
+	// Overview and the Megamap* keys are the optional megamap overview
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15; megamap.go).
+	Overview               int     `json:"overview"`
+	MegamapWheel           int     `json:"megamapWheel"`
+	MegamapWheelMove       int     `json:"megamapWheelMove"`
+	MegamapDoubleClickMove int     `json:"megamapDoubleClickMove"`
+	MegamapFlash           int     `json:"megamapFlash"`
+	MegamapRadarMinimum    int     `json:"megamapRadarMinimum"`
+	MegamapSonarMinimum    int     `json:"megamapSonarMinimum"`
+	MegamapSonarJamMinimum int     `json:"megamapSonarJamMinimum"`
+	MegamapAntiNukeMinimum int     `json:"megamapAntiNukeMinimum"`
+	PlayerDotColors        [10]int `json:"playerDotColors"`
 }
 
 // DefaultPresentation selects the modern executor with a 60 FPS cap and every
@@ -531,6 +544,8 @@ func DefaultPresentation() Presentation {
 		Water: DefaultEffectSwitch, Lighting: DefaultEffectSwitch, Finish: DefaultEffectSwitch,
 		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
 		TrailStrength: DefaultTrailStrength,
+		MegamapWheel:  1, MegamapWheelMove: 1, MegamapFlash: 1,
+		PlayerDotColors: DefaultPlayerDotColors,
 	}
 }
 
@@ -580,6 +595,7 @@ func (p *Presentation) Normalize() {
 	} else if p.TrailStrength > MaxTrailStrength {
 		p.TrailStrength = MaxTrailStrength
 	}
+	p.normalizeMegamap()
 }
 
 // Display is the `VISUALS` page's persisted block. The two size values are

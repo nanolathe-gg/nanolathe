@@ -1486,7 +1486,7 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 func retailOptionsCue(key string) string {
 	switch key {
 	case "communityhud", "nhealth", "ncounters", "nreload", "nveteran", "ngroups", "nallies", "nweather",
-		"builders", "bghold", "bgman", "bgroam", "bphold", "bpman", "bproam", "ncycle", "ndouble", "nswitchalt",
+		"builders", "bghold", "bgman", "bgroam", "bphold", "bpman", "bproam", "ncycle", "ndouble", "nswitchalt", "noverview",
 		"placement", "npreview", "nroverlay", "norderdrag", "nteamnano", "nmexsnap", "nwrecksnap", "nsnapmod",
 		"nanolathe", "ngameplay", "nrender", "nfps", "nsidebar",
 		"nglow", "nwater", "nlights", "nfinish", "nheat", "nmarks", "nnano",
@@ -1518,7 +1518,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	switch name {
 	case "NHEALTH", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
 		return g.activateCommunityHUDOption(name)
-	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE", "NSWITCHALT":
+	case "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE", "NSWITCHALT", "NOVERVIEW":
 		return g.activateBuilderOption(name)
 	case "NGAMEPLAY", "NRENDER", "NFPS", "NGLOW", "NWATER", "NLIGHTS", "NFINISH", "NHEAT", "NMARKS", "NSIDEBAR":
 		return g.activateNanolatheOption(name)
@@ -1813,7 +1813,7 @@ func retailOptionsCueKey(name string) string {
 	switch name {
 	case "COMMUNITYHUD", "NCOUNTERS", "NRELOAD", "NVETERAN", "NGROUPS", "NALLIES", "NWEATHER":
 		return strings.ToLower(name)
-	case "BUILDERS", "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE", "NSWITCHALT":
+	case "BUILDERS", "BGHOLD", "BGMAN", "BGROAM", "BPHOLD", "BPMAN", "BPROAM", "NCYCLE", "NDOUBLE", "NSWITCHALT", "NOVERVIEW":
 		return strings.ToLower(name)
 	case "NANOLATHE":
 		return "nanolathe"
