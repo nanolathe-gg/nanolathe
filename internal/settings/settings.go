@@ -326,6 +326,14 @@ type Skirmish struct {
 	Players        []Player `json:"players"`
 }
 
+// ModSelection is the settings key `mod`: one mod's id and, optionally, its
+// version; an empty version selects the newest installed one
+// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+type ModSelection struct {
+	ID      string `json:"id,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
 // Settings is the whole persisted block.
 type Settings struct {
 	// Gameplay is the selected rule set: `modern`, `strict-3.1`, or the name
@@ -343,7 +351,17 @@ type Settings struct {
 	// load-time content fact, not a gameplay rule set
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 	ContentProfile string `json:"contentProfile,omitempty"`
-	Version        int    `json:"version"`
+	// Mutators is the selected mutator set, each key mapped to its canonical
+	// factor spelling, e.g. {"buildSpeed": "2"} (docs/DESIGN_MODS_MUTATORS.md
+	// §6.6). It is kept verbatim: this package does not import content, so a
+	// reader parses it with content.ParseMutators and reports an invalid entry
+	// there. A command-line --mutator wins over it.
+	Mutators map[string]string `json:"mutators,omitempty"`
+	// Mod is the saved mod choice (docs/DESIGN_MODS_MUTATORS.md §4.3). It is
+	// only stored and round-tripped here; the mod library resolves it. The
+	// zero value selects no mod and is omitted from the file.
+	Mod     ModSelection `json:"mod,omitzero"`
+	Version int          `json:"version"`
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
@@ -767,6 +785,11 @@ func (s *Settings) Normalize() {
 	// neither vocabulary. An unknown selector is rejected where it is
 	// resolved, at the mount boundary, so a typo names itself there.
 	s.ContentProfile = strings.TrimSpace(s.ContentProfile)
+	// The mutator entries are kept verbatim for the reader that parses them;
+	// only an empty set is folded to absent.
+	if len(s.Mutators) == 0 {
+		s.Mutators = nil
+	}
 	if s.Version == 0 {
 		s.Version = FileVersion
 	}

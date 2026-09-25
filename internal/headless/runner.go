@@ -76,6 +76,11 @@ type FreshBattleRequest struct {
 	Progress           content.Progress
 	PresentationWidth  int32
 	PresentationHeight int32
+	// Mutators are the battle's global multipliers, forwarded to the session
+	// entry options, which apply them to the entry's catalog clone in every
+	// gameplay mode (docs/DESIGN_MODS_MUTATORS.md §6). The zero value applies
+	// none, so a request that names none composes the unchanged battle.
+	Mutators content.Mutators
 }
 
 // FreshBattle is the authoritative result of composition. Presentation owns
@@ -124,6 +129,9 @@ type Request struct {
 	// name, so the report always carries the profile the run actually used
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 	ContentProfile string
+	// Mutators are the battle's global multipliers; the report prints the
+	// canonical set the session bound (docs/DESIGN_MODS_MUTATORS.md §6.6).
+	Mutators content.Mutators
 }
 
 // Run mounts a retail install and enters the ordinary session composition and
@@ -201,6 +209,7 @@ func RunWithContent(request Request, fs vfs.FSOps, catalog *content.Catalog) (Re
 		CRTSeed:          request.CRTSeed,
 		FS:               fs,
 		Catalog:          catalog,
+		Mutators:         request.Mutators,
 	})
 	if err != nil {
 		return Report{}, err
@@ -225,9 +234,9 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	var sess *session.Session
 	switch kind {
 	case ScenarioCampaign:
-		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits}, request.Progress)
+		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits, Mutators: request.Mutators}, request.Progress)
 	case ScenarioDirectOTA, ScenarioSkirmish, ScenarioSurvival:
-		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Progress: request.Progress, ContentLimits: request.ContentLimits})
+		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Progress: request.Progress, ContentLimits: request.ContentLimits, Mutators: request.Mutators})
 	default:
 		err = fmt.Errorf("headless: unsupported fresh battle kind %q", kind)
 	}

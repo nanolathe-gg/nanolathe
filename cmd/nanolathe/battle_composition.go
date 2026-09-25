@@ -59,6 +59,7 @@ func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishCon
 	return freshBattleRequest{value: headless.FreshBattleRequest{
 		Gameplay:         opts.Gameplay,
 		CommunitySources: communitySources(opts, cs),
+		Mutators:         opts.Mutators,
 		BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
 		Kind:             kind, Map: cfg.MapName, Difficulty: cfg.Difficulty, Skirmish: cfg,
 		LocalOwner: localOwner, Watching: watching,
@@ -79,6 +80,7 @@ func missionBattleRequest(opts Options, cs *contentSet, identity string, difficu
 	return freshBattleRequest{value: headless.FreshBattleRequest{
 		Gameplay:         opts.Gameplay,
 		CommunitySources: communitySources(opts, cs),
+		Mutators:         opts.Mutators,
 		BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
 		Kind:             headless.ScenarioCampaign, Mission: identity,
 		CampaignIndex: campaignIndex, CampaignSlot: campaignSlot,

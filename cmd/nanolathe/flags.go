@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/survival"
@@ -35,7 +37,23 @@ type Options struct {
 	// resolved name, so everything downstream — the headless report among it —
 	// reports the profile the mount actually used
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
-	ContentProfile     string
+	ContentProfile string
+	// Mod selects an installed mod ("id", "id@version" or "none"); ModSet
+	// records that the flag was given, so it wins over the saved choice
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+	Mod    string
+	ModSet bool
+	// MutatorArgs are the raw --mutator name=factor pairs; Mutators is the
+	// resolved set every battle request carries. The screen updates Mutators
+	// when the player applies a new set (docs/DESIGN_MODS_MUTATORS.md §6).
+	MutatorArgs map[string]string
+	Mutators    content.Mutators
+	// InstallMod installs a local zip or directory into the mod library and
+	// exits (a command-line stand-in for drag-and-drop, §4.5).
+	InstallMod string
+	// modBaseRoots marks Roots as the base install only (an internal remount
+	// with a mod selected), so several roots are not a manual stack.
+	modBaseRoots       bool
 	Arrival            bool    // modern battle opening (GPU §36)
 	ShotArrivalTime    float64 // seconds into a reproducible opening capture; negative disables
 	UnitLimit          int     // zero uses the saved preference; explicit CLI values override it
@@ -225,6 +243,28 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		opts.ContentProfile = text
 		return nil
 	})
+	set.Func("mod", "installed mod to mount after the base install: id, id@version or none; omitted uses the saved choice in the window, and none for --shot, --film, --battle-benchmark and --headless (docs/DESIGN_MODS_MUTATORS.md §4.3)", func(text string) error {
+		if _, _, err := modlibrary.ParseSelector(text); err != nil {
+			return err
+		}
+		opts.Mod = text
+		return nil
+	})
+	set.Func("mutator", "battle mutator name=factor, e.g. buildSpeed=2 or buildCost=0.5 (repeatable; omitted uses the saved set in the window, and none for --shot, --film, --battle-benchmark and --headless)", func(text string) error {
+		name, value, ok := strings.Cut(text, "=")
+		if !ok {
+			return fmt.Errorf("mutator %q: want name=factor", text)
+		}
+		if opts.MutatorArgs == nil {
+			opts.MutatorArgs = map[string]string{}
+		}
+		opts.MutatorArgs[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		if _, err := content.ParseMutators(opts.MutatorArgs); err != nil {
+			return err
+		}
+		return nil
+	})
+	set.StringVar(&opts.InstallMod, "install-mod", "", "install a mod zip or directory into the mod library, then exit")
 	set.Func("gameplay-feature", "community feature override name=value (repeatable; Strict ignores overrides)", func(text string) error {
 		v, err := community.ParseOverride(text)
 		if err == nil {
@@ -271,6 +311,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.FullscreenSet = true
 		case "gameplay":
 			opts.GameplaySet = true
+		case "mod":
+			opts.ModSet = true
 		case "renderer":
 			opts.RendererSet = true
 		case "fps":

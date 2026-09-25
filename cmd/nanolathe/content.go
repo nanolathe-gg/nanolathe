@@ -11,6 +11,7 @@ import (
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/install"
+	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -46,6 +47,21 @@ type contentSet struct {
 	roots        []string
 	notes        []string
 	translations *content.TranslationTable
+
+	// mod is the selected installed mod mounted as the last root, or nil.
+	// baseRoots are the roots without it, and manualRoots marks a command
+	// line that stacked its own roots, which disables mod selection
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+	mod         *modlibrary.Mod
+	baseRoots   []string
+	manualRoots bool
+	// savedMod marks a mod the saved choice selected rather than --mod. It
+	// must never stop the game from starting (docs/DESIGN_MODS_MUTATORS.md
+	// §4.3 "A missing mod at start").
+	savedMod bool
+	// modNotice is a one-line player-facing notice about the mod selection,
+	// shown on the main menu (for example a saved mod that has gone).
+	modNotice string
 }
 
 func (c *contentSet) Close() error {
@@ -74,6 +90,18 @@ func (e *missingProductError) Error() string {
 		e.what, e.logical, providers, e.expected)
 }
 
+// savedModError is a failure to open content with the mod the saved choice
+// selected. It reads as its cause; the windowed start recognises it and
+// starts without the mod instead (docs/DESIGN_MODS_MUTATORS.md §4.3 "A
+// missing mod at start").
+type savedModError struct {
+	mod modlibrary.Mod
+	err error
+}
+
+func (e *savedModError) Error() string { return e.err.Error() }
+func (e *savedModError) Unwrap() error { return e.err }
+
 // openContent mounts a retail install. The archives live at the install root;
 // the loose gamedata directory on a real install is empty, so never probe for
 // it on disk (PLAN_00 C6).
@@ -85,6 +113,24 @@ func openContent(opts Options) (*contentSet, error) {
 	roots, err := install.Resolve(explicit)
 	if err != nil {
 		return nil, err
+	}
+	selection, err := resolveModSelection(opts, explicit, roots)
+	if err != nil {
+		return nil, err
+	}
+	set, err := mountContent(opts, roots, selection)
+	if err != nil && selection.saved {
+		return nil, &savedModError{mod: *selection.mod, err: err}
+	}
+	return set, err
+}
+
+// mountContent mounts the resolved base roots plus the selected mod, if any,
+// resolves the content profile and checks the required products.
+func mountContent(opts Options, baseRoots []string, selection modSelection) (*contentSet, error) {
+	roots := append([]string(nil), baseRoots...)
+	if selection.mod != nil {
+		roots = append(roots, selection.mod.Dir)
 	}
 	for _, root := range roots {
 		info, err := os.Stat(root)
@@ -112,9 +158,16 @@ func openContent(opts Options) (*contentSet, error) {
 	// reads content, because detection asks the mounted overlay for its
 	// markers. Precedence is the explicit flag, then the saved preference,
 	// then detection — the same order the displayless command follows
-	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
+	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"). With a mod the
+	// mod's own profile takes the saved preference's place.
 	selector := opts.ContentProfile
-	if strings.TrimSpace(selector) == "" {
+	if strings.TrimSpace(selector) == "" && selection.mod != nil {
+		// A selected mod names its profile explicitly, or means detection
+		// when it names none, as a metadata-less local package does
+		// (docs/DESIGN_MODS_MUTATORS.md §4.5). The saved preference never
+		// applies another content set's directory table to a mod (D12).
+		selector = selection.mod.ContentProfileSelector()
+	} else if strings.TrimSpace(selector) == "" {
 		stored, _ := settings.Load()
 		selector = stored.ContentProfile
 	}
@@ -131,6 +184,8 @@ func openContent(opts Options) (*contentSet, error) {
 		presentation:     profile.Presentation,
 		gameplayFeatures: profile.GameplaySources(),
 		root:             roots[0], roots: append([]string(nil), roots...), notes: fileSystem.Notes(),
+		mod: selection.mod, baseRoots: append([]string(nil), baseRoots...), manualRoots: selection.manual, modNotice: selection.notice,
+		savedMod: selection.saved,
 	}
 
 	// One required product proves the mount produced game data rather than an

@@ -250,12 +250,20 @@ func SetMaterialTable(logical string, data []byte, providers string) error {
 	return nil
 }
 
-// LoadMaterialTable installs an override when the mounted content supplies one
-// at MaterialTablePath. No such file is the ordinary case and not an error; a
-// file that cannot be read leaves the embedded table in place and reports why.
+// LoadMaterialTable installs the annotation for newly mounted content. Every
+// load starts from the embedded table and then applies the override the
+// content supplies at MaterialTablePath, if any, so remounting different
+// content in one process (a mod switch, docs/DESIGN_MODS_MUTATORS.md §4.4)
+// never keeps the previous content's table: an override without a [materials]
+// section sets only its [effects] over the embedded table, and one that cannot
+// be read leaves the embedded table in force and reports why. No such file is
+// the ordinary case and not an error.
 func LoadMaterialTable(fs vfs.FSOps) error {
 	if fs == nil {
 		return nil
+	}
+	if err := SetMaterialTable("embedded material annotation", embeddedMaterialTDF, "embedded"); err != nil {
+		return err
 	}
 	if _, err := fs.Stat(MaterialTablePath); err != nil {
 		return nil

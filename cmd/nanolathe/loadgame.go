@@ -37,6 +37,18 @@ const (
 // [08 R-SAVE-02 §1].
 const retailSaveLoadGUI = "guis/loadgame.gui"
 
+// mutatedSaveMessage is the refusal every save gives while the battle runs
+// with mutators. Until the save sidecar records them
+// (docs/DESIGN_MODS_MUTATORS.md §7), a load applies none (§7.3 step 1), so a
+// restored battle would run unmutated on unit health saved from a mutated one.
+const mutatedSaveMessage = "Saving is not available while mutators are active"
+
+// saveRefusedForMutators reports whether the battle this shell would save,
+// live or on its results screen, runs with mutators. Loading is unaffected.
+func (g *gameShell) saveRefusedForMutators() bool {
+	return g != nil && g.battle != nil && g.battle.sess != nil && !g.battle.sess.Mutators.IsZero()
+}
+
 // saveLoadDir is the directory this shell's screens address.
 func (g *gameShell) saveLoadDir() string {
 	if g == nil {
@@ -63,6 +75,9 @@ func (g *gameShell) saveLoadDir() string {
 func (g *gameShell) openSaveLoadScreen(mode saveLoadMode, source saveLoadSource) error {
 	if g == nil || g.cs == nil {
 		return fmt.Errorf("nanolathe: save/load screen: no mounted content: logical path %s, providers searched [], expected the authored save dialog", retailSaveLoadGUI)
+	}
+	if mode == saveScreenMode && g.saveRefusedForMutators() {
+		return g.showRetailMessage(mutatedSaveMessage)
 	}
 	dir := g.saveLoadDir()
 	if mode == saveScreenMode {
@@ -382,6 +397,10 @@ func (g *gameShell) activateSaveLoadGadget(name string) bool {
 		g.playMenuCue(cuePreviousScreen)
 		g.closeSaveLoadScreen()
 	case saveLoadToSave:
+		if g.saveRefusedForMutators() {
+			reportRetailMessageError(g.showRetailMessage(mutatedSaveMessage))
+			break
+		}
 		saveLoadUI.SetMode(saveScreenMode)
 		g.reopenSaveLoadPanel()
 	case saveLoadToLoad:
@@ -465,6 +484,10 @@ func (g *gameShell) commitSaveLoadWrite() {
 	path := saveLoadUI.CommitPath()
 	if path == "" {
 		// An empty name does nothing: no file, no message [08 R-SAVE-02 §1].
+		return
+	}
+	if g.saveRefusedForMutators() {
+		reportRetailMessageError(g.showRetailMessage(mutatedSaveMessage))
 		return
 	}
 	var err error

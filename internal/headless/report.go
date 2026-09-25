@@ -70,6 +70,10 @@ type Report struct {
 	// Rules is the bound rule set's name. Gameplay reports only the reserved
 	// base word, so a registered third-party set is visible only here.
 	Rules string `json:"rules"`
+	// Mutators is the canonical mutator set the session bound, e.g.
+	// "buildCost=0.5,buildSpeed=2"; empty for the unmutated catalog
+	// (docs/DESIGN_MODS_MUTATORS.md §6.6).
+	Mutators string `json:"mutators"`
 	// ContentProfile is the resolved content profile: `retail` for an
 	// unmodified install, otherwise the profile whose markers the mounted
 	// overlay presented or the one the host selected explicitly
@@ -186,6 +190,7 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 		ScenarioKind:     kind,
 		Gameplay:         sess.Gameplay.Normalize(),
 		Rules:            sess.Rules.Name,
+		Mutators:         sess.Mutators.String(),
 		Community:        sess.Community,
 		EntryCommunity:   sess.EntryCommunity,
 		CommunityDigest:  sess.Community.Digest(),

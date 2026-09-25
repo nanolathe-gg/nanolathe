@@ -110,6 +110,10 @@ func run(opts Options, out *os.File) error {
 		return content.Close()
 	}
 
+	if opts.InstallMod != "" {
+		return runInstallMod(opts, out)
+	}
+
 	if opts.BattleBenchmark != "" {
 		path, err := benchlock.Path()
 		if err != nil {
@@ -136,14 +140,36 @@ func run(opts Options, out *os.File) error {
 
 	content, err := openContent(opts)
 	if err != nil {
-		return err
+		// Start-up never fails because of the saved mod choice
+		// (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start").
+		var saved *savedModError
+		if !errors.As(err, &saved) {
+			return err
+		}
+		if content, err = startWithoutSavedMod(opts, saved.mod, saved.err); err != nil {
+			return err
+		}
 	}
 	defer content.Close()
+	// launch keeps the command line as given, for a start that must remount
+	// without the saved mod after mounting it.
+	launch := opts
 	opts.Root, opts.Roots = content.root, content.roots
 	// The mount boundary owns profile selection, so the resolved name — not
 	// the selector the command line carried — is what the reports state
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 	opts.ContentProfile = content.profile
+	// Mutators and the running mod's gameplay minimum
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3, §6). Captures, benchmarks and
+	// displayless runs take neither the saved mod nor the saved mutators.
+	if opts.Mutators, err = resolveStartupMutators(opts); err != nil {
+		return err
+	}
+	// Only a command line that names both is refused: a saved mod never stops
+	// the start, and the window raises the selection to its minimum visibly.
+	if minimum, ok := modMinimumGameplay(content.mod); ok && opts.GameplaySet && !content.savedMod && gameplayBelow(opts.Gameplay, minimum) {
+		return &missingProductError{what: "gameplay mode is below the mod's minimum", logical: "<command line>", providers: []string{"--gameplay", "--mod"}, expected: gameplayLabel(minimum) + " or Modern for " + content.mod.Name}
+	}
 
 	if opts.Film != "" {
 		return runFilm(opts, content)
@@ -163,5 +189,5 @@ func run(opts Options, out *os.File) error {
 
 	// All runtime entry points compose the retail game shell. The shell opens
 	// the authored menus, or enters the battle directly when --map is supplied.
-	return runGameShell(opts, content)
+	return runGameShell(launch, opts, content)
 }

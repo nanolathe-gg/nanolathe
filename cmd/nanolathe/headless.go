@@ -99,6 +99,7 @@ func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedS
 		}
 		request.value = headless.FreshBattleRequest{
 			CommunitySources: communitySources(opts, cs),
+			Mutators:         opts.Mutators,
 			BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
 			Gameplay:         opts.Gameplay,
 			Map:              opts.Map, Mission: opts.Mission, Difficulty: opts.Difficulty,

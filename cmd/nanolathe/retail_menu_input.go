@@ -232,6 +232,9 @@ func widgetTokens(in *input.State) []input.Token {
 
 func (g *gameShell) commitListSelection(name string, index int) {
 	name = gui.CallbackName(name)
+	if g.commitModsListSelection(name, index) {
+		return
+	}
 	if g.saveLoadPanelActive() && name == "GAMES" {
 		// Selecting a row refreshes the summary panel and copies the entry's
 		// description into GAMENAME [08 R-SAVE-02 §1].
@@ -255,6 +258,11 @@ func (g *gameShell) commitListSelection(name string, index int) {
 func (g *gameShell) activateGadget(name string) {
 	name = gui.CallbackName(name)
 	key := frontendCallbackKey(name)
+	// The Mods & Mutators windows are children over MAINMENU
+	// (docs/DESIGN_MODS_MUTATORS.md §8.2).
+	if g.activateModsGadget(name) {
+		return
+	}
 	// The save/load dialog is a child window over the screen that opened it,
 	// so its controls are resolved before the underlying screen's [07 R-FE-01 §8].
 	if g.activateSaveLoadGadget(name) {
@@ -289,6 +297,8 @@ func (g *gameShell) activateGadget(name string) {
 	switch g.frontend.Mode {
 	case modeMenuMain:
 		switch name {
+		case "MODS":
+			g.openModsScreenReporting()
 		case "INTRO":
 			reportRetailMessageError(g.startIntro(clPtr))
 		case "Credits":

@@ -464,3 +464,45 @@ func TestGlowStrengthLoadsAndClamps(t *testing.T) {
 		}
 	}
 }
+
+// The `mutators` and `mod` keys are stored and round-tripped verbatim
+// (docs/DESIGN_MODS_MUTATORS.md §4.3, §6.6). This package does not validate
+// mutator entries — it does not import content — so an entry its reader will
+// refuse still survives a save; an empty set and an unselected mod are
+// omitted from the file.
+func TestMutatorsAndModRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	want := Defaults()
+	want.Mutators = map[string]string{"buildSpeed": "2", "buildCost": "0.5", "notAMutator": "9"}
+	want.Mod = ModSelection{ID: "prota", Version: "4.6"}
+	if err := want.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Mutators, want.Mutators) || got.Mod != want.Mod {
+		t.Fatalf("round trip = %v %+v, want %v %+v", got.Mutators, got.Mod, want.Mutators, want.Mod)
+	}
+
+	empty := Defaults()
+	empty.Mutators = map[string]string{}
+	if err := empty.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"mutators"`)) || bytes.Contains(data, []byte(`"mod"`)) {
+		t.Fatalf("an empty set and an unselected mod must be omitted:\n%s", data)
+	}
+	got, err = LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mutators != nil || got.Mod != (ModSelection{}) {
+		t.Fatalf("absent keys loaded as %v %+v", got.Mutators, got.Mod)
+	}
+}

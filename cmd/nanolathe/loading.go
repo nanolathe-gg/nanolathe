@@ -432,6 +432,18 @@ func (g *gameShell) drawLoadingScreen(c *client.Client) {
 	if bg := g.assets.loading; bg != nil {
 		c.UIBlitPCX(bg, 0, 0)
 	}
+	// The match selection above the map line (docs/DESIGN_MODS_MUTATORS.md
+	// §8.3), a Nanolathe addition to the authored screen.
+	{
+		lines := g.loadingSelectionLines()
+		screenW, screenH := c.Size()
+		step := g.retailTextHeight() + 3
+		base := int(math.Trunc(float64(screenH)-float64(g.retailTextHeight())*1.5)) - step*(len(lines)+1)
+		for i, line := range lines {
+			width := g.retailTextWidth(line)
+			g.drawRetailString(c, line, screenW/2-width/2, base+i*step, -1, g.guiColor(retailLoadTitleColor))
+		}
+	}
 	// The map line comes before the rows, and a campaign mission draws none
 	// [07 "The loading screen"].
 	if l.mapName != "" {

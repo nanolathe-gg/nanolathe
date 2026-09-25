@@ -26,7 +26,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md) | the gameplay rule seams, how a Modern or Strict 3.1 rule set is bound, and what it may cost |
 | [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
 | [DESIGN_COMMUNITY_PATCH](DESIGN_COMMUNITY_PATCH.md) | the Community 3.9 gameplay profile: the third reserved rule set, the feature table a content set or player configures, the mapping of every community-patch contract onto a seam, and the decisions still open (design, not implemented) |
-| [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) | the mod library and the nanolathe.gg catalogue, global mutators applied to the per-battle catalog in every mode, and the save sidecar that records and restores a match's selection (design, not implemented) |
+| [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) | the mod library and the nanolathe.gg catalogue, global mutators applied to the per-battle catalog in every mode, and the save sidecar that records and restores a match's selection (implemented except the save sidecar, mod switching on load and drop-to-install) |
 | [DESIGN_SURVIVAL](DESIGN_SURVIVAL.md) | the Survival single-player mode: the attacker slot, the wave director, build-tree tech tiers, the no-victory result and score, available in every gameplay mode |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
@@ -104,7 +104,9 @@ package implements.
 | `formats/zrb` | Stateful Smacker 2 movie decoder: indexed frames, palette deltas, PCM soundtrack and authored cadence | DESIGN_CONTENT_VFS |
 | `internal/content` | Compiles authored data into immutable definitions with defaults and conversions applied once: units, weapons, features, movement classes, sides, sounds, maps, AI profiles, battle tables; the catalog hash; and the authored animation metadata the SIMULATION depends on — a feature's burn/die/reclaim frame geometry and lifetimes in visits, an effect entry's frame count (`CompileSimArt`), compiled before the session's features and strips exist so headless and windowed battles run one simulation | DESIGN_CONTENT_VFS |
 | `internal/content/profiles` | Content profiles: the embedded per-content-set directory tables and limits, marker detection and selection by name or authored JSON file, applied as a `vfs.Layout` at the mount boundary | DESIGN_CONTENT_VFS §5 |
-| `internal/settings` | Front-end preferences that survive a restart (last skirmish setup, per-slot side/colour/ally, difficulty) | DESIGN_CONTENT_VFS |
+| `internal/settings` | Front-end preferences that survive a restart (last skirmish setup, per-slot side/colour/ally, difficulty, the selected mod and mutators) | DESIGN_CONTENT_VFS |
+| `internal/modlibrary` | The installed-mod library: data directory, `nanolathe-mod.json` metadata, mod selection, and zip or folder install with extraction and validation. No network | DESIGN_MODS_MUTATORS §4 |
+| `internal/modfetch` | The nanolathe.gg mod manifest and resumable, SHA-256-verified downloads. The only package that imports `net/http`, and only `cmd/nanolathe` imports it | DESIGN_MODS_MUTATORS §5 |
 
 ### Runtime core
 
@@ -185,7 +187,7 @@ package implements.
 
 | Package | Responsibility | Design document |
 |---|---|---|
-| `internal/architecture` | Repository guards that inspect source rather than importing it: the platform boundary, random-stream ownership, retail-only content, shrink-only parity ratchets | this document, §6 |
+| `internal/architecture` | Repository guards that inspect source rather than importing it: the platform boundary, the network boundary (`net/http` only in `internal/modfetch`), random-stream ownership, retail-only content, shrink-only parity ratchets | this document, §6 |
 | `internal/cleanroom` | The clean-room lint and its per-file debt baseline | this document, §6 |
 | `internal/docs` | The citation resolver: every research citation in `docs/` and in Go comments resolves | this document, §6 |
 | `internal/compat/spec03` | Black-box checks of the published presentation boundary | DESIGN_PRESENTATION_CLIENT |
@@ -203,6 +205,7 @@ anything in a lower layer and nothing in a higher one.
 platform      cmd/nanolathe, cmd/nanolathe-headless ─► mods ─► session   (linked rule sets, DESIGN_GAMEPLAY_RULES §8)
               cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
               cmd/nanolathe ─► upscale ─► formats, palette   (load-time 2× art, DESIGN_GPU_RENDERER §14)
+              cmd/nanolathe ─► modfetch ─► modlibrary ─► content, gameplay, vfs   (mods, DESIGN_MODS_MUTATORS §4–§5)
               cmd/nanolathe-headless ─► headless
 
 presentation  client ─► render, hud, audio, camera, palette, input, model, frame,

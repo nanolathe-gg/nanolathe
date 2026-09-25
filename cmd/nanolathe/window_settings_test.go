@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
@@ -93,5 +94,43 @@ func TestEntryZoomAppliesToTheSelectedCanvas(t *testing.T) {
 		if w, h := b.cam.EffectiveView(); w != 512 || h != 384 {
 			t.Fatalf("zoom viewport = %dx%d", w, h)
 		}
+	}
+}
+
+// The window adapter's options are built once, at start-up, but a content
+// reload replaces the shell the host holds (docs/DESIGN_MODS_MUTATORS.md
+// §4.4). Every callback must reach the shell the host holds when it runs, not
+// the start-up one.
+func TestHostWindowOptionsFollowTheSwappedShell(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	first := &gameShell{presentation: settings.DefaultPresentation()}
+	first.presentation.FPS, first.presentation.Water, first.presentation.Renderer = 60, 1, "classic"
+	host := &shellHost{shell: first}
+	options := host.windowOptions()
+
+	second := &gameShell{presentation: settings.DefaultPresentation(), windowSize: retailDisplayMode{1024, 768}}
+	second.presentation.FPS, second.presentation.Water, second.presentation.Renderer = 144, 0, "classic"
+	second.opts.Renderer = "classic"
+	host.shell = second
+
+	if mode, fps := options.PresentationSettings(); fps != 144 || mode != ebitenapp.RendererClassic {
+		t.Fatalf("presentation settings = %v/%d, want the swapped shell's classic/144", mode, fps)
+	}
+	if options.Effects().Water {
+		t.Fatal("effects read the start-up shell's Water switch")
+	}
+	if w, h := options.WindowSize(); w != 1024 || h != 768 {
+		t.Fatalf("window size %dx%d, want the swapped shell's 1024x768", w, h)
+	}
+	options.FullscreenChanged(true)
+	if !second.fullscreen || first.fullscreen {
+		t.Fatal("the fullscreen change reached the start-up shell")
+	}
+	options.RendererChanged(ebitenapp.RendererModern)
+	if second.presentation.Renderer != "modern" || first.presentation.Renderer != "classic" {
+		t.Fatal("the renderer change did not reach the swapped shell")
+	}
+	if options.ShowFPS() {
+		t.Fatal("ShowFPS without a battle")
 	}
 }

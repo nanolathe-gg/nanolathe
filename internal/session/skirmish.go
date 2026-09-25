@@ -549,6 +549,10 @@ type SkirmishEntryOptions struct {
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero value is
 	// the retail baseline.
 	ContentLimits content.Limits
+	// Mutators are the battle's global multipliers, applied to this entry's
+	// catalog clone in every gameplay mode (docs/DESIGN_MODS_MUTATORS.md §6).
+	// The zero value applies none.
+	Mutators content.Mutators
 }
 
 // NewSkirmishWithProgress is NewSkirmishWithEntryOptions with only a load
@@ -597,6 +601,10 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		return nil, err
 	}
 	cat = prepareCommunityWeapons(cat, cfg.Gameplay, entryFeatures)
+	cat, err = applyEntryMutators(cat, options.Mutators)
+	if err != nil {
+		return nil, err
+	}
 	// 2. select mission/schema [08 "Mission type dispatch"]
 	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, cfg.MapName, 0, cfg.NumPlayers, nil)
 	if err != nil {
@@ -653,6 +661,7 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		CommunitySources: options.CommunitySources,
 		Community:        entryFeatures,
 		EntryCommunity:   entryFeatures,
+		Mutators:         options.Mutators,
 		Catalog:          cat,
 		World:            terrain,
 		Mission:          m,

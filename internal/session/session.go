@@ -134,8 +134,12 @@ type Session struct {
 	// Community is the resolved, session-owned feature table (DESIGN_COMMUNITY_PATCH §3).
 	Community community.Features
 	// EntryCommunity preserves battle-entry parameters across live rule switches.
-	EntryCommunity       community.Features
-	CommunitySources     CommunitySources
+	EntryCommunity   community.Features
+	CommunitySources CommunitySources
+	// Mutators is the set battle entry applied to Catalog, fixed for the whole
+	// battle (docs/DESIGN_MODS_MUTATORS.md §6.3). It is recorded here only so
+	// reports and the save sidecar can read it; no phase consults it.
+	Mutators             content.Mutators
 	playerBuilderOptions [10]orders.BuilderOptions
 	builderOptionsReady  bool
 	// Rules is the bound gameplay rule set, one implementation per seam.

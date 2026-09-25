@@ -44,6 +44,11 @@ type RetailLoadDeps struct {
 	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero
 	// value is the retail baseline.
 	ContentLimits content.Limits
+	// Mutators are the multipliers the restored battle runs under, applied to
+	// the restore clone in every gameplay mode (docs/DESIGN_MODS_MUTATORS.md
+	// §6.3). A save without a sidecar restores with the zero value, which
+	// applies none (§7.3 step 1).
+	Mutators content.Mutators
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
@@ -143,6 +148,16 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 			return nil, err
 		}
 	}
+	// Mutators follow the restriction here as they do in fresh mission entry
+	// (docs/DESIGN_MODS_MUTATORS.md §6.3), for two reasons: the restriction
+	// recomputes the catalog digest from the authored records, which would
+	// discard the mutated identity, and it decides which corpse chains the
+	// build-cost mutator reaches. Applying them in the same order makes a
+	// restored battle's catalog the one its fresh entry built.
+	cat, err = applyEntryMutators(cat, deps.Mutators)
+	if err != nil {
+		return nil, err
+	}
 	terrain, err := loadTerrainStrict(deps.FS, cat, m)
 	if err != nil {
 		return nil, fmt.Errorf("session: retail map resolution: %w", err)
@@ -161,6 +176,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 		CommunitySources: deps.CommunitySources,
 		Community:        entryFeatures,
 		EntryCommunity:   entryFeatures,
+		Mutators:         deps.Mutators,
 		State:            StateBattle,
 		Catalog:          cat,
 		World:            terrain,

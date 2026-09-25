@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
@@ -54,6 +55,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	}
+	// A mutated battle is not the retail baseline, so say so before it runs;
+	// the report carries the canonical set as well
+	// (docs/DESIGN_MODS_MUTATORS.md §6.6).
+	if !request.Mutators.IsZero() {
+		fmt.Fprintf(stderr, "nanolathe: mutators: %s\n", strings.Join(request.Mutators.Describe(), ", "))
 	}
 	// Profiling wraps the session but never enters it: the sampler is a host
 	// concern and the authoritative run is bit-identical with or without it
@@ -180,6 +187,11 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 		bench.Gameplay = mode
 		return err
 	})
+	var mutatorArgs []string
+	flags.Func("mutator", "global multiplier name=factor, repeatable, applied in every gameplay mode (docs/DESIGN_MODS_MUTATORS.md §6): "+mutatorUsage()+"; only these flags select mutators, never the settings file, so a run reproduces from its command line", func(text string) error {
+		mutatorArgs = append(mutatorArgs, text)
+		return nil
+	})
 	flags.StringVar(&contentProfile, "content-profile", "", "content profile: "+strings.Join(contentprofiles.Names(), ", ")+", or the path of a profile JSON file; omitted detects it from the mounted content set (docs/DESIGN_CONTENT_VFS.md §5)")
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
 	var survivalPace string
@@ -236,6 +248,11 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	storedFeatures, _ := settings.Load()
 	request.GameplayFeatures = storedFeatures.GameplayFeatures
 	bench.GameplayFeatures = storedFeatures.GameplayFeatures
+	mutators, err := resolveMutators(mutatorArgs, bench.OutputDir != "")
+	if err != nil {
+		return request, reportPath, profiles, bench, err
+	}
+	request.Mutators = mutators
 	request.ContentProfile = contentProfile
 	bench.ContentProfile = contentProfile
 	bench.UnitLimit = headless.SimBenchDefaultUnitLimit
@@ -267,6 +284,52 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	}
 	request.TickLimit = uint32(ticks)
 	return request, reportPath, profiles, bench, nil
+}
+
+// mutatorUsage names the mutator keys and the step list from the content
+// package's own descriptors, so the flag text cannot fall behind the set.
+func mutatorUsage() string {
+	var keys []string
+	for _, info := range content.MutatorCatalog() {
+		keys = append(keys, info.Key)
+	}
+	steps := make([]string, len(content.MutatorSteps))
+	for i, step := range content.MutatorSteps {
+		steps[i] = step.String()
+	}
+	return "name one of " + strings.Join(keys, ", ") + ", factor one of " + strings.Join(steps, ", ")
+}
+
+// resolveMutators reads the --mutator flags (docs/DESIGN_MODS_MUTATORS.md
+// §6.6). The displayless command never reads the settings file's "mutators"
+// key: fingerprint locks and benchmark runs must reproduce from their command
+// line alone, whatever the player last chose in the window. The
+// simulation-cost benchmark measures a fixed scene, so it refuses the flag.
+func resolveMutators(args []string, benchmark bool) (content.Mutators, error) {
+	expected := "name=factor, " + mutatorUsage()
+	if benchmark {
+		if len(args) > 0 {
+			return content.Mutators{}, fmt.Errorf("nanolathe: mutators are not applied to the simulation-cost benchmark: logical path <command line>, providers searched [mutator], expected no --mutator with --sim-benchmark")
+		}
+		return content.Mutators{}, nil
+	}
+	if len(args) == 0 {
+		return content.Mutators{}, nil
+	}
+	values := make(map[string]string, len(args))
+	for _, arg := range args {
+		name, factor, ok := strings.Cut(arg, "=")
+		name = strings.TrimSpace(name)
+		if _, repeated := values[name]; !ok || name == "" || repeated {
+			return content.Mutators{}, fmt.Errorf("nanolathe: invalid mutator %q: logical path <command line>, providers searched [mutator], expected %s, each name once", arg, expected)
+		}
+		values[name] = factor
+	}
+	m, err := content.ParseMutators(values)
+	if err != nil {
+		return content.Mutators{}, fmt.Errorf("nanolathe: invalid mutator: logical path <command line>, providers searched [mutator], expected %s: %w", expected, err)
+	}
+	return m, nil
 }
 
 func writeReport(path string, stdout io.Writer, report headless.Report) error {
