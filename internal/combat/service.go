@@ -2509,7 +2509,11 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 		return result
 	}
 
+	before := victim.Health
 	victim.Health = ApplyDamage(victim.Health, amount)
+	if s.HealthLost != nil && before > 0 && victim.Health < before {
+		s.HealthLost(victim, w.RawUnitRecord(in.Attacker), before-max(victim.Health, 0))
+	}
 	if victim.Health <= 0 && s.DeathLatchAdmitted(victim.Owner) {
 		// Preserve the modular health and stored provenance for the later
 		// death packet. A null damage attacker leaves the prior link intact

@@ -59,6 +59,12 @@ func (g *gameShell) drawRetailListRows(c *client.Client, p *ui.Panel, index int,
 			text = text[2:]
 		}
 		color := g.guiColor(byte(gad.ColorF & 0xff))
+		accent, readable := modsListHeadingColor(g, p)
+		readable = readable && heading
+		if readable {
+			g.shadeListHeading(c, r, y, rowHeight)
+			color = accent
+		}
 		if rowHeight > textMetric+6 {
 			remaining := int(r.H) - 1
 			for line, run := range retailListWrapLines(text, measure, width) {
@@ -73,14 +79,23 @@ func (g *gameShell) drawRetailListRows(c *client.Client, p *ui.Panel, index int,
 			g.drawRetailStringSelected(c, text, x, y, width, color, 0, rowFont)
 		}
 		if heading {
-			if g.assets != nil && g.assets.pal != nil {
-				for level := -19; level >= -22; level-- {
-					c.UIShadeRect(g.assets.pal, int(r.X)+2, y, int(r.W)-1, rowHeight+1, level)
-				}
+			if !readable {
+				g.shadeListHeading(c, r, y, rowHeight)
 			}
 		} else if idx == selected && gad.Attribs&0x100 == 0 {
 			g.drawListSelection(c, r, y, rowHeight)
 		}
+	}
+}
+
+// shadeListHeading darkens a heading row four times over its inclusive row
+// rectangle [07 R-WGT-01 §4].
+func (g *gameShell) shadeListHeading(c *client.Client, r gui.Rect, y, rowHeight int) {
+	if g.assets == nil || g.assets.pal == nil {
+		return
+	}
+	for level := -19; level >= -22; level-- {
+		c.UIShadeRect(g.assets.pal, int(r.X)+2, y, int(r.W)-1, rowHeight+1, level)
 	}
 }
 

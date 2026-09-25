@@ -146,6 +146,18 @@ type Features struct {
     ScriptPorts               bool // recorder ports 32 and 69–75 (the eight content uses; §4.5)
     MexSnap, WreckSnap        bool // click snap (command-time, CP-CON-6, §4.6)
 
+    // ProTA 4.8 package switches (§4.7): false in every shipped table,
+    // enabled only by a content profile's gameplay block or a player override.
+    AIDifficultyIncome        bool // computer-player Easy/Medium/Hard 0.5/1/4 income
+    AIStockpileProducts       bool // armed-building record on the resource/queue task
+    TargetLockRelease         bool // retained-target release in the maintenance scan
+    AIApplianceEnergy         bool // energyuse sign-byte appliance selector
+    AIBuilderStopThreshold    bool // capture-capable placement cutoff at ten
+    WorkingWeaponsAutonomous  bool // five ground work handlers leave weapons autonomous
+    AttackSingleSlotTake      bool // Attack_Chase / Suppress take one slot, not two or three
+    MapFeatureOwnerEleven     bool // terrain-file features stamped owner 11, drawn without LOS
+    ResurrectionTextFix       bool // "Resurrection failed" spelling
+
     // Parameters: zero means "as retail" for every one of them.
     RepairRate                RepairRate // CP-DMG-4: Enabled, RepairMultiplier, SelfHealMultiplier (1..100)
     OffMapAircraftMarginTiles int        // CP-ENV-1: 0 = retail (no off-map targeting)
@@ -223,6 +235,14 @@ start from for retail content (D2). The shipped content profiles gain a
 applies). The three profiles Nanolathe ships no content table for (`bta`,
 `mayhem`, `twilight`) are selectable by name from the settings file or a
 user-authored profile.
+
+The five ProTA 4.8 package switches of §4.7 are false in **every** shipped
+table, `prota` included. They are behaviours of that historical package's
+engine loader, not of any `tdraw` build profile, so enabling them in the
+mainline table would change the computer player for retail content under
+Community 3.9 and Modern. The fields are omitted from the canonical JSON while
+false, so every shipped table keeps its digest; an enabled switch enters the
+digest by name.
 
 Two rows of the matrix are not table fields because they are not gameplay:
 the weather-report and megamap rows (host presentation, §7) and the
@@ -356,6 +376,66 @@ supplying the per-package defaults and caps, and it is on in every profile
 whose table enables it because it changes no authoritative rule. The override
 key (default Alt) suppresses it for one click, as in the patch.
 
+### 4.7 ProTA 4.8 package behaviours
+
+The shipped ProTA 4.8 package's engine loader patches the computer player,
+its income and the weapon-maintenance scan
+([ProTA 4.8 engine package, "AI and economy evidence audit"](../research/extensions/prota-engine.md#ai-and-economy-evidence-audit)).
+Each contract is a table switch that no shipped table enables. The ProTA
+content profile turns them on through its `gameplay` block's field overrides
+(§3.2 source 2), so they apply only when that package's content is mounted and
+Community 3.9 or Modern is selected; Strict 3.1 resolves the zero table and
+ignores them, and a player may switch any of them off field by field. The
+retail baseline of every row is the existing implementation. Modern embeds
+Community, so each row's Modern answer is Community's.
+
+| Contract | Owner / where the rule lives | Strict | Community (switch on) |
+|---|---|---|---|
+| Computer-player income factors (`AIDifficultyIncome`) | `economy.Service.Community`, read in `addContribution` and `CreditFeatureReclaim` (`internal/economy/maker.go`) | Easy/Medium/Hard `0.5/0.7/1` at the per-unit contribution store and both feature-reclaim credits `[05 R-ECO-01 §3]` | `0.5/1/4` (every selector other than 0 and 1 is Hard) on the seven per-unit routes and both feature-reclaim credits, at the same working-precision store; unit reclaim, spawn credits, transfers, reverse construction and factory-cancellation refunds keep `0.5/0.7/1` |
+| Stockpile purchasing (`AIStockpileProducts`) | `ai.Manager.Community`, read by the task dispatcher and the resource/queue body (`internal/ai/manager.go`); the ordinary submission helper in `internal/session/ai_bind.go` | the null task has no body; the resource task admits any live, completed building `[08 R-AI-01 §2]` | the armed-building record runs the resource/queue body at `+30` in vector order; a unit holding any secondary order is skipped for the whole visit; the product branch submits one CANBUILD product, and a `MAKENUKE`/`MAKEANTI` product becomes one counted slot-zero `BuildWeapon` round `[07 R-P0-11 §1]` |
+| Target-lock release (`TargetLockRelease`) | `combat.Rules.TargetLockRelease` (Strict false, Community the projected switch), asked by the autonomous maintenance scan (`internal/combat/autonomous.go`) | the scan admits exactly Fire at Will and retains a target through alliance, category and stunned checks `[06 §3.2]` | the scan admits standing-fire values two and three; a retained unit target failing the unit-to-unit physical gate `[06 R-WPN-05 §9]` is set to the empty encoding without `TargetCleared`, the inherited checks still run on the old target, and reacquisition waits for the next visit when they accept; unit acquisition still requires exactly two |
+| Low-energy appliances (`AIApplianceEnergy`) | `ai.Manager.Community`, `activationBranch` | the authored `makesmetal` byte selects the activation arm `[08 R-AI-01 §2]` | the signed top byte of the binary32 `energyuse` must be at least 66 (`energyuse >= 32` for finite nonnegative values); the retail disable/enable order, the bound-five draw and the no-fallthrough rule are unchanged |
+| Builder stop threshold (`AIBuilderStopThreshold`) | `ai.Manager.Community`, construction placement pass | a capture-capable member skips placement at five build-capable units `[08 R-AI-01 §3]` | the placement cutoff is ten; the reposition pass keeps five, so counts five through nine are eligible for both passes |
+| Weapons while working (`WorkingWeaponsAutonomous`) | `orders.Rules.WorkLeavesWeaponsAutonomous` (Strict false, Community the projected switch), asked by `orders.TakeWorkSlots` at all five sites: `HelpBuild` phase 1, `Capture` phase 0, `ReclaimUnit` phase 0 and `RepairUnit` phase 1's in-reach arm (`internal/orders/work.go`), and `MobileBuild` phase 1 after a legal placement check (`mobilePlacementVisit`, `internal/construction/states.go`) | each site releases all three slots, so the builder's weapons are silent until the record's destructor gives them back `[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]` | the same call with the inhibit verb: a slot an earlier order held becomes autonomous with its target cleared and `TargetCleared` raised, an autonomous slot keeps its target, and autonomous acquisition then runs under its ordinary gates `[06 §3.2]`; `SelfRepair`, `RepairUnitNoMove`, the VTOL twins' preamble, `VTOL_MobileBuild`'s takeoff preamble, `BuildingBuild` and the destructor are unchanged |
+| Single-slot attack take (`AttackSingleSlotTake`) | `orders.Rules.AttackTakesOneSlot`, asked by `Attack_Chase` phase 1 (`internal/orders/guard.go`) and `Suppress` phase 1 (`internal/orders/combat.go`) | `Attack_Chase` phase 1 releases slots 0 and 2 before binding slot `p1`; `Suppress` phase 1 with `p1 = 2` releases all three `[04 R-ORD-01 §3]` | `Attack_Chase` phase 1 releases only slot 2 when `p1 > 1` (signed), else only slot 0; `Suppress` with `p1 = 2` releases only slot 2. `Attack_Chase` phase 3 and `Suppress`'s `p1 ≠ 2` arm keep retail's take |
+| Resurrection failure text (`ResurrectionTextFix`) | `orders.Rules.ResurrectionFailureText`, asked by `Resurrect` phase 3 (`internal/orders/work.go`) | the unresolved-corpse failure shows status 7 `Ressurection failed`, retail's spelling `[04 R-ORD-01 §5]` | status 7 `Resurrection failed`, the feature-lookup failure's string; status, abandon and every other caption are unchanged |
+| Map-owned features drawn without LOS (`MapFeatureOwnerEleven`) | read once at battle entry by `loadTerrainStrict` (`internal/session/composition.go`), which passes the placer to `world.Load` through `world.WithTerrainFeaturePlacer`; the draw hook is `tallFeatureVisibleForFrame` (`internal/client/world_draw.go`), shared by the Classic and Modern executors | terrain-file anchors take placer nibble 10; a `nodrawundergray` feature in either feature pass draws only for the local slot or when the two-corner LOS test passes `[05 R-FEAT-01 §3]` `[03 R-RAST-01 §6]` | terrain-file anchors in both attribute layouts take 11 and void cells take none; mission-file, successor, reproduction, reload and corpse stamps are unchanged; the second (tall, height ≥ 10) pass draws a selector-11 feature without the LOS test once the `nodrawundergray` and local-slot tests fail; the first pass and the fog overlay are unchanged, so unexplored cells stay dark; the PlayerFeatures image stores and restores 11 `[08 R-SAVE-02 §12]`. The draw hook reads no table, as the shipped renderer's has no gate: no retail stamp writes 11, so it is unreachable under Strict |
+
+The last four rows are the same loader's order, drawing and text patches
+([ProTA 4.8 engine package, "Shipped order, drawing, sound and text patches"](../research/extensions/prota-engine.md#shipped-order-drawing-sound-and-text-patches)).
+
+*The `MobileBuild` slot call.* Retail's `MobileBuild` phase 1 releases all
+three slots after a legal placement check and before the site is prepared
+`[04 R-ORD-01 §5]`. The ground row's placement visit
+(`internal/construction/states.go`, `mobilePlacementVisit`) makes that call
+through `orders.TakeWorkSlots` as the first effect of its legal arm, before the
+site height is written and the nanoframe allocated; a blocked visit makes no
+call, and a visit after an allocation refusal repeats it as a guarded no-op. The
+record destructor returns the slots on every removal path, because the row's
+static mask lacks the slot-keeper bit `[04 R-ORD-01 §7]`. `VTOL_MobileBuild`
+shares the visit but makes no placement-time call: its takeoff preamble
+released the slots in phase 0 `[04 R-ORD-02 §2]`. Under Strict this is a
+parity fix, and a ground builder's weapons are silent while it builds; with the
+switch on, the same call hands them back. `mobile_build_slots_test.go` locks
+both verbs, the destructor's return, and the absence of a call on a blocked or
+aircraft placement.
+
+*No new seam.* The economy and the computer player read their projected copy
+of the table, like the combat interceptor and corpse rows; Strict's zero table
+is the bypass. The target-lock row adds one method to the existing
+`combat.Rules`, because it changes an acquisition decision the combat seam
+already owns, and the three order rows add three methods to `orders.Rules`,
+whose Community answers read the queue binding's projected copy.
+
+*Content.* The switches need the package's authored data to matter: the six
+stationary stockpile producers (`ARMAMD`, `ARMEMP`, `ARMSILO`, `CORFMD`,
+`CORTRON`, `CORSILO`) author `builder=1` and one `MAKENUKE*`/`MAKEANTI*`
+pseudo-product each. The shipped package adds no route for mobile anti-nuke
+generation (`ARMSCAB`, `CORMABM`) and no CANBUILD membership for the Core
+east/west shipyards, so neither is implemented
+([ProTA 4.8 engine package](../research/extensions/prota-engine.md#unknown)).
+The ProTA content profile enables all five switches in its `gameplay` block.
+
 ## 5. Content interface
 
 Every author-facing key the patch reads is parsed onto the compiled
@@ -411,7 +491,9 @@ boundary is explicit and nothing is silently dropped:
 
 | Patch feature | Nanolathe home | Status |
 |---|---|---|
-| Megamap, wheel zoom, dither, icon config | the strategic view and smooth zoom (DESIGN_GPU_RENDERER §16) | existing view and zoom; optional ordered INI/PCX icon configuration in `presentation.strategicIconConfig` |
+| Megamap, its wheel entry and exit, under-attack flash, ring minimums, `Player1..10DotColors` | the optional megamap overview ([DESIGN_INTERFACE_HUD_INPUT §3.15](DESIGN_INTERFACE_HUD_INPUT.md#315-optional-megamap)) | implemented as an optional overview, `presentation.overview` (Zoom by default) with the `megamap*` and `playerDotColors` keys; the ProTA controls preset selects it |
+| Wheel zoom, dither, icon config | the strategic view and smooth zoom (DESIGN_GPU_RENDERER §16) | existing view and zoom; optional ordered INI/PCX icon configuration in `presentation.strategicIconConfig`, which the megamap's icons also use |
+| ProTA 4.8 victory cue on every local win | end-of-battle audio ([DESIGN_INTERFACE_HUD_INPUT §3.16](DESIGN_INTERFACE_HUD_INPUT.md#316-optional-victory-cue)) | implemented as the host option `presentation.victoryCue` (Options → HUD), off by default; the ProTA controls preset turns it on |
 | Whiteboard, chat drawer, fonts, Unicode | HUD messages | not planned |
 | Stockpile and transport counters, reload bars, `Vet<n>` label, group numbers | battle HUD | implemented as host HUD options |
 | Team-coloured nanolathe, stream/frame colours | shared effect presentation | implemented; optional team switch and per-player stream/frame lists |
@@ -484,6 +566,15 @@ reads the service's projected table copy. Modern embeds Community.
   whatever the sources say; a content profile's `gameplay` block resolves to
   the named embedded table with its overrides applied; a settings override
   wins over the profile and the command line over both.
+- **ProTA package switches (§4.7).** Every shipped table leaves them false and
+  keeps its digest; a content-profile block enables them and a later source
+  disables them field by field; Strict projects zero onto the economy, combat
+  and every computer player. Per-contract tests lock the three income forms
+  and the unchanged unit-reclaim refund, the `+30` armed-building task and its
+  secondary-order suppression, the target-lock release against Strict, the
+  appliance selector's boundary at `energyuse` 32, and the five-through-nine
+  construction overlap; an asset-gated check proves a computer-owned ProTA
+  silo receives one slot-zero `BuildWeapon` round.
 - **Per-contract tests in the owning package**, each locking the arithmetic
   the extension contract states and the Strict bypass, including RNG and
   resource effects: the veterancy identity with absent keys; the `[min, max)`

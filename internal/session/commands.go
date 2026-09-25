@@ -348,6 +348,24 @@ func (s *Session) EnqueueHumanCommandWithSequence(c HumanCommand) (uint64, error
 	return c.Sequence, nil
 }
 
+// HasPendingHumanCommand reports whether a command of this kind waits for the
+// next authoritative boundary. A host that runs the sub-ticks on their own
+// goroutine asks before handing a pump over (docs/DESIGN_GPU_RENDERER.md
+// §13.13).
+func (s *Session) HasPendingHumanCommand(kind HumanCommandKind) bool {
+	if s == nil {
+		return false
+	}
+	s.humanMu.Lock()
+	defer s.humanMu.Unlock()
+	for i := range s.pendingHuman {
+		if s.pendingHuman[i].Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // PendingHumanCommands returns immutable command copies for diagnostics/tests
 // and presentation of input intent awaiting the next authoritative tick.
 func (s *Session) PendingHumanCommands() []HumanCommand {
@@ -1208,20 +1226,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			}
 			return
 		}
-		if !orders.StockpileSlotAcceptsBuildWeapon(u, stockpileAliasSlot) {
-			return
-		}
-		s.bindOrderQueue(u)
-		// The queued/non-queued argument is NOT the click's Shift bit: the
-		// world-order shift chain does not participate on the counted path
-		// [07 R-P0-11 §1], and this producer issues no Replace, so it never
-		// purges. The argument is inert for a rear-segment record in any case
-		// — the caption clear is never called for BUILDWEAPON [04 R-ORD-01 §1].
-		n := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
-		n.Param1, n.Param2 = uint32(stockpileAliasSlot), uint32(count)
-		if q := orders.QueueForUnit(u); q != nil {
-			q.CoalesceTail(id, n)
-		}
+		s.queueStockpileRounds(u, count, tick)
 	case HumanBuildPage:
 		s.applyHumanBuildPage(c.BuildPage)
 	case HumanGroupAssign:

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	contentprofiles "github.com/nanolathe-gg/nanolathe/internal/content/profiles"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
+	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/survival"
@@ -35,11 +37,28 @@ type Options struct {
 	// resolved name, so everything downstream — the headless report among it —
 	// reports the profile the mount actually used
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
-	ContentProfile     string
+	ContentProfile string
+	// Mod selects an installed mod ("id", "id@version" or "none"); ModSet
+	// records that the flag was given, so it wins over the saved choice
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+	Mod    string
+	ModSet bool
+	// MutatorArgs are the raw --mutator name=factor pairs; Mutators is the
+	// resolved set every battle request carries. The screen updates Mutators
+	// when the player applies a new set (docs/DESIGN_MODS_MUTATORS.md §6).
+	MutatorArgs map[string]string
+	Mutators    content.Mutators
+	// InstallMod installs a local zip or directory into the mod library and
+	// exits (a command-line stand-in for drag-and-drop, §4.5).
+	InstallMod string
+	// modBaseRoots marks Roots as the base install only (an internal remount
+	// with a mod selected), so several roots are not a manual stack.
+	modBaseRoots       bool
 	Arrival            bool    // modern battle opening (GPU §36)
 	ShotArrivalTime    float64 // seconds into a reproducible opening capture; negative disables
 	UnitLimit          int     // zero uses the saved preference; explicit CLI values override it
 	BattleBenchmark    string
+	BenchmarkCapture   string
 	BenchmarkFactories bool
 	BenchmarkFrames    int
 	BenchmarkTPS       int
@@ -87,6 +106,7 @@ type Options struct {
 	FilmOut            string      // --film destination: a directory of PNGs, or "-" for raw RGBA on stdout
 	FilmFrames         int         // stop a --film capture after this many frames; 0 captures the whole script
 	ShotModal          string      // battle modal to open before --shot captures: "options", "exit", "confirm", "settings", "help" or "briefing"
+	ShotMegamap        bool        // show the megamap overview in --shot (DESIGN_INTERFACE_HUD_INPUT §3.15)
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
 	FPSSet             bool        // explicit command-line override
@@ -193,6 +213,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.ShotBuild, "shot-build", "", "preview this unit beside the first selection or at viewport centre in --shot (no construction order)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
 	set.StringVar(&opts.BattleBenchmark, "battle-benchmark", "", "run the seeded live battle benchmark into a new output directory")
+	set.StringVar(&opts.BenchmarkCapture, "benchmark-capture", "", "stage a battle benchmark from a Ctrl+Shift+F11 diagnostic directory")
 	set.BoolVar(&opts.BenchmarkFactories, "benchmark-factories", true, "queue factory production in the battle benchmark")
 	set.IntVar(&opts.BenchmarkFrames, "benchmark-frames", 180, "measured battle benchmark frames after two seconds of renderer warmup")
 	set.IntVar(&opts.BenchmarkPreTicks, "benchmark-pre-ticks", 300, "simulation ticks before opening the battle benchmark window (30 ticks per second)")
@@ -209,6 +230,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.FilmOut, "film-out", "", "where --film writes: a directory of PNG frames, or \"-\" for a raw RGBA stream on stdout")
 	set.IntVar(&opts.FilmFrames, "film-frames", 0, "stop a --film capture after this many frames (0 captures the whole script)")
 	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\", \"confirm\", \"settings\", \"help\", or \"briefing\" (needs --mission)")
+	set.BoolVar(&opts.ShotMegamap, "shot-megamap", false, "select the Megamap overview and show it before --shot captures")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
@@ -225,6 +247,28 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		opts.ContentProfile = text
 		return nil
 	})
+	set.Func("mod", "installed mod to mount after the base install: id, id@version or none; omitted uses the saved choice in the window, and none for --shot, --film, --battle-benchmark and --headless (docs/DESIGN_MODS_MUTATORS.md §4.3)", func(text string) error {
+		if _, _, err := modlibrary.ParseSelector(text); err != nil {
+			return err
+		}
+		opts.Mod = text
+		return nil
+	})
+	set.Func("mutator", "battle mutator name=factor, e.g. buildSpeed=2 or buildCost=0.5 (repeatable; omitted uses the saved set in the window, and none for --shot, --film, --battle-benchmark and --headless)", func(text string) error {
+		name, value, ok := strings.Cut(text, "=")
+		if !ok {
+			return fmt.Errorf("mutator %q: want name=factor", text)
+		}
+		if opts.MutatorArgs == nil {
+			opts.MutatorArgs = map[string]string{}
+		}
+		opts.MutatorArgs[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		if _, err := content.ParseMutators(opts.MutatorArgs); err != nil {
+			return err
+		}
+		return nil
+	})
+	set.StringVar(&opts.InstallMod, "install-mod", "", "install a mod zip or directory into the mod library, then exit")
 	set.Func("gameplay-feature", "community feature override name=value (repeatable; Strict ignores overrides)", func(text string) error {
 		v, err := community.ParseOverride(text)
 		if err == nil {
@@ -271,6 +315,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.FullscreenSet = true
 		case "gameplay":
 			opts.GameplaySet = true
+		case "mod":
+			opts.ModSet = true
 		case "renderer":
 			opts.RendererSet = true
 		case "fps":
@@ -308,12 +354,15 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 	}
 	if opts.BattleBenchmark != "" {
+		if opts.BenchmarkCapture != "" && (!opts.Survival || opts.Map == "") {
+			return opts, fmt.Errorf("nanolathe: capture benchmark requires --survival and --map")
+		}
 		// --zoom is accepted here: the benchmark scene is the same battle at
 		// twice the pixels, and the detail view's cost is exactly what the
 		// benchmark exists to measure (DESIGN_GPU_RENDERER §14.6). The scale
 		// is recorded in the scene metadata, so two runs are only compared
 		// when they were captured at the same one.
-		if opts.Shot != "" || opts.ShotModel != "" || opts.Headless || opts.LoadSave != "" || opts.Mission != "" || opts.CPUProfile != "" || opts.MemProfile != "" || opts.ProfileSeconds != 0 || opts.ShotRenderer != "" || opts.ShotGPUProfileFrames != 0 || (opts.ShotSize != "" && opts.ShotSize != "1920x1080") {
+		if opts.Shot != "" || opts.ShotModel != "" || opts.Headless || opts.LoadSave != "" || opts.Mission != "" || opts.CPUProfile != "" || opts.MemProfile != "" || opts.ProfileSeconds != 0 || opts.ShotRenderer != "" || opts.ShotGPUProfileFrames != 0 || (opts.BenchmarkCapture == "" && opts.ShotSize != "" && opts.ShotSize != "1920x1080") {
 			return opts, fmt.Errorf("nanolathe: battle benchmark requires a standalone 1920x1080 battle")
 		}
 		if opts.BenchmarkPreTicks < 0 || opts.BenchmarkPreTicks > 18000 {
@@ -332,7 +381,12 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.Seed = 7
 		}
 		opts.Shot = filepath.Join(opts.BattleBenchmark, "battle.png")
-		opts.ShotSize = "1920x1080"
+		if opts.ShotSize == "" {
+			opts.ShotSize = "1920x1080"
+		}
+	}
+	if opts.BenchmarkCapture != "" && opts.BattleBenchmark == "" {
+		return opts, fmt.Errorf("nanolathe: --benchmark-capture requires --battle-benchmark")
 	}
 	if opts.Shot != "" || opts.ShotModel != "" {
 		if err := validateShotOptions(opts); err != nil {

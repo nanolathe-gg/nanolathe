@@ -47,6 +47,11 @@ type MissionEntryOptions struct {
 	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero
 	// value is the retail baseline.
 	ContentLimits content.Limits
+	// Mutators are the battle's global multipliers. They apply to campaign
+	// missions as they do to skirmish (P5), after the unit restriction, to
+	// this entry's catalog clone (docs/DESIGN_MODS_MUTATORS.md §6.3). The
+	// zero value applies none.
+	Mutators content.Mutators
 }
 
 // NewMissionWithEntryOptions is the explicit battle-entry constructor used by
@@ -125,7 +130,11 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 		return nil, err
 	}
 	cat = prepareCommunityWeapons(cat, options.Gameplay, entryFeatures)
-	terrain, err := loadTerrainStrict(fs, cat, m)
+	cat, err = applyEntryMutators(cat, options.Mutators)
+	if err != nil {
+		return nil, err
+	}
+	terrain, err := loadTerrainStrict(fs, cat, m, entryFeatures)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +158,7 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 		CommunitySources: options.CommunitySources,
 		Community:        entryFeatures,
 		EntryCommunity:   entryFeatures,
+		Mutators:         options.Mutators,
 		Catalog:          cat,
 		World:            terrain,
 		Mission:          m,

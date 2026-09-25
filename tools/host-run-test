@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Cheap process checks for shared locking, inherited ownership and crash release."""
+"""Cheap process checks for gate slots, benchmark exclusion, gate/benchmark
+independence, inherited ownership, crash release and exit status."""
 import os
 from pathlib import Path
 import subprocess
@@ -7,38 +8,69 @@ import sys
 import tempfile
 
 runner = str(Path(__file__).with_name("host-run").resolve())
+HOLD = [sys.executable, "-c", "import sys; print('held', flush=True); sys.stdin.read()"]
+
 with tempfile.TemporaryDirectory() as tmp:
-    env = dict(os.environ, HOME=tmp, XDG_CACHE_HOME=tmp)
+    env = dict(os.environ, HOME=tmp, XDG_CACHE_HOME=tmp, NANOLATHE_GATE_SLOTS="2")
     env.pop("NANOLATHE_HOST_LOCK_FD", None)
     processes = []
+
+    def start(*command):
+        process = subprocess.Popen(
+            [runner, *command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            text=True, env=env, cwd=tmp,
+        )
+        processes.append(process)
+        return process
+
+    def holding(process):
+        assert process.stdout.readline().strip() == "held"
+        return process
+
+    def waiting(process, what):
+        line = process.stdout.readline()
+        assert what in line, line
+        assert process.poll() is None
+
+    def release(process):
+        process.kill()
+        process.wait(timeout=5)
+
     try:
-        holder = subprocess.Popen(
-            [runner, sys.executable, "-c",
-             "import sys; print('held', flush=True); sys.stdin.read()"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env,
-        )
-        processes.append(holder)
-        assert holder.stdout.readline().strip() == "held"
-        waiter = subprocess.Popen(
-            [runner, runner, sys.executable, "-c", "print('nested acquired')"],
-            stdout=subprocess.PIPE, text=True, env=env, cwd=tmp,
-        )
-        processes.append(waiter)
-        assert "waiting for another" in waiter.stdout.readline()
-        assert waiter.poll() is None
-        holder.kill()
-        holder.wait(timeout=5)
-        assert waiter.communicate(timeout=5)[0].strip() == "nested acquired"
+        # A benchmark excludes another benchmark; a nested run inside the
+        # waiter does not reacquire, and a killed holder releases.
+        bench = holding(start(*HOLD))
+        waiter = start(runner, sys.executable, "-c", "print('nested acquired')")
+        waiting(waiter, "waiting for another benchmark")
+        # Gates never wait for a benchmark, and the slots admit two of them.
+        gate = holding(start("--gate", *HOLD))
+        second = holding(start("--gate", *HOLD))
+        third = start("--gate", *HOLD)
+        waiting(third, "one of 2 verification gate slots")
+        release(bench)
+        out = waiter.communicate(timeout=5)[0]
+        assert "2 verification gate(s) running beside" in out, out
+        assert out.strip().endswith("nested acquired"), out
         assert waiter.returncode == 0
+        # A crashed gate frees its slot; a benchmark never waits for gates.
+        release(gate)
+        holding(third)
+        bench = start(*HOLD)
+        assert "gate(s) running beside" in bench.stdout.readline()
+        holding(bench)
+        for process in (bench, second, third):
+            release(process)
+
         # A command's failure must remain a failure at the gate boundary.
-        result = subprocess.run(
-            [runner, sys.executable, "-c", "raise SystemExit(7)"], env=env,
-            timeout=5,
-        )
-        assert result.returncode == 7
+        for mode in ([], ["--gate"]):
+            result = subprocess.run(
+                [runner, *mode, sys.executable, "-c", "raise SystemExit(7)"],
+                env=env, timeout=5,
+            )
+            assert result.returncode == 7
     finally:
         for process in processes:
             if process.poll() is None:
                 process.kill()
             process.wait()
-print("host-run: exclusion, nested ownership, crash release and exit status passed")
+print("host-run: gate slots, benchmark exclusion, nested ownership, crash release and exit status passed")

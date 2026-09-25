@@ -26,7 +26,7 @@
 set -e
 
 if [ -z "${NANOLATHE_HOST_LOCK_FD:-}" ]; then
-	exec "$(dirname "$0")/host-run" "$0" "$@"
+	exec "$(dirname "$0")/host-run" --gate "$0" "$@"
 fi
 . "$(dirname "$0")/go-budget"
 

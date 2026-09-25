@@ -57,6 +57,7 @@ func (s *Session) projectCommunity() {
 			AntinukeCircularCoverage: f.AntinukeCircularCoverage, WeaponTargetKeys: f.WeaponTargetKeys,
 			Veterancy: f.Veterancy, AirCorpseFall: f.AirCorpseFall,
 			OffMapAircraftMarginTiles: f.OffMapAircraftMarginTiles,
+			TargetLockRelease:         f.TargetLockRelease,
 		}
 		if areaOverflowWasEnabled != f.AreaDamageOverflow {
 			// Q13 refreshes this snapshot only after a completed tick. Discard an
@@ -81,6 +82,27 @@ func (s *Session) projectCommunity() {
 	if s.Movement != nil {
 		s.Movement.Community = community.Features{GridClaimTieBreak: f.GridClaimTieBreak}
 	}
+	if s.Econ != nil {
+		s.Econ.Community = community.Features{AIDifficultyIncome: f.AIDifficultyIncome}
+	}
+	// The computer players are player-indexed with nil holes: a direct indexed
+	// walk, never a map range [I1]. A manager composed later takes the same
+	// copy at construction (initializeBattleAI).
+	for player := range s.AI {
+		if s.AI[player] != nil {
+			s.AI[player].Community = s.aiCommunity()
+		}
+	}
+}
+
+// aiCommunity is the computer player's copy of the table: the three ProTA 4.8
+// package AI switches (DESIGN_COMMUNITY_PATCH §4.7).
+func (s *Session) aiCommunity() community.Features {
+	f := s.Community
+	return community.Features{
+		AIStockpileProducts: f.AIStockpileProducts, AIApplianceEnergy: f.AIApplianceEnergy,
+		AIBuilderStopThreshold: f.AIBuilderStopThreshold,
+	}
 }
 
 func (s *Session) orderCommunity() community.Features {
@@ -89,6 +111,9 @@ func (s *Session) orderCommunity() community.Features {
 		GuardingBuildersHold: f.GuardingBuildersHold, PatrollingBuilderFilters: f.PatrollingBuilderFilters,
 		ReclaimToggleKeepsBuild: f.ReclaimToggleKeepsBuild, ConstructionKickout: f.ConstructionKickout,
 		WeaponTargetKeys: f.WeaponTargetKeys, Veterancy: f.Veterancy, BuildWeaponSlotGuard: f.BuildWeaponSlotGuard,
+		// The ProTA 4.8 package's order switches (DESIGN_COMMUNITY_PATCH §4.7).
+		WorkingWeaponsAutonomous: f.WorkingWeaponsAutonomous, AttackSingleSlotTake: f.AttackSingleSlotTake,
+		ResurrectionTextFix: f.ResurrectionTextFix,
 	}
 }
 

@@ -17,7 +17,7 @@ func (c *Client) applyWreckHeat(g *drawlist.ModelGeometry, f frame.FeatureView) 
 	if !c.enhanced || !c.effects.Distortion || !f.WreckHeatKnown || c.buffer == nil {
 		return
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	if cur == nil || f.Y < cur.Visibility.SeaLevel || !SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer) {
 		return
 	}

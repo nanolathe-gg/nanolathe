@@ -231,7 +231,7 @@ presentation buffers; it writes nothing back, consumes no simulation RNG, and
 the simulation still publishes only after the complete phase sequence
 [01 §4.4]. `--shot` and Original never blend.
 
-**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. Outside `internal/client/interpolate.go` the frame path has no `Lerp`, `alpha`, or previous-frame blend. `frame.Buffer.Previous` has exactly two production callers: that file, which performs the Enhanced blend, and the live battle benchmark's census in `cmd/nanolathe`, which only counts which units moved between two committed ticks and feeds nothing back.
+**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. Outside `internal/client/interpolate.go` the frame path has no `Lerp`, `alpha`, or previous-frame blend. `frame.Buffer.Previous` has exactly two production callers: that file, which performs the Enhanced blend, and the live battle benchmark's census in `cmd/nanolathe`, which only counts which units moved between two committed ticks and feeds nothing back. The older frame of a pinned pair (`frame.Buffer.PinTick`/`PinLatest`, DESIGN_GPU_RENDERER §13.13) is likewise read only in that file.
 
 ## I7 — Tick phase order
 
@@ -304,7 +304,8 @@ Current contracts are DESIGN_WEAPONS_PROJECTILES §2.3.1 (terrain admission) and
 "Modern danger escape", "Modern learned terrain", "Modern re-route
 staggering", "Modern group-order spreading", "Modern bounded path work",
 "Modern allied pass-through", "Modern unreachable moves", "Modern jam
-release" and "Modern route straightening",
+release" with its "Modern pocket release", "Modern route straightening" and
+"Modern wedge escape",
 DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots", and
 DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
 "Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE

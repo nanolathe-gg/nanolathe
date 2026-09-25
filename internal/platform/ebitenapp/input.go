@@ -35,6 +35,10 @@ type sampledInput struct {
 	heldModifiers  input.Modifiers
 	heldCommand    bool
 	filteredText   bool
+
+	// dropped are the real paths of files and folders dropped onto the
+	// window during this poll (docs/DESIGN_MODS_MUTATORS.md §4.5).
+	dropped []string
 }
 
 // readInput is the production device-polling path. Host shortcuts are consumed
@@ -57,6 +61,7 @@ func readInput(timestamp uint32) sampledInput {
 		characters: ebiten.AppendInputChars(nil),
 		command:    runtime.GOOS == "darwin" && (ebiten.IsKeyPressed(ebiten.KeyMetaLeft) || ebiten.IsKeyPressed(ebiten.KeyMetaRight)),
 		clipboard:  readHostClipboard,
+		dropped:    droppedPaths(ebiten.DroppedFiles()),
 	}
 	sample.pressedButtons = input.MouseButtons{
 		Left:   inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft),
@@ -128,6 +133,7 @@ func applyInputWith(in *input.State, sample sampledInput, clicks *doubleClickRec
 	}
 	in.ShortcutTokenMode = true
 	in.ShortcutToken = input.Token{}
+	in.DroppedPaths = sample.dropped
 	m, k := in.Mouse, in.Kbd
 	m.ResetEdges()
 	k.ResetEdges()

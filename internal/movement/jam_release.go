@@ -41,6 +41,14 @@ type jamRelease struct {
 	until    uint32
 	limit    uint32
 	cooldown uint32
+	// pocket marks a release the Modern pocket release granted to take a
+	// sealed-out unit through the ring of parked friends into its free slot
+	// (pocket_release.go). The near-destination end rule closes such a
+	// release only on the unit's own goal anchor: a unit standing against the
+	// ring is already clear of every friend, and so is one crossing a free
+	// slot inside the formation. It stays false unless the bound rules release
+	// pockets.
+	pocket bool
 }
 
 // JamRelease releases a unit after jamAfter jammed ticks for lifetime ticks
@@ -94,13 +102,14 @@ func (s *System) hostileMover(owner uint8) func(id int) bool {
 // jamReleaseIgnores reports whether the commit's occupant test may treat
 // occupant occ's cells as free for self: one of the two is releasing, occ is
 // a friendly ground unit, and occ is not a same-way mover self should queue
-// behind. It reads committed state only and writes nothing.
+// behind — unless self already overlaps occ, which makes the pair wedged
+// rather than queued. It reads committed state only and writes nothing.
 func (s *System) jamReleaseIgnores(self *units.Unit, mine *CollisionState, occ int, tick uint32) bool {
 	if !s.releasing(self.Handle, tick) && !s.releasing(pool.Handle(occ), tick) {
 		return false
 	}
 	other, ok := s.friendlyMover(self, occ)
-	return ok && !s.sameWayMover(mine, other, pool.Handle(occ))
+	return ok && (!s.sameWayMover(mine, other, pool.Handle(occ)) || s.overlapsOccupant(mine, occ))
 }
 
 // sameWayMover reports whether other (unit occ) holds an active route and
@@ -151,7 +160,7 @@ func (s *System) noteJamRelease(u *units.Unit, coll *CollisionState, blocked boo
 	if st.until > tick {
 		inside := s.insideFriend(u, coll)
 		switch {
-		case !inside && !s.jamReleaseEndOK(u, route, x, z):
+		case !inside && !s.jamReleaseEndOK(u, route, x, z) && (!st.pocket || s.pocketAtGoal(u, coll)):
 			st.until = tick
 			st.cooldown = tick + jamReleaseCooldown
 		case inside && st.until <= tick+1 && tick+1 < st.limit:
@@ -174,12 +183,20 @@ func (s *System) noteJamRelease(u *units.Unit, coll *CollisionState, blocked boo
 	jammed, friendBlocked := false, false
 	if blocked && blocker > 0 {
 		if other, ok := s.friendlyMover(u, blocker); ok {
-			jammed = !s.sameWayMover(coll, other, pool.Handle(blocker))
+			// A same-way blocker is a queue to wait in, unless the unit
+			// already overlaps it: a wedged pair waits on itself for ever.
+			jammed = !s.sameWayMover(coll, other, pool.Handle(blocker)) || s.overlapsOccupant(coll, blocker)
 			friendBlocked = jammed
 		}
 	}
 	if !jammed && blocked && !routed {
 		jammed = s.touchesFriendly(u, coll)
+	}
+	if !jammed && !routed && s.insideFriend(u, coll) {
+		// A route-less unit standing inside a friend proposes no step, so its
+		// commit never reads blocked; it is wedged all the same, and only a
+		// release's static-view search plans it out.
+		jammed = true
 	}
 	if !jammed {
 		st.run = 0
@@ -203,6 +220,7 @@ func (s *System) noteJamRelease(u *units.Unit, coll *CollisionState, blocked boo
 		st.limit = tick + 2*lifetime
 		st.cooldown = st.until + jamReleaseCooldown
 		st.replan = true
+		st.pocket = false
 		if route != nil {
 			// Re-plan promptly: the release's searches read the static view.
 			route.WantsRepath = true
@@ -233,6 +251,24 @@ func (s *System) goalHeldByParkedFriend(u *units.Unit, coll *CollisionState) boo
 				continue
 			}
 			if r := handleRow(s.Routes, pool.Handle(occ)); r == nil || !r.Active || r.Count < 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// overlapsOccupant reports whether occupant occ holds a cell of the committed
+// footprint coll describes: the two units already overlap.
+func (s *System) overlapsOccupant(coll *CollisionState, occ int) bool {
+	if s.Grid == nil || occ <= 0 {
+		return false
+	}
+	fx, fz := int32(max(coll.FootPrintX, 1)), int32(max(coll.FootPrintZ, 1))
+	a := coll.CachedAnchor
+	for z := a.Z; z < a.Z+fz; z++ {
+		for x := a.X; x < a.X+fx; x++ {
+			if id, held := s.Grid.OccupantAt(Cell{X: x, Z: z}); held && id == occ {
 				return true
 			}
 		}

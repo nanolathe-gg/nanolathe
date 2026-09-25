@@ -87,9 +87,10 @@ const (
 	// neighbour's texels out of the commit's two-by-two resolve.
 	modelDirectMargin = 2
 	// modelDirectParamMaxRows bounds the lane's parameter image: 1024 texels a
-	// row, twelve per entry, holding every mapped four-corner face and the
-	// per-subject verdict entries. The image grows to what a frame uses; a
-	// frame past the bound draws its remaining faces linearly.
+	// row, twelve per slot, holding every mapped four-corner face (two slots
+	// each, model_quads.go) and the per-subject verdict entries (one slot
+	// each). The image grows to what a frame uses; a frame past the bound
+	// draws its remaining faces linearly. modelDirectParamCap is in slots.
 	modelDirectParamMaxRows = 2048
 	modelDirectParamCap     = modelDirectParamMaxRows * modelQuadParamWidth / modelQuadTexels
 	// modelDirectFatten is how far the water reflection pushes a face corner
@@ -175,11 +176,16 @@ type modelDirectLane struct {
 	// reads that image for coverage and keys alone, so its faces take the
 	// coverage-only path and skip everything a colour needs.
 	soloPass bool
-	// soloOutline is the outline walk the group composition made of the packet
-	// the solo pass is about to repeat, so the rows are walked once. Valid only
-	// between those two appends of soloOutlineFor.
-	soloOutline    []modelGPUFace
+	// outline is the frame's planned outline rings (model_outline.go), and
+	// soloOutline the range of them the group composition planned for the
+	// packet the solo pass is about to repeat, so its rings are described and
+	// walked once. Valid only between those two appends of soloOutlineFor.
+	outline        []modelOutlineRing
+	soloOutline    [2]int32
 	soloOutlineFor *drawlist.ModelGeometry
+	// walkOutlines sends every outline ring to the CPU walk, the reference
+	// the device rings are checked against (model_outline_test.go).
+	walkOutlines bool
 	// soloSlot is the same reuse for the doubled lane's box (slotBoundsFor).
 	soloSlot    image.Rectangle
 	soloSlotFor *drawlist.ModelGeometry
@@ -286,7 +292,9 @@ func (d *modelDirectLane) resetFrame() {
 	d.groupReflection = modelDirectRegion{}
 	d.groups.merges = d.groups.merges[:0]
 	// The per-packet reuse holds slices and boxes of this frame's packets only.
-	d.soloOutline, d.soloOutlineFor, d.soloSlotFor = nil, nil, nil
+	clear(d.outline)
+	d.outline = d.outline[:0]
+	d.soloOutline, d.soloOutlineFor, d.soloSlotFor = [2]int32{}, nil, nil
 	d.runs, d.verts, d.idx = d.runs[:0], d.verts[:0], d.idx[:0]
 	d.params.reset()
 }
@@ -822,18 +830,8 @@ func (r *Renderer) appendPacket(g *drawlist.ModelGeometry, region modelDirectReg
 		// rows of the 1× image after the anti-alias resolve [03 R-COMP-01 §3],
 		// so an endpoint is a whole pixel. The doubled lane's own rows would
 		// put an endpoint at a doubled column, straddling two pixels' blocks
-		// and resolving to half an endpoint in each. A solo image reuses the
-		// walk the group composition just made of the same packet — the frame
-		// arena hands out slices that stay valid and distinct for the whole
-		// frame — instead of walking those rows a second time.
-		faces := d.soloOutline
-		if !d.soloPass || d.soloOutlineFor != g {
-			faces = r.prepareModelOutline(g, false)
-			d.soloOutline, d.soloOutlineFor = faces, g
-		}
-		for _, f := range faces {
-			r.appendDirectGPUFace(f, nox, noy, 2, entry)
-		}
+		// and resolving to half an endpoint in each (model_outline.go).
+		r.appendOutline(g, nox, noy, entry)
 	}
 	r.appendDirectLane(raster.LiveFaces, raster, ox, oy, scale, mode|modelDirectLive, entry)
 	d.keyDelta = 0
@@ -1116,7 +1114,7 @@ func (r *Renderer) appendFaceCore(f *drawlist.ModelFace, tex modelFaceTex, ox, o
 	// interpolation rather than the device's per-triangle one; anything else
 	// interpolates its lanes linearly.
 	quad := 0
-	if n == 4 && run != nil && !shadow && !d.noQuads && d.params.count < modelDirectParamCap {
+	if n == 4 && run != nil && !shadow && !d.noQuads && d.params.count+modelQuadSlots <= modelDirectParamCap {
 		// At scale one (the recorder's own doubled lane) the corners are the
 		// packet's: the scaled copy would be exact and is not made.
 		corners := f.Vertices
@@ -1569,15 +1567,16 @@ func modelDirectMapped(mode int) bool {
 }
 
 // modelDirectKeyShaderSource is the key pass: the face's height key — the
-// two-chain mapping's for a mapped face, the vertex lane's otherwise —
-// narrowed to a byte as the span writers narrow it, in red, under a max
-// blend. Source 3 is the parameter image; a mapped face's Custom2 names the
-// subject's entry, whose magnitude locates the frame its parameters are in.
+// two-chain mapping's for a mapped face, read from the quad's key entry
+// (modelQuadKey), the vertex lane's otherwise — narrowed to a byte as the span
+// writers narrow it, in red, under a max blend. Source 3 is the parameter
+// image; a mapped face's Custom2 names the subject's entry, whose magnitude
+// locates the frame its parameters are in.
 func modelDirectKeyShaderSource() string {
 	return `//kage:unit pixels
 
 package main
-` + modelQuadMapperSource + modelDirectMappedSource() + `
+` + modelQuadMapperSource + modelOutlineSource + modelDirectMappedSource() + `
 func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	mode := int(custom.x + 0.5)
 	if mode >= ` + fmt.Sprint(modelDirectLive) + ` {
@@ -1588,7 +1587,16 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// The parameters are subject-local: the subject's frame, read from its
 		// verdict entry (either sign), shifts the fragment into them.
 		frame := modelQuadFrame(abs(floor(custom.z + 0.5)))
-		key = floor(modelQuadLanes(color.b, floor(dstPos.xy-imageDstOrigin())-frame).z)
+		key = floor(modelQuadKey(color.b, floor(dstPos.xy-imageDstOrigin())-frame))
+	}
+	if mode == ` + fmt.Sprint(modelDirectOutline) + ` && color.b > 0.5 {
+		// An outline ring's primitive: only its rows' endpoints write a key.
+		ok, ring := modelOutlineKey(color.b, floor(dstPos.xy-imageDstOrigin()), vec2(color.a, custom.y), color.r)
+		if !ok {
+			discard()
+			return vec4(0.0)
+		}
+		key = ring
 	}
 	key = key - floor(key/256.0)*256.0
 	return vec4(key/255.0, 0.0, 0.0, 1.0)
@@ -1613,7 +1621,7 @@ package main
 
 const palRow = ` + fmt.Sprint(tableRowPAL) + `.0
 const blueRow = ` + fmt.Sprint(tableRowBlue) + `.0
-` + modelQuadMapperSource + modelDirectMappedSource() + battleLightShaderSource + metalGlintShaderSource + modelFinishShaderSource + `
+` + modelQuadMapperSource + modelOutlineSource + modelDirectMappedSource() + battleLightShaderSource + metalGlintShaderSource + modelFinishShaderSource + `
 func palAt(idx float) vec3 {
 	return imageSrc1AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, palRow+0.5)).rgb
 }
@@ -1655,6 +1663,17 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		lanes = modelQuadLanes(color.b, d-modelQuadFrame(abs(entry)))
 		key = floor(lanes.z)
 	}
+	// An outline ring's primitive: only its rows' endpoints are drawn, in the
+	// flat colour at full shade (model_outline.go).
+	ring := mode == ` + fmt.Sprint(modelDirectOutline) + ` && color.b > 0.5
+	if ring {
+		ok, rk := modelOutlineKey(color.b, d, vec2(color.a, custom.y), color.r)
+		if !ok {
+			discard()
+			return vec4(0.0)
+		}
+		key = rk
+	}
 	key = key - floor(key/256.0)*256.0
 	// The pixel's block origin: the top-left texel, whose stored key is the
 	// key retail's 1× image holds after the 2:1 resolve samples it
@@ -1677,6 +1696,10 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	finish := floor(encoded/65536.0)
 	idx := mod(encoded, 256.0)
 	k := color.r
+	if ring {
+		// The ring's red lane carries the group delta; an endpoint is unshaded.
+		k = 1.0
+	}
 	if mode == ` + fmt.Sprint(modelDirectShadow) + ` {
 		// A shadow silhouette: its index, no key test, no verdicts.
 	} else if mode == ` + fmt.Sprint(modelDirectQuad) + ` || mode == ` + fmt.Sprint(modelDirectQuadShade) + ` {
@@ -1698,7 +1721,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	// written at alpha 254/255 so the underwater commit can find it (§26.5).
 	submerged := false
 	if entry > 0.5 && mode != ` + fmt.Sprint(modelDirectShadow) + ` {
-		base := (entry-1.0)*12.0
+		base := (entry-1.0)*` + fmt.Sprint(modelQuadTexels) + `.0
 		a := modelQuadTexel(base)
 		b := modelQuadTexel(base+1.0)
 		c := modelQuadTexel(base+2.0)

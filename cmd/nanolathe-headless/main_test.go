@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,7 +15,17 @@ import (
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
+// isolateHostFiles points the settings file and the data directory at
+// scratch space, so no test reads the developer's own preferences or mods.
+func isolateHostFiles(t *testing.T) {
+	t.Helper()
+	t.Setenv(settings.EnvPath, "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+}
+
 func TestParseBuildsExplicitSeedPair(t *testing.T) {
+	isolateHostFiles(t)
 	request, _, _, _, err := parse([]string{"-root", "/tmp/assets", "-map", "test", "-seed", "23", "-ticks", "7"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +40,7 @@ func TestParseBuildsExplicitSeedPair(t *testing.T) {
 // [08 R-AI-01 §12][05 R-ECO-01 §3], so a value outside that range must fail
 // parse with a nanolathe-shaped diagnostic rather than reach the session.
 func TestParseRejectsDifficultyOutsideTheVocabulary(t *testing.T) {
+	isolateHostFiles(t)
 	for _, difficulty := range []string{"-1", "3"} {
 		if _, _, _, _, err := parse([]string{"-map", "test", "-difficulty", difficulty}, &bytes.Buffer{}); err == nil {
 			t.Fatalf("parse with -difficulty %s unexpectedly succeeded", difficulty)
@@ -94,6 +104,7 @@ func TestHeadlessSkirmishTakesTheDefaultUnitLimit(t *testing.T) {
 }
 
 func TestRepeatedRootFlags(t *testing.T) {
+	isolateHostFiles(t)
 	t.Setenv("NANOLATHE_TA_ROOT", "/ignored")
 	request, _, _, _, err := parse([]string{"--root", "base", "--root=mod"}, &bytes.Buffer{})
 	if err != nil {
@@ -108,7 +119,7 @@ func TestRepeatedRootFlags(t *testing.T) {
 }
 
 func TestParseUnitLimit(t *testing.T) {
-	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	isolateHostFiles(t)
 	stored := settings.Defaults()
 	stored.UnitLimit = 1500
 	if err := stored.Save(); err != nil {
@@ -134,5 +145,56 @@ func TestParseUnitLimit(t *testing.T) {
 		if _, _, _, _, err := parse([]string{"--unit-limit", value}, io.Discard); err == nil {
 			t.Fatalf("accepted %s", value)
 		}
+	}
+}
+
+// TestParseMutators locks docs/DESIGN_MODS_MUTATORS.md §6.6 for the
+// displayless command: only --mutator flags select mutators, and the settings
+// file's "mutators" key is never read, valid or not, so fingerprint and
+// benchmark runs reproduce from their command line. Bad names, factors off
+// the step list, a repeated name and a flag on the fixed benchmark scene are
+// all refused with the standard diagnostic.
+func TestParseMutators(t *testing.T) {
+	isolateHostFiles(t)
+	stored := settings.Defaults()
+	stored.Mutators = map[string]string{"buildCost": "0.5"}
+	if err := stored.Save(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, ""},
+		{[]string{"--mutator", "buildSpeed=2"}, "buildSpeed=2"},
+		{[]string{"--mutator", "buildSpeed=1.5", "--mutator=buildCost=4"}, "buildCost=4,buildSpeed=1.5"},
+		{[]string{"--mutator", "buildCost=1"}, ""},
+		{[]string{"--mutator", "radar=0.5", "--mutator", "health=2", "--mutator", "damage=0.75", "--mutator", "sight=3"}, "damage=0.75,health=2,radar=0.5,sight=3"},
+	} {
+		req, _, _, _, err := parse(tc.args, io.Discard)
+		if err != nil {
+			t.Fatalf("parse(%v): %v", tc.args, err)
+		}
+		if got := req.Mutators.String(); got != tc.want {
+			t.Fatalf("parse(%v) mutators = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	for _, args := range [][]string{
+		{"--mutator", "buildspeed=2"},
+		{"--mutator", "buildSpeed=5"},
+		{"--mutator", "buildSpeed"},
+		{"--mutator", "buildSpeed=2", "--mutator", "buildSpeed=3"},
+		{"--mutator", "buildSpeed=2", "--sim-benchmark", "/tmp/unused-benchmark"},
+	} {
+		if _, _, _, _, err := parse(args, io.Discard); err == nil || !strings.HasPrefix(err.Error(), "nanolathe: ") {
+			t.Fatalf("parse(%v) = %v, want a nanolathe diagnostic", args, err)
+		}
+	}
+	stored.Mutators = map[string]string{"speed": "2"}
+	if err := stored.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if req, _, _, _, err := parse(nil, io.Discard); err != nil || !req.Mutators.IsZero() {
+		t.Fatalf("an invalid stored key was read: %q, %v", req.Mutators.String(), err)
 	}
 }

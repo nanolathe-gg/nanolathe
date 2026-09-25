@@ -157,12 +157,12 @@ func TestCommandDragAreaFiltersTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &battleCommandDrag{start: dragPoint{180, 180}, end: dragPoint{260, 260}, latch: input.LatchRepair}
-	repair := b.dragAreaTargets(d)
+	repair := b.dragAreaTargets(b.sess.Snapshot.Current(), d)
 	if len(repair) != 1 || repair[0].Target != builder {
 		t.Fatalf("repair %+v", repair)
 	}
 	d.latch = input.LatchReclaim
-	reclaim := b.dragAreaTargets(d)
+	reclaim := b.dragAreaTargets(b.sess.Snapshot.Current(), d)
 	if len(reclaim) != 1 || reclaim[0].Target != 0 || !reclaim[0].Position.HasFeature || reclaim[0].Position.X != 200<<16 {
 		t.Fatalf("reclaim %+v", reclaim)
 	}
@@ -173,7 +173,7 @@ func TestCommandDragAreaFiltersTargets(t *testing.T) {
 	if err := b.sess.Snapshot.Publish(f.Tick + 1); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.dragAreaTargets(d)) != 0 {
+	if len(b.dragAreaTargets(b.sess.Snapshot.Current(), d)) != 0 {
 		t.Fatal("reclaim admitted hidden feature")
 	}
 }

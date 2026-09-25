@@ -260,7 +260,14 @@ func bindRenderFlags(binding *cob.Binding, modelFlags []uint8) {
 				return false
 			}
 			modelPiece := pm[piece]
-			if modelPiece < 0 || modelPiece >= len(mf) {
+			if modelPiece < 0 {
+				// A declared script piece beyond the model has no render
+				// record. Retail's flag adapter writes past the table with
+				// no check and the thread carries on; Nanolathe keeps the
+				// thread and drops the write [04 R-COB-01 §4].
+				return true
+			}
+			if modelPiece >= len(mf) {
 				return false
 			}
 			if set {

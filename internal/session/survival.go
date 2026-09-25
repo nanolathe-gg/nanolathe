@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
@@ -144,6 +145,7 @@ type survivalUnit struct {
 
 // SurvivalStats are one player's Survival counters (DESIGN_SURVIVAL §8).
 type SurvivalStats struct {
+	Damage    int64 // priced damage this slot dealt to attacker units
 	Destroyed int64 // wave cost of attacker units this slot killed
 	Lost      int64 // wave cost of this slot's own units lost
 }
@@ -177,9 +179,14 @@ type survivalState struct {
 	units        []survivalUnit
 	nextRetarget uint32
 
-	survived      int   // waves whose arrival the survivors outlasted
-	survivedValue int64 // sum of those waves' budgets
-	stats         [10]SurvivalStats
+	survived   int   // waves whose arrival the survivors outlasted
+	wavePoints int64 // what those waves scored, bonuses included
+	cleanLost  bool  // a finished survivor structure fell to the active wave
+	stats      [10]SurvivalStats
+	// removed is the health taken so far from each live attacker unit, the
+	// running total its priced damage is credited from (§8). Lookup only;
+	// never ranged.
+	removed map[pool.Handle]int32
 
 	walk    []*units.Unit
 	history []SurvivalWaveRecord
@@ -551,6 +558,7 @@ func (s *Session) stepSurvival(tick uint32) {
 			st.nextG, st.nextP = 0, 0
 			st.lastSpawn = tick
 			st.waveUnits = st.waveUnits[:0]
+			st.cleanLost = false
 			s.survivalCount(0)
 			s.survivalSay(tick, fmt.Sprintf("Wave %d has arrived", st.wave))
 		}
@@ -569,8 +577,9 @@ func (s *Session) stepSurvival(tick uint32) {
 		if !dead && tick < deadline {
 			break
 		}
+		ws := st.tuning.ScoreWave(st.plan.Budget, dead, !st.cleanLost, tick-st.lastSpawn, down+st.tuning.Straggle)
 		st.survived++
-		st.survivedValue += st.plan.Budget
+		st.wavePoints += ws.Total()
 		st.phase = survivalDowntime
 		st.phaseEnd = min(tick+down, deadline)
 		s.survivalReward()
@@ -578,9 +587,18 @@ func (s *Session) stepSurvival(tick uint32) {
 		if dead {
 			word = "cleared"
 		}
-		msg := fmt.Sprintf("Wave %d %s", st.wave, word)
+		msg := fmt.Sprintf("Wave %d %s:", st.wave, word)
 		if r := st.tuning.WaveReward; r > 0 {
-			msg += fmt.Sprintf(": +%d metal and energy", int(r))
+			msg += fmt.Sprintf(" +%d metal and energy,", int(r))
+		}
+		msg += fmt.Sprintf(" score +%d", ws.Total())
+		switch {
+		case ws.Fast > 0 && ws.Clean > 0:
+			msg += " (fast, clean)"
+		case ws.Fast > 0:
+			msg += " (fast)"
+		case ws.Clean > 0:
+			msg += " (clean)"
 		}
 		s.survivalSay(tick, msg)
 	}
@@ -720,6 +738,7 @@ func (s *Session) survivalSpawn(tick uint32) {
 		u.Flags = u.Flags&^(units.StandingFieldMask<<units.StandingMoveShift) | 2<<units.StandingMoveShift
 		u.Flags = u.Flags&^(units.StandingFieldMask<<units.StandingFireShift) | 2<<units.StandingFireShift
 		st.waveUnits = append(st.waveUnits, h)
+		delete(st.removed, h) // a reused handle starts a new unit's total
 		su := survivalUnit{h: h, wave: st.wave}
 		s.survivalSend(&su, u, tick)
 		st.units = append(st.units, su)
@@ -820,14 +839,34 @@ func (s *Session) survivalTarget(u *units.Unit) *units.Unit {
 	return best
 }
 
-// survivalNoteDeath files one death into the Survival counters.
-func (s *Session) survivalNoteDeath(u *units.Unit) {
+// survivalNoteDamage credits the priced damage a survivor dealt to an
+// attacker unit (DESIGN_SURVIVAL §8). It is bound to combat's HealthLost.
+func (s *Session) survivalNoteDamage(victim, attacker *units.Unit, lost int32) {
+	st := s.Survival
+	if st == nil || victim == nil || attacker == nil || victim.Owner != st.attacker || victim.Def == nil || !st.onTeam(attacker.Owner) {
+		return
+	}
+	if st.removed == nil {
+		st.removed = make(map[pool.Handle]int32)
+	}
+	cost := st.pool.Cost(victim.Def)
+	before := st.removed[victim.Handle]
+	after := min(before+lost, max(victim.MaxHealth, 0))
+	st.removed[victim.Handle] = after
+	st.stats[attacker.Owner].Damage += survival.DamageValue(cost, victim.MaxHealth, after) - survival.DamageValue(cost, victim.MaxHealth, before)
+}
+
+// survivalNoteDeath files one death into the Survival counters. A finished
+// survivor structure the attacker's weapons destroyed costs the active wave
+// its clean bonus; one its owner reclaimed or self-destructed does not.
+func (s *Session) survivalNoteDeath(u *units.Unit, cause combat.Cause) {
 	st := s.Survival
 	if st == nil || u == nil || u.Def == nil {
 		return
 	}
 	v := st.pool.Cost(u.Def)
 	if u.Owner == st.attacker {
+		delete(st.removed, u.Handle)
 		if side := int(u.LastDamageSide); side < 10 && side != int(st.attacker) {
 			st.stats[side].Destroyed += v
 		}
@@ -836,6 +875,19 @@ func (s *Session) survivalNoteDeath(u *units.Unit) {
 	if int(u.Owner) < 10 {
 		st.stats[u.Owner].Lost += v
 	}
+	if st.phase == survivalActive && u.Def.BMCode == 0 && u.Remaining == 0 && u.LastDamageSide == st.attacker && cause == combat.CauseOrdinary {
+		st.cleanLost = true
+	}
+}
+
+// survivalScore is the team's score so far: every survivor's priced damage
+// plus what the survived waves scored (DESIGN_SURVIVAL §8).
+func (st *survivalState) survivalScore() int64 {
+	score := st.wavePoints
+	for _, p := range st.team {
+		score += st.stats[p].Damage
+	}
+	return score
 }
 
 func (s *Session) survivalSay(tick uint32, text string) {
@@ -867,16 +919,19 @@ func (s *Session) survivalResult(tick uint32) *frame.SurvivalResult {
 	if st == nil {
 		return nil
 	}
-	local := int(s.LocalOwner)
 	r := &frame.SurvivalResult{
 		Waves:      int32(st.survived),
 		Reached:    int32(st.wave),
 		TicksAlive: tick,
+		WavePoints: st.wavePoints,
+		Score:      st.survivalScore(),
 	}
-	if local >= 0 && local < 10 {
-		r.Destroyed = st.stats[local].Destroyed
-		r.Lost = st.stats[local].Lost
-		r.Score = r.Destroyed + st.survivedValue
+	for _, p := range st.team {
+		c := st.stats[p]
+		r.Damage += c.Damage
+		r.Destroyed += c.Destroyed
+		r.Lost += c.Lost
+		r.SlotDamage[p] = c.Damage
 	}
 	return r
 }
@@ -916,6 +971,7 @@ func (s *Session) survivalFrameStatus(tick uint32) frame.SurvivalStatus {
 		Phase:       uint8(st.phase),
 		SecondsLeft: int32(left),
 		Attackers:   int32(s.Units.LiveCountForPlayer(int(st.attacker))),
+		Score:       st.survivalScore(),
 	}
 }
 

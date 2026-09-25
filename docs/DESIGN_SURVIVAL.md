@@ -51,12 +51,13 @@ catalog so every content mod works without Survival data.
 | D1 | Survival runs under **every** gameplay mode, Strict 3.1 included. It is a scenario composed from existing mechanisms, not a gameplay rule (§3). |
 | D2 | **No saving.** A Survival battle exists only live; if you die, you die, as in an online match. |
 | D3 | The mode is called **Survival**. |
-| D4 | The human starts at or near the map centre, optionally with one or two allied computer players; waves arrive from random directions, grow and rise in tech level; there is no victory, and the score is kept from kills, losses, damage and time alive. Each wave is distinct and is followed by downtime to build, expand and repair. |
+| D4 | The human starts at or near the map centre, optionally with one or two allied computer players; waves arrive from random directions, grow and rise in tech level; there is no victory, and the score is kept from kills, losses, damage and time alive (refined by D10). Each wave is distinct and is followed by downtime to build, expand and repair. |
 | D5 | Survival is a separate entry on the single-player menu whose setup reuses the skirmish screen in a Survival configuration (§9). |
 | D6 | The survivors are one side against the world: they share line of sight, the explored map and radar, and their income, but each controls only their own units (§4.3). Decided after the first play-test. |
 | D7 | Income is split evenly among the living survivors; each spends only their own stock, so a computer buddy cannot drain the human's (§4.3). Proposed in answer to the maintainer's question and adopted for the prototype. |
 | D8 | Survival adds metal deposits near the start site, matched to the map's own, so staying central pays and the opening has metal (§4.5). The maintainer's idea after the first play-test. |
 | D9 | Each survived wave pays every living survivor 1000 metal and 1000 energy (§6.9). The maintainer's idea after landing. |
+| D10 | The score belongs to the team and shows on screen. It is earned only against the attacker: priced damage dealt plus each survived wave's budget, with fast-clear and clean-wave bonuses. Time alive, income, repair and overkill earn nothing, and nothing is subtracted; losses and waste are shown as stats (§8). Adopted 2026-09-24 from the maintainer's ideas after discussion. |
 
 ## 3. Policy: a scenario, not a rule
 
@@ -373,8 +374,9 @@ living survivor receives `WaveReward` metal and `WaveReward` energy, each
 capped at that survivor's storage; what does not fit is lost, as overflow
 is. The grant goes straight into each stock, so the income split (§4.3)
 never sees it and every survivor gets the full amount. It draws nothing.
-The message line reports it with the wave: `Wave N cleared: +1000 metal and
-energy`, or `survived` when the wave was outlasted rather than destroyed.
+The message line reports it with the wave and its score (§8):
+`Wave N cleared: +1000 metal and energy, score +1840 (fast, clean)`, or
+`survived` when the wave was outlasted rather than destroyed.
 
 ## 7. Tuning (initial values)
 
@@ -388,6 +390,8 @@ choices for play-testing, recorded here so they change in one place.
 | `Straggle` | 60 s | Most the next warning waits past arrival + downtime |
 | `DowntimeBase`, `DowntimePerUnit`, `DowntimeMax` | 30 s, 2.5 s per tier-1 unit, 150 s | Pause after a wave |
 | `WaveReward` | 1000 | Metal and energy per living survivor per survived wave, up to storage |
+| `FastClearBonus` | 50 % | Bonus on a wave's budget for a clear at arrival, falling linearly to none at the deadline (§8) |
+| `CleanWaveBonus` | 25 % | Bonus on a wave's budget when no finished structure fell to it (§8) |
 | `BaseUnits` | 2 | Budget at battle start, in median tier-1 units |
 | `Doubling` | 5 min (relaxed 6.5 min, relentless 4 min) | Budget doubling time |
 | `UnlockUnits` | 8 | A tier unlocks when the budget buys this many of its median unit |
@@ -415,15 +419,38 @@ choices for play-testing, recorded here so they change in one place.
 - **The attacker is not a player in the result.** It has no result row, is
   never a winner, its "obliterated" announcement is suppressed, and it never
   takes the kill lead.
-- **Survival counters**, per human and buddy slot: waves survived, time alive,
-  value destroyed (wave cost of attacker units that slot killed), value lost
-  (wave cost of its own units lost) and damage dealt to attacker units.
-- **Score** = value destroyed + the budget of every wave survived. Losses are
-  shown but not subtracted, so sacrificing units is not punished twice.
-- **The result screen** keeps its seven authored columns and adds one
-  Nanolathe line under the rows: waves survived, time alive and the Survival
-  score (a presentation divergence, like the Mods & Mutators loading-screen
-  lines).
+- **Survival counters**, per human and buddy slot: priced damage dealt to
+  attacker units, value destroyed (wave cost of attacker units that slot
+  killed), value lost (wave cost of its own units lost); and for the team,
+  waves survived, time alive and the points the survived waves scored.
+- **Score** is the team's, earned only against the attacker, so nothing a
+  survivor does without the waves involved can farm it:
+  - **Priced damage.** Each hit a survivor lands on an attacker unit is worth
+    the unit's wave cost times the share of its maximum health the hit
+    removed, counting only health the unit still had. Every hit on one unit
+    therefore sums to exactly its cost when it dies from full health,
+    whoever landed them, damage past its last point of health earns
+    nothing, and a unit that regains health is never worth more than its
+    cost. Combat reports the health each accepted packet removed through its
+    `HealthLost` observer; the session keeps each attacker unit's running
+    total and credits the difference in value.
+  - **Wave points.** A survived wave scores its budget, plus up to
+    `FastClearBonus` of it when it is cleared rather than outlasted,
+    falling linearly from its arrival to the deadline on which the next wave
+    comes anyway (§6.1), plus `CleanWaveBonus` of it when no finished
+    survivor structure fell to its weapons while it was the active wave.
+    Structures an owner reclaims or self-destructs do not count.
+  - **Nothing else.** Time alive already pays through the growing budgets;
+    income, repair and overkill would reward play that does not beat the
+    waves; losses are not subtracted, so sacrificing units is not punished
+    twice. Waste already has its authored result columns.
+- **On screen.** The HUD shows `Score N` on a line under the wave line (§9),
+  and the wave message reports what each wave scored (§6.9).
+- **The result screen** keeps its seven authored columns and adds two
+  Nanolathe lines under the rows: time alive, waves survived and the team
+  score; then the team's damage value with each survivor's share by name,
+  and the wave points (a presentation divergence, like the Mods & Mutators
+  loading-screen lines).
 - **Best scores** are kept per map, mod, mutators, rule set, buddy count and
   Survival options in the host settings directory, outside the simulation. A
   battle in which a cheat was used is shown but not recorded.
@@ -454,7 +481,8 @@ choices for play-testing, recorded here so they change in one place.
   The background's baked "Skirmish Setup" title stays; it is authored art.
   The post-battle return and Restart go back to the Survival screen and
   setup.
-- **In battle.** The slide strip shows the wave number and state. There is no
+- **In battle.** The slide strip shows the wave number and state, and the
+  team's score on the line under it (§8). There is no
   minimap marker today; an entry-edge marker is follow-up presentation work.
 
 ## 10. Command line and headless
@@ -485,6 +513,9 @@ choices for play-testing, recorded here so they change in one place.
 - **End.** An attacker with no live units never arms victory; local defeat
   ends the battle; the attacker has no result row.
 - **No save.** A save request in a Survival session is refused.
+- **Score.** Hits on one unit, split between shooters, sum to exactly its
+  cost and overkill earns nothing; only a cleared wave earns the fast-clear
+  bonus, and an earlier clear earns more.
 - **Performance.** A long headless Survival run on a stock map stays within
   the simulation benchmark's per-tick budget at the unit limit.
 
@@ -494,8 +525,8 @@ Implemented: the session shape (§4),
 the roomiest start site (§4.2), shared vision, radar and income (§4.3), the
 extra deposits (§4.5),
 tiers and pool (§5), the director (§6), the §7 values, no victory, the result
-gates, the destroyed/lost counters and score (§8), the HUD wave line and the
-result line, `--survival`, `--survival-buddies`, `--survival-pace`,
+gates, the counters and the team score with priced damage and wave bonuses
+(§8), the HUD wave and score lines and the result lines, `--survival`, `--survival-buddies`, `--survival-pace`,
 `--survival-no-air` and `--survival-no-naval` on both commands with the
 `survival` report block (§10), and the save refusal (§11). Tests: planner
 determinism, budget, tiers and switches, region labelling, the retail tier
@@ -504,7 +535,7 @@ Strict 3.1.
 
 The single-player menu button and the Survival setup screen (§9) are in.
 
-Not yet: damage dealt; best scores; an entry-edge minimap marker.
+Not yet: best scores; an entry-edge minimap marker.
 
 ## 14. Proposals awaiting confirmation
 
@@ -515,7 +546,7 @@ Not yet: damage dealt; best scores; an entry-edge minimap marker.
 | P3 | Tier = factories entered on the cheapest route from a commander (§5). |
 | P4 | Time-driven budget, size-scaled downtime, arrival-timed waves, budget-driven tier unlock and themed directions as in §6.1–§6.4 with the §7 values; a 30–40 minute average battle. |
 | P5 | Waves patrol to the nearest human-team unit, structures first, and are retargeted when idle (§6.7). |
-| P6 | Score = value destroyed + budgets of survived waves; losses shown, not subtracted (§8). |
+| P6 | Superseded by D10 (§8). |
 | P7 | Buddies do not extend the battle after the human's defeat (§8). |
 | P8 | Cheats allowed but the result is not recorded as a best score (§8). |
 

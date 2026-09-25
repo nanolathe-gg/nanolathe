@@ -130,6 +130,13 @@ type Binding struct {
 	SFXVisible       func(piece int, sfxType int32) bool
 	PresentationSink PresentationSink
 
+	// LinkNotes records the piece-table entries retail links without a name
+	// match: a script piece whose name the model lacks, and a script piece
+	// beyond the model's piece count. Neither refuses the bind
+	// [04 R-COB-01 §4]; the notes exist for tools and diagnostics only and
+	// never reach simulation state.
+	LinkNotes []BindingDiagnostic
+
 	// composeScratch is ComposePiece's per-call piece-state buffer. The
 	// composition reads the VM's piece words and writes model order; nothing
 	// outside the call sees the slice, and ComposePiece is not re-entrant on
@@ -214,17 +221,14 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 	if req.PresentationSink != nil {
 		bridge.SetPresentationSink(req.PresentationSink)
 	}
-	pieceMap := make([]int, len(program.Pieces))
-	for i := range pieceMap {
-		pieceMap[i] = modelPieceIndex(req.ModelPieces, program.Pieces[i])
-	}
+	pieceMap := LinkPieces(program.Pieces, req.ModelPieces)
 	// A presentation sink may need the strict COB→model identity before the
 	// Create callback emits its first event. This optional adapter is
 	// presentation-only and cannot affect binding or VM state.
 	if sink, ok := req.PresentationSink.(interface{ SetCOBPieceMap([]int) }); ok {
 		sink.SetCOBPieceMap(pieceMap)
 	}
-	binding := &Binding{Program: program, VM: vm, Model: req.Model, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, Callbacks: bridge, SimulationRNG: req.SimulationRNG, SFXSink: req.SFXSink, SFXVisible: req.SFXVisible, PresentationSink: req.PresentationSink}
+	binding := &Binding{Program: program, VM: vm, Model: req.Model, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, LinkNotes: linkNotes(program.Pieces, req.ModelPieces, pieceMap, logical, func() string { return providersFor(fs, logical, info) }), Callbacks: bridge, SimulationRNG: req.SimulationRNG, SFXSink: req.SFXSink, SFXVisible: req.SFXVisible, PresentationSink: req.PresentationSink}
 	if req.PreCreate != nil {
 		if err := req.PreCreate(binding); err != nil {
 			return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
@@ -387,28 +391,15 @@ func linkDiagnostics(program *Program, modelPieces, required []string, groups []
 	diagnostics := make([]BindingDiagnostic, 0)
 	if modelPieces == nil {
 		diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingMissingModel, Logical: logical, Provider: providers, Expected: "loaded 3DO piece hierarchy", Detail: "model piece list is nil"})
-	} else if len(program.Pieces) > len(modelPieces) {
-		diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingPieceCount, Logical: logical, Provider: providers, Expected: fmt.Sprintf("%d model pieces", len(modelPieces)), Detail: fmt.Sprintf("COB declares %d pieces", len(program.Pieces))})
 	}
-
-	modelByName := make(map[string]int, len(modelPieces))
+	// A script piece the model lacks, and a script piece beyond the model's
+	// piece count, are not refusals: retail's linking pass never rejects a
+	// program, and ProTA 4.8's CORSILO and CORAMPH each declare one trailing
+	// piece their model does not have [04 R-COB-01 §4]. LinkPieces gives them
+	// retail's slot identity; linkNotes keeps them visible to tools.
 	for i, name := range modelPieces {
-		key := canonicalPiece(name)
-		if key == "" {
+		if strings.TrimSpace(name) == "" {
 			diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingUnresolvedPiece, Logical: logical, Provider: providers, Expected: fmt.Sprintf("model piece %d", i), Detail: "model piece name is empty"})
-			continue
-		}
-		// Authored duplicate names are legal; lookup uses the first matching
-		// piece, as modelPieceIndex does [02 R-MALF-01 §2]. ARMCH's stock
-		// hierarchy contains two beam pieces and must remain buildable.
-		if _, exists := modelByName[key]; exists {
-			continue
-		}
-		modelByName[key] = i
-	}
-	for i, name := range program.Pieces {
-		if _, ok := modelByName[canonicalPiece(name)]; !ok {
-			diagnostics = append(diagnostics, BindingDiagnostic{Code: BindingUnresolvedPiece, Logical: logical, Provider: providers, Expected: name, Detail: fmt.Sprintf("COB piece index %d is absent from the 3DO hierarchy", i)})
 		}
 	}
 
@@ -470,14 +461,85 @@ func linkDiagnostics(program *Program, modelPieces, required []string, groups []
 	return diagnostics
 }
 
-func canonicalPiece(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+// LinkPieces is retail's script-to-model piece link [04 R-COB-01 §4]. The
+// unit's render-piece table starts in model depth-first order and is permuted
+// in place, one script piece at a time: script piece i searches the table from
+// slot i onward for the first record whose name matches (ASCII case folded)
+// and swaps that record into slot i. Script piece i then owns whatever record
+// slot i holds — the matched piece, or, when nothing from slot i onward
+// matches, the unclaimed model piece already sitting there. A script piece at
+// or beyond the model's piece count has no record at all and maps to -1.
+//
+// The result is injective: every model piece is owned by at most one script
+// piece. Duplicate model names therefore go to successive script entries of
+// that name, and a name whose match was already claimed or moved below the
+// searching slot does not find it again.
+//
+// Presentation draws through this same map: each committed piece view carries
+// its linked model index, so an in-range alias animates on screen as it does
+// here, and a piece beyond the model draws nothing.
+func LinkPieces(scriptPieces, modelPieces []string) []int {
+	pieceMap := make([]int, len(scriptPieces))
+	slots := make([]int, len(modelPieces))
+	for i := range slots {
+		slots[i] = i
+	}
+	for i, name := range scriptPieces {
+		if i >= len(slots) {
+			pieceMap[i] = -1
+			continue
+		}
+		for j := i; j < len(slots); j++ {
+			if pieceNameEqual(modelPieces[slots[j]], name) {
+				slots[i], slots[j] = slots[j], slots[i]
+				break
+			}
+		}
+		pieceMap[i] = slots[i]
+	}
+	return pieceMap
+}
 
-func modelPieceIndex(modelPieces []string, name string) int {
-	key := canonicalPiece(name)
-	for i, candidate := range modelPieces {
-		if canonicalPiece(candidate) == key {
-			return i
+// linkNotes describes each script piece that LinkPieces bound without a name
+// match. The codes are the historical refusal codes, kept so a tool can
+// classify the note; they are informational here [04 R-COB-01 §4].
+func linkNotes(scriptPieces, modelPieces []string, pieceMap []int, logical string, providersOf func() string) []BindingDiagnostic {
+	var notes []BindingDiagnostic
+	providers := ""
+	for i, name := range scriptPieces {
+		matched := pieceMap[i] >= 0 && pieceNameEqual(modelPieces[pieceMap[i]], name)
+		if !matched && providers == "" {
+			providers = providersOf()
+		}
+		switch {
+		case matched:
+		case pieceMap[i] < 0:
+			notes = append(notes, BindingDiagnostic{Code: BindingPieceCount, Logical: logical, Provider: providers, Expected: fmt.Sprintf("%d model pieces", len(modelPieces)), Detail: fmt.Sprintf("COB piece index %d (%q) is beyond the model and has no render piece", i, name)})
+		default:
+			notes = append(notes, BindingDiagnostic{Code: BindingUnresolvedPiece, Logical: logical, Provider: providers, Expected: name, Detail: fmt.Sprintf("COB piece index %d is absent from the 3DO hierarchy and takes model piece %q in its slot", i, modelPieces[pieceMap[i]])})
 		}
 	}
-	return -1
+	return notes
+}
+
+// pieceNameEqual is the piece-name comparison of the link pass: a
+// case-insensitive byte comparison that folds only ASCII letters and trims
+// nothing [04 R-COB-01 §4].
+func pieceNameEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }

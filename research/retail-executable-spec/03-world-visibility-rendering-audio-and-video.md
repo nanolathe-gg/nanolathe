@@ -4518,8 +4518,9 @@ and remains `TODO(T23)`.
 **Cadence.** A radar dirty word carries the schedule: bit 0 is the blink phase,
 bit 1 is final dirty (set by the mapped composite and by the contacts pass),
 bit 2 is mapped dirty (set by surface allocation and by placement invalidation,
-cleared by the mapped composite after it checks). A countdown byte counting 7
-down to 0 drives the blink phase. The picture is built once, dirty-triggered;
+cleared by the mapped composite after it checks). A signed 16-bit countdown
+counting 7 down to 0, advanced once per authoritative sub-tick, drives the
+blink phase ([01 R-CORE-03]). The picture is built once, dirty-triggered;
 mapped composites when dirty; final is rebuilt every tick after the sensor
 phase.
 
@@ -4833,8 +4834,14 @@ the append; retail relies on the active unit count never reaching capacity by co
 reimplementation must enforce the cap itself rather than reproduce the
 unbounded write.
 
-**Blink.** A per-host-frame ticker decrements the countdown 7..0, reloading to
-7, and toggles the blink phase bit every 8 frames. Units whose per-instance
+**Blink.** The blink phase bit is advanced by phase 12 of the authoritative
+sub-tick, not by the host frame, and that phase is its only recurring writer
+([01 R-CORE-03]). While the countdown is above zero, phase 12 decrements it and
+leaves the bit alone; at zero it reloads the countdown to 7 and toggles the
+bit. Battle entry sets countdown 7 and phase 0, so the bit toggles every eighth
+sub-tick, first at global tick 8. The contacts pass only reads the bit.
+**Established** (2026-09-24 correction: this paragraph formerly called it a
+per-host-frame ticker toggling every 8 frames). Units whose per-instance
 blink-suppress byte is nonzero (a per-tick-decremented countdown) show their
 blip only while the blink phase bit is set.
 

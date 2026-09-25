@@ -1,6 +1,8 @@
 package client
 
 import (
+	"slices"
+
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -11,9 +13,9 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// worldDrawable is one admitted object in the painter pass. The source slice
-// order is retained for equal rows; only rows are sorted by their world-Z plot
-// row [03 R-RAST-01 §7].
+// worldDrawable is one admitted object in the painter pass. Original retains
+// source slice order inside each world-Z plot row [03 R-RAST-01 §7]; Enhanced
+// refines the unit order there (DESIGN_GPU_RENDERER §5.5).
 type worldDrawable struct {
 	row     int32
 	unit    *frame.UnitView
@@ -184,6 +186,10 @@ type worldBuckets struct {
 	items        []worldDrawable
 	bucket       []worldBucket
 	orderedItems []worldDrawable
+	// Enhanced keeps the retail row barriers but orders units within each row
+	// by their full world Z, so crossing a plot-row edge cannot flip an overlap
+	// (DESIGN_GPU_RENDERER §5.5).
+	fineUnitOrder bool
 
 	// units is the frame's unit slice the child indices point into.
 	units []frame.UnitView
@@ -199,6 +205,7 @@ type worldBuckets struct {
 }
 
 func (b *worldBuckets) reset() {
+	b.fineUnitOrder = false
 	for i := range b.bucket {
 		b.bucket[i].items = b.bucket[i].items[:0]
 	}
@@ -366,15 +373,16 @@ func (b *worldBuckets) add(v worldDrawable) {
 	b.bucket[len(b.bucket)-1].items = append(b.bucket[len(b.bucket)-1].items, idx)
 }
 
-// ordered returns this frame's drawables in ascending bucket row, stable
-// within a row. It is idempotent: the two unit passes are two walks over one
-// bucket build, so both call it and both see the same sequence
-// [03 R-RAST-01 §7].
+// ordered returns this frame's drawables in ascending bucket row. Original
+// keeps source order within a row; Enhanced sorts that row's units by full Z.
+// It is idempotent: the two unit passes are two walks over one bucket build,
+// so both call it and both see the same sequence [03 R-RAST-01 §7]
+// (DESIGN_GPU_RENDERER §5.5).
 func (b *worldBuckets) ordered() []worldDrawable {
 	b.orderedItems = b.orderedItems[:0]
 	// Insertion sort is allocation-free and the bucket count is bounded by the
 	// distinct rows admitted for this frame. Existing bucket order is not a
-	// contract; equal-row item order remains source enumeration order [03 §1].
+	// contract; row items start in source enumeration order [03 §1].
 	for i := 1; i < len(b.bucket); i++ {
 		v := b.bucket[i]
 		j := i
@@ -385,8 +393,38 @@ func (b *worldBuckets) ordered() []worldDrawable {
 		b.bucket[j] = v
 	}
 	for _, row := range b.bucket {
+		start := len(b.orderedItems)
 		for _, idx := range row.items {
 			b.orderedItems = append(b.orderedItems, b.items[idx])
+		}
+		if b.fineUnitOrder {
+			// Full Z makes unit order continuous across the 16-pixel bucket
+			// boundary. Retain the row's feature tail and slot ties; no render
+			// history or simulation state participates (GPU design §5.5).
+			slices.SortStableFunc(b.orderedItems[start:], func(a, d worldDrawable) int {
+				if a.unit == nil {
+					if d.unit == nil {
+						return 0
+					}
+					return 1
+				}
+				if d.unit == nil {
+					return -1
+				}
+				if a.unit.Z < d.unit.Z {
+					return -1
+				}
+				if a.unit.Z > d.unit.Z {
+					return 1
+				}
+				if a.unit.Slot < d.unit.Slot {
+					return -1
+				}
+				if a.unit.Slot > d.unit.Slot {
+					return 1
+				}
+				return 0
+			})
 		}
 	}
 	return b.orderedItems
@@ -438,12 +476,17 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// switches (§30); each is gated here rather than inside its producer so the
 	// recording is identical to the one a build without the effect would make.
 	if c.effects.Marks {
-		c.drawScorchMarks(c.buffer.Current())
+		c.drawScorchMarks(c.committedFrame())
 	}
+	// Under the asynchronous simulation the host feeds these layers every
+	// publication in order when it joins a batch (ObserveCommittedFrame), so a
+	// pass places nothing itself (§13.13).
 	if c.effects.Water && !c.strategicView() {
-		c.placeSurfaceWakes(c.buffer.Current())
+		if !c.observesInOrder() {
+			c.placeSurfaceWakes(c.committedFrame())
+		}
 		c.drawSurfaceWakes()
-		c.drawBuildingFoam(c.buffer.Current())
+		c.drawBuildingFoam(c.committedFrame())
 	}
 	// The Enhanced trail layer lies on the terrain under every strip
 	// (DESIGN_GPU_RENDERER §15). Marks are placed from the committed tick, not
@@ -451,7 +494,9 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// Below the strategic cut the marks are smaller than a pixel and cost more
 	// than they show, so they are one of the layers §16.10 drops.
 	if c.effects.Marks && !c.strategicView() {
-		c.placeTrails(c.buffer.Current())
+		if !c.observesInOrder() {
+			c.placeTrails(c.committedFrame())
+		}
 		c.drawTrails()
 	}
 	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
@@ -581,12 +626,36 @@ func (c *Client) drawFeaturePass(cur *frame.Frame, ok bool) {
 // definitions draw only for a local-player placer selector or when either of
 // the two footprint corners is visible in the committed visibility mask; the
 // fog/explored channels are deliberately not consulted [03 R-RAST-01 §6]
-// [03 §5.1.5].
+// [03 §5.1.5]. This is the first (short-feature) pass's gate;
+// tallFeatureVisibleForFrame is the second pass's.
 func featureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
+	return featureDrawGate(cur, f, false)
+}
+
+// tallFeatureVisibleForFrame is the second (tall-feature) pass's gate: the
+// first pass's gate plus the ProTA 4.8 package's renderer hook, which draws a
+// feature whose placer selector is 11 without the LOS test once the
+// nodrawundergray and local-slot tests have failed
+// (research/extensions/prota-engine.md "Map-owned features drawn without
+// line of sight"). The hook has no gate of its own: retail never stamps 11, so only
+// the ProTA terrain-file stamp (the community table's MapFeatureOwnerEleven,
+// docs/DESIGN_COMMUNITY_PATCH.md §4.7) can reach it. Fog still darkens the
+// feature afterwards, so unexplored cells stay dark.
+func tallFeatureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
+	return featureDrawGate(cur, f, true)
+}
+
+func featureDrawGate(cur *frame.Frame, f frame.FeatureView, tall bool) bool {
 	if cur == nil {
 		return false
 	}
 	if !f.NoDrawUnderGray {
+		return true
+	}
+	// The local-slot test cannot also pass for selector 11 (no player slot is
+	// 11), so taking the hook first is the hook's order; it precedes the
+	// viewer guard because it reads no viewer state.
+	if tall && f.OwnerKnown && f.Owner == world.MapOwnedFeaturePlacer {
 		return true
 	}
 	viewer := cur.ViewingPlayer
@@ -623,6 +692,9 @@ func featureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
 func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	b := &c.worldBuckets
 	b.reset()
+	// The comparison capture can enable Enhanced art while recording its
+	// Classic half. Only the modern geometry record selects this painter policy.
+	b.fineUnitOrder = c.geometryOnlyModels
 	if !ok || cur == nil || c.cam == nil {
 		return
 	}
@@ -635,8 +707,8 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	// [03 R-RAST-01 §7].
 	b.indexChildren(cur.Units)
 	// The bucket build walks the units the viewer may see, in slot order, and
-	// appends each to its row. Appends are stable, so in-row draw order is
-	// ascending unit slot in both passes [03 R-RAST-01 §7].
+	// appends each to its row. Original keeps that in-row slot order; Enhanced
+	// refines it after the build (DESIGN_GPU_RENDERER §5.5).
 	for i := range cur.Units {
 		u := &cur.Units[i]
 		// Hull admission already selects visible units [03 R-RAST-01 §7].
@@ -655,7 +727,8 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		b.add(worldDrawable{row: row, unit: u, screenX: sx, screenY: sy, index: int32(i)})
 	}
 	// The deferred tall features take the same gate as pass 1: the window, and
-	// nothing that reads fog or LOS [03 R-RAST-01 §6].
+	// nothing that reads fog [03 R-RAST-01 §6]. The ProTA owner-11 hook lives
+	// on this pass alone (tallFeatureVisibleForFrame).
 	for i := range cur.Features {
 		f := &cur.Features[i]
 		if f.Height < 10 {
@@ -664,7 +737,7 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 		if !win.admitsCell(f.CX, f.CZ) {
 			continue
 		}
-		if !featureVisibleForFrame(cur, *f) {
+		if !tallFeatureVisibleForFrame(cur, *f) {
 			continue
 		}
 		sx, sy := c.featureScreenPos(*f)
@@ -762,10 +835,10 @@ func isCarried(v frame.UnitView) bool {
 //
 // This is the play-test defect the unit fixes. Cargo hangs at the carrier's
 // attach piece, so it lands in the same 16-pixel plot row as its carrier, where
-// in-row order is ascending unit slot. An Atlas built before the unit it lifts
-// therefore had its cargo painted a second time, straight to the framebuffer,
-// after the carrier's staging blit — which is exactly the per-pixel occlusion
-// [R-REN-03A §4] exists to produce, undone one blit later. The reverse slot
+// Original's in-row order is ascending unit slot. An Atlas built before the
+// unit it lifts therefore had its cargo painted a second time, straight to the
+// framebuffer after the carrier's staging blit — undoing the per-pixel
+// occlusion [R-REN-03A §4] exists to produce. The reverse slot
 // order hid the bug rather than fixing it.
 //
 // The selected-unit footprint quad is NOT inside the present and is still drawn
@@ -914,7 +987,7 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// the executor gates the lighting pass itself (§30).
 		burning := false
 		if c.enhanced && f.IsBurning && c.buffer != nil {
-			cur := c.buffer.Current()
+			cur := c.committedFrame()
 			burning = cur != nil && SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer)
 		}
 		heat := burning && c.effects.Distortion

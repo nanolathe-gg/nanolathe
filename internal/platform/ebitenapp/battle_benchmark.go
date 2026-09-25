@@ -23,6 +23,7 @@ import (
 type BenchmarkOptions struct {
 	Directory, Renderer string
 	Frames              int
+	Width, Height       int
 	// TPS is the target presentation rate: 30, 60 or 120 draws per second.
 	// One authoritative tick spans TPS/30 draws. Modern presents fractions
 	// 0..(TPS/30-1)/(TPS/30); classic keeps committed-tick sampling [I6].
@@ -105,7 +106,7 @@ func (g *battleBenchmark) tickPhase() (phase, drawsPerTick int) {
 func (g *battleBenchmark) warmupDraws() int { return 2 * g.options.TPS }
 
 func benchmarkMS(start time.Time) float64             { return float64(time.Since(start)) / 1e6 }
-func (g *battleBenchmark) Layout(int, int) (int, int) { return 1920, 1080 }
+func (g *battleBenchmark) Layout(int, int) (int, int) { return g.options.Width, g.options.Height }
 func (g *battleBenchmark) Update() error {
 	if g.err != nil {
 		return g.err
@@ -178,7 +179,7 @@ func (g *battleBenchmark) finish() error {
 		}
 	}
 	// Screenshots and encoding deliberately follow all measured work.
-	pic := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
+	pic := image.NewRGBA(image.Rect(0, 0, g.options.Width, g.options.Height))
 	g.img.ReadPixels(pic.Pix)
 	return g.file("battle.png", func(f *os.File) error { return png.Encode(f, pic) })
 }
@@ -282,7 +283,7 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		// The benchmark scene is fixed: every Enhanced effect stays on so two
 		// runs measure the same work (§30).
 		g.gpu.SetEffects(g.c.Effects())
-		g.img = g.gpu.Execute(list, 1920, 1080)
+		g.img = g.gpu.Execute(list, g.options.Width, g.options.Height)
 		if err := g.gpu.FogContentError(); err != nil {
 			g.err = err
 			return
@@ -326,6 +327,15 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 // BattleBenchmark paces every Draw and runs a fixed number of draws per tick.
 // It exercises production simulation/rendering, not the interactive catch-up scheduler.
 func BattleBenchmark(c *client.Client, step func(), census func() any, options BenchmarkOptions) error {
+	if options.Width == 0 {
+		options.Width = 1920
+	}
+	if options.Height == 0 {
+		options.Height = 1080
+	}
+	if options.Width < 1 || options.Height < 1 {
+		return fmt.Errorf("nanolathe: benchmark viewport must have positive dimensions")
+	}
 	if options.TPS <= 0 {
 		options.TPS = 30
 	}
@@ -350,7 +360,7 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 	options.Metadata["present_timing_available"] = false
 	g := &battleBenchmark{pacer: benchmarkPacer{period: time.Second / time.Duration(options.TPS)}, c: c, step: step, census: census, options: options, rows: make([]benchmarkRow, 0, options.Frames)}
 	if options.Renderer == "modern" {
-		g.gpu = gpurender.New(c.PaletteTables(), 1920, 1080)
+		g.gpu = gpurender.New(c.PaletteTables(), options.Width, options.Height)
 		c.SetEnhanced(true)
 		// Only the Enhanced executor blends; the classic rows keep
 		// committed-tick sampling at every draw rate (§13.5) [I6].
@@ -358,12 +368,12 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 			c.SetInterpolation(true)
 		}
 	} else {
-		g.img = ebiten.NewImage(1920, 1080)
+		g.img = ebiten.NewImage(options.Width, options.Height)
 	}
 	defer g.stopProfile()
 	ebiten.SetWindowVisible(true)
 	ebiten.SetRunnableOnUnfocused(true)
-	ebiten.SetWindowSize(1920, 1080)
+	ebiten.SetWindowSize(options.Width, options.Height)
 	ebiten.SetVsyncEnabled(true)
 	// A separate fixed Update clock caused zero-update callbacks to skip Draw,
 	// producing a beat pattern against the host's presentation loop. Every

@@ -71,17 +71,24 @@ import (
 // armies' opposed movers now pass through each other mid-route instead of
 // blocking. The ashap locks, the benchmark initial lock and every Strict and
 // Community lock are unchanged by it.
+//
+// Retail's `MobileBuild` weapon-slot release [04 R-ORD-01 §5] moves the Strict
+// and Community ashap 6000-tick locks and nothing else: at that tick the Core
+// commander is building with slots 0 and 2 taken from autonomy, and setting
+// that one bit back reproduces the previous values exactly. The trajectories
+// do not diverge, so the 54000-tick and benchmark locks hold; the Modern
+// commander is still approaching its site at tick 6000, so its lock holds too.
 const (
 	lockAshapMap                   = "ashap plateau"
 	lockAshapSeed           uint32 = 7
 	lockAshapUnitLimit             = 250 // Strict setting; Community's table overrides it.
 	lockDifficulty                 = 1
-	lockAshapStrict6000            = "partial-v1:d125c21700a2db1b"
-	lockAshapCommunity6000         = "partial-v1:734ea09ae6678310"
+	lockAshapStrict6000            = "partial-v1:bfc3b98e66838d54"
+	lockAshapCommunity6000         = "partial-v1:3ee37e7e5104c034"
 	lockAshapModern6000            = "partial-v1:320cbaa11e9fd28a"
 	lockAshapStrict54000           = "partial-v1:4a62d6ab26833264"
 	lockAshapCommunity54000        = "partial-v1:ae0cc2ee810199ec"
-	lockAshapModern54000           = "partial-v1:9bfdd19e13a3809a"
+	lockAshapModern54000           = "partial-v1:d7f48d704d2eb5d3"
 	lockAshapCommunityEnd   uint32 = 53430
 	lockAshapModernEnd      uint32 = 54000
 
@@ -93,10 +100,10 @@ const (
 	lockBenchModernInitial           = "partial-v1:f6cbc51b5ef4deff"
 	lockBenchStrictWarm              = "partial-v1:dce20f30bcdeef34"
 	lockBenchCommunityWarm           = "partial-v1:f907fb371a053c87"
-	lockBenchModernWarm              = "partial-v1:3e207cfb11bc3644"
+	lockBenchModernWarm              = "partial-v1:020c5588af463a71"
 	lockBenchStrictFinal             = "partial-v1:d0eaf19c8a8f135b"
 	lockBenchCommunityFinal          = "partial-v1:81b03660538b0eac"
-	lockBenchModernFinal             = "partial-v1:ee6fd800ec1b6ea1"
+	lockBenchModernFinal             = "partial-v1:8566bce851e216f7"
 )
 
 // TestStrictFingerprintIsLocked holds the retail baseline. Nothing in a Modern

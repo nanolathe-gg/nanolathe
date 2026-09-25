@@ -42,12 +42,13 @@ The smoke checks run 32 traffic or 40 lifecycle phase cycles per case in both
 modes and assert that the intended initial order is present. With
 `NANOLATHE_PATH_BENCH_SMOKE_FULL=1`, they include every supported size, run
 the first sustained-wave event through tick 152, and run stop/reverse through
-tick 52. Use the shared host lock and reference install:
+tick 52. A smoke measures nothing, so it takes no host lock; use the reference
+install:
 
 ```sh
 NANOLATHE_RETAIL_ASSETS=/Users/daniel/TotalAnnihilation \
 GOMAXPROCS=2 NANOLATHE_PATH_BENCH_SMOKE=1 \
-tools/host-run go test -p 2 -tags 'pathbench retail' ./internal/session \
+go test -p 2 -tags 'pathbench retail' ./internal/session \
   -run '^TestPathBench(Traffic|Lifecycle)Smoke$' -count=1
 ```
 
@@ -77,3 +78,28 @@ the rest of the suite. Wave scripts include a short command relative to each
 probe's current position; if an algorithm changes that position, the actual
 command trace also changes. The strict comparison guard rejects that pairing
 as different input, while separate summaries remain useful.
+
+## Wrecks over live units
+
+The `wreck/*` family (`path_bench_wreck_test.go`) stamps wrecks over live
+ground units with production services and then orders the survivors across
+open ground. It exercises
+[Modern wedge escape](DESIGN_MOVEMENT_PATH.md#modern-wedge-escape) and makes
+no retail claim: the stamp tests no unit occupancy, so these states are
+reachable in play, but the layouts are authored.
+
+| IDs | Sizes | Authored conditions |
+| --- | --- | --- |
+| `wreck/jam_corpses` | 16/64, 1,500 ticks | A touching block of 2×2 units at `(12+2i,30+2j)`: Arm Jammers where `i%3==1 && j%2==1`, Flashes elsewhere. At tick 50 the Jammers die through the session's ordinary death path — ordinary damage kind, health −1, the lowest Killed severity — and each leaves its 3×3 `armjam_dead` at its committed anchor (checked at tick 51), over the west column, north row or north-west cell of the Flashes east, south and south-east of it. The survivors are ordered 44 cells east at tick 70. |
+| `wreck/wreck_over` | 8/32, 1,200 ticks | A group of `corak` at `(12+3i,30+3j)` with one-cell gaps. At tick 50 the feature service stamps each unit's own 2×2 `corak_dead` exactly over every unit with `i+j` even — the end state of a unit dying inside another. The group is ordered 44 cells east at tick 70. |
+
+The orders come at tick 70 because a fresh order's zero request stamp comes
+due only once the 60-tick throttle has run from tick 0: an earlier order
+leaves every unit on its synthetic line until tick 60, long enough to walk off
+a partly covered footprint before any search runs, which a battle never
+allows. The Jammer is the only ground unit in the reference install whose
+corpse is larger than its movement footprint. The wedged units are the ones
+whose committed footprint covers a cell the commit's static test rejects;
+`session.TestPathBenchWreckEscape` (opt-in `pathbench` build) locks one relationship on
+`wreck/wreck_over` with eight units — none of the four wedged units leaves
+under Strict 3.1 or `modern-no-wedge`, and all four leave under Modern.

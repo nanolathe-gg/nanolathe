@@ -56,7 +56,9 @@ func (s *Service) TidalScalar() float32 {
 	return s.Terrain.Tidal
 }
 
-// addContribution applies the retail signed-contribution discount. The two
+// addContribution applies the retail signed-contribution discount, or the
+// ProTA 4.8 package's computer-player factors when the session's table enables
+// AIDifficultyIncome (proTAIncomeCredit, below). The two
 // difficulty factors are double constants; the contribution arrives at the
 // working precision of [R-ECO-01 §1] and the accumulator store is the ONLY
 // narrowing [R-ECO-01 §3][R-ECO-01 §11].
@@ -76,10 +78,6 @@ func (s *Service) TidalScalar() float32 {
 // is the record load, not an extra rounding. A *product just formed* stays at
 // working precision all the way into the store here.
 func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
-	// TODO(question): ProTA documents different computer-player difficulty
-	// factors, but their arithmetic and applicable credit paths need readable
-	// source or bounded observations; retain retail until established. See
-	// research/extensions/prota-engine.md "Unknown".
 	if b == nil {
 		return
 	}
@@ -90,6 +88,10 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 	selector := 2
 	if s != nil && s.EconomySelector != nil {
 		selector = *s.EconomySelector
+	}
+	if s != nil && s.Community.AIDifficultyIncome {
+		b.Production = proTAIncomeCredit(b.Production, contribution, selector)
+		return
 	}
 	// The explicit conversion of each discount product is retail's rounding of
 	// that product before the subtraction, two roundings rather than the one a
@@ -103,6 +105,34 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 		b.Production = float32(float64(b.Production) - float64(contribution*-0.7))
 	default:
 		b.Production = float32(float64(b.Production) + contribution)
+	}
+}
+
+// proTAIncomeCredit is the ProTA 4.8 package's computer-player credit, used by
+// the seven per-unit contribution routes and by both feature-reclaim credits
+// when the session's table enables AIDifficultyIncome
+// (research/extensions/prota-engine.md "AI and economy evidence audit",
+// "shipped 4.8 production and feature-reclaim arithmetic"). The caller has
+// already applied the owner's record and computer-control gate. Easy keeps
+// retail's one-half, Medium becomes the plain add, and Hard — every selector
+// other than zero and one — multiplies by four:
+//
+//	easy:   float32(p - c * double(-0.5))
+//	medium: float32(p + c)
+//	hard:   float32(p - c * double(-4))
+//
+// Working precision is kept until the single-precision store, as in the
+// retail ladder above; the explicit conversion of each product is the same
+// rounding barrier against a fused multiply-add. No sign or finiteness guard
+// is added, and scaling stays per contribution rather than after the total.
+func proTAIncomeCredit(production float32, contribution float64, selector int) float32 {
+	switch selector {
+	case 0:
+		return float32(float64(production) - float64(contribution*-0.5))
+	case 1:
+		return float32(float64(production) + float64(contribution))
+	default:
+		return float32(float64(production) - float64(contribution*-4))
 	}
 }
 
@@ -302,6 +332,20 @@ func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner u
 	s.ensureUnitBuckets(builderHandle)
 	b := &s.unitBuckets[builderHandle].Buckets
 	discounted := s.specialPlayerSlot(builderOwner)
+	if discounted && s.Community.AIDifficultyIncome {
+		// The ProTA 4.8 package replaces only this helper's two credits: each
+		// takes the package's Easy/Medium/Hard 0.5/1/4 table at the same store
+		// boundary, energy before metal. The unit-reclaim refund below and
+		// every other credit keep retail's ladder
+		// (research/extensions/prota-engine.md "AI and economy evidence audit").
+		selector := 2
+		if s.EconomySelector != nil {
+			selector = *s.EconomySelector
+		}
+		b[Energy].Production = proTAIncomeCredit(b[Energy].Production, float64(energy), selector)
+		b[Metal].Production = proTAIncomeCredit(b[Metal].Production, float64(metal), selector)
+		return
+	}
 	creditReclaimedMaterial(s, &b[Energy], float64(energy), discounted)
 	creditReclaimedMaterial(s, &b[Metal], float64(metal), discounted)
 }

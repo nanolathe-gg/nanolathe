@@ -78,9 +78,11 @@ func TestP28COB01RScenarioARMCKPublishesStrictCreateState(t *testing.T) {
 	if len(view.Pieces) != len(binding.VM.Pieces) {
 		t.Fatalf("committed pieces=%d VM pieces=%d", len(view.Pieces), len(binding.VM.Pieces))
 	}
+	// Each lane carries the binding's model link, not the script piece name
+	// [04 R-COB-01 §4].
 	for i, piece := range view.Pieces {
 		state := binding.VM.Pieces[i]
-		if piece.Name != binding.Program.Pieces[i] || piece.RotX != state.RotX || piece.RotY != state.RotY || piece.RotZ != state.RotZ || piece.Tx != state.Trans[0] || piece.Ty != state.Trans[1] || piece.Tz != state.Trans[2] {
+		if piece.Index != binding.PieceMap[i] || piece.Name != "" || piece.RotX != state.RotX || piece.RotY != state.RotY || piece.RotZ != state.RotZ || piece.Tx != state.Trans[0] || piece.Ty != state.Trans[1] || piece.Tz != state.Trans[2] {
 			t.Fatalf("committed piece %d does not copy strict VM state: view=%#v VM=%#v", i, piece, state)
 		}
 	}

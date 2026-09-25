@@ -23,7 +23,7 @@ type resultOverlayStage struct {
 
 func (s resultOverlayStage) DrawUI(c *client.Client, presented client.UIFrame) {
 	if presented.Committed != nil {
-		s.hud.drawResultOverlay(c, s.battle, presented.Committed.Result)
+		s.hud.drawResultOverlay(c, s.battle, presented.Committed.Result, localSlotWatching(presented.Committed))
 	}
 }
 
@@ -32,16 +32,16 @@ func TestResultTitleFrameUsesExplicitAuthoredOutcome(t *testing.T) {
 		victoryFrame: &formats.GAFFrame{},
 		defeatFrame:  &formats.GAFFrame{},
 	}
-	if got := h.resultTitleFrame(frame.ResultView{Kind: "victory"}); got != h.victoryFrame {
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "victory"}, false); got != h.victoryFrame {
 		t.Fatal("victory did not select authored victory title")
 	}
-	if got := h.resultTitleFrame(frame.ResultView{Kind: "defeat"}); got != h.defeatFrame {
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "defeat"}, false); got != h.defeatFrame {
 		t.Fatal("defeat did not select authored defeat title")
 	}
-	if got := h.resultTitleFrame(frame.ResultView{Draw: true, Kind: "victory"}); got != nil {
+	if got := h.resultTitleFrame(frame.ResultView{Draw: true, Kind: "victory"}, false); got != nil {
 		t.Fatal("draw selected a terminal title")
 	}
-	if got := h.resultTitleFrame(frame.ResultView{Kind: "unknown", WinnerTeam: -1}); got != nil {
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "unknown", WinnerTeam: -1}, false); got != nil {
 		t.Fatal("unknown result selected a terminal title")
 	}
 }
@@ -124,7 +124,7 @@ func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
 	h := &retailBattleHUD{victoryFrame: &formats.GAFFrame{
 		Width: 1, Height: 1, XOffset: 2, YOffset: 3, Pixels: []byte{7}, Transparent: []bool{false},
 	}}
-	b := &battleSession{}
+	b := &battleSession{postBattle: endMissionController(t, w.Result)}
 	c, err := client.New(client.Options{Buffer: buf, Width: 16, Height: 40})
 	if err != nil {
 		t.Fatal(err)
@@ -386,5 +386,48 @@ func TestDrawResultStatsUsesPostBattleClockNotFrozenScrollAnchor(t *testing.T) {
 		if got := h.resultState.current[0][column]; got != want {
 			t.Fatalf("column %d (%s) settled at %d, want the true value %d", column, resultBars[column].Label, got, want)
 		}
+	}
+}
+
+// ENDMSN gives a watching local slot the defeat title even on a won result
+// [08 R-CAMP-01 §8].
+func TestResultTitleFrameWatcherTakesDefeat(t *testing.T) {
+	h := &retailBattleHUD{victoryFrame: &formats.GAFFrame{}, defeatFrame: &formats.GAFFrame{}}
+	if got := h.resultTitleFrame(frame.ResultView{Kind: "victory"}, true); got != h.defeatFrame {
+		t.Fatal("a watcher's won result did not select the defeat title")
+	}
+}
+
+// endMissionController runs a skirmish results controller to ENDMSN.
+func endMissionController(t *testing.T, view frame.ResultView) *session.PostBattleController {
+	t.Helper()
+	c := session.NewPostBattleController(view, session.PostBattleConfig{Kind: session.PostBattleSkirmish})
+	for now := uint32(1); now < 400 && c.State() != session.PostBattleEndMission; now++ {
+		c.Step(now, false)
+	}
+	if c.State() != session.PostBattleEndMission {
+		t.Fatalf("results controller stopped in state %d", c.State())
+	}
+	return c
+}
+
+// The frame composed before the results controller exists is the live battle
+// frame after the latching tick: it carries no ENDMSN art [07 §11].
+func TestResultOverlayWaitsForTheResultsController(t *testing.T) {
+	buf := frame.NewBuffer()
+	buf.BeginWrite().Result = frame.ResultView{Ended: true, Kind: "victory"}
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	h := &retailBattleHUD{victoryFrame: &formats.GAFFrame{
+		Width: 1, Height: 1, XOffset: 2, YOffset: 3, Pixels: []byte{7}, Transparent: []bool{false},
+	}}
+	c, err := client.New(client.Options{Buffer: buf, Width: 16, Height: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetUIStage(resultOverlayStage{hud: h, battle: &battleSession{}})
+	if got := c.ComposeFrame().RGBAAt(6, 25); got != (color.RGBA{A: 255}) {
+		t.Fatalf("ENDMSN title drawn before the results controller: %#v", got)
 	}
 }

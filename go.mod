@@ -3,7 +3,7 @@ module github.com/nanolathe-gg/nanolathe
 go 1.25.0
 
 require (
-	github.com/hajimehoshi/ebiten/v2 v2.10.1
+	github.com/hajimehoshi/ebiten/v2 v2.10.3
 	golang.org/x/sys v0.47.0
 )
 

@@ -145,11 +145,14 @@ func actualActivatedModelPose(fs vfs.FSOps, def *content.UnitDef) ([]frame.Piece
 	flags := binding.VM.SnapshotFlags()
 	poses := make([]frame.PieceView, len(binding.VM.Pieces))
 	for i, state := range binding.VM.Pieces {
-		name := ""
-		if i < len(binding.Program.Pieces) {
-			name = binding.Program.Pieces[i]
+		// Each lane poses the model piece the binding linked it to, as the
+		// battle publication does; a piece beyond the model is -1 and poses
+		// nothing [04 R-COB-01 §4].
+		link := -1
+		if i < len(binding.PieceMap) {
+			link = binding.PieceMap[i]
 		}
-		poses[i] = frame.PieceView{Index: i, Name: name, RotX: state.RotX, RotY: state.RotY, RotZ: state.RotZ, Tx: state.Trans[0], Ty: state.Trans[1], Tz: state.Trans[2], DontShade: state.DontShade, Hidden: state.Hidden, DontShadow: state.DontShadow}
+		poses[i] = frame.PieceView{Index: link, RotX: state.RotX, RotY: state.RotY, RotZ: state.RotZ, Tx: state.Trans[0], Ty: state.Trans[1], Tz: state.Trans[2], DontShade: state.DontShade, Hidden: state.Hidden, DontShadow: state.DontShadow}
 		if i < len(flags) {
 			poses[i].Hidden = flags[i]&1 == 0
 			poses[i].DontShade = flags[i]&4 == 0

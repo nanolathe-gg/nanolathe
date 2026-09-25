@@ -1,7 +1,10 @@
 package frame
 
 import (
+	"cmp"
 	"errors"
+	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -79,9 +82,19 @@ type DebrisView struct {
 	Fire  bool
 }
 
-// PieceView carries one committed COB piece transform [03 §2.4].
+// PieceView carries one committed COB piece transform [03 §2.4]. A unit's
+// lanes are in script piece order: lane i is script piece i.
 type PieceView struct {
-	Index            int
+	// Index is the model piece this lane poses. The publisher copies it from
+	// the unit's script-to-model link [04 R-COB-01 §4], so a script piece whose
+	// name the model lacks poses the model piece its slot took, as it does in
+	// the simulation, and a script piece beyond the model's piece count is -1
+	// and poses nothing.
+	Index int
+	// Name, when set, addresses the model piece by name instead of Index. Only
+	// lanes with no link use it: authored preview poses, and a script attached
+	// without a model binding. Committed lanes of a bound unit leave it empty,
+	// because a name cannot express the link's slot aliasing.
 	Name             string
 	RotX, RotY, RotZ uint16
 	Tx, Ty, Tz       numeric.Fixed
@@ -1008,16 +1021,22 @@ type SurvivalStatus struct {
 	Phase       uint8
 	SecondsLeft int32
 	Attackers   int32
+	Score       int64 // the team's Survival score so far
 }
 
-// SurvivalResult is the local player's Survival outcome.
+// SurvivalResult is the survivors' Survival outcome; the score and its
+// counters are the team's (docs/DESIGN_SURVIVAL.md §8).
 type SurvivalResult struct {
 	Waves      int32  `json:"waves_survived"`
 	Reached    int32  `json:"wave_reached"`
 	TicksAlive uint32 `json:"ticks_alive"`
+	Damage     int64  `json:"damage_value"`
+	WavePoints int64  `json:"wave_points"`
 	Destroyed  int64  `json:"value_destroyed"`
 	Lost       int64  `json:"value_lost"`
 	Score      int64  `json:"score"`
+	// SlotDamage is each survivor slot's share of Damage.
+	SlotDamage [PlayerRowSlots]int64 `json:"slot_damage"`
 }
 
 // Copy returns an independent copy, nil for nil.
@@ -1373,27 +1392,52 @@ func resetOrders(s []OrderView) {
 	}
 }
 
-// Buffer is a preallocated two-slot committed-frame buffer. The committed
-// index is atomic solely to publish the writer's completed slot to a reader;
-// the caller still owns the documented lifetime boundary above.
+// Buffer is the committed-frame buffer: preallocated slots the simulation
+// publishes into and presentation reads from.
+//
+// By default the writer alternates between two slots, the committed tick and
+// the one it is refilling, and readers run between writes on the writer's own
+// goroutine. SetConcurrentReaders widens the rotation for a presentation that
+// reads beside a writer on another goroutine (docs/DESIGN_GPU_RENDERER.md
+// §13.13): such a reader pins the slots it reads, and the writer only ever
+// refills the oldest slot that is neither pinned nor the committed one. A mutex
+// guards the slot bookkeeping and the retained event queue; slot contents need
+// none, because a pinned or committed slot is never written.
 type Buffer struct {
-	slots     [2]Frame
-	committed atomic.Uint32 // zero means no publication; otherwise slot+1
-	writeSlot uint8
+	mu sync.Mutex
+	// space wakes a writer waiting for a slot to leave its last pin. With the
+	// widened rotation the recorder's pair can never exhaust it; the wait is the
+	// correctness backstop, not an expected path.
+	space *sync.Cond
+	slots [concurrentBufferSlots]Frame
+	// seq is each slot's publication sequence number, zero for a slot that was
+	// never published; pins counts the readers holding it.
+	seq  [concurrentBufferSlots]uint64
+	pins [concurrentBufferSlots]int32
+	// rotation is how many slots the writer rotates through; zero means two.
+	rotation  int
+	nextSeq   uint64
+	committed int // zero means no publication; otherwise slot+1
+	// current mirrors committed for Current, which the synchronous recorders
+	// call per drawn object: an atomic load publishes the slot's contents as
+	// the lock did, without taking it.
+	current   atomic.Pointer[Frame]
+	writeSlot int
 	writing   bool
 	lastTick  uint32
 	published bool
 	// previousSlot names the slot published immediately before the committed
-	// one, and previousValid says whether that slot still holds it. Enhanced
-	// presentation blends the two most recent committed ticks
+	// one, and previousValid says whether it is a blendable earlier tick.
+	// Enhanced presentation blends the two most recent committed ticks
 	// (docs/DESIGN_GPU_RENDERER.md §13.5); every other consumer reads only
-	// Current. BeginWrite clears the flag because the writer reuses exactly
-	// that slot, so the older tick stops existing the moment a write starts
-	// [I6].
-	previousSlot  uint8
+	// Current. BeginWrite clears the flag: with two slots the writer reuses
+	// exactly that slot, so the older tick stops existing the moment a write
+	// starts, and the unpinned reader contract keeps that rule for every
+	// rotation [I6].
+	previousSlot  int
 	previousValid bool
 	// Retained committed events, drained by the presentation consumer. See
-	// event_retention.go: the two slots carry current STATE, which the next
+	// event_retention.go: the slots carry current STATE, which the next
 	// publication legitimately supersedes, while events are one-shot
 	// occurrences that must survive until they are applied
 	// [03 R-AUD-01 §7][03 §2.4][I6].
@@ -1401,6 +1445,12 @@ type Buffer struct {
 	pendingDropped  uint64
 	pendingOverflow bool
 }
+
+// concurrentBufferSlots is the widened rotation. A reader beside the writer
+// pins at most one blend pair at a time, the writer holds one slot, and the
+// remainder retains a catch-up batch of up to five sub-ticks [01 §4.3] until
+// the host observes each publication in order after joining the writer.
+const concurrentBufferSlots = 8
 
 // NewBuffer constructs a two-slot buffer and reserves the requested top-level
 // capacities in both slots. With no argument, the zero-value capacities are
@@ -1414,26 +1464,77 @@ func NewBuffer(capacities ...Capacities) *Buffer {
 	return b
 }
 
-// BeginWrite returns the noncommitted slot after resetting it. Only one
+// SetConcurrentReaders widens the writer's rotation to every slot, for a
+// presentation that pins what it reads while the writer runs on another
+// goroutine (docs/DESIGN_GPU_RENDERER.md §13.13). The two-slot default keeps a
+// headless or single-goroutine run at its old footprint. Call it between
+// writes; it never narrows the rotation, since a slot in the wider range may
+// hold a publication a reader still expects.
+func (b *Buffer) SetConcurrentReaders() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.rotation = concurrentBufferSlots
+	b.mu.Unlock()
+}
+
+func (b *Buffer) rotationLocked() int {
+	if b.rotation <= 0 {
+		return 2
+	}
+	return b.rotation
+}
+
+// BeginWrite returns a slot for the next publication after resetting it: the
+// oldest slot in the rotation that is neither committed nor pinned. Only one
 // simulation writer may call this method. Calling it again before Publish
 // restarts the same pending write.
 func (b *Buffer) BeginWrite() *Frame {
 	if b == nil {
 		return nil
 	}
-	idx := uint8(0)
-	if committed := b.committed.Load(); committed != 0 {
-		idx = uint8((committed - 1) ^ 1)
+	b.mu.Lock()
+	idx := b.writeSlot
+	if !b.writing {
+		for {
+			if idx = b.freeSlotLocked(); idx >= 0 {
+				break
+			}
+			if b.space == nil {
+				b.space = sync.NewCond(&b.mu)
+			}
+			b.space.Wait()
+		}
 	}
 	b.writeSlot = idx
 	b.writing = true
-	// The pending write overwrites the older of the two committed ticks, so the
-	// previous slot is unavailable until this write is published
+	// The pending write may overwrite the older of the two committed ticks, so
+	// the unpinned previous slot is unavailable until this write is published
 	// (docs/DESIGN_GPU_RENDERER.md §13.5).
 	b.previousValid = false
+	b.mu.Unlock()
+	// The chosen slot is neither committed nor pinned, so no reader can reach
+	// it while it is reset outside the lock.
 	f := &b.slots[idx]
 	f.Reset()
 	return f
+}
+
+// freeSlotLocked picks the writer's next slot: the oldest publication in the
+// rotation that no reader holds, other than the committed one. It returns -1
+// when every candidate is pinned.
+func (b *Buffer) freeSlotLocked() int {
+	best := -1
+	for i := range b.rotationLocked() {
+		if i == b.committed-1 || b.pins[i] > 0 {
+			continue
+		}
+		if best < 0 || b.seq[i] < b.seq[best] {
+			best = i
+		}
+	}
+	return best
 }
 
 // Publish commits the pending write at tick. Tick values must increase
@@ -1441,7 +1542,12 @@ func (b *Buffer) BeginWrite() *Frame {
 // tick required by [01 §4.4]. A failed publication leaves the pending write
 // available for correction and retry.
 func (b *Buffer) Publish(tick uint32) error {
-	if b == nil || !b.writing {
+	if b == nil {
+		return ErrPublishWithoutWrite
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.writing {
 		return ErrPublishWithoutWrite
 	}
 	if b.published && tick <= b.lastTick {
@@ -1456,15 +1562,23 @@ func (b *Buffer) Publish(tick uint32) error {
 	b.retainCommittedEvents(f.Events)
 	// The slot being superseded becomes the previous tick. Before the second
 	// publication there is none (docs/DESIGN_GPU_RENDERER.md §13.5).
-	if committed := b.committed.Load(); committed != 0 {
-		b.previousSlot = uint8(committed - 1)
+	if b.committed != 0 {
+		b.previousSlot = b.committed - 1
 		b.previousValid = true
 	}
-	b.committed.Store(uint32(b.writeSlot) + 1)
+	b.commitLocked()
 	b.lastTick = tick
 	b.published = true
-	b.writing = false
 	return nil
+}
+
+// commitLocked makes the pending write the committed slot and numbers it.
+func (b *Buffer) commitLocked() {
+	b.nextSeq++
+	b.seq[b.writeSlot] = b.nextSeq
+	b.committed = b.writeSlot + 1
+	b.current.Store(&b.slots[b.writeSlot])
+	b.writing = false
 }
 
 // Republish commits the pending write at the tick that is already committed,
@@ -1480,7 +1594,12 @@ func (b *Buffer) Publish(tick uint32) error {
 // Enhanced blend from pairing two copies of one tick
 // (docs/DESIGN_GPU_RENDERER.md §13.5) [I6].
 func (b *Buffer) Republish(tick uint32) error {
-	if b == nil || !b.writing {
+	if b == nil {
+		return ErrPublishWithoutWrite
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.writing {
 		return ErrPublishWithoutWrite
 	}
 	if !b.published || tick != b.lastTick {
@@ -1493,23 +1612,19 @@ func (b *Buffer) Republish(tick uint32) error {
 	// what the paused boundary raised and never the previous tick's again
 	// [03 R-AUD-01 §7][I6].
 	b.retainCommittedEvents(f.Events)
-	b.committed.Store(uint32(b.writeSlot) + 1)
-	b.writing = false
+	b.commitLocked()
 	return nil
 }
 
 // Current returns the committed frame, or nil before the first successful
-// publication. The returned frame is immutable until the next BeginWrite
-// permitted by the documented reader lifetime contract.
+// publication. An unpinned reader may use the frame only while the writer is
+// quiescent — on the writer's own goroutine, or after joining it; a reader
+// beside a running writer pins instead.
 func (b *Buffer) Current() *Frame {
 	if b == nil {
 		return nil
 	}
-	committed := b.committed.Load()
-	if committed == 0 {
-		return nil
-	}
-	return &b.slots[committed-1]
+	return b.current.Load()
 }
 
 // Previous returns the frame published immediately before Current, or nil
@@ -1518,15 +1633,153 @@ func (b *Buffer) Current() *Frame {
 // (docs/DESIGN_GPU_RENDERER.md §13.5); it writes nothing back and no
 // simulation path reads it [I6].
 func (b *Buffer) Previous() *Frame {
-	if b == nil || b.writing || !b.previousValid {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.writing || !b.previousValid {
 		return nil
 	}
 	return &b.slots[b.previousSlot]
 }
 
+// PinTick holds, for a reader beside the writer, the newest publication of
+// tick and the publication immediately before it. prev is nil when that
+// earlier publication is not a blendable earlier tick — there is none, or it
+// holds the same tick because the paused-input boundary republished it — which
+// is the unpinned Previous rule (§13.5). ok is false when tick is no longer, or
+// not yet, held by any slot; nothing is pinned then. Every pinned frame must be
+// released with Unpin.
+func (b *Buffer) PinTick(tick uint32) (cur, prev *Frame, ok bool) {
+	if b == nil {
+		return nil, nil, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	best := -1
+	for i := range b.rotationLocked() {
+		if b.seq[i] == 0 || b.writing && i == b.writeSlot || b.slots[i].Tick != tick {
+			continue
+		}
+		if best < 0 || b.seq[i] > b.seq[best] {
+			best = i
+		}
+	}
+	if best < 0 {
+		return nil, nil, false
+	}
+	return b.pinPairLocked(best)
+}
+
+// PinLatest holds the committed frame and the publication before it, under the
+// same rules as PinTick. cur is nil before the first publication.
+func (b *Buffer) PinLatest() (cur, prev *Frame) {
+	if b == nil {
+		return nil, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.committed == 0 {
+		return nil, nil
+	}
+	cur, prev, _ = b.pinPairLocked(b.committed - 1)
+	return cur, prev
+}
+
+func (b *Buffer) pinPairLocked(idx int) (cur, prev *Frame, ok bool) {
+	b.pins[idx]++
+	cur = &b.slots[idx]
+	if want := b.seq[idx] - 1; want > 0 {
+		for i := range b.rotationLocked() {
+			if b.seq[i] != want || b.writing && i == b.writeSlot {
+				continue
+			}
+			if b.slots[i].Tick < cur.Tick {
+				b.pins[i]++
+				prev = &b.slots[i]
+			}
+			break
+		}
+	}
+	return cur, prev, true
+}
+
+// Unpin releases one hold on f taken by PinTick or PinLatest. A nil frame is
+// ignored, so a caller can release both halves of a pair unconditionally.
+func (b *Buffer) Unpin(f *Frame) {
+	if b == nil || f == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i := range b.slots {
+		if &b.slots[i] != f {
+			continue
+		}
+		if b.pins[i] > 0 {
+			b.pins[i]--
+			if b.pins[i] == 0 && b.space != nil {
+				b.space.Broadcast()
+			}
+		}
+		return
+	}
+}
+
+// PublicationsSince visits, oldest first, every publication numbered after seq
+// that the rotation still holds, and returns the newest number visited (seq
+// itself when there is none). It is for a host observing each publication in
+// order after joining a writer that may have published several; a publication
+// the rotation has already reused is skipped. The writer must be quiescent
+// while visit reads the frames.
+func (b *Buffer) PublicationsSince(seq uint64, visit func(f *Frame)) uint64 {
+	if b == nil {
+		return seq
+	}
+	b.mu.Lock()
+	var order [concurrentBufferSlots]int
+	n := 0
+	for i := range b.rotationLocked() {
+		if b.seq[i] > seq && !(b.writing && i == b.writeSlot) {
+			order[n] = i
+			n++
+		}
+	}
+	slices.SortFunc(order[:n], func(x, y int) int { return cmp.Compare(b.seq[x], b.seq[y]) })
+	newest := seq
+	if n > 0 {
+		newest = b.seq[order[n-1]]
+	}
+	b.mu.Unlock()
+	for _, i := range order[:n] {
+		visit(&b.slots[i])
+	}
+	return newest
+}
+
+// PublicationSeq reports the number of the committed publication, zero before
+// the first.
+func (b *Buffer) PublicationSeq() uint64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.committed == 0 {
+		return 0
+	}
+	return b.seq[b.committed-1]
+}
+
 // PublishedTick reports the last committed tick.
 func (b *Buffer) PublishedTick() (uint32, bool) {
-	if b == nil || !b.published {
+	if b == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.published {
 		return 0, false
 	}
 	return b.lastTick, true

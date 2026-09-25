@@ -636,14 +636,11 @@ func RetailBattleSummary(s *Session, description, gameID string, configuredUnitL
 	} else {
 		// Skirmish is session kind 2, the same game type the summary panel
 		// renders as `Skirmish (%d players)` [08 R-SAVE-02 §3] [08 R-SAVE-02 §4].
-		// TODO(question): a save records no rule-set name. The retail bank's
-		// box vocabulary is fixed and Nanolathe adds no metadata area of its
-		// own, so there is nowhere to store the bound set's name without
-		// inventing a box, and a loaded game therefore runs under the
-		// session's current set (docs/DESIGN_GAMEPLAY_RULES.md §6). Settled
-		// by a decision on a Nanolathe-side save metadata area — a sidecar
-		// file or an agreed additional box — which is a save-format question,
-		// not a retail one.
+		// The bank records no rule-set name: its box vocabulary is fixed. The
+		// bound set's name travels in the Nanolathe sidecar beside the bank
+		// instead (SaveSidecar; docs/DESIGN_MODS_MUTATORS.md §7), and a save
+		// without one loads under the session's current set
+		// (docs/DESIGN_GAMEPLAY_RULES.md §6).
 		if s.unitLimitRules().RecordsLiveUnitLimit() {
 			summary.MaxUnits = int32(sessionUnitLimit(s))
 		}

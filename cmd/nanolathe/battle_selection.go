@@ -26,6 +26,19 @@ func (b *battleSession) currentSnapshot() (*frame.Frame, bool) {
 	return cur, cur != nil
 }
 
+// presentedSnapshot is the committed frame a draw pass shows: the client's
+// pinned publication under the asynchronous simulation, the newest otherwise
+// (battle_sim.go). Draw-path readers — the HUD's world overlays, which run on
+// the pre-record goroutine while a batch publishes — use it; host-step readers
+// keep currentSnapshot.
+func (b *battleSession) presentedSnapshot(cl *client.Client) (*frame.Frame, bool) {
+	if cl == nil {
+		return b.currentSnapshot()
+	}
+	cur := cl.PresentedFrame()
+	return cur, cur != nil
+}
+
 func (b *battleSession) hasSelection() bool {
 	if f, ok := b.currentSnapshot(); ok {
 		return len(f.Selection.Handles) != 0
@@ -114,6 +127,12 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	// already taken the lens branch for the position, so only the unit word
 	// differs — and both take it under the same condition, an armed drag
 	// rectangle keeping the pointer in the view branch [07 R-CAM-01 §11].
+	if f, ok := b.currentSnapshot(); ok {
+		// The megamap's hovered unit is the unit word over it (§3.15).
+		if handle, hit, owned := b.megamapPickTarget(f, sx, sy); owned {
+			return handle, hit, pos
+		}
+	}
 	if b.modernDrag == nil && b.isOverMinimap(sx, sy) && !b.battleState().Input.DragActive {
 		f, ok := b.currentSnapshot()
 		if !ok {

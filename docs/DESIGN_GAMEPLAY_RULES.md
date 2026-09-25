@@ -91,7 +91,7 @@ as a second way to select a policy: a composed session always binds.
 | `visibility.Rules` | `internal/visibility` | Community allied-jammer suppression and aircraft border visibility (DESIGN_COMMUNITY_PATCH §4.4); no prior seam owned per-viewer sensor decisions |
 | `session.ScriptPortRules` | `internal/session` | Community recorder ports 32 and 69–75 (DESIGN_COMMUNITY_PATCH §4.5) |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
-| `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned; [re-route staggering](DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering): a 0–7 tick offset on the 60-tick re-route throttle; [group-order spreading](DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading): a same-tick group's first requests admitted over three ticks, nearest first; [bounded path work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work): carried search work capped at four shares and a futile polling sweep ends the player's call; [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots): each actor of an ordinary group move gets its own free destination footprint; [allied pass-through](DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through): head-on friendly movers pass through each other mid-route; [unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves): a goal certified sealed by a static re-run of the setup ray finishes its eligible move at the frontier after a 90-tick dwell and a closing probe; [jam release](DESIGN_MOVEMENT_PATH.md#modern-jam-release): a ground mover friendly units have blocked for 30 ticks ignores friendly ground occupants other than same-way movers for 90 ticks and plans over the static view |
+| `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned; [re-route staggering](DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering): a 0–7 tick offset on the 60-tick re-route throttle; [group-order spreading](DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading): a same-tick group's first requests admitted over three ticks, nearest first; [bounded path work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work): carried search work capped at four shares and a futile polling sweep ends the player's call; [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots): each actor of an ordinary group move gets its own free destination footprint; [allied pass-through](DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through): head-on friendly movers pass through each other mid-route; [unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves): a goal certified sealed by a static re-run of the setup ray finishes its eligible move at the frontier after a 90-tick dwell and a closing probe; [jam release](DESIGN_MOVEMENT_PATH.md#modern-jam-release): a ground mover friendly units have blocked for 30 ticks ignores friendly ground occupants other than same-way movers for 90 ticks and plans over the static view, and its [pocket release](DESIGN_MOVEMENT_PATH.md#modern-pocket-release) grants that release, 30 ticks after its search was rejected, to a unit that parked friends seal out of its own free destination, finishing the move in place after two such releases; [wedge escape](DESIGN_MOVEMENT_PATH.md#modern-wedge-escape): a ground mover a wreck was stamped over may step off the rejected cells it already covers, its own search reads them as passable, and a mover wedged under a route planned elsewhere re-plans at once |
 | `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); Strict 3.1 and Community bind `path.RetailKernel`, Modern binds `path.StraightenKernel` ([route straightening](DESIGN_MOVEMENT_PATH.md#modern-route-straightening)) |
 | `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); Strict 3.1 and Community bind `ai.RetailPlanner`, Modern binds `ai.ModernPlanner` ([wave air targets](DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets)) |
 
@@ -274,25 +274,25 @@ extension-specific migration hook; do not assume it cancels or converts work.
 
 ## 6. Save interaction
 
-A save records **no rule-set name**. The retail bank's box vocabulary is
-fixed and Nanolathe adds no metadata area of its own, so there is nowhere to
-store `RuleSet.Name` without inventing a box, and this design does not change
-retail save bytes. The gameplay word lives in the settings file, not in the
-save.
+The retail bank records **no rule-set name**; its box vocabulary is fixed and
+this design does not change retail save bytes. Nanolathe records the name in
+a sidecar file beside the bank instead
+([DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar)),
+together with the Community sources, the battle-entry table, the unit limit,
+the mod and the mutators.
 
-Consequently **a loaded game runs under the session's current rule set.** The
+**A save with a sidecar restores its own rule set.** The load binds the
+recorded name during staging, stages with the recorded Community sources and
+entry table, and makes the recorded set the host's selection, so the options
+control, a restart and the next battle agree with the loaded game. A recorded
+name this build cannot select (a registered set that is not linked) loads
+under its recorded base, with a warning on the battle message line.
+
+**A save without a sidecar** — every retail save and every Nanolathe save
+written before the sidecar — runs under the session's current rule set. The
 load path carries the caller's mode word, binds the matching set during
-composition, and the restored battle continues under it. The code site
-carries a `TODO(question)` naming what is missing: a decision on a
-Nanolathe-side save metadata area — a sidecar file, or an agreed additional
-box — which is a save-format question rather than a retail one.
-
-**Planned change.** [DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar)
-settles that question with a Nanolathe sidecar file beside the bank. The
-sidecar records the bound set, the Community sources, the unit limit, the mod
-and the mutators, and a load restores them. Until that design is implemented,
-this section describes the code. A save without a sidecar keeps this
-behaviour afterwards.
+composition, and the restored battle continues under it. Nothing is inferred
+from the loaded content.
 
 A future extension that needs persistent identity or private state must first
 settle the metadata format, versioning, missing-set behavior and restoration
@@ -432,9 +432,9 @@ Two consequences are worth stating because they are observable:
   or settings-file choice.
 - Headless and simulation-cost reports include `rules` for the bound set
   name; session debug captures also include `rules`. The headless report
-  exposes the session base separately as `gameplay`. A retail save still
-  carries no rule-set name (§6). Reports identify a run's selection but do not
-  make loading a save restore that selection.
+  exposes the session base separately as `gameplay`. A retail bank still
+  carries no rule-set name; the Nanolathe sidecar beside it does, and a load
+  restores that selection (§6).
 
 ## 9. Extending the existing mechanism
 

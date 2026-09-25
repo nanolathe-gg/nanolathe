@@ -157,6 +157,16 @@ type gameShell struct {
 	gameplay         gameplay.Mode
 	gameplayFeatures community.Overrides
 	builderOptions   settings.BuilderOptions
+	// modSetting and mutatorSetting are the saved mod choice and mutator set.
+	// They are written back unchanged unless the Mods & Mutators screen
+	// applies new ones, so a --mod or --mutator flag never overwrites them
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3, §6).
+	modSetting     settings.ModSelection
+	mutatorSetting map[string]string
+	// controlsOffered is the saved list of content whose recommended
+	// settings have been offered, so each is offered once
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+	controlsOffered []string
 	// messages is the message-column ring configuration (`textlines`,
 	// `textscroll`, `screenchat`, `unitchattext`). The options family's
 	// interface page writes `textscroll`, `textlines` and `unitchattext`;
@@ -175,7 +185,8 @@ type gameShell struct {
 	// `LEFTCLICK` two-stage button writes [07 R-CAM-01 §5].
 	interfaceType int
 	// switchAlt is the persisted digit-key mux bit [07 R-CAM-01 §4]. It has
-	// no authored options-page gadget; the shell carries it into each battle.
+	// no authored options-page gadget; the Orders page adds Nanolathe's, and
+	// the shell carries it into each battle.
 	switchAlt bool
 	// clockVisible is the persisted stand-alone battle-clock bit. It has no
 	// options-page gadget; `+Clock` changes it during battle and the shell
@@ -353,50 +364,140 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 
 // runGameShell is the windowed entry: retail menus by default; straight into
 // the battle view when --map was supplied (the established development path).
-func runGameShell(opts Options, cs *contentSet) error {
+// launch is the command line as given, which a start that must drop the saved
+// mod remounts from.
+func runGameShell(launch, opts Options, cs *contentSet) error {
 	if opts.Map != "" {
-		return runBattleView(opts, cs)
+		return runBattleView(launch, opts, cs)
 	}
-
-	shell, err := newGameShell(opts, cs)
-	if err != nil {
-		return err
-	}
-	// The persisted frontend preferences are read once here, before the first
-	// panel is drawn, the way retail reads its registry block during startup
-	// [07 §4].
-	shell.attachSettings()
-	if err := validatePresentationZoom(shell.opts); err != nil {
-		return err
-	}
-	maps := shell.maps
 
 	const winW, winH = 640, 480
-	shell.cam = &camera.Camera{X: 0, Z: 0, ViewW: winW, ViewH: winH, MapW: winW, MapH: winH}
 	buf := &frame.Buffer{}
+	// The window loop reaches the shell through host, so a content reload can
+	// replace the shell between two steps (docs/DESIGN_MODS_MUTATORS.md §4.4).
+	host := &shellHost{}
 	var cl *client.Client
-	cl, err = client.New(client.Options{
+	cl, err := client.New(client.Options{
 		Buffer: buf,
 		Width:  winW,
 		Height: winH,
 		Title:  "Nanolathe",
-		Step:   func(delta float64) { shell.step(delta, cl) },
+		Step:   func(delta float64) { host.step(delta, cl) },
 		// The shell's client morphs into the battle's, so the Enhanced blend's
 		// fraction producer follows whichever battle is live; outside a battle
 		// there is no tick to be part-way through
 		// (docs/DESIGN_GPU_RENDERER.md §13.5).
 		TickFraction: func() float32 {
-			if shell.battle == nil {
+			if host.shell.battle == nil {
 				return 0
 			}
-			return shell.battle.tickFraction()
+			return host.shell.battle.tickFraction()
+		},
+		PresentationTick: func() (uint32, bool) {
+			if host.shell.battle == nil {
+				return 0, false
+			}
+			return host.shell.battle.presentationTick()
+		},
+		JoinSimulation: func() {
+			if host.shell.battle != nil {
+				host.shell.battle.stopSimulation(cl)
+			}
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
+	shell, err := startWindowedShell(launch, opts, cs, cl)
+	if err != nil {
+		return err
+	}
+	host.shell = shell
+	if err := validatePresentationZoom(shell.opts); err != nil {
+		return err
+	}
+	if opts.LoadSave != "" {
+		// The host supplied an explicit path; loading is performed before the
+		// client loop starts, on the same thread that owns render-thread state.
+		// No file-picker or alternate save format is introduced here.
+		if err := shell.loadRetailSavePath(opts.LoadSave); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(shell.maps))
+	shell.queueStartupMovie()
+	defer func() { host.shell.closeIntro(cl) }()
+	return ebitenapp.Run(cl, rendererMode(shell.opts), host.windowOptions())
+}
+
+// startWindowedShell builds the menu shell on cs and binds the client to it.
+// A mod the saved choice selected must never stop the game from starting
+// (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"): when the shell
+// cannot be built or bound on it, the start remounts with no mod and says why
+// on the main menu. A --mod that fails stays an error.
+func startWindowedShell(launch, opts Options, cs *contentSet, cl *client.Client) (*gameShell, error) {
+	shell, _, err := startWithSavedModFallback(launch, opts, cs, func(opts Options, cs *contentSet) (*gameShell, error) {
+		return buildWindowedShell(opts, cs, cl)
+	})
+	return shell, err
+}
+
+// startWithSavedModFallback runs start on cs. When start fails and the saved
+// choice, not --mod, selected cs's mod, the mod failed to build or bind, so
+// the start remounts with no mod (startWithoutSavedMod names the mod and the
+// reason) and runs start once more on that set
+// (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"). It returns
+// the set start succeeded on, which the caller owns; a replaced cs is closed.
+// launch is the command line as given.
+func startWithSavedModFallback[T any](launch, opts Options, cs *contentSet, start func(Options, *contentSet) (T, error)) (T, *contentSet, error) {
+	result, err := start(opts, cs)
+	if err == nil || !cs.savedMod || cs.mod == nil {
+		return result, cs, err
+	}
+	var zero T
+	fresh, err := startWithoutSavedMod(launch, *cs.mod, err)
+	if err != nil {
+		return zero, cs, err
+	}
+	_ = cs.Close()
+	opts.Root, opts.Roots, opts.ContentProfile = fresh.root, fresh.roots, fresh.profile
+	result, err = start(opts, fresh)
+	if err != nil {
+		_ = fresh.Close()
+		return zero, nil, err
+	}
+	return result, fresh, nil
+}
+
+// buildWindowedShell composes the menu shell on cs, reads the persisted
+// preferences into it and binds the client. A shell that fails to bind
+// releases its audio; cs stays its caller's.
+func buildWindowedShell(opts Options, cs *contentSet, cl *client.Client) (*gameShell, error) {
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		return nil, err
+	}
+	// The persisted frontend preferences are read once here, before the first
+	// panel is drawn, the way retail reads its registry block during startup
+	// [07 §4].
+	shell.attachSettings()
+	shell.enforceModGameplayMinimum()
+	shell.cam = &camera.Camera{X: 0, Z: 0, ViewW: retailScreenW, ViewH: retailScreenH, MapW: retailScreenW, MapH: retailScreenH}
 	clPtr = cl // entering a battle morphs THIS client
-	cl.SetModelFS(cs.unmappedMount)
+	if err := bindShellContent(shell, cl); err != nil {
+		shell.releaseAudio()
+		return nil, err
+	}
+	return shell, nil
+}
+
+// bindShellContent installs everything the client takes from a shell's
+// mounted content: the model filesystem (which also clears the client's model,
+// texture and feature caches), camera, display options, palette, font and the
+// software cursor. Start-up and a content reload both come through here, so
+// the two cannot drift apart.
+func bindShellContent(shell *gameShell, cl *client.Client) error {
+	cl.SetModelFS(shell.cs.unmappedMount)
 	cl.SetCamera(shell.cam)
 	// The preferences were read before the client existed, so the three
 	// display-option bits reach it here [07 R-FE-01 §6].
@@ -413,24 +514,13 @@ func runGameShell(opts Options, cs *contentSet) error {
 	}
 	// Software cursor [07 §8]. The cursor GAF is mandatory for the windowed
 	// frontend, and installation happens before entering Ebitengine's loop.
-	cursors, cerr := client.LoadCursors(cs.fs)
-	if cerr != nil {
-		return cerr
+	cursors, err := client.LoadCursors(shell.cs.fs)
+	if err != nil {
+		return err
 	}
 	cl.SetCursors(cursors)
 	cl.SetUIStage(gameShellUIStage{shell: shell})
-	if opts.LoadSave != "" {
-		// The host supplied an explicit path; loading is performed before the
-		// client loop starts, on the same thread that owns render-thread state.
-		// No file-picker or alternate save format is introduced here.
-		if err := shell.loadRetailSavePath(opts.LoadSave); err != nil {
-			return err
-		}
-	}
-	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
-	shell.queueStartupMovie()
-	defer shell.closeIntro(cl)
-	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
+	return nil
 }
 
 func loadMenuAssets(cs *contentSet) *menuAssets {
@@ -669,6 +759,11 @@ func (g *gameShell) openMenuWithTokenFlush(mode shellMode, flushTokens bool) {
 			// The builder sees runtime-appended controls and resolves all
 			// records before Panel copies instance state. Repaints only use the
 			// installed record and never reassign keys [07 R-WGT-01 §3].
+			if mode == modeMenuMain {
+				// The Nanolathe-owned MODS button and status line
+				// (docs/DESIGN_MODS_MUTATORS.md §8.1).
+				installMainMenuModsButton(window)
+			}
 			g.installRetailWindowButtonArt(window, p.art)
 			g.installRetailListScrollbars(window, p.art)
 			if mode == modeMenuMain {
@@ -689,6 +784,7 @@ func (g *gameShell) openMenuWithTokenFlush(mode shellMode, flushTokens bool) {
 				if i := window.GadgetIndex("DebugString"); i >= 0 {
 					window.Gadgets[i].Rect.X -= int32(g.retailTextWidth(menuVersion) / 2)
 				}
+				g.refreshMainMenuModStatus(panel)
 			}
 		}
 	}
@@ -806,6 +902,12 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
+	// Nothing below may touch the battle's session while its simulation
+	// goroutine runs; join it first (battle_sim.go, DESIGN_GPU_RENDERER §13.13).
+	if g.battle != nil {
+		g.battle.joinSimulation(cl)
+		g.battle.syncSimulationMode(cl)
+	}
 	if g.startupMoviePending {
 		g.startupMoviePending = false
 		reportRetailMessageError(g.startMovie(cl, startupMoviePath, false))
@@ -816,14 +918,25 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 		return
 	}
 	pumpAudio(time.Now())
+	// A drop's outcome is taken before the download poll, so the Get more mods
+	// dialog never reports a drop install as its own download.
+	g.pollModDrop(cl)
+	g.pollModsFetch()
+	// A mod's recommended settings are offered once, over the bare main
+	// menu, however the mod came to be running (docs/DESIGN_MODS_MUTATORS.md
+	// §4.3).
+	g.pollControlsOffer()
 	if cl != nil && cl.IsFocused() && g.audioOwner != nil && g.audioOwner.Music != nil {
 		serviceMusic(g.audioOwner)
 	}
 	g.playPendingMenuBGM()
 	switch g.frontend.Mode {
 	case modeBattle:
-		if g.battle != nil {
-			g.battle.viewerStep(delta, cl)
+		if battle := g.battle; battle != nil {
+			battle.viewerStep(delta, cl)
+			// The sub-ticks this step released run on the simulation goroutine
+			// from here until the next step joins them (battle_sim.go).
+			battle.launchSimulation(cl)
 		}
 	case modeLoading:
 		// The transition that blocks on catalog and map loading installs the

@@ -240,6 +240,17 @@ func assertProTASessionComposition(t *testing.T, s *Session) {
 	if err != nil {
 		t.Fatalf("resolve independent ProTA feature table: %v", err)
 	}
+	// The ProTA content profile adds the historical package switches to
+	// the build table (docs/DESIGN_COMMUNITY_PATCH.md §4.7).
+	wantFeatures.AIDifficultyIncome = true
+	wantFeatures.AIStockpileProducts = true
+	wantFeatures.TargetLockRelease = true
+	wantFeatures.AIApplianceEnergy = true
+	wantFeatures.AIBuilderStopThreshold = true
+	wantFeatures.WorkingWeaponsAutonomous = true
+	wantFeatures.AttackSingleSlotTake = true
+	wantFeatures.MapFeatureOwnerEleven = true
+	wantFeatures.ResurrectionTextFix = true
 	if s.Gameplay != gameplay.Modern || s.Rules.Name != ModernRuleSetName {
 		t.Fatalf("ProTA gameplay/rules = %q/%q, want %q/%q", s.Gameplay, s.Rules.Name, gameplay.Modern, ModernRuleSetName)
 	}

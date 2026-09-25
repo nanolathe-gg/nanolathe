@@ -217,6 +217,10 @@ canvas. `Layout` also publishes the actual outside dimensions to the client,
 so camera edge scrolling includes letterbox bars and bounded overshoot on every
 side (DESIGN_INTERFACE_HUD_INPUT §3.1). Only the camera uses that adapted
 position; the raw pointer remains the source for picking and widgets.
+When fullscreen scales the canvas down, Ebitengine's integer logical pointer
+sample can stop short of the trailing logical pixel at the last physical
+display pixel. The edge adapter treats the final physical pixel's logical
+interval as the edge for camera scrolling.
 Neither executor renders the world at desktop resolution merely
 because the window is fullscreen.
 
@@ -373,7 +377,7 @@ files:
 |---|---|
 | `client.go` | the type, its caches, options, size, present, exit |
 | `frame.go` | `Frame`, the compose entry, fog draw, visibility predicates for units, features and projectiles |
-| `world_draw.go` | the ten barriers, the plot-cell window, the screen-Y buckets, the two feature passes and the two unit passes |
+| `world_draw.go` | the ten barriers, the plot-cell window, the screen-Y buckets, the two feature passes (the tall pass carries the ProTA placer-11 LOS bypass, [DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)) and the two unit passes |
 | `terrain.go` | the tile blitter: source block plus intra-tile remainder, clipped at map bounds |
 | `model*.go` | the model rasterizer — see §2.3 |
 | `strip_draw.go`, `effect_draw.go` | the per-barrier strip walk and the fixed-effect pool draw |
@@ -471,6 +475,16 @@ PAL atlas row consume those same output colours. The logical and physical
 index-remap tables do not change, and no gamma value reaches simulation state
 `[07 R-FE-01 §11]` [I6].
 
+Results keep the battle picture until the outcome art replaces it. The frame
+that first shows the latched result is the live battle frame with the
+in-battle end title and no results art. Every later darkening frame
+recomposes that frozen picture, title included, and then shades it
+(DESIGN_INTERFACE_HUD_INPUT §3.8 "In-battle end titles", `[07 §11]`). The
+campaign CD-check idle (state 8) keeps the fully darkened picture behind its
+dialog, because retail's state 8 only redraws its windows
+(`postBattleShadesPicture`, `[08 R-CAMP-01 §6]`). The Modern executor darkens
+in true colour, so mid-sequence it differs from Classic by the compounded
+palette rounding that DESIGN_GPU_RENDERER §13.3 describes.
 Results retain the battle palette and gamma throughout darkening, then save
 the current factor and force neutral gamma for outcome art. The glamour
 entry installs its black palette before the first image composition; later
@@ -794,10 +808,10 @@ are C1 and C3 of §3.1.
 * **C11 Backend.** There is one Ebitengine game loop and one window. Its fixed
   logical size is distinct from the negotiated outside size, so Ebitengine can
   letterbox without changing authored HUD coordinates.
-* **C13 Draw order.** Units and comparable world objects reach the draw loops
-  through per-row screen-Y bucket insertion, appended in enumeration order.
-  Paint order is Y-sorted rows with in-row enumeration order, and there is **no
-  depth test** `[03 §1]` `[03 R-RAST-01 §7]`.
+* **C13 Draw order.** Units reach the draw loops through world-Z plot-row
+  buckets, appended in ascending slot order. Original paints each row in that
+  order with **no scene depth test** `[03 §1]` `[03 R-RAST-01 §7]`.
+  Enhanced refines the order of units within a row (DESIGN_GPU_RENDERER §5.5).
 
 C2 (scroll magnitude) and C5 (the 30-entry keyboard ring and 24-record mouse
 ring) belong to `internal/camera` and `internal/input`; the interface design
@@ -1052,7 +1066,14 @@ document carries them.
 * **C12 Committed sampling.** The client reads world positions, piece
   rotations, rotation accumulators and animation ticks from the one committed
   frame for the current tick. Retail does not interpolate between updates
-  `[03 §2.4]` [I6].
+  `[03 §2.4]` [I6]. Each committed piece lane carries the model piece it
+  poses: publication copies the unit binding's script-to-model link
+  (`Binding.PieceMap`), and `modelStates` poses through that index for both
+  renderers. A script piece whose name the model lacks therefore animates the
+  model piece its slot took, on screen as in the simulation, and a script
+  piece beyond the model's piece count (`-1`) poses nothing `[04 R-COB-01 §4]`.
+  Only lanes with no link — authored preview poses and a script attached
+  without a model binding — name their piece instead.
 
 ### 3.3 Audio — C13–C20
 

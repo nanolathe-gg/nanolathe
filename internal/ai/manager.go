@@ -1,9 +1,11 @@
 package ai
 
 import (
-	"github.com/nanolathe-gg/nanolathe/internal/construction"
+	"math"
 	"sort"
 
+	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -225,6 +227,12 @@ type Manager struct {
 	Planner Planner `json:"-"`
 	// The same construction policy used by human admission, bound by Session.
 	ConstructionRules construction.Rules `json:"-"`
+	// Community is the session's projected copy of the feature-table answers
+	// the think step reads: the three ProTA 4.8 package AI switches
+	// (DESIGN_COMMUNITY_PATCH §4.7). The session writes it beside Planner at
+	// composition and at the command boundary; the zero value, which Strict
+	// 3.1 always projects, is the retail step.
+	Community community.Features `json:"-"`
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.
@@ -551,8 +559,13 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 		if k == TaskEmptySlot {
 			continue
 		}
-		// The null task is a real slot with no body and no rescheduling.
-		if k == TaskNull {
+		// The null task is a real slot with no body and no rescheduling. The
+		// ProTA 4.8 package points the armed-building record's task at the
+		// resource/builder-queue body instead, which reschedules at +30 and
+		// walks that record in vector order
+		// (research/extensions/prota-engine.md "shipped 4.8 stockpile
+		// purchasing").
+		if k == TaskNull && !m.Community.AIStockpileProducts {
 			if m.Deadlines[k] > tick {
 				continue
 			}
@@ -576,6 +589,8 @@ func (m *Manager) runDueTasks(tick uint32, w *units.World, econ *economy.Service
 			m.doConstruction(tick, w, econ)
 		case TaskResource:
 			m.doResource(tick, w, econ)
+		case TaskNull:
+			m.doResourceGroup(tick, w, econ, m.GroupNull)
 		case TaskWaveA:
 			m.doWave(tick, w, econ, waveAThreshold, waveMin, waveMax)
 		case TaskWaveB:
@@ -601,6 +616,11 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 		return tick + 90 // [08] construction/positioning at currentTick+90 [P0-02]
 	case TaskResource:
 		return tick + 30 // [08] resource/queue at +30 [P0-02]
+	case TaskNull:
+		if m.Community.AIStockpileProducts {
+			return tick + 30 // the ProTA package's resource/queue body on the armed-building record
+		}
+		return 0 // stays 0 [P0-02]
 	case TaskWaveA, TaskWaveB:
 		return tick + 300 // [P0-02] attack waves at +300
 	case TaskRegroupA, TaskRegroupB:
@@ -619,7 +639,7 @@ func (m *Manager) nextDeadline(k TaskKind, tick uint32) uint32 {
 		}
 		r := s.Uint32n(150)  // [08] bound 150 (I4) [P0-02] per-session isolated [RS-06]
 		return tick + 30 + r // [08] tick+30+RNG(150) [P0-02]
-	case TaskEmptySlot, TaskNull:
+	case TaskEmptySlot:
 		return 0 // stays 0 [P0-02]
 	default:
 		return tick + 30
@@ -658,10 +678,15 @@ func (m *Manager) doConstruction(tick uint32, w *units.World, econ *economy.Serv
 // constructionPlacePass is pass one: choose and place a building for every
 // member of the construction vector, in vector order [08 R-AI-01 §3].
 func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *economy.Service, centreX, centreZ numeric.Fixed, buildCapable int32) {
-	// TODO(question): ProTA documents raising the commander builder threshold
-	// from five to ten; readable source or bounded observations must establish
-	// its eligibility and the paired reposition gate before adopting it. See
-	// research/extensions/prota-engine.md "Unknown".
+	// The capture-capable placement cutoff is retail's five, or ten under the
+	// ProTA 4.8 package switch. Only this first comparison moves; the
+	// reposition pass keeps five, so counts five through nine are eligible for
+	// both passes (research/extensions/prota-engine.md "shipped 4.8
+	// construction threshold is asymmetric").
+	placementCutoff := int32(5)
+	if m.Community.AIBuilderStopThreshold {
+		placementCutoff = 10
+	}
 	// The retail task does not rediscover builders from the world when its
 	// vector is empty; the classifier and ordinary group writers are the
 	// admissions to this input [R-P0-04].
@@ -676,10 +701,11 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 			continue
 		}
 		if u.Def.CanCapture {
-			// Signed compare against five build-capable own units, then the
-			// manager's damage/loss throttle deadline as an unsigned compare.
-			// Both gates are `cancapture`-only [08 R-AI-01 §3].
-			if buildCapable >= 5 {
+			// Signed compare against five build-capable own units (ten under
+			// the ProTA package switch), then the manager's damage/loss
+			// throttle deadline as an unsigned compare. Both gates are
+			// `cancapture`-only [08 R-AI-01 §3].
+			if buildCapable >= placementCutoff {
 				continue
 			}
 			if tick < m.unitLossDeadline {
@@ -735,6 +761,7 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 				UnitKey: cand.DefKey,
 				Count:   1,
 				Kind:    BuildKindFactoryQueue,
+				Tick:    tick,
 			}
 			_ = m.QueueBuildTyped(req)
 			continue
@@ -938,9 +965,17 @@ func (m *Manager) constructionRepositionPass(tick uint32, w *units.World, centre
 }
 
 // doResource implements the eco/queue task at tick plus thirty. It consumes
-// only the resource/activity group populated by established writer paths
-// [08 "Eco toggle and group-vector population"].
+// only the group record it is dispatched for — the resource/activity record
+// populated by established writer paths [08 "Eco toggle and group-vector
+// population"], and under the ProTA 4.8 package the armed-building record as
+// well (research/extensions/prota-engine.md "shipped 4.8 stockpile
+// purchasing").
 func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service) {
+	m.doResourceGroup(tick, w, econ, m.GroupResource)
+}
+
+// doResourceGroup is the resource/builder-queue body over one group record.
+func (m *Manager) doResourceGroup(tick uint32, w *units.World, econ *economy.Service, group []pool.Handle) {
 	if w == nil || econ == nil {
 		return
 	}
@@ -952,9 +987,9 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 	// Manager dispatch reads the settled economy aggregates, not the
 	// per-pass reporting counters [R-P0-05].
 	netEnergy := econ.Players[m.Player].AIProduction[economy.Energy] - econ.Players[m.Player].AIConsumption[economy.Energy]
-	// The eco task scans its assigned resource/activity vector, not the whole
-	// owner slice [08][R-P0-04].
-	for _, h := range m.GroupResource {
+	// The eco task scans its assigned group vector, not the whole owner slice
+	// [08][R-P0-04].
+	for _, h := range group {
 		u := w.Unit(h)
 		if u == nil || !u.Alive || u.Owner != m.Player {
 			continue
@@ -971,15 +1006,25 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		if u.Remaining != 0 {
 			continue
 		}
+		// The ProTA 4.8 package adds one admission after the live, completed
+		// building test: a unit holding any secondary order is skipped for the
+		// whole visit, energy management included. Only the order's presence
+		// is tested — not its count, and not the slot's completed rounds — so
+		// another round can be requested once both order segments drain
+		// (research/extensions/prota-engine.md "shipped 4.8 stockpile
+		// purchasing").
+		if m.Community.AIStockpileProducts {
+			if q := orders.QueueOfUnit(u); q != nil && q.LenSecondary() > 0 {
+				continue
+			}
+		}
 		// The authored makes-metal byte selects the activation branch
-		// [08 "Eco toggle and group-vector population"].
-		// TODO(question): ProTA documents shutting down other energy consumers;
-		// their eligibility, thresholds and reactivation/RNG path need readable
-		// source or bounded observations. Keep the retail predicate here. See
-		// research/extensions/prota-engine.md "Unknown".
-		if u.Def.MakesMetal != 0 {
+		// [08 "Eco toggle and group-vector population"]; the ProTA package
+		// replaces that selector with its low-energy appliance test.
+		if m.activationBranch(u.Def) {
 			// Established: equality disables; nonpositive net energy and a
-			// zero draw leave activation unchanged [08 R-AI-01 §2].
+			// zero draw leave activation unchanged [08 R-AI-01 §2]. The ProTA
+			// appliance branch keeps this order, threshold and draw unchanged.
 			if energyStock <= metalStock+metalStock {
 				u.SetActivated(false)
 			} else if netEnergy > 0 {
@@ -1006,6 +1051,21 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 		// This branch was missing entirely: nanolathe queued factory products
 		// from the construction task instead, which only worked while the
 		// classifier misfiled buildings into the construction group.
+		//
+		// Under the ProTA 4.8 package the armed-building record reaches this
+		// branch as well. A stationary stockpile producer's single CANBUILD
+		// entry is a MAKENUKE/MAKEANTI pseudo-product, which the ordinary
+		// submission helper bound as QueueBuildTyped turns into one slot-zero
+		// BuildWeapon round rather than a unit order
+		// (research/extensions/prota-engine.md "authored stationary stockpile
+		// producers").
+		//
+		// No shipped ProTA 4.8 route services the CANBUILD entries of the two
+		// mobile anti-nuke units (ARMSCAB, CORMABM: builder=0, bmcode=1), and
+		// the regular Core east/west shipyards (CORSYE, CORSYW) gain no
+		// membership from the CORSYNE/CORSYNW lists, so both keep the authored
+		// (empty) membership (research/extensions/prota-engine.md "AI and
+		// economy evidence audit" and its directional-shipyard paragraph).
 		if !m.hasBuildOptionsForDef(u.Def) {
 			continue
 		}
@@ -1028,11 +1088,30 @@ func (m *Manager) doResource(tick uint32, w *units.World, econ *economy.Service)
 			UnitKey: cand.DefKey,
 			Count:   1,
 			Kind:    BuildKindFactoryQueue,
+			Tick:    tick,
 		}
 		if err := m.QueueBuildTyped(req); err != nil {
 			continue
 		}
 	}
+}
+
+// activationBranch selects the resource task's activation arm. Retail tests
+// the authored makes-metal byte [08 R-AI-01 §2]. The ProTA 4.8 package tests
+// `energyuse` instead: the most significant byte of its binary32 encoding,
+// read as signed, must be at least 66. For finite nonnegative values that is
+// `energyuse >= 32`; negative values (negative zero included) fail and
+// positive infinity and positive-sign NaNs pass. It is a bit test, not a test
+// for any positive consumption (research/extensions/prota-engine.md "shipped
+// 4.8 low-energy appliances").
+func (m *Manager) activationBranch(def *content.UnitDef) bool {
+	if m.Community.AIApplianceEnergy {
+		// The compiled definition carries the authored value at double width;
+		// the record field retail reads is its binary32 narrowing, the same
+		// one the economy's upkeep reads [02 "Unit record"].
+		return int8(math.Float32bits(float32(def.EnergyUse))>>24) >= 66
+	}
+	return def.MakesMetal != 0
 }
 
 // doWave implements the attack wave A/B task at +300 [08 "Wave merge"][P0-02].

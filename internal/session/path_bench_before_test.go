@@ -19,6 +19,8 @@ func (*modernNoPathfinding) GroupDestinationSlots(*movement.System) bool       {
 func (*modernNoPathfinding) AlliedPassThrough(*movement.System) bool           { return false }
 func (*modernNoPathfinding) UnreachableMoves(*movement.System) (int32, uint32) { return 0, 0 }
 func (*modernNoPathfinding) JamRelease(*movement.System) (uint16, uint32)      { return 0, 0 }
+func (*modernNoPathfinding) WedgeEscape(*movement.System) bool                 { return false }
+func (*modernNoPathfinding) PocketRelease(*movement.System) (int32, uint32)    { return 0, 0 }
 
 type modernNoBound struct{ movement.ModernRules }
 
@@ -40,6 +42,14 @@ type modernNoJam struct{ movement.ModernRules }
 
 func (*modernNoJam) JamRelease(*movement.System) (uint16, uint32) { return 0, 0 }
 
+type modernNoWedge struct{ movement.ModernRules }
+
+func (*modernNoWedge) WedgeEscape(*movement.System) bool { return false }
+
+type modernNoPocket struct{ movement.ModernRules }
+
+func (*modernNoPocket) PocketRelease(*movement.System) (int32, uint32) { return 0, 0 }
+
 func init() {
 	RegisterRuleSet("modern-no-pathfinding", func() RuleSet {
 		return RuleSet{Movement: &modernNoPathfinding{}, Path: path.RetailKernel{}}
@@ -49,5 +59,7 @@ func init() {
 	RegisterRuleSet("modern-no-pass", func() RuleSet { return RuleSet{Movement: &modernNoPass{}} })
 	RegisterRuleSet("modern-no-unreach", func() RuleSet { return RuleSet{Movement: &modernNoUnreach{}} })
 	RegisterRuleSet("modern-no-jam", func() RuleSet { return RuleSet{Movement: &modernNoJam{}} })
+	RegisterRuleSet("modern-no-wedge", func() RuleSet { return RuleSet{Movement: &modernNoWedge{}} })
+	RegisterRuleSet("modern-no-pocket", func() RuleSet { return RuleSet{Movement: &modernNoPocket{}} })
 	RegisterRuleSet("modern-no-straighten", func() RuleSet { return RuleSet{Path: path.RetailKernel{}} })
 }

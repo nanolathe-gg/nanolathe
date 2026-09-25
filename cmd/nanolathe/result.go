@@ -119,14 +119,24 @@ func resultRoute(fs vfs.FSOps, sess *session.Session, view frame.ResultView) boo
 // outcome title art. Layout, controls, labels, and background art all come
 // from the retail GUI/GAF records; there is intentionally no generated panel,
 // dim layer, text, or button geometry here [07 §11][08 "Session end and reporting"].
-func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, view frame.ResultView) {
+//
+// watching is the local slot's watcher bit, which the ENDMSN title selector
+// reads [08 R-CAMP-01 §8].
+func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, view frame.ResultView, watching bool) {
 	if h == nil || c == nil || b == nil || !view.Ended || b.battleState().Input.ResultDismissed {
 		return
 	}
-	if b.postBattle != nil && b.postBattle.State() != session.PostBattleEndMission {
+	// Before the results controller exists the frame is the live battle frame
+	// after the latching tick: retail composes it with the in-battle end title
+	// and hands over to the results handler afterwards, so ENDMSN is not drawn
+	// yet [07 §11].
+	if b.postBattle == nil {
+		return
+	}
+	if b.postBattle.State() != session.PostBattleEndMission {
 		if b.postBattle.State() == session.PostBattleGlamour && b.postBattleGlamour != nil {
 			c.UIBlitPCX(b.postBattleGlamour, 0, 0)
-		} else if b.postBattle.State() >= session.PostBattleFadeSetup && b.postBattle.State() <= session.PostBattleOutcome {
+		} else if postBattleShadesPicture(b.postBattle.State()) {
 			b.applyPostBattleFade(c)
 		}
 		return
@@ -153,7 +163,7 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, 
 	// ENDMSN uses the in-game title bank at the frontend title anchor. Missing
 	// optional art remains a diagnostic from HUD loading and does not acquire a
 	// synthetic text substitute [08 R-CAMP-01 §8][fmt gaf].
-	title := h.resultTitleFrame(view)
+	title := h.resultTitleFrame(view, watching)
 	if title == nil {
 		return
 	}
@@ -162,11 +172,46 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, 
 	h.drawResultStats(c, b, view)
 }
 
-// resultTitleFrame selects only the two authored terminal outcomes. Draw and
-// any result kind not established by the retail result contract have no title;
-// in particular, they must not inherit the victory art by default [07 §11].
-func (h *retailBattleHUD) resultTitleFrame(view frame.ResultView) *formats.GAFFrame {
+// postBattleShadesPicture reports whether the results state still shows the
+// retained battle picture under the darkening steps emitted so far. That
+// covers states 2 to 5 and the campaign CD-check idle, state 8. In state 8
+// retail draws only its open windows over the retained picture, which state
+// 3 left fully darkened [08 R-CAMP-01 §6]. This controller reaches state 8
+// only from the CD check, never after ENDMSN.
+func postBattleShadesPicture(state session.PostBattleState) bool {
+	return state >= session.PostBattleFadeSetup && state <= session.PostBattleOutcome ||
+		state == session.PostBattleCDIdle
+}
+
+// resultTitleFrame is the ENDMSN title selector. Retail draws `igvictory`
+// when the battle was won and the local slot is not a watcher, and `igdefeat`
+// otherwise, so a watcher sees the defeat title even on a won result
+// [08 R-CAMP-01 §8]. A draw and any result kind outside the retail contract
+// have no title and must not inherit the victory art [07 §11].
+func (h *retailBattleHUD) resultTitleFrame(view frame.ResultView, watching bool) *formats.GAFFrame {
 	if h == nil || view.Draw {
+		return nil
+	}
+	switch strings.ToLower(view.Kind) {
+	case "victory":
+		if watching {
+			return h.defeatFrame
+		}
+		return h.victoryFrame
+	case "defeat":
+		return h.defeatFrame
+	default:
+		return nil
+	}
+}
+
+// endTitleFrame is the in-battle end title the battle frame composer draws
+// over the view [07 §11]. The gate before both titles is the local slot's
+// watcher bit: a watcher gets neither title. Otherwise the latch's won-path
+// bit selects `igvictory` and its lost bit selects `igdefeat`. A draw, a
+// resignation or any other ending without an outcome bit gets no title.
+func (h *retailBattleHUD) endTitleFrame(view frame.ResultView, watching bool) *formats.GAFFrame {
+	if h == nil || !view.Ended || view.Draw || watching {
 		return nil
 	}
 	switch strings.ToLower(view.Kind) {
@@ -177,6 +222,44 @@ func (h *retailBattleHUD) resultTitleFrame(view frame.ResultView) *formats.GAFFr
 	default:
 		return nil
 	}
+}
+
+// endTitleOnPicture reports whether the results sequence still shows the
+// battle picture the title was composed into. Retail composes the title into
+// the one live battle frame after the latching tick, then hands over to the
+// results handler. That handler presents without drawing and shades the
+// retained picture through the ten darkening steps. The picture stays until
+// the glamour image or the ENDMSN background replaces it [07 §11]
+// [08 R-CAMP-01 §6]. That the title survives the darkening is a Supported
+// inference; no retail capture shows it yet. This composer redraws the frozen
+// committed frame on every host frame, so it redraws the title with it until
+// that replacement.
+func (b *battleSession) endTitleOnPicture() bool {
+	if b == nil || b.battleState().Input.ResultDismissed {
+		return false
+	}
+	if b.postBattle == nil {
+		return true
+	}
+	state := b.postBattle.State()
+	return state != session.PostBattleGlamour && state != session.PostBattleEndMission
+}
+
+// drawEndTitle blits the in-battle end title at the view-centre anchor less
+// the frame's authored offsets, the anchor of the pause title
+// [07 R-HUD-05 "Centred in the view"]. It is drawn over the world and chrome,
+// before the clock line and the open windows, and the post-battle darkening
+// is applied over it [07 §11].
+func (h *retailBattleHUD) drawEndTitle(c *client.Client, b *battleSession, cur *frame.Frame) {
+	if h == nil || c == nil || cur == nil || !b.endTitleOnPicture() {
+		return
+	}
+	title := h.endTitleFrame(cur.Result, localSlotWatching(cur))
+	if title == nil {
+		return
+	}
+	w, height := c.Size()
+	c.UIBlitAnchor(title, (w+128)/2, height/2)
 }
 
 // resultStartAvailable mirrors the retail ENDMSN initializer's outcome choice:

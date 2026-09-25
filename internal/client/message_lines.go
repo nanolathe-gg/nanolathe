@@ -23,7 +23,7 @@ func (c *Client) messageLogo(speaker uint8) *formats.GAFFrame {
 	if c.buffer == nil || c.messageLogos == nil || speaker >= frame.PlayerRowSlots {
 		return nil
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	if cur == nil || !cur.Players[speaker].Present {
 		return nil
 	}

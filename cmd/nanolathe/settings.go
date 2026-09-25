@@ -64,6 +64,8 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.setPresentation(startupPresentation(g.opts, s.Presentation))
 	g.setGameplay(startupGameplay(g.opts, s.Gameplay))
 	g.gameplayFeatures = s.GameplayFeatures
+	g.modSetting, g.mutatorSetting = s.Mod, s.Mutators
+	g.controlsOffered = s.ControlsOffered
 	g.builderOptions = s.BuilderOptions
 	g.fullscreen = s.Fullscreen
 	// The message-column ring configuration is the interface page's
@@ -130,14 +132,11 @@ func (g *gameShell) applySettings(s settings.Settings) {
 		}
 	}
 	// A stored block always describes the row array in full, so the shell must
-	// not later re-derive it from scratch.
+	// not later re-derive it from scratch. Retail's loader has no all-Open
+	// fallback: rows are stored as read, and the SKIRMISH row build's test of
+	// the shown rows is the only place a live pair is forced
+	// [08 R-SKIR-01 §1] "Shown rows only".
 	g.retailControllersSet = true
-	if !g.hasLiveController() {
-		// Without a live controller every row would leave Start refused. Fall
-		// back to the default controller setup in that case.
-		g.retailControllersSet = false
-		g.ensureRetailSkirmishControllers()
-	}
 
 	// The stored map only wins if it is still installed; a map removed from the
 	// install falls back to the first of the enumerated list.
@@ -151,16 +150,6 @@ func (g *gameShell) applySettings(s settings.Settings) {
 		}
 	}
 	g.syncMapIndex()
-}
-
-// hasLiveController reports whether any row is a human or a computer player.
-func (g *gameShell) hasLiveController() bool {
-	for i := 0; i < session.SkirmishMaxPlayers; i++ {
-		if g.retailControllers[i] != 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // syncMapIndex points the SELMAP.GUI list at whatever map the setup names, so
@@ -201,6 +190,9 @@ func (g *gameShell) captureSettings() settings.Settings {
 		Gameplay:         g.gameplay.Normalize(),
 		GameplayFeatures: g.gameplayFeatures,
 		BuilderOptions:   g.builderOptions,
+		Mod:              g.modSetting,
+		Mutators:         g.mutatorSetting,
+		ControlsOffered:  g.controlsOffered,
 		// The interface page's three message controls write into this block;
 		// `screenchat` rides through unchanged [02 §3][07 R-CAM-01 §7].
 		Messages: g.messages,

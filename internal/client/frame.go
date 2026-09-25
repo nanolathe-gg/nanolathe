@@ -2,12 +2,33 @@ package client
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
+
+// SetFrameTiming enables the +fps overlay's presentation-only blend timer.
+// Call after JoinPreRecord so a worker cannot read this flag concurrently.
+func (c *Client) SetFrameTiming(enabled bool) {
+	if c != nil {
+		if c.frameTiming != enabled {
+			c.blendNanos = 0
+		}
+		c.frameTiming = enabled
+	}
+}
+
+// FrameBlendNanos is the last completed record's frame interpolation time.
+// Call after JoinPreRecord when the record ran on the pipeline worker.
+func (c *Client) FrameBlendNanos() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.blendNanos
+}
 
 // visibilityGridSize validates a published mask before a projected cell is
 // used. A malformed publication cannot be interpreted as visible data [03
@@ -143,11 +164,21 @@ func (c *Client) recordFrameNoAudio() {
 	// view of the two most recent committed ticks. Classic and `--shot` never
 	// enable it, so they still record exactly the committed tick
 	// (docs/DESIGN_GPU_RENDERER.md §13.5) [I6].
+	var blendStarted time.Time
+	if c.frameTiming {
+		blendStarted = time.Now()
+	}
 	cur := c.presentationFrame()
 	ok := cur != nil
 	// blending is true when presentationFrame returned the interpolator's view
 	// rather than the committed frame itself.
-	blending := ok && cur != c.buffer.Current()
+	blending := ok && cur != c.committedFrame()
+	if c.frameTiming {
+		c.blendNanos = 0
+		if blending {
+			c.blendNanos = int64(time.Since(blendStarted))
+		}
+	}
 
 	// C9: read the committed frame only; intermediate ticks are not drawn
 	// (PLAN_03 C15). A paused simulation simply presents the same frame.
@@ -297,11 +328,13 @@ func (c *Client) waterSurfaceMetadata() drawlist.WaterSurface {
 	if c == nil || !c.enhanced || !c.effects.Water || c.strategicView() || c.buffer == nil {
 		return drawlist.WaterSurface{}
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	if cur == nil {
 		return drawlist.WaterSurface{}
 	}
-	c.observeWaterMotion(cur)
+	if !c.observesInOrder() {
+		c.observeWaterMotion(cur)
+	}
 	water := drawlist.WaterSurface{
 		Enabled: true, Tick: cur.Tick,
 		WindHeading: cur.Wind.Heading, WindStrength: cur.Wind.Strength,

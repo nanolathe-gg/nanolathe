@@ -18,14 +18,15 @@ import (
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
-// CommunityPreviewStyle is the host's three-state placement preview choice.
+// CommunityPreviewStyle is the host's placement preview choice.
 // Its values match the persisted NanoframePreview setting.
 type CommunityPreviewStyle uint8
 
 const (
-	CommunityPreviewOff CommunityPreviewStyle = iota
+	CommunityPreviewPulse CommunityPreviewStyle = iota
 	CommunityPreviewFull
 	CommunityPreviewWireframe
+	CommunityPreviewOff
 )
 
 // CommunityPreviewOptions supplies one already-resolved placement pose. Facing
@@ -50,11 +51,12 @@ type communityPreviewModelKey struct {
 var communityPreviewEphemeral = [...]string{"flare", "flash", "muzzle", "fire", "flame", "wake"}
 
 // DrawCommunityBuildPreview records a placement model at its resolved host
-// pose. Full uses the production body composer; wireframe projects the same
-// authored primitive rings and records their edges. Both use the same filtered
-// hierarchy and PreviewObject3D fallback (community patch engine, CP-UD-2).
+// pose. Pulse uses the construction reveal's empty-body outline [03 §5.2];
+// Full uses the production body composer; Wireframe projects the same authored
+// primitive rings and records their edges. All use the same filtered hierarchy
+// and PreviewObject3D fallback (community patch engine, CP-UD-2).
 func (c *Client) DrawCommunityBuildPreview(opts CommunityPreviewOptions) bool {
-	if c == nil || c.cam == nil || opts.Definition == nil || opts.Style == CommunityPreviewOff {
+	if c == nil || c.cam == nil || opts.Definition == nil || opts.Style >= CommunityPreviewOff {
 		return false
 	}
 	def := opts.Definition
@@ -79,6 +81,19 @@ func (c *Client) DrawCommunityBuildPreview(opts CommunityPreviewOptions) bool {
 	draw.KeyPlane = def.ZBuffer
 	draw.CastsShadow = false
 
+	// A placement has no unit identifier or construction fraction. Starting the
+	// existing nanoframe reveal at remaining=1 gives the same empty-body edge
+	// treatment as a newly placed building, with phase zero tied to the
+	// committed presentation tick. This is host presentation policy only.
+	if opts.Style == CommunityPreviewPulse {
+		draw.UnderConstruction, draw.KeyPlane = true, true
+		band, outline := presentationrender.NanoframePulse(0, c.frameTick)
+		band = c.communityFrameColor(opts.OwnerColor, opts.ColorKnown, band)
+		outline = c.communityFrameColor(opts.OwnerColor, opts.ColorKnown, outline)
+		reveal := presentationrender.BuildNanoframeReveal(1, band, outline)
+		return c.drawModel(draw, opts.Owner, unitTeamColor(view), 0, modelCursorUnit, &reveal, outline)
+	}
+
 	if opts.Style == CommunityPreviewFull {
 		if !c.drawModel(draw, opts.Owner, unitTeamColor(view), 0, modelCursorUnit, nil, 0) {
 			return false
@@ -89,12 +104,10 @@ func (c *Client) DrawCommunityBuildPreview(opts CommunityPreviewOptions) bool {
 	}
 	anchorX, anchorY := c.modelAnchor(draw)
 	color := c.GUIColor(15)
-	if c.communityColors.options.TeamColorNanolathe {
-		// Nanolathe's preview keeps §37's production body/wire geometry. The
-		// source feature's preview sweep begins at the first frame-ramp entry;
-		// use that same configured entry for the static host outline shared by
-		// both styles (community-patch-engine.md "Team-coloured nanolathe and
-		// nanoframe colours").
+	if opts.Style == CommunityPreviewWireframe {
+		_, color = presentationrender.NanoframePulse(0, c.frameTick)
+		color = c.communityFrameColor(opts.OwnerColor, opts.ColorKnown, color)
+	} else if c.communityColors.options.TeamColorNanolathe {
 		color = c.communityFrameColor(opts.OwnerColor, opts.ColorKnown, 0xa0)
 	}
 	rings := c.modelOutlineGeometry(draw, anchorX, anchorY, color, 1, 0, 0)

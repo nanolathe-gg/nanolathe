@@ -48,6 +48,23 @@ func TestBattleBenchmarkLeadInFlags(t *testing.T) {
 	}
 }
 
+func TestCaptureBenchmarkFlags(t *testing.T) {
+	base := []string{"--battle-benchmark=/tmp/unused-battle", "--benchmark-capture=/tmp/unused-capture", "--survival", "--map=Moon Quartet", "--shot-size=1280x827"}
+	opts, err := parseFlags(base, io.Discard)
+	if err != nil || opts.BenchmarkCapture != "/tmp/unused-capture" || opts.ShotSize != "1280x827" {
+		t.Fatalf("capture benchmark flags: opts=%+v err=%v", opts, err)
+	}
+	for _, args := range [][]string{
+		{"--benchmark-capture=/tmp/unused-capture"},
+		{"--battle-benchmark=/tmp/unused-battle", "--benchmark-capture=/tmp/unused-capture", "--map=Moon Quartet"},
+		{"--battle-benchmark=/tmp/unused-battle", "--benchmark-capture=/tmp/unused-capture", "--survival"},
+	} {
+		if _, err := parseFlags(args, io.Discard); err == nil {
+			t.Fatalf("accepted incomplete capture benchmark flags: %v", args)
+		}
+	}
+}
+
 func TestCoastalBenchmarkStagesEveryMedium(t *testing.T) {
 	root := probeRetail(t)
 	opts, err := parseFlags([]string{"--battle-benchmark=/tmp/unused-coastal", "--root=" + root}, io.Discard)

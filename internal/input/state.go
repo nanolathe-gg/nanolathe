@@ -143,6 +143,13 @@ type State struct {
 	ShortcutToken     Token
 	ShortcutTokenMode bool
 
+	// DroppedPaths are the real paths of the files and folders dropped onto
+	// the window since the previous host service, in the platform's order;
+	// empty in every other service. The desktop shell installs a dropped mod
+	// package from them (docs/DESIGN_MODS_MUTATORS.md §4.5). Host-only: it
+	// never reaches command handling or the simulation.
+	DroppedPaths []string
+
 	tokens TokenRing
 
 	pointers PointerRing

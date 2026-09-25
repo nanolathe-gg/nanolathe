@@ -398,11 +398,14 @@ func (s *saveLoadScreen) Activate(name string) saveLoadCommand {
 
 // deleteSelectedSave removes `SAVEGAME\<selected file name>`, ignores the
 // result and rebuilds the list; there is no confirmation [08 R-SAVE-02 §1].
+// The save's Nanolathe sidecar goes with it (docs/DESIGN_MODS_MUTATORS.md
+// §7.1).
 func (s *saveLoadScreen) deleteSelected() {
 	entry, ok := s.SelectedEntry()
 	if !ok {
 		return
 	}
 	_ = os.Remove(entry.Path)
+	_ = save.RemoveSidecar(entry.Path)
 	s.Refresh()
 }

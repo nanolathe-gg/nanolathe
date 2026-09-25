@@ -38,7 +38,7 @@ func (g *gameShell) communityPlacementOptionsPage(window *gui.Window) error {
 		text   string
 		stages int
 	}{
-		{"NPREVIEW", "Preview: Off|Preview: Full|Preview: Wire", 3},
+		{"NPREVIEW", "Preview: Pulse|Preview: Full|Preview: Wire|Preview: Off", 4},
 		{"NROVERLAY", "Rotate art: Off|Rotate art: On", 2},
 		{"NORDERDRAG", "Order drag: Off|Order drag: On", 2},
 		{"NTEAMNANO", "Team nano: Off|Team nano: On", 2},
@@ -175,7 +175,7 @@ func (g *gameShell) activateCommunityPlacementOption(name string) bool {
 	p := g.presentation
 	switch name {
 	case "NPREVIEW":
-		p.NanoframePreview = g.retailOptionsStage(name, 3, p.NanoframePreview)
+		p.NanoframePreview = g.retailOptionsStage(name, 4, p.NanoframePreview)
 	case "NROVERLAY":
 		p.BuildRotationOverlay = g.retailOptionsStage(name, 2, boolInt(p.BuildRotationOverlay != 0))
 	case "NORDERDRAG":

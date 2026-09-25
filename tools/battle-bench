@@ -2,6 +2,9 @@
 # Live simulation plus rendering, retail assets required. Output directory must be new.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+# Benchmarks keep their documented two-worker budget; gates default higher.
+: "${GOMAXPROCS:=2}"
+: "${NANOLATHE_TEST_P:=2}"
 . tools/go-budget
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

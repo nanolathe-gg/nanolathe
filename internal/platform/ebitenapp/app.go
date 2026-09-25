@@ -5,11 +5,11 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
@@ -97,9 +97,11 @@ type app struct {
 	updatedAt time.Time
 	// presentInterval is the minimum spacing between two presented modern
 	// frames, zero for the display's own refresh; presentedAt is when the last
-	// one was presented. See RunOptions.MaxFPS.
+	// one was presented; refresh measures the window's current refresh period
+	// from Draw arrivals. See RunOptions.MaxFPS and presentDue.
 	presentInterval time.Duration
 	presentedAt     time.Time
+	refresh         refreshEstimate
 	// pipe is the record/submit pipeline's host state
 	// (docs/DESIGN_GPU_RENDERER.md §13.10). It is modern-only: the classic path
 	// never launches a pre-record and never joins one it did not launch.
@@ -122,9 +124,21 @@ type app struct {
 	// sanity line: bodies per second must stay at the update rate however the
 	// deferral moves them.
 	bodies int64
+	// loopThreadRaised records that the game loop goroutine has pinned and
+	// raised its thread (thread_priority_darwin.go).
+	loopThreadRaised bool
 	// fpsCounter measures completed modern presentations, including paused
 	// foreground redraws, rather than Ebitengine's uncapped Draw callbacks.
 	fpsCounter fpsCounter
+	// fpsSim accumulates client/authoritative step wall time until the next
+	// completed modern Draw. The host step may run in Update or the Draw tail.
+	fpsSim time.Duration
+	// fpsGraph is a small host-only bitmap, reused while the overlay is visible.
+	fpsGraph       *ebiten.Image
+	fpsGraphPixels []byte
+	// fpsPasses is the device passes the last presented frame issued
+	// (gpurender.ModelStats.Passes), shown while the overlay is visible.
+	fpsPasses int
 }
 
 // RunOptions are the window's host-side settings, none of which the client or
@@ -169,6 +183,10 @@ type RunOptions struct {
 // Modern may defer a host body to the Draw tail, preserving the record/submit
 // pipeline (§13.10). Its sample is queued until that body actually runs.
 func (a *app) Update() error {
+	if !a.loopThreadRaised {
+		RaiseCurrentThread()
+		a.loopThreadRaised = true
+	}
 	if err := a.gpu.FogContentError(); err != nil {
 		a.c.JoinPreRecord()
 		return err
@@ -325,6 +343,9 @@ func (a *app) setRenderer(mode RendererMode) {
 	a.pipe.armed = false
 	a.mode = mode
 	if mode != RendererModern {
+		// Original presents the committed tick after each update, on the
+		// synchronous path (§13.13).
+		a.c.SetAsyncSimulation(false)
 		a.c.SetInterpolation(false)
 		// Original draws the authored art: the synthesized 2x tiles and
 		// sprites are an Enhanced feature (DESIGN_GPU_RENDERER §14.3).
@@ -344,7 +365,16 @@ func rendererName(mode RendererMode) string {
 }
 
 func (a *app) stepClient() {
+	var started time.Time
+	if a.mode == RendererModern && a.options.ShowFPS != nil && a.options.ShowFPS() {
+		started = time.Now()
+	}
 	a.c.Step(1.0 / float64(presentationTPS))
+	if !started.IsZero() {
+		// Under the asynchronous simulation the step no longer contains the
+		// sub-ticks; the batch it joined reports its own goroutine time (§13.13).
+		a.fpsSim += time.Since(started) + a.c.TakeSimulationTime()
+	}
 	if !a.c.IsFocused() {
 		// Host focus loss ends relative capture; no historical native pointer
 		// record is synthesized for the lost interval [01 R-PLAT-01 §6][T25].
@@ -386,19 +416,42 @@ func (a *app) scaledInputNow() uint32 {
 // Draw presents one composed frame. The image is recreated only when the
 // logical size changes; WritePixels replaces its contents wholesale.
 func (a *app) Draw(screen *ebiten.Image) {
+	// The arrival is taken before the pre-record join: it is the refresh this
+	// Draw belongs to, and the join's wait is not part of it.
+	arrived := time.Now()
+	showFPS := a.mode == RendererModern && a.options.ShowFPS != nil && a.options.ShowFPS()
+	var drawStarted time.Time
+	if showFPS {
+		drawStarted = arrived
+	}
 	a.beginDraw()
+	a.c.SetFrameTiming(showFPS)
 	width, height := a.c.Size()
 	// Enhanced presents on every Draw — that is the whole of the refresh-rate
 	// cadence — so it does not consume the update's pending flag; the blended
 	// view differs between two Draws of one update (§13.5).
 	if a.mode == RendererModern {
-		if !a.presentDue() {
+		if !a.presentDue(arrived) {
 			return
 		}
-		a.drawModern(screen, width, height)
+		if showFPS && a.fpsCounter.target != a.presentInterval {
+			// A live cap change starts a new history with one budget.
+			a.fpsCounter = fpsCounter{target: a.presentInterval}
+			a.fpsSim = 0
+		} else if !showFPS {
+			a.fpsCounter = fpsCounter{}
+			a.fpsSim = 0
+		}
+		blend, record, submit := a.drawModern(screen, width, height, showFPS)
+		if showFPS {
+			completed := time.Now()
+			a.fpsCounter.observe(completed, completed.Sub(drawStarted), a.fpsSim, blend, record, submit)
+			a.fpsSim = 0
+		}
 		return
 	}
 	a.fpsCounter = fpsCounter{}
+	a.fpsSim = 0
 	a.paused.clear()
 	if !a.consumePresentation() {
 		return
@@ -416,7 +469,7 @@ func (a *app) Draw(screen *ebiten.Image) {
 // c.Frame here would replay the list through the classic sink and double the work
 // (docs/DESIGN_GPU_RENDERER.md §2.4). The renderer is built lazily on first use
 // from the installed palette.
-func (a *app) drawModern(screen *ebiten.Image, width, height int) {
+func (a *app) drawModern(screen *ebiten.Image, width, height int, showFPS bool) (blend, record, submit time.Duration) {
 	if !a.sourcesPrepared {
 		// Direct --map entry and the first classic-to-modern switch have no
 		// modern loading callback. Prepare once before their first battle draw.
@@ -440,8 +493,15 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		// produces and the camera with the update phase above (§13.5) [I6].
 		a.c.SetInterpolation(true)
 		a.c.SetEnhanced(true)
+		// The window runs the session's sub-ticks on their own goroutine while
+		// it presents; the next host step starts it (§13.13).
+		a.c.SetAsyncSimulation(true)
 		a.interpolating = true
 	}
+	// Every read this Draw makes of the committed frames — the displayed
+	// resources, the digest, a synchronous record — goes through the pair
+	// pinned here (§13.13).
+	a.c.PinPresentation()
 	// Audio stays here, on the game goroutine and once per presented frame,
 	// whether the list was pre-recorded or not [03 §8.3] C18. The caption ring
 	// it can write is in the pipeline's digest, so a drain that changed what
@@ -458,7 +518,10 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// display the window is actually running on.
 	// The interval is the one the outstanding prediction was made over, so a
 	// frame that arrived late cannot widen the tolerance by its own lateness.
-	if !a.drawPaused(screen, width, height) {
+	paused, pausedRecord, pausedSubmit := a.drawPaused(screen, width, height, showFPS)
+	if paused {
+		record, submit = pausedRecord, pausedSubmit
+	} else {
 		tolerance := fractionTolerance(a.pipe.tolerancePeriod(a.presentInterval, ebiten.ActualFPS()))
 		list, hit := a.c.TakePreRecord(a.c.PresentationDigest(), tolerance)
 		switch {
@@ -471,7 +534,19 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		}
 		a.pipe.armed = false
 		if !hit {
+			var started time.Time
+			if showFPS {
+				started = time.Now()
+			}
 			list = a.c.RecordModernFrame()
+			if showFPS {
+				record = time.Since(started)
+			}
+		} else if showFPS {
+			record = time.Duration(a.c.PreRecordNanos())
+		}
+		if showFPS {
+			blend = time.Duration(a.c.FrameBlendNanos())
 		}
 		a.gpu.SetDisplayPalette(a.c.DisplayPalette())
 		a.gpu.SetGlow(a.c.Glow())
@@ -482,7 +557,16 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		// joins. Command input remains on the ordinary host step [07 §8].
 		x, y := ebiten.CursorPosition()
 		a.c.PositionPresentationCursor(list, x, y)
-		if img := a.gpu.Execute(list, width, height); img != nil {
+		var submitStarted time.Time
+		if showFPS {
+			submitStarted = time.Now()
+		}
+		img := a.gpu.Execute(list, width, height)
+		if showFPS {
+			submit = time.Since(submitStarted)
+			a.fpsPasses = a.gpu.ModelStats().Passes
+		}
+		if img != nil {
 			a.c.CommitStrategicPresentation()
 			screen.DrawImage(img, &ebiten.DrawImageOptions{})
 			a.c.MarkArrivalPresented()
@@ -490,15 +574,8 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	}
 	// The overlay is drawn after the GPU surface and outside the recorded list:
 	// screenshots and the simulation remain independent of host frame timing.
-	if a.options.ShowFPS != nil && a.options.ShowFPS() {
-		a.fpsCounter.observe(time.Now())
-		label := "FPS --"
-		if a.fpsCounter.ready {
-			label = fmt.Sprintf("FPS %.0f", a.fpsCounter.value)
-		}
-		ebitenutil.DebugPrintAt(screen, label, max(0, width-len(label)*6-9), 6)
-	} else {
-		a.fpsCounter = fpsCounter{}
+	if showFPS {
+		a.drawFPSOverlay(screen, width)
 	}
 	// Execute has enqueued this frame and copied what the device needs, so the
 	// list and the recorder's scratch are free again. Spend the flush and the
@@ -526,6 +603,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	// when an update body ran in between.
 	a.launchPreRecord(now, sampledAt, period, tick16)
 	a.pipe.observeTick(sampledAt, tick16)
+	return blend, record, submit
 }
 
 // beginDraw is shared by both executors: an F10 transition can happen in the
@@ -571,22 +649,68 @@ func (a *app) launchPreRecord(now, sampledAt time.Time, period time.Duration, ti
 	}
 }
 
-// presentDue applies RunOptions.MaxFPS to one modern Draw. The screen is
-// retained between Draws (Run configures that), so a skipped Draw leaves the
-// last presented frame on the display. The test allows an eighth of the
-// interval of slack: Draw calls sit on the vsync grid and jitter by a fraction
-// of a refresh, and without the slack a 60 cap on a 120 Hz display would skip
-// every refresh that landed a few microseconds early and present at 40.
-func (a *app) presentDue() bool {
-	if a.presentInterval <= 0 {
-		return true
-	}
-	now := time.Now()
-	if !a.presentedAt.IsZero() && now.Sub(a.presentedAt) < a.presentInterval-a.presentInterval/8 {
-		return false
+// presentDue applies RunOptions.MaxFPS to one modern Draw arriving at now.
+// The screen is retained between Draws (Run configures that), so a skipped Draw
+// leaves the last presented frame on the display.
+//
+// While the window refreshes faster than the cap, a Draw that arrives sooner
+// than the cap's interval, less an eighth of it for vsync jitter, is skipped:
+// a 60 cap presents every other refresh at 120 Hz. The refresh is not fixed,
+// though: a ProMotion panel drops to 60 Hz while a battle runs and switches
+// back later. Timed in the window, at 60 Hz that test skipped the Draw after
+// any present more than 2 ms late — the next refresh then arrives early
+// relative to it — so one hitch cost two refreshes and the counter read 55-59.
+// When the measured refresh is no faster than the cap, every refresh is due;
+// only a Draw less than half a refresh after the last present, one of a burst
+// of back-to-back Draws, is skipped.
+func (a *app) presentDue(now time.Time) bool {
+	refresh := a.refresh.observe(now)
+	if a.presentInterval > 0 && !a.presentedAt.IsZero() {
+		allowance := a.presentInterval / 8
+		threshold := a.presentInterval - allowance
+		if refresh >= threshold {
+			threshold = refresh / 2
+		}
+		if now.Sub(a.presentedAt) < threshold {
+			return false
+		}
 	}
 	a.presentedAt = now
 	return true
+}
+
+// refreshEstimate measures the refresh period the window is running at from
+// Draw arrivals: half the median spacing of two consecutive Draws. A heavy
+// frame and the light one after it arrive long then short, as do a late
+// present and the refresh after it, and a stall arrives once; pairs absorb the
+// first two and the median the third.
+type refreshEstimate struct {
+	last      time.Time
+	intervals [16]time.Duration
+	count     int
+	next      int
+}
+
+func (r *refreshEstimate) observe(now time.Time) time.Duration {
+	if !r.last.IsZero() {
+		if d := now.Sub(r.last); d > 0 {
+			r.intervals[r.next] = d
+			r.next = (r.next + 1) % len(r.intervals)
+			r.count = min(r.count+1, len(r.intervals))
+		}
+	}
+	r.last = now
+	if r.count < 4 {
+		return 0
+	}
+	var pairs [len(r.intervals) - 1]time.Duration
+	start := (r.next - r.count + len(r.intervals)) % len(r.intervals)
+	for i := range r.count - 1 {
+		pairs[i] = r.intervals[(start+i)%len(r.intervals)] + r.intervals[(start+i+1)%len(r.intervals)]
+	}
+	window := pairs[:r.count-1]
+	slices.Sort(window)
+	return window[len(window)/2] / 2
 }
 
 func (a *app) consumePresentation() bool {
@@ -789,6 +913,10 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	game.c.SetBattlePresentationPreparer(game.prepareBattlePresentation)
 	defer game.c.SetBattlePresentationPreparer(nil)
 	game.c.SetDebugDeviceCapture(game.writeDebugDeviceCapture)
+	// The pre-record goroutine is one of the frame's critical threads; the
+	// main (render) thread is raised below and the game loop at its first
+	// Update (thread_priority_darwin.go).
+	game.c.SetWorkerThreadSetup(RaiseCurrentThread)
 	defer game.c.SetDebugDeviceCapture(nil)
 	defer game.paused.clear()
 	width, height := game.desiredWindowSize()
@@ -827,5 +955,6 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	game.fullscreenPresentation = startNativeFullscreenPresentation()
 	defer game.fullscreenPresentation.close()
 	defer game.cursorClip.release()
+	RaiseCurrentThread()
 	return ebiten.RunGame(game)
 }

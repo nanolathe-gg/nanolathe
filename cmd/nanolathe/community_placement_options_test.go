@@ -36,6 +36,12 @@ func TestCommunityPlacementOptionsTransaction(t *testing.T) {
 	if p := g.presentation; p.NanoframePreview != 1 || p.BuildRotationOverlay != 0 || p.QueuedOrderDrag != 1 || p.TeamColorNanolathe != 1 || p.MexSnapRadius != 0 || p.ClickSnapOverrideKey != "ctrl" {
 		t.Fatalf("live Placement preferences=%+v", p)
 	}
+	for _, want := range []int{2, 3, 0, 1} {
+		g.activateRetailOptionsGadget("NPREVIEW")
+		if got := g.presentation.NanoframePreview; got != want {
+			t.Fatalf("preview option stage=%d, want %d", got, want)
+		}
+	}
 	g.activateRetailOptionsGadget("UNDO")
 	if p := g.presentation; p.NanoframePreview != 0 || p.BuildRotationOverlay != 1 || p.QueuedOrderDrag != 0 || p.TeamColorNanolathe != 0 || p.MexSnapRadius != -1 || p.ClickSnapOverrideKey != "alt" || p.BuildRotateKey != "r" {
 		t.Fatalf("Placement undo=%+v", p)

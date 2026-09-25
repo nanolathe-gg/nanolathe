@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/community"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
 
@@ -36,6 +37,13 @@ var detectionOrder = [...]string{"escalation", "prota", "zero", "retail"}
 
 // RetailName is the profile every unmodified install resolves to.
 const RetailName = "retail"
+
+// The controls presets a profile, like mod metadata, may recommend
+// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+const (
+	ControlsCommunity = "community"
+	ControlsRetail    = "retail"
+)
 
 // Limits records the table sizes and read caps a content set needs. The
 // catalog compile reads Units, Weapons, TNTBytes and LOSBytes through
@@ -80,6 +88,14 @@ type Profile struct {
 	Limits       Limits              `json:"limits"`
 	Presentation Presentation        `json:"presentation"`
 	Gameplay     community.Overrides `json:"gameplay,omitempty"`
+	// Controls and MinimumGameplay are the content set's recommended
+	// controls preset and gameplay minimum, spelled as in mod metadata. A
+	// mounted mod's own metadata wins; these apply only where it names none,
+	// as a metadata-less local package does, and Controls also offers the
+	// preset when the profile is mounted without a mod
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+	Controls        string `json:"controls,omitempty"`
+	MinimumGameplay string `json:"minimumGameplay,omitempty"`
 }
 
 // Layout returns the first-segment redirection this profile applies. The
@@ -115,6 +131,16 @@ func parse(data []byte, origin string) (Profile, error) {
 	profile.Name = strings.ToLower(strings.TrimSpace(profile.Name))
 	if profile.Name == "" {
 		return Profile{}, fmt.Errorf("nanolathe: content profile has no name: logical path %s, providers searched [%s], expected a named content profile", origin, origin)
+	}
+	switch profile.Controls {
+	case "", ControlsCommunity, ControlsRetail:
+	default:
+		return Profile{}, fmt.Errorf("nanolathe: content profile controls preset %q is unknown: logical path %s, providers searched [%s], expected %s, %s or omitted", profile.Controls, origin, origin, ControlsCommunity, ControlsRetail)
+	}
+	switch gameplay.Mode(profile.MinimumGameplay) {
+	case "", gameplay.Strict31, gameplay.Community39, gameplay.Modern:
+	default:
+		return Profile{}, fmt.Errorf("nanolathe: content profile minimumGameplay %q is not a reserved gameplay word: logical path %s, providers searched [%s], expected %s, %s, %s or omitted", profile.MinimumGameplay, origin, origin, gameplay.Strict31, gameplay.Community39, gameplay.Modern)
 	}
 	for retail, target := range profile.Directories {
 		if strings.TrimSpace(retail) == "" || strings.TrimSpace(target) == "" {

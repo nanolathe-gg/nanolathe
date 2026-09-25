@@ -24,3 +24,4 @@ HANDOFF*
 /.codex/
 
 /patchmatchgo
+__pycache__/

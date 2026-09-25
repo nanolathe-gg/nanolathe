@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"image"
 	"image/draw"
 	"image/png"
@@ -110,7 +111,7 @@ func TestCommunityPreviewLoadsBareSubstituteWithExtension(t *testing.T) {
 	}
 }
 
-func TestCommunityPreviewRetailFullAndWireframe(t *testing.T) {
+func TestPlacementPreviewStylesAndPulse(t *testing.T) {
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(testsupport.RetailRoot(t)); err != nil {
 		t.Skipf("retail assets not mountable: %v", err)
@@ -128,18 +129,32 @@ func TestCommunityPreviewRetailFullAndWireframe(t *testing.T) {
 	c.SetModelFS(fs)
 	def := &content.UnitDef{UnitName: "armcom", ObjectName: "armcom", BMCode: 1, ZBuffer: true}
 
-	full := captureCommunityPreviewStyle(t, c, def, CommunityPreviewFull)
+	pulseA := captureCommunityPreviewStyle(t, c, def, CommunityPreviewPulse, 0)
+	pulseB := captureCommunityPreviewStyle(t, c, def, CommunityPreviewPulse, 8)
+	if foregroundPixels(pulseA, tables.Base[0]) == 0 || bytes.Equal(pulseA.Pix, pulseB.Pix) {
+		t.Fatal("placement nanoframe did not draw a pulsing wireframe")
+	}
+	full := captureCommunityPreviewStyle(t, c, def, CommunityPreviewFull, 0)
 	if len(c.list.ModelCommands()) == 0 {
 		t.Fatal("full preview recorded no model")
 	}
-	wire := captureCommunityPreviewStyle(t, c, def, CommunityPreviewWireframe)
+	wire := captureCommunityPreviewStyle(t, c, def, CommunityPreviewWireframe, 0)
+	wireNext := captureCommunityPreviewStyle(t, c, def, CommunityPreviewWireframe, 8)
 	if foregroundPixels(wire, tables.Base[0]) == 0 {
 		t.Fatal("wireframe preview rendered no edges")
 	}
+	if bytes.Equal(wire.Pix, wireNext.Pix) {
+		t.Fatal("wireframe preview did not pulse")
+	}
+	if c.DrawCommunityBuildPreview(CommunityPreviewOptions{Definition: def, Style: CommunityPreviewOff}) {
+		t.Fatal("off preview drew a model")
+	}
 	if path := os.Getenv("NANOLATHE_COMMUNITY_PREVIEW_CAPTURE"); path != "" {
-		contact := image.NewRGBA(image.Rect(0, 0, 384, 160))
-		draw.Draw(contact, image.Rect(0, 0, 192, 160), full, image.Point{}, draw.Src)
-		draw.Draw(contact, image.Rect(192, 0, 384, 160), wire, image.Point{}, draw.Src)
+		contact := image.NewRGBA(image.Rect(0, 0, 768, 160))
+		draw.Draw(contact, image.Rect(0, 0, 192, 160), pulseA, image.Point{}, draw.Src)
+		draw.Draw(contact, image.Rect(192, 0, 384, 160), pulseB, image.Point{}, draw.Src)
+		draw.Draw(contact, image.Rect(384, 0, 576, 160), full, image.Point{}, draw.Src)
+		draw.Draw(contact, image.Rect(576, 0, 768, 160), wire, image.Point{}, draw.Src)
 		f, err := os.Create(path)
 		if err != nil {
 			t.Fatal(err)
@@ -164,9 +179,10 @@ func foregroundPixels(img *image.RGBA, background [4]uint8) int {
 	return count
 }
 
-func captureCommunityPreviewStyle(t *testing.T, c *Client, def *content.UnitDef, style CommunityPreviewStyle) *image.RGBA {
+func captureCommunityPreviewStyle(t *testing.T, c *Client, def *content.UnitDef, style CommunityPreviewStyle, tick uint32) *image.RGBA {
 	t.Helper()
 	const width, height = 192, 160
+	c.frameTick = tick
 	c.width, c.height, c.recordW, c.recordH = width, height, width, height
 	c.indexed = make([]uint8, width*height)
 	c.rgba = make([]byte, width*height*4)

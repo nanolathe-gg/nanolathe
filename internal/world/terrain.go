@@ -616,6 +616,20 @@ func canonicalWindAndGravity(mh *content.MapHeader) (windMin, windMax int32, gra
 	return windMin, windMax, numeric.Fixed(0x1FDB), 112
 }
 
+// LoadOption adjusts one battle-entry terrain load.
+type LoadOption func(placer *uint8)
+
+// WithTerrainFeaturePlacer names the placer nibble the terrain-file feature
+// stamps write into their anchor cells. Retail passes TerrainFeaturePlacer;
+// the ProTA 4.8 package's loader passes MapOwnedFeaturePlacer, selected by
+// the session's community feature table (docs/DESIGN_COMMUNITY_PATCH.md
+// §4.7). Only the terrain-file pass takes it: the mission-file pass,
+// successors, reproduction, save reload and corpses stamp through the
+// feature service with their own nibbles.
+func WithTerrainFeaturePlacer(placer uint8) LoadOption {
+	return func(p *uint8) { *p = placer }
+}
+
 // Load loads terrain for mapKey through the VFS and catalog
 // [03 §2.2]. mapKey is the map basename (e.g. "ashap plateau")
 // case-insensitively [02 §5]. It validates the TNT version [03 §2.2] C2,
@@ -626,7 +640,16 @@ func canonicalWindAndGravity(mh *content.MapHeader) (windMin, windMax int32, gra
 // here covers skirmish, mission and save entry alike, including callers that
 // supply an already compiled catalog. Uncompiled fixtures retain the former
 // 32 MiB fallback (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
-func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
+//
+// The terrain-file feature stamps pass the retail placer nibble,
+// TerrainFeaturePlacer, unless an option names another.
+func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string, opts ...LoadOption) (*Terrain, error) {
+	placer := TerrainFeaturePlacer
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&placer)
+		}
+	}
 	maxTNTBytes := int64(32 << 20)
 	if cat != nil && cat.Limits.TNTBytes > 0 {
 		maxTNTBytes = cat.Limits.TNTBytes
@@ -764,7 +787,7 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string) (*Terrain, error) {
 	// derived height pair exists, before feature and void post-processing, and
 	// never invalidate it during the battle [03 §3.5][R-P0-18-B §4].
 	t.buildLOSHeightWords()
-	t.stampFeatureAnchors()
+	t.stampFeatureAnchors(placer)
 	// The loader's order puts the mission file's own `[features]` pass between
 	// these stamps and the sweep [02 R-MAP-01 §6]. That pass goes through the
 	// feature service, which does not exist yet, so the session runs it through

@@ -21,10 +21,11 @@ tools/path-bench /tmp/maze --cases 'maze|winding|concave' --rules modern --repea
 
 Without filters the suite runs all supported sizes and all three reserved rule
 sets, with three timed repeats per case. A custom registered `RuleSet` name can
-be selected with `--rules`. The wrapper serializes expensive commands with the
-same host lock as the battle benchmarks. A new output directory is required;
-artifacts belong outside the repository. `--ticks` is a fixture-debug override,
-not a comparable replacement for the normal observation window.
+be selected with `--rules`. The timed suite holds the benchmark lock, as the
+battle benchmarks do, so it never overlaps another benchmark; verification
+gates may run beside it. A new output directory is required; artifacts belong
+outside the repository. `--ticks` is a fixture-debug override, not a comparable
+replacement for the normal observation window.
 
 The directory contains `manifest.json` (revision, host/runtime and settings),
 `cases.json`, exact production Alt+drag inputs and separate assignment timings
@@ -153,13 +154,14 @@ corpus totals excluding the scripted waves.
 The suite registers rule sets for attributing a change to a Modern pathfinding
 policy (`internal/session/path_bench_before_test.go`): `modern-no-pathfinding`
 switches every one off (bounded path work, group destination slots, allied
-pass-through, unreachable moves, jam release and route straightening), and
-`modern-no-bound`, `-no-slots`, `-no-pass`, `-no-unreach`, `-no-jam` and
-`-no-straighten` each switch off one. A new Modern pathfinding policy adds its
-own `-no-` set and joins `modern-no-pathfinding`.
+pass-through, unreachable moves, jam release and its pocket release, route
+straightening and wedge escape), and `modern-no-bound`, `-no-slots`,
+`-no-pass`, `-no-unreach`, `-no-jam`, `-no-pocket`, `-no-straighten` and
+`-no-wedge` each switch off one. A new Modern pathfinding policy adds its own
+`-no-` set and joins `modern-no-pathfinding`.
 
 Scenario details: [terrain, naval and knowledge](PATH_BENCHMARK_TERRAIN.md),
-[traffic and lifecycle](PATH_BENCHMARK_TRAFFIC.md), and
+[traffic, lifecycle and wrecks](PATH_BENCHMARK_TRAFFIC.md), and
 [Alt+drag](PATH_BENCHMARK_FORMATIONS.md). The `avoid/*` family
 (`path_bench_avoid_test.go`) adds friendly traffic against friendly traffic:
 two same-owner groups swapping sides in open ground (16 and 64) and through

@@ -132,6 +132,7 @@ func (g *gameShell) loadSaveLoadPanel(mode saveLoadMode) (*ui.Panel, error) {
 		return nil, retailFrontendAssetError(g.cs, "retail save dialog bitmap", mode.backdrop(), "the authored save/load backdrop", err)
 	}
 	saveLoadAssets = &retailPanelAssets{window: window, background: background}
+	installSaveSidecarLine(window)
 	// LOADGAME is a fresh authored open. Build before the panel captures its
 	// runtime state [07 R-WGT-01 §3].
 	g.installRetailWindowButtonArt(window, nil)
@@ -195,6 +196,11 @@ func (g *gameShell) refreshSaveLoadPanel() {
 	for name, value := range retailSummaryPanelFields(summary, ok, g.retailSideNames()) {
 		panel.SetText(name, value)
 	}
+	line := ""
+	if entry, has := saveLoadUI.SelectedEntry(); has {
+		line = g.fitDetail(saveSidecarLine(entry.Path), saveSidecarLineWidth, 1)
+	}
+	panel.SetText(saveSidecarLineGadget, line)
 }
 
 // drawSaveLoadRadarPreview paints the selected file's `Radar Image` box into
@@ -441,7 +447,10 @@ func (g *gameShell) commitSaveLoadLoad() {
 	// Keep the selected row and dialog buffers through detached preparation:
 	// a preflight refusal returns to this load screen [08 R-SAVE-02 §2].
 	if err := g.loadRetailSavePath(entry.Path); err != nil {
-		reportRetailMessageError(g.showRetailMessage(retailInvalidSaveMessage))
+		// A sidecar's refusal (a mod that is not installed, say) says what
+		// to do; every other failure is retail's verbatim message.
+		fmt.Fprintf(os.Stderr, "nanolathe: loading %s: %v\n", entry.Path, err)
+		reportRetailMessageError(g.showRetailMessage(loadFailureMessage(err)))
 		return
 	}
 	// Successful routing may already have replaced the frontend stack. Close
@@ -467,18 +476,20 @@ func (g *gameShell) commitSaveLoadWrite() {
 		// An empty name does nothing: no file, no message [08 R-SAVE-02 §1].
 		return
 	}
-	var err error
+	var write func() error
 	switch saveLoadUI.Source() {
 	case saveLoadFromResults:
-		err = g.writeBetweenMissionsSave(path, name)
+		write = func() error { return g.writeBetweenMissionsSave(path, name) }
 	case saveLoadFromBattle:
-		err = g.writeBattleSave(path, name)
+		write = func() error { return g.writeBattleSave(path, name) }
 	default:
 		// The front end has no game to save; retail only reaches the save
 		// direction from `ARMOPT` and `ENDMSN` [07 R-FE-01 §8].
 		return
 	}
-	if err != nil {
+	// Every save this shell writes, continuation included, gets its
+	// Nanolathe sidecar (docs/DESIGN_MODS_MUTATORS.md §7.1).
+	if err := g.writeSaveWithSidecar(path, write); err != nil {
 		reportRetailMessageError(g.showRetailMessage(err.Error()))
 		return
 	}

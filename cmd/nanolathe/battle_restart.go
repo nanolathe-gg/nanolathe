@@ -243,7 +243,15 @@ func (g *gameShell) prepareBattleRestartContent() bool {
 	// The resolved content profile rides along, so a remount keeps the
 	// directory table this run selected rather than re-detecting it
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
-	fresh, err := openContent(Options{Root: g.cs.root, Roots: g.cs.roots, Remaster: g.opts.Remaster, ContentProfile: g.cs.profile})
+	remount := Options{Root: g.cs.root, Roots: g.cs.roots, Remaster: g.opts.Remaster, ContentProfile: g.cs.profile}
+	if !g.cs.manualRoots {
+		// Remount the base roots and select the running mod explicitly — none
+		// when none is running — so the fresh set mounts what the battle ran
+		// on and still knows which mod that was, never the saved choice
+		// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+		remount.Roots, remount.Mod, remount.ModSet, remount.modBaseRoots = g.cs.baseRoots, g.cs.modSelector(), true, true
+	}
+	fresh, err := openContent(remount)
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(err.Error()))
 		return false

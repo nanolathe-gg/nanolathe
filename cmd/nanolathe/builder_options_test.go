@@ -30,32 +30,43 @@ func TestBuilderOptionsPageTransaction(t *testing.T) {
 	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
 		writeShellShot(t, cl, filepath.Join(dir, "builder-options.png"))
 	}
+	if index := optionsPanel.Index("NSWITCHALT"); index < 0 || optionsPanel.StageAt(index) != 0 {
+		t.Fatal("the SwitchAlt control is missing or does not show the retail default")
+	}
 	g.activateRetailOptionsGadget("NCYCLE")
 	g.activateRetailOptionsGadget("NDOUBLE")
 	g.activateRetailOptionsGadget("BGHOLD")
 	g.activateRetailOptionsGadget("BPROAM")
-	if g.builderOptions.Guard[0] != 2 || g.builderOptions.Patrol[2] != 2 {
+	g.activateRetailOptionsGadget("NSWITCHALT")
+	if g.builderOptions.Guard[0] != 2 || g.builderOptions.Patrol[2] != 2 || !g.switchAlt {
 		t.Fatal("controls did not advance once")
 	}
 	g.activateRetailOptionsGadget("UNDO")
-	if g.builderOptions != settings.DefaultBuilderOptions() || g.presentation.CommunitySelection != 0 || g.presentation.DoubleClickSelection != 0 {
-		t.Fatal("undo did not restore the six values")
+	if g.builderOptions != settings.DefaultBuilderOptions() || g.presentation.CommunitySelection != 0 || g.presentation.DoubleClickSelection != 0 || g.switchAlt {
+		t.Fatal("undo did not restore the seven values")
 	}
 	g.activateRetailOptionsGadget("BGHOLD")
 	g.activateRetailOptionsGadget("NCYCLE")
+	g.activateRetailOptionsGadget("NSWITCHALT")
 	g.activateRetailOptionsGadget("PREV")
 	saved, err := settings.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.BuilderOptions.Guard[0] != 2 || saved.Presentation.CommunitySelection != 1 {
+	if saved.BuilderOptions.Guard[0] != 2 || saved.Presentation.CommunitySelection != 1 || saved.SwitchAlt != 1 {
 		t.Fatal("OK did not persist builder preferences")
 	}
 	g.activateGadget("Options")
 	g.activateRetailOptionsGadget("BUILDERS")
+	if optionsPanel.StageAt(optionsPanel.Index("NSWITCHALT")) != 1 {
+		t.Fatal("the SwitchAlt control does not show the saved value")
+	}
 	g.activateRetailOptionsGadget("RESTORE")
+	if g.switchAlt {
+		t.Fatal("Restore Defaults did not restore the retail digit mux")
+	}
 	g.activateRetailOptionsGadget("CANCEL")
-	if g.builderOptions.Guard[0] != 2 || g.presentation.CommunitySelection != 1 {
+	if g.builderOptions.Guard[0] != 2 || g.presentation.CommunitySelection != 1 || !g.switchAlt {
 		t.Fatal("cancel did not restore the saved preference")
 	}
 	if err := g.openRetailOptionsScreen(true); err != nil {

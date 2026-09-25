@@ -2470,9 +2470,11 @@ symbol; its surface is hidden, so this is never on screen.
 
 The skirmish row controller values are numeric and distinct from the session
 API's compatibility mapping: `0` is `Open`, `1` is `Player`, and `2` is
-`Computer`. The row initializer makes slot 0 `Player` and ally group 2 when
-every controller row is zero. The row controller cycles `0→2`, `1→0`, and
-`2→1` only when no other row is `1`, otherwise `2→0`. An open row keeps only
+`Computer`. When every shown row is `Open`, the screen build makes slot 0
+`Player` and slot 1 `Computer` and changes no ally group (2026-09-24
+correction: this sentence formerly read the second write as slot 0's ally
+group 2; [08 R-SKIR-01 §1] "Shown rows only"). The row controller cycles
+`0→2`, `1→0`, and `2→1` only when no shown row is `1`, otherwise `2→0`. An open row keeps only
 `Player%d` visible; side, ally, resource, and color gadgets are hidden. The
 stock dynamic art is `skirmname`, `SIDEx`, `32xlogos`, `TEAMICONSx`, and
 `skirmmet` (both resource controls select its frame 0; its frame 1 is the
@@ -6876,6 +6878,23 @@ level up, to decide whether this routine is reached at all.) An
 implementation that switched on the product would invert the rule for a
 mobile builder producing a mobile product.
 
+**Established — the stockpile alias test.** The routine is handed the product
+as a *name*: the clicked toy's name on this click path, and the product
+definition's unit name when the computer player's resource/queue task calls
+the same routine [08 R-AI-01 §2]. After the cue it searches that name for the
+substring `MAKENUKE` and, only when that is absent, for `MAKEANTI`, with the C
+runtime's ordinary substring search: a byte-exact, therefore
+**case-sensitive**, match anywhere in the name (`ARMMAKEANTI` and
+`MAKENUKEARM` both qualify; `makenuke` does not). Either hit selects
+`BUILDWEAPON` with an id operand of **zero** — the first weapon slot — and
+passes the signed count through unchanged, so a right-click subtracts rounds
+exactly as it subtracts products. No catalogue lookup is made on this arm, so
+an alias name need not name a unit definition. Only a name with neither
+substring is resolved to a definition id, through the catalogue's sorted-name
+lookup, which compares **case-insensitively**; a name that resolves to no
+definition returns at once with nothing queued (the cue has already played).
+A resolved name then takes the `MOBILEBUILD`/`BUILDINGBUILD` choice above.
+
 * Positive count: the queue head is chosen by a descriptor flag that selects
   the secondary order list when set and the primary order list otherwise. If
   the tail node of the chosen list matches the descriptor's kind and product
@@ -8459,11 +8478,52 @@ null-slot fallback.
 Pause is represented by a runtime state that suppresses simulation progress
 and causes an `igpaused` title overlay to be drawn. Victory/defeat overlays
 come from the `igtitles` GAF family — handles `igvictory`, `igdefeat`, and
-`igpaused` — gated by mode-word bits: victory on bit 5 of one mode word,
-defeat on bit 6 of it, pause on bit 0 of the pause-mode word. Victory/defeat
-states later transition to end-mission/endgame report screens. The
-options-window pause path is established above; the Pause key toggles the
+`igpaused` — gated by bits: victory on bit 5 of the end-latch word, defeat on
+bit 6 of it ([08 R-TRIG-01 §6]), pause on bit 0 of the pause-mode word.
+Victory/defeat states later transition to end-mission/endgame report screens.
+The options-window pause path is established above; the Pause key toggles the
 same local pause bit and emits the pause packet ([R-CAM-01 §2], [01 §4.3]).
+
+**The in-battle end titles and their gate — Established** (static trace of
+the battle frame composer and the battle pump). The composer draws the pause
+title first, whoever the viewer is: frame 0 of `igpaused` whenever the
+pause-mode word's bit 0 is set. It then applies one gate to both end titles.
+The gate reads the local slot's lobby record, and when that record's watcher
+bit (`0x40`, [R-HUD-04 §1]) is set, it skips both titles. Otherwise the
+composer draws frame 0 of `igvictory` when the end-latch word's bit 5 is set.
+It then draws frame 0 of `igdefeat` when bit 6 is set, so defeat would be drawn
+over victory if both bits were set. That watcher test is the whole gate. It
+does not test the session kind, whether the call is a live frame or a
+movie-capture or screenshot composition, a timer, the pause state, or any open
+window. The ENDMSN title selector reads the same watcher bit
+[08 R-CAMP-01 §8]. The two uses differ: here a watcher gets neither title,
+while ENDMSN gives a watcher the defeat title. Both titles use the
+view-centre anchor `((W + 128) / 2, H / 2)`, less the frame's authored
+offsets ([R-HUD-05]). The composer draws them over the world and chrome,
+before the game-clock line and the open windows, so a modal window covers a
+title. The watcher bit's two setters are both multiplayer-only
+([R-HUD-04 §1]), so in campaign and skirmish the gate always passes. There the
+title depends only on the latch bit.
+
+**When, and for how long — Established.** The end-condition block sets the
+latch bits [08 R-TRIG-01 §6]. The won path sets bit 5, the lost path sets bit
+6, and every writer of either bit also sets the ending bit (bit 2). A resign
+or other ended-without-outcome latch sets the ending bit alone and draws no
+title. One pass of the battle pump runs the due simulation ticks, then
+composes and presents the battle frame, then tests the latch word for the
+ending bit or the won-path bit 4. In campaign and skirmish that test succeeds
+on the same pass whose tick latched, and the pump hands over to the results
+handler [08 R-CAMP-01 §6]. The end title is therefore composed into exactly
+one live battle frame: the frame presented after the latching tick. No title
+timer or duration constant exists. In multiplayer (out of scope) the handover
+also waits for a peer-side predicate, so there every frame the battle still
+composes carries the title. **Supported inference:** the results handler does
+not recompose the battle view. Its first two states present without drawing.
+The ten darkening steps of state 3 shade the retained picture
+([08 R-CAMP-01 §6]), so the title stays visible, darkening with the view. It
+disappears when state 5 blits the glamour image or installs the `ENDMSN`
+background. The static trace found no clear of the composition surface on the
+handover path. A retail capture of a won skirmish would settle it.
 
 Game-speed changes are clamped to the retail range and displayed as localized
 messages. In multiplayer, speed changes are represented as networked semantic
@@ -8507,7 +8567,10 @@ can remain composed under the appropriate overlay.
   inference from manual observation), and whether a left press outside the
   editor behaves the same · §5 "Chat" [R-WGT-01 §6] · what would settle it: a
   trace of the editor capture release on an outside button-down.
-- Outcome transition timing · §11 · static trace.
+- Whether the end title stays visible under the results darkening (Supported
+  inference: the handler shades the retained frame, and no clear of it was
+  found) · §11 "When, and for how long" · a retail capture of a won skirmish.
+  The rest of the outcome-transition timing is closed there.
 - Pause authorization and forwarding authority for chat, pause, and speed
   packets in multiplayer · §11 · static trace. Out of implementation scope.
 
@@ -8702,7 +8765,8 @@ and the decider that would close it.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · §10, doc 08 · static trace.
 - Start-position markers · §10, doc 03 · static trace.
-- Outcome transition timing · §11 · static trace.
+- Whether the in-battle end title stays visible under the results darkening
+  (Supported inference) · §11 · retail capture of a won skirmish.
 - Campaign continuation timing · §5, doc 08 · static trace.
 - Role separation of shared player-word bit `0x20` between READY display and
   map-control authority; both consumers are proven and the semantics are not

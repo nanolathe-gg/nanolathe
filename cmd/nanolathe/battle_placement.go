@@ -27,6 +27,11 @@ func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	// conversion, not the view's cursor-to-world projection — the two paths do
 	// not share a routine in retail either — and the resulting map pixels then
 	// go through the same ground resolver [07 R-CAM-01 §11][03 §3.11].
+	// The megamap, while shown, owns the viewport's pointer and resolves its
+	// own world point (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	if wx, wy, wz, ok := b.megamapCursorWorld(sx, sy); ok {
+		return wx, wy, wz
+	}
 	if mpx, mpz, ok := b.minimapPointerWorld(sx, sy); ok {
 		if b.sess != nil {
 			if wx, wy, wz, ok := b.sess.CursorToWorld(mpx, mpz); ok {
@@ -108,7 +113,7 @@ func (b *battleSession) updatePlacement(mx, my int32) {
 	}
 	rawX, rawZ := world.PlacementAnchor(wx, wz, footX, footZ)
 	buildX, buildZ := rawX, rawZ
-	if b.communityClickSnapAllowed(mx) {
+	if b.communityClickSnapAllowed(mx) && !b.megamapOwnsPointer(mx, my) { // no click snap from the megamap (§3.15)
 		buildX, buildZ = b.communityBuildSnap(def, rawX, rawZ, footX, footZ, self, wx, wz)
 	}
 	b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ = buildX, buildZ
@@ -287,48 +292,6 @@ func (b *battleSession) drawBuildGhost(c *client.Client) {
 	thickness := int(viewScaleOf(b).Px(2))
 	for inset := 0; inset < thickness; inset++ {
 		c.UIFrameRect(int(l)+inset, int(t)+inset, int(r-l)-2*inset, int(btm-t)-2*inset, col)
-	}
-	// Nanolathe host presentation policy: a small white glint travels around
-	// the stationary verdict border. The site rectangle and its legal/illegal
-	// colour remain the retail ones [07 §9]; only committed presentation time
-	// moves this accent, with no input or simulation state change.
-	if cur, ok := b.currentSnapshot(); ok {
-		if x, y, width, height, visible := buildGhostGlint(l, t, r, btm, int32(thickness), cur.Tick); visible {
-			c.UIFillRect(int(x), int(y), int(width), int(height), c.GUIColor(15))
-		}
-	}
-}
-
-// buildGhostGlint walks the inset edge in clockwise order. Each tick moves it
-// four record pixels at native scale, so it remains visible at ordinary battle
-// speed without changing the footprint's placement geometry.
-func buildGhostGlint(l, t, r, btm, thickness int32, tick uint32) (x, y, width, height int32, ok bool) {
-	w, h := r-l, btm-t
-	if w <= 0 || h <= 0 || thickness <= 0 {
-		return 0, 0, 0, 0, false
-	}
-	dash := 6 * thickness
-	if dash > w {
-		dash = w
-	}
-	if dash > h {
-		dash = h
-	}
-	spanW, spanH := w-dash, h-dash
-	perimeter := 2 * (spanW + spanH)
-	if perimeter == 0 {
-		return l, t, dash, thickness, true
-	}
-	phase := int32((uint64(tick) * uint64(2*thickness)) % uint64(perimeter))
-	switch {
-	case phase < spanW:
-		return l + phase, t, dash, thickness, true
-	case phase < spanW+spanH:
-		return r - thickness, t + phase - spanW, thickness, dash, true
-	case phase < 2*spanW+spanH:
-		return r - dash - (phase - spanW - spanH), btm - thickness, dash, thickness, true
-	default:
-		return l, btm - dash - (phase - 2*spanW - spanH), thickness, dash, true
 	}
 }
 

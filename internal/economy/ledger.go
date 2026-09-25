@@ -4,6 +4,7 @@
 package economy
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
@@ -151,6 +152,12 @@ type Service struct {
 	SensorShareCalls int  // diagnostic: sensor sharing invocations at tick%450==0 [05]
 	EconomySelector  *int // difficulty selector: 0 easy, 1 medium, 2 hard [R-ECO-01 §3]
 	Networked        bool // networked-session gate for automatic sharing [R-SHARE-01 §3]
+	// Community is the session's projected copy of the one feature-table
+	// answer this service reads: AIDifficultyIncome, the ProTA 4.8 package's
+	// computer-player income factors (DESIGN_COMMUNITY_PATCH §4.7). The
+	// composer writes it beside the rule set; nothing in a tick resolves the
+	// table. The zero value is Strict 3.1's retail ladder.
+	Community community.Features
 
 	// EndCondition is the end-condition block of [08 R-TRIG-01 §6]: the
 	// victory and defeat polls, the shared countdown and the end latch. It is

@@ -25,10 +25,21 @@ func (c *autonomousScanCursor) nextRecord(player uint8, limit int) int {
 	return record
 }
 
-func autonomousScanAdmitsUnit(u *units.Unit) bool {
-	return u != nil && u.Def != nil && u.Remaining == 0 &&
-		u.Flags&units.ArmedStatus != 0 &&
-		u.Flags>>units.StandingFireShift&units.StandingFieldMask == stanceFireAtWill
+// autonomousScanAdmits is the visited record's admission [06 §3.2]. The
+// last clause is retail's exact Fire at Will compare; under the ProTA 4.8
+// target-lock release it tests only the field's high bit, which admits the
+// encoded values two and three (research/extensions/prota-engine.md "shipped
+// target retention and firing boundary"). Ordinary unit acquisition below
+// still requires exactly two.
+func autonomousScanAdmits(u *units.Unit, lockRelease bool) bool {
+	if u == nil || u.Def == nil || u.Remaining != 0 || u.Flags&units.ArmedStatus == 0 {
+		return false
+	}
+	stance := u.Flags >> units.StandingFireShift & units.StandingFieldMask
+	if lockRelease {
+		return stance&stanceFireAtWill != 0
+	}
+	return stance == stanceFireAtWill
 }
 
 // StepAutonomousForPlayer runs the manager's maintenance pass after AI tasks
@@ -44,10 +55,11 @@ func (s *Service) StepAutonomousForPlayer(player uint8, w *units.World, vis *vis
 		return
 	}
 	limit := end - start + 1
+	lockRelease := s.rules().TargetLockRelease(s)
 	for visit := 0; visit < autonomousScanBudget(w.UnitLimit()); visit++ {
 		record := s.scanCursor.nextRecord(player, limit)
 		u := w.Unit(pool.Handle(start + record))
-		if !autonomousScanAdmitsUnit(u) {
+		if !autonomousScanAdmits(u, lockRelease) {
 			continue
 		}
 		for idx := 0; idx < NumSlots; idx++ {
@@ -60,6 +72,17 @@ func (s *Service) StepAutonomousForPlayer(player uint8, w *units.World, vis *vis
 				// Until their full free-writer set is mapped, the compact freed
 				// record resolves absent here [06 "Missing and unknown"].
 				target := w.Unit(slot.Target.Unit)
+				if lockRelease && target != nil && target.Def != nil && !s.CanEngageSlotTarget(u, target, idx, terrain) {
+					// The ProTA 4.8 release: a retained target that fails the
+					// unit-to-unit physical gate has its stored identity zeroed
+					// directly — the empty encoding, with no TargetCleared — while
+					// this visit keeps the old target for the inherited checks
+					// below. If they accept, reacquisition waits for the slot's
+					// next visit; if one rejects, acquisition runs now
+					// (research/extensions/prota-engine.md "shipped target
+					// retention and firing boundary").
+					slot.Target = units.Target{Kind: units.TargetNone}
+				}
 				if !s.rules().ReconsiderTarget(u, slot, target, vis) && target != nil && target.Def != nil &&
 					!registryOwnerDeclaresAllianceWithCandidate(player, target.Owner, econ) &&
 					IsPreferredCategoryMask(target.Def.DefinitionMask(), badMaskForSlot(u.Def, idx)) &&

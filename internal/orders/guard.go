@@ -193,8 +193,20 @@ func attackChaseHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		if !canEngageSlot(u, n.Target, int(n.Param1)) {
 			return Code(1) // *advance* — out of reach, go maneuver
 		}
-		releaseSlot(u, 0)
-		releaseSlot(u, 2)
+		if rulesOfUnit(u).AttackTakesOneSlot(u) {
+			// The ProTA 4.8 package takes one slot: 2 when p1 > 1 (a SIGNED
+			// compare), else 0; the other slots keep acquiring
+			// (research/extensions/prota-engine.md, the two related
+			// weapon-slot patches). Phase 3 keeps retail's pair.
+			if int32(n.Param1) > 1 {
+				releaseSlot(u, 2)
+			} else {
+				releaseSlot(u, 0)
+			}
+		} else {
+			releaseSlot(u, 0)
+			releaseSlot(u, 2)
+		}
 		bindSlotToUnit(u, int(n.Param1), n.Target)
 		n.DynamicGate = 0x13808
 		return Code(2) // *hold*

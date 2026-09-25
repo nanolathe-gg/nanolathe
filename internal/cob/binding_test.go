@@ -75,8 +75,9 @@ func TestBindStrictAllowsProgramWithoutCreate(t *testing.T) {
 	}
 }
 
-// Duplicate model names bind to the first match, including case variants
-// [02 R-MALF-01 §2]. Rejecting the hierarchy prevents stock ARMCH allocation.
+// Duplicate model names bind to the first unclaimed match, including case
+// variants [02 R-MALF-01 §2][04 R-COB-01 §4]. Rejecting the hierarchy prevents
+// stock ARMCH allocation.
 func TestBindStrictDuplicateModelPiecesUseFirstMatch(t *testing.T) {
 	fs := bindingFS(t, makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"beam", "base"}))
 	binding, err := BindStrict(fs, BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base", "BEAM", "beam"}})
@@ -187,11 +188,11 @@ func TestBindStrictReportsMissingAndMalformedCOB(t *testing.T) {
 	}
 }
 
-func TestBindStrictReportsPieceAndEntryFailures(t *testing.T) {
-	// COB declares more pieces than model provides — the strict count check is
-	// that COB pieces must be a subset of model pieces, not strict equality;
-	// model having extra unused pieces (e.g., ARMCOM 15 vs COB 14) is allowed
-	// [d69ed97].
+// Piece-name mismatches never refuse a bind: retail's link pass has no
+// refusal, so only the entry-point failure is reported, and the same program
+// without that requirement binds with the two pieces described as link notes
+// [04 R-COB-01 §4].
+func TestBindStrictReportsEntryFailureButLinksUnmatchedPieces(t *testing.T) {
 	fs := bindingFS(t, makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0, 0}, []string{"barrel", "extra"}))
 	_, err := BindStrict(fs, BindingRequest{
 		UnitName:        "TestUnit",
@@ -202,8 +203,58 @@ func TestBindStrictReportsPieceAndEntryFailures(t *testing.T) {
 	if !ok {
 		t.Fatalf("error = %T %v, want BindingError", err, err)
 	}
-	if !bindingErr.Has(BindingPieceCount) || !bindingErr.Has(BindingUnresolvedPiece) || !bindingErr.Has(BindingMissingEntry) {
-		t.Fatalf("diagnostics = %#v, want count/unresolved/missing-entry", bindingErr.Diagnostics)
+	if !bindingErr.Has(BindingMissingEntry) || bindingErr.Has(BindingPieceCount) || bindingErr.Has(BindingUnresolvedPiece) {
+		t.Fatalf("diagnostics = %#v, want only missing-entry", bindingErr.Diagnostics)
+	}
+
+	binding, err := BindStrict(fs, BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base"}})
+	if err != nil {
+		t.Fatalf("unmatched pieces refused the bind: %v", err)
+	}
+	if got := binding.PieceMap; len(got) != 2 || got[0] != 0 || got[1] != -1 {
+		t.Fatalf("piece map = %v, want [0 -1]: barrel takes slot 0's base, extra has no slot", got)
+	}
+	if len(binding.LinkNotes) != 2 || binding.LinkNotes[0].Code != BindingUnresolvedPiece || binding.LinkNotes[1].Code != BindingPieceCount {
+		t.Fatalf("link notes = %#v, want unresolved then beyond-model", binding.LinkNotes)
+	}
+}
+
+// The link pass permutes the model's piece slots in place, one script piece at
+// a time, searching only from the script piece's own slot onward
+// [04 R-COB-01 §4]. Each case locks one consequence of that order.
+func TestLinkPiecesRetailSlotPass(t *testing.T) {
+	cases := []struct {
+		name          string
+		script, model []string
+		want          []int
+	}{
+		{"reorders by name", []string{"barrel", "base"}, []string{"base", "barrel"}, []int{1, 0}},
+		{"ASCII case fold", []string{"TURRET"}, []string{"turret"}, []int{0}},
+		{"no trimming", []string{"base "}, []string{"base", "x"}, []int{0}},
+		// A missing name keeps the unclaimed piece already sitting in its
+		// slot, including one an earlier swap moved there.
+		{"missing name takes its slot", []string{"a", "missing", "b"}, []string{"b", "c", "a"}, []int{2, 1, 0}},
+		// Trailing script pieces beyond the model have no record.
+		{"beyond the model", []string{"base", "blastpt"}, []string{"base"}, []int{0, -1}},
+		// A piece claimed by an earlier alias lies below the searching slot and
+		// is not found again: y aliases slot 0's x, so x falls back to slot 1.
+		{"claimed piece is not found again", []string{"y", "x"}, []string{"x", "z"}, []int{0, 1}},
+		// Duplicate model names go to successive script entries of that name.
+		{"duplicate model names", []string{"beam", "beam"}, []string{"base", "beam", "beam"}, []int{1, 2}},
+		// A swap can carry the first duplicate past the second, so the second
+		// is found first.
+		{"swap reorders duplicates", []string{"a", "b"}, []string{"b", "b", "a"}, []int{2, 1}},
+	}
+	for _, tc := range cases {
+		got := LinkPieces(tc.script, tc.model)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: map = %v, want %v", tc.name, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: map = %v, want %v", tc.name, got, tc.want)
+			}
+		}
 	}
 }
 

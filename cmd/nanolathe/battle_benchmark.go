@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -25,25 +26,46 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 	}
 	s := b.sess
 	diagnostics := newBattleBenchmarkDiagnostics(opts.BattleBenchmark, s)
-	scene, err := stageCoastalBenchmark(opts, s)
-	if err != nil {
-		return err
+	var scene *coastalBenchmarkScene
+	var captureScene *captureBenchmarkScene
+	var factories []*units.Unit
+	var cx, cz int32
+	var err error
+	if opts.BenchmarkCapture != "" {
+		captureScene, err = stageCaptureBenchmark(opts, s)
+		if err != nil {
+			return err
+		}
+		cx, cz = captureScene.CameraX, captureScene.CameraZ
+		factories = captureScene.Factories
+	} else {
+		scene, err = stageCoastalBenchmark(opts, s)
+		if err != nil {
+			return err
+		}
+		cx, cz = scene.X, scene.Z
+		factories = scene.Factories
 	}
-	factories := scene.Factories
-	cx, cz := scene.X, scene.Z
 	millis := &shotMillisSource{}
 	b.millisSource = millis
 	step := func() {
 		diagnostics.Step(func() { millis.step++; b.viewerStep(1.0/30, c) })
 	}
-	b.cam.JumpToBattleViewCenter(cx, cz)
+	positionCamera := func() {
+		if captureScene != nil {
+			b.cam.JumpTo(cx, cz)
+		} else {
+			b.cam.JumpToBattleViewCenter(cx, cz)
+		}
+	}
+	positionCamera()
 	for i := 0; i < opts.BenchmarkPreTicks; i++ {
 		step()
 		// Drain each committed tick so the first displayed frame does not replay
 		// the entire lead-in's retained sound and status queue.
 		c.TickPresentationAudio()
 	}
-	b.cam.JumpToBattleViewCenter(cx, cz)
+	positionCamera()
 	// The benchmark scene at the detail view is the same battle drawn from
 	// twice the pixels (DESIGN_GPU_RENDERER §14.1). The scale is applied after
 	// the scene's own camera jump and about the viewport centre, so the army
@@ -61,7 +83,7 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 		visibleUnits, visibleProjectiles, visibleEffects := 0, 0, 0
 		visible := func(x, y, z numeric.Fixed) bool {
 			sx, sy := b.cam.WorldToScreen(x, y, z)
-			return sx >= camera.OriginX && sx < 1920 && sy >= camera.OriginY && sy < 1048
+			return sx >= camera.OriginX && sx < b.cam.ViewW && sy >= camera.OriginY && sy < b.cam.ViewH-32
 		}
 		moving := benchmarkMovingUnits(f, s.Snapshot.Previous())
 		// In-view counts use projected anchors inside the battle viewport;
@@ -71,7 +93,7 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 			if feature.Filename != "" {
 				sprites++
 				sx, sy := b.cam.WorldToScreen(feature.X, feature.Y, feature.Z)
-				visible := sx >= camera.OriginX && sx < 1920 && sy >= camera.OriginY && sy < 1048
+				visible := sx >= camera.OriginX && sx < b.cam.ViewW && sy >= camera.OriginY && sy < b.cam.ViewH-32
 				if visible {
 					visibleSprites++
 				}
@@ -83,7 +105,7 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 				}
 			}
 		}
-		var production [8]benchmarkFactory
+		production := make([]benchmarkFactory, len(factories))
 		for i, u := range factories {
 			if u == nil || !u.Alive || u.Def == nil {
 				continue
@@ -129,13 +151,24 @@ func runBattleBenchmark(opts Options, cs *contentSet, b *battleSession, c *clien
 			}
 		}
 		sample := map[string]any{"in_view_units": visibleUnits, "in_view_projectiles": visibleProjectiles, "in_view_effects": visibleEffects, "features": len(f.Features), "sprite_features": sprites, "burning_features": burning, "in_view_sprite_features": visibleSprites, "in_view_burning_features": visibleBurning, "damaged_units": damaged, "moving_units": moving, "tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
-		addCoastalBenchmarkCensus(sample, f, s, b.cam)
+		if scene != nil {
+			addCoastalBenchmarkCensus(sample, f, s, b.cam)
+		}
 		return sample
 	}
-	metadata := map[string]any{"scene_version": 5, "gameplay": s.Gameplay.Normalize(), "rules": s.Rules.Name, "gameplay_features": s.Community, "entry_gameplay_features": s.EntryCommunity, "gameplay_features_digest": s.Community.Digest(), "content_profile": cs.contentProfileName(), "phase_timing": true, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "pre_window_ticks": opts.BenchmarkPreTicks, "mobiles_per_side": 160, "mobile_roster": coastalBenchmarkMobiles(), "battle_center": []int32{cx, cz}, "display": loadedSettings().Display, "root": opts.Root, "roots": opts.Roots}
-	metadata["coastal_scene"] = scene
+	metadata := map[string]any{"scene_version": 5, "gameplay": s.Gameplay.Normalize(), "rules": s.Rules.Name, "gameplay_features": s.Community, "entry_gameplay_features": s.EntryCommunity, "gameplay_features_digest": s.Community.Digest(), "content_profile": cs.contentProfileName(), "mod": cs.modSelector(), "mutators": s.Mutators.String(), "phase_timing": true, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int32{b.cam.ViewW, b.cam.ViewH}, "zoom": viewZoomOf(b).Float(), "auto_remaster": opts.AutoRemaster, "pre_window_ticks": opts.BenchmarkPreTicks, "display": loadedSettings().Display, "root": opts.Root, "roots": opts.Roots}
+	if scene != nil {
+		metadata["coastal_scene"] = scene
+		metadata["battle_center"] = []int32{cx, cz}
+		metadata["mobiles_per_side"] = 160
+		metadata["mobile_roster"] = coastalBenchmarkMobiles()
+	} else {
+		metadata["scene_version"] = 1
+		metadata["capture_scene"] = captureScene
+		metadata["camera_origin"] = []int32{cx, cz}
+	}
 	metadata["visibility"] = "normal"
-	err = ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, BeforeMeasure: diagnostics.Begin, AfterMeasure: diagnostics.End, Metadata: metadata})
+	err = ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Width: int(b.cam.ViewW), Height: int(b.cam.ViewH), BeforeMeasure: diagnostics.Begin, AfterMeasure: diagnostics.End, Metadata: metadata})
 	if err != nil {
 		return err
 	}

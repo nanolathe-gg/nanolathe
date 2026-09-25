@@ -85,6 +85,12 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		background = optionsAssets.background
 		page = optionsAssets.art
 	}
+	if assets := modsPanelAssets(p); assets != nil {
+		// The Mods & Mutators windows carry their own backdrop (§8.2 of
+		// docs/DESIGN_MODS_MUTATORS.md).
+		background = assets.background
+		page = assets.art
+	}
 	if saveLoadAssets != nil && p == saveLoadPanel {
 		// The save/load dialog is a child window with its own authored
 		// backdrop; it must not borrow the surface it was opened over

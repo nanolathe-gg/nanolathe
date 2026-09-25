@@ -149,6 +149,68 @@ func TestWorldBucketsStableEqualRows(t *testing.T) {
 	}
 }
 
+func TestEnhancedUnitOverlapOrderAcrossRowBoundary(t *testing.T) {
+	// Slot 1 is always south of slot 2. Retail's equal-row slot tie paints
+	// slot 2 last at Z=15, then reverses the pair at Z=16 when slot 1 enters
+	// the next plot row [03 R-RAST-01 §7]. Enhanced keeps the same front unit
+	// on both sides of that unrelated bucket edge (GPU design §5.5).
+	for _, tc := range []struct {
+		name         string
+		enhanced     bool
+		modernRecord bool
+		z            int32
+		want         [2]pool.Handle
+	}{
+		{"classic same row", false, false, 15, [2]pool.Handle{1, 2}},
+		{"classic next row", false, false, 16, [2]pool.Handle{2, 1}},
+		{"comparison classic half", true, false, 15, [2]pool.Handle{1, 2}},
+		{"enhanced same row", true, true, 15, [2]pool.Handle{2, 1}},
+		{"enhanced next row", true, true, 16, [2]pool.Handle{2, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t)
+			flatModel(c, "overlap_order", 40, 17)
+			c.SetEnhanced(tc.enhanced)
+			c.geometryOnlyModels = tc.modernRecord
+			cur := &frame.Frame{
+				Selection: frame.SelectionView{LocalPlayer: 0},
+				Units: []frame.UnitView{
+					{Slot: 1, Owner: 0, X: px(200), Z: px(tc.z), MoverMode: 1, Model: "overlap_order"},
+					{Slot: 2, Owner: 0, X: px(200), Z: px(14), MoverMode: 1, Model: "overlap_order"},
+				},
+			}
+			c.drawWorldPass(cur, true)
+			if len(c.selectionChrome) != len(tc.want) {
+				t.Fatalf("drawn units = %d, want %d", len(c.selectionChrome), len(tc.want))
+			}
+			for i, want := range tc.want {
+				if got := c.selectionChrome[i].view.Slot; got != want {
+					t.Fatalf("draw order[%d] = slot %d, want %d", i, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestEnhancedWorldBucketsKeepFeatureTailAndSlotTies(t *testing.T) {
+	var b worldBuckets
+	b.fineUnitOrder = true
+	front := frame.UnitView{Slot: 3, Z: px(15)}
+	back := frame.UnitView{Slot: 2, Z: px(14)}
+	tie := frame.UnitView{Slot: 1, Z: px(15)}
+	feature := frame.FeatureView{}
+	b.add(worldDrawable{row: 7, unit: &front})
+	b.add(worldDrawable{row: 7, unit: &back})
+	b.add(worldDrawable{row: 7, unit: &tie})
+	b.add(worldDrawable{row: 7, feature: &feature})
+	for repeat := 0; repeat < 2; repeat++ {
+		got := b.ordered()
+		if len(got) != 4 || got[0].unit != &back || got[1].unit != &tie || got[2].unit != &front || got[3].feature != &feature {
+			t.Fatalf("ordered row on repeat %d = %+v", repeat, got)
+		}
+	}
+}
+
 func TestWorldBucketsReuseWithoutPerFrameAllocation(t *testing.T) {
 	var b worldBuckets
 	for i := 0; i < 8; i++ {
@@ -164,6 +226,27 @@ func TestWorldBucketsReuseWithoutPerFrameAllocation(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("warm world bucket pass allocations = %f, want 0", allocs)
+	}
+	var units [8]frame.UnitView
+	for i := range units {
+		units[i] = frame.UnitView{Slot: pool.Handle(i + 1), Z: px(int32(8 - i))}
+	}
+	b.reset()
+	b.fineUnitOrder = true
+	for i := range units {
+		b.add(worldDrawable{row: int32(i % 3), unit: &units[i]})
+	}
+	_ = b.ordered()
+	allocs = testing.AllocsPerRun(100, func() {
+		b.reset()
+		b.fineUnitOrder = true
+		for i := range units {
+			b.add(worldDrawable{row: int32(i % 3), unit: &units[i]})
+		}
+		_ = b.ordered()
+	})
+	if allocs != 0 {
+		t.Fatalf("warm enhanced world bucket pass allocations = %f, want 0", allocs)
 	}
 }
 

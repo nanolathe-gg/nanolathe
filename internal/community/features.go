@@ -44,6 +44,27 @@ type Features struct {
 	MexSnap                  bool `json:"mexSnap"`
 	WreckSnap                bool `json:"wreckSnap"`
 
+	// The ProTA 4.8 package switches are historical behaviours of that
+	// package's engine loader, not of any tdraw build profile
+	// (research/extensions/prota-engine.md "AI and economy evidence audit").
+	// Every shipped table leaves them false, including prota, so only a
+	// content profile's gameplay block or a player override enables them
+	// (DESIGN_COMMUNITY_PATCH §4.7). They are omitted from the canonical JSON
+	// while false, so each shipped table keeps its established digest; an
+	// enabled switch enters the digest by name.
+	AIDifficultyIncome     bool `json:"aiDifficultyIncome,omitempty"`
+	AIStockpileProducts    bool `json:"aiStockpileProducts,omitempty"`
+	TargetLockRelease      bool `json:"targetLockRelease,omitempty"`
+	AIApplianceEnergy      bool `json:"aiApplianceEnergy,omitempty"`
+	AIBuilderStopThreshold bool `json:"aiBuilderStopThreshold,omitempty"`
+	// The order, drawing and text patches of the same loader
+	// (research/extensions/prota-engine.md "Shipped order, drawing, sound and
+	// text patches"), under the same policy.
+	WorkingWeaponsAutonomous bool `json:"workingWeaponsAutonomous,omitempty"`
+	AttackSingleSlotTake     bool `json:"attackSingleSlotTake,omitempty"`
+	MapFeatureOwnerEleven    bool `json:"mapFeatureOwnerEleven,omitempty"`
+	ResurrectionTextFix      bool `json:"resurrectionTextFix,omitempty"`
+
 	RepairRate                RepairRate `json:"repairRate"`
 	OffMapAircraftMarginTiles int        `json:"offMapAircraftMarginTiles"`
 	ProjectileCapacity        int        `json:"projectileCapacity"`

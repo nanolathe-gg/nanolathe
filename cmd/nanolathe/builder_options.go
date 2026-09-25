@@ -73,13 +73,22 @@ func builderOptionsPage(window *gui.Window) error {
 			control.Text = fmt.Sprintf("%s: %s|%s: %s|%s: %s", stances[i], labels[0], stances[i], labels[1], stances[i], labels[2])
 			control.Rect.Y = y
 			kept = append(kept, control)
-			y += 24
+			y += 22
 		}
-		y += 12
+		// The rows are packed so the page, SwitchAlt row included, clears
+		// Restore Defaults in the shorter in-battle column.
+		y += 6
 	}
 	for _, row := range []struct{ name, text string }{
 		{"NCYCLE", "Idle keys: Off|Idle keys: On"},
 		{"NDOUBLE", "2-click: Off|2-click: On"},
+		// The persisted SwitchAlt mux [07 R-CAM-01 §4]: plain digits pick
+		// build pages (retail's default) or recall groups. `+switchalt`
+		// changes the same value from the message line.
+		{"NSWITCHALT", "Digits: Pages|Digits: Groups"},
+		// The overview Tab and the wheel open: today's smooth zoom, or the
+		// optional megamap (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		{"NOVERVIEW", "Tab: Options|Tab: Megamap"},
 	} {
 		control := button
 		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, 2
@@ -97,6 +106,8 @@ func (g *gameShell) syncBuilderOptions() {
 	}
 	optionsPanel.SetStageAt(optionsPanel.Index("NCYCLE"), g.presentation.CommunitySelection)
 	optionsPanel.SetStageAt(optionsPanel.Index("NDOUBLE"), g.presentation.DoubleClickSelection)
+	optionsPanel.SetStageAt(optionsPanel.Index("NSWITCHALT"), boolInt(g.switchAlt))
+	optionsPanel.SetStageAt(optionsPanel.Index("NOVERVIEW"), boolInt(g.presentation.Overview == settings.OverviewMegamap))
 	for group, names := range builderOptionNames {
 		values := g.builderOptions.Guard
 		if group == 1 {
@@ -109,6 +120,18 @@ func (g *gameShell) syncBuilderOptions() {
 }
 
 func (g *gameShell) activateBuilderOption(name string) bool {
+	if name == "NSWITCHALT" {
+		g.setSwitchAlt(g.retailOptionsStage(name, 2, boolInt(g.switchAlt)) != 0)
+		g.syncBuilderOptions()
+		return true
+	}
+	if name == "NOVERVIEW" {
+		p := g.presentation
+		p.Overview = g.retailOptionsStage(name, 2, boolInt(p.Overview == settings.OverviewMegamap))
+		g.setPresentation(p)
+		g.syncBuilderOptions()
+		return true
+	}
 	if name == "NCYCLE" || name == "NDOUBLE" {
 		p := g.presentation
 		value := &p.CommunitySelection
@@ -142,5 +165,17 @@ func (g *gameShell) activateBuilderOption(name string) bool {
 func (g *gameShell) setSelectionPreferences(p settings.Presentation) {
 	next := g.presentation
 	next.CommunitySelection, next.DoubleClickSelection = p.CommunitySelection, p.DoubleClickSelection
+	next.Overview = p.Overview
 	g.setPresentation(next)
+}
+
+// setSwitchAlt changes the digit-key mux the options page shows. A running
+// battle captured the bit at entry, so it takes the new value too, as
+// `+switchalt` does [07 R-CAM-01 §4]; the options transaction persists it on
+// OK and takes it back on Undo and Cancel.
+func (g *gameShell) setSwitchAlt(on bool) {
+	g.switchAlt = on
+	if g.battle != nil {
+		g.battle.switchAlt = on
+	}
 }

@@ -174,6 +174,16 @@ func runShot(opts Options, cs *contentSet) error {
 	if err := b.configureDeveloperShot(opts); err != nil {
 		return err
 	}
+
+	// `--shot-megamap` composes the megamap overview over this frame, and over
+	// the battle benchmark's measured frames, with the Megamap overview
+	// selected for this run alone (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	if opts.ShotMegamap {
+		p := b.hostPreferences()
+		p.Overview = settings.OverviewMegamap
+		b.hostPresentation = &p
+		b.setMegamapShown(true, cl)
+	}
 	if opts.BattleBenchmark != "" {
 		return runBattleBenchmark(opts, cs, b, cl)
 	}

@@ -2,10 +2,11 @@ package gpurender
 
 import "github.com/nanolathe-gg/nanolathe/internal/drawlist"
 
-// Outline preparation for the model lane: the row walk that turns a
+// Outline preparation for the model lane: the CPU row walk that turns a
 // nanoframe outline ring into its per-row endpoint quads, with the span
 // writer's own edge arithmetic (docs/DESIGN_GPU_RENDERER.md §22)
-// [03 R-COMP-01 §3][03 R-RAST-01 §1].
+// [03 R-COMP-01 §3][03 R-RAST-01 §1]. The lane draws most rings on the device
+// from their edge setup instead (model_outline.go); this walk draws the rest.
 
 // modelGPUVertex is one prepared endpoint corner: its position and key,
 // carried as fractions until the fragment narrows them.
@@ -20,66 +21,51 @@ type modelGPUFace struct {
 	Color    uint8
 }
 
-func (r *Renderer) prepareModelOutline(g *drawlist.ModelGeometry, doubled bool) []modelGPUFace {
-	rows := 0
-	width := float32(1)
-	if doubled {
-		width = 2
+// prepareOutlineRing walks one ring's rows: on every row where the right
+// chain's column is past the left's, the two columns are the row's endpoints,
+// each one native pixel kept inside the packet's box.
+func (r *Renderer) prepareOutlineRing(g *drawlist.ModelGeometry, f *drawlist.ModelFace) []modelGPUFace {
+	v := f.Vertices
+	if len(v) < 2 {
+		return nil
 	}
-	for i := range g.Outline {
-		v := g.Outline[i].Vertices
-		if len(v) < 2 {
-			continue
+	top, bottom := 0, 0
+	for j := range v {
+		if v[j].Y < v[top].Y {
+			top = j
 		}
-		lo, hi := v[0].Y, v[0].Y
-		for _, p := range v {
-			lo, hi = min(lo, p.Y), max(hi, p.Y)
+		if v[j].Y > v[bottom].Y {
+			bottom = j
 		}
-		rows += int(hi - lo)
 	}
+	rows := int(v[bottom].Y - v[top].Y)
 	if rows == 0 {
 		return nil
 	}
 	out := r.modelPrep.strips.take(2 * rows)[:0]
 	corners := r.modelPrep.vertices.take(8 * rows)
 	used := 0
-	for i := range g.Outline {
-		f := g.Outline[i]
-		v := f.Vertices
-		if len(v) < 2 {
+	for y := v[top].Y; y < v[bottom].Y; y++ {
+		left, a := chainAt(v, top, bottom, -1, y)
+		right, b := chainAt(v, top, bottom, 1, y)
+		if !a || !b || right.X <= left.X {
 			continue
 		}
-		top, bottom := 0, 0
-		for j := range v {
-			if v[j].Y < v[top].Y {
-				top = j
-			}
-			if v[j].Y > v[bottom].Y {
-				bottom = j
-			}
-		}
-		for y := v[top].Y; y < v[bottom].Y; y++ {
-			left, a := chainAt(v, top, bottom, -1, y)
-			right, b := chainAt(v, top, bottom, 1, y)
-			if !a || !b || right.X <= left.X {
+		for _, p := range [2]modelGPUVertex{left, right} {
+			// Outlines also visit rings dropped by the body material dispatch;
+			// retain the classic composition-box clip for those endpoints.
+			if g.Width > 0 && (p.X < 0 || p.X >= float32(g.Width) || p.Y < 0 || p.Y >= float32(g.Height)) {
 				continue
 			}
-			for _, p := range [2]modelGPUVertex{left, right} {
-				// Outlines also visit rings dropped by the body material dispatch;
-				// retain the classic composition-box clip for those endpoints.
-				if g.Width > 0 && (p.X < 0 || p.X >= float32(g.Width) || p.Y < 0 || p.Y >= float32(g.Height)) {
-					continue
-				}
-				q, s, t := p, p, p
-				q.X += width
-				s.X += width
-				s.Y += width
-				t.Y += width
-				quad := corners[used : used+4 : used+4]
-				quad[0], quad[1], quad[2], quad[3] = p, q, s, t
-				used += 4
-				out = append(out, modelGPUFace{Vertices: quad, Color: f.Color})
-			}
+			q, s, t := p, p, p
+			q.X++
+			s.X++
+			s.Y++
+			t.Y++
+			quad := corners[used : used+4 : used+4]
+			quad[0], quad[1], quad[2], quad[3] = p, q, s, t
+			used += 4
+			out = append(out, modelGPUFace{Vertices: quad, Color: f.Color})
 		}
 	}
 	return out

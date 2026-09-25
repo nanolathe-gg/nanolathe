@@ -255,6 +255,11 @@ func (c *Client) placeTrails(cur *frame.Frame) {
 	if st.valid && st.tick == cur.Tick {
 		return
 	}
+	// A pinned pass may read a tick older than the host has already observed
+	// (§13.13); history only moves forward.
+	if c.observesInOrder() && st.valid && cur.Tick < st.tick {
+		return
+	}
 	st.valid, st.tick = true, cur.Tick
 	if st.units == nil {
 		st.units = map[uint64]*trailTracker{}

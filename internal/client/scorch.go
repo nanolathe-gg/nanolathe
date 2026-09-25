@@ -62,6 +62,11 @@ func (c *Client) observeScorchMarks(cur *frame.Frame) {
 		return
 	}
 	st := &c.scorch
+	// A pinned pass may read a tick older than the host has already observed
+	// (§13.13); that is not a new history.
+	if c.observesInOrder() && st.valid && cur.Tick < st.tick && cur.ViewingPlayer == st.viewer {
+		return
+	}
 	if st.valid && (cur.Tick < st.tick || cur.ViewingPlayer != st.viewer) {
 		*st = scorchState{}
 	}
@@ -128,7 +133,9 @@ func (c *Client) drawScorchMarks(cur *frame.Frame) {
 	if c == nil || cur == nil || !c.enhanced || c.cam == nil || c.terrain == nil || c.strategicView() {
 		return
 	}
-	c.observeScorchMarks(cur)
+	if !c.observesInOrder() {
+		c.observeScorchMarks(cur)
+	}
 	st := &c.scorch
 	st.arena = st.arena[:0]
 	if mark, ok := c.arrivalScorchMark(); ok {

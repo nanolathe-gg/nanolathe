@@ -296,6 +296,13 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 		// Cycling selects one of the three reserved sets, so it also replaces a
 		// third-party selection with the reserved set at the chosen layer.
 		stage := g.retailOptionsStage(name, len(gameplayOptionModes), gameplayOptionStage(g.gameplay))
+		// A running mod's minimum skips the layers below it
+		// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+		if g.cs != nil {
+			if minimum, ok := modMinimumGameplay(g.cs.mod); ok && stage < gameplayOptionStage(minimum) {
+				stage = gameplayOptionStage(minimum)
+			}
+		}
 		g.setGameplay(gameplayOptionModes[stage])
 		g.syncNanolatheOptions()
 		return true

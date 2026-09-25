@@ -14,9 +14,10 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
-// ensureRetailSkirmishControllers mirrors the state that the retail implementation and
-// the retail implementation hand to SKIRMISH.GUI when the per-player controller values are
-// absent: all rows are open, then row zero is made the human player. The
+// ensureRetailSkirmishControllers gives a shell with no stored rows the
+// state retail's preferences loader leaves when every Player%dController is
+// missing — all rows Open — and then applies the screen build's all-Open
+// fallback, which is the first thing retail does with those rows. The
 // numeric values are kept separate from session.SkirmishConfig because the
 // retail GUI distinguishes an open row (0) from a human (1), while the
 // session compatibility API uses 0 for its human controller.
@@ -27,25 +28,48 @@ func (g *gameShell) ensureRetailSkirmishControllers() {
 	for i := range g.retailControllers {
 		g.retailControllers[i] = 0
 	}
-	if g.setup.NumPlayers > 0 {
-		g.retailControllers[0] = 1
-		// the retail implementation installs ally group 2 when it has to create the first
-		// human row from an otherwise empty controller array.
-		g.setup.Players[0].AllyGroup = 2
-	}
 	g.retailControllersSet = true
+	g.applyRetailSkirmishOpenRowsFallback()
+}
+
+// shownSkirmishRows is the number of rows the *III..*X player count shows.
+// Every retail setup-screen row walk stops there [08 R-SKIR-01 §1] "Shown
+// rows only".
+func (g *gameShell) shownSkirmishRows() int {
+	return min(max(g.setup.NumPlayers, 0), session.SkirmishMaxPlayers)
+}
+
+// applyRetailSkirmishOpenRowsFallback is the screen build's all-Open test:
+// when no shown row is live, row 0 becomes Player and row 1 Computer, with
+// no colour, side or ally-group change. Retail runs it on every row build —
+// screen entry and each player-count change — not on every callback, and a
+// hidden live row does not stop it [08 R-SKIR-01 §1] "Shown rows only".
+func (g *gameShell) applyRetailSkirmishOpenRowsFallback() {
+	for i := 0; i < g.shownSkirmishRows(); i++ {
+		if g.retailControllers[i] != 0 {
+			return
+		}
+	}
+	g.retailControllers[0] = 1
+	g.setup.Players[0].Controller = session.SkirmishDefaultController
+	g.retailControllers[1] = 2
+	g.setup.Players[1].Controller = 1
 }
 
 // skirmishConfigForStart converts the authored retail row state into the
 // existing single-player session entry point. Open rows are not players;
 // human/computer rows are compacted in display order just as the retail start
-// gate counts non-zero controller rows.
+// gate counts non-zero controller rows. Only the rows the player-count
+// selector shows are read: retail's row-to-player conversion walks rows below
+// the shown count, and a row above it keeps whatever controller it held before
+// the count was lowered without becoming a player [08 R-SKIR-01 §2].
 func (g *gameShell) skirmishConfigForStart(mapName string) session.SkirmishConfig {
 	g.ensureRetailSkirmishControllers()
 	cfg := g.setup
 	cfg.MapName = mapName
+	shown := g.shownSkirmishRows()
 	out := 0
-	for i := 0; i < session.SkirmishMaxPlayers; i++ {
+	for i := 0; i < shown; i++ {
 		if g.retailControllers[i] == 0 {
 			continue
 		}
@@ -103,7 +127,16 @@ func (g *gameShell) mapDataFor(name string) *retailMapData {
 		maxTNTBytes = 1 << 30 // the former format-loader fallback for fixtures
 	}
 	if data, err := g.cs.fs.ReadFileLimit("maps/"+name+".tnt", maxTNTBytes); err == nil {
-		d.tnt, _ = formats.LoadTNT(data)
+		if full, err := formats.LoadTNT(data); err == nil {
+			// The map chooser only reads the minimap and playable dimensions.
+			// Keep the parsed-success sentinel and those pixels, not the large
+			// decoded terrain and raw TNT while a battle runs.
+			d.tnt = &formats.TNT{
+				Width: full.Width, Height: full.Height,
+				MinimapWidth: full.MinimapWidth, MinimapHeight: full.MinimapHeight,
+				Minimap: append([]byte(nil), full.Minimap...),
+			}
+		}
 	}
 	g.mapData[key] = d
 	return d
@@ -564,6 +597,12 @@ func (g *gameShell) updateHoverHelp(x, y int32) {
 func (g *gameShell) installSkirmishDynamicGadgets(window *gui.Window) {
 	if window == nil {
 		return
+	}
+	if !g.survivalMenu {
+		// This is the row build, so retail's all-Open test runs here; the
+		// Survival rows are Nanolathe's own and keep their fixed team.
+		g.ensureRetailSkirmishControllers()
+		g.applyRetailSkirmishOpenRowsFallback()
 	}
 	n := g.setup.NumPlayers
 	if n < 1 {

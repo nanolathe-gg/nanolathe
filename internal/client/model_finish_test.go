@@ -197,6 +197,61 @@ func TestLoadMaterialTableFromMountedContent(t *testing.T) {
 	if modelTextureMaterial("corsea6d") != drawlist.ModelMaterialDefault {
 		t.Fatal("the mounted override did not replace the embedded table")
 	}
+	// Remounting content without an override in the same process restores the
+	// embedded table rather than keeping the previous content's (a mod switch).
+	if err := LoadMaterialTable(empty); err != nil {
+		t.Fatal(err)
+	}
+	if modelTextureMaterial("corsea6d") != drawlist.ModelMaterialMetal || modelTextureMaterial("MySheet") == drawlist.ModelMaterialMetal {
+		t.Fatal("remounting content with no override kept the previous override")
+	}
+}
+
+// Every load starts from the embedded table (docs/DESIGN_MODS_MUTATORS.md
+// §4.4): content whose override has no [materials] section, or whose override
+// cannot be read, must not inherit the previous content's texture table.
+func TestLoadMaterialTableResetsBeforeEachOverride(t *testing.T) {
+	restoreMaterialTable(t)
+	restoreGlowFamilies(t)
+	mount := func(body string) *vfs.FS {
+		t.Helper()
+		pack := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(pack, "nanolathe"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pack, MaterialTablePath), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fs := vfs.New()
+		if err := fs.MountDirectory(pack, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = fs.Close() })
+		return fs
+	}
+	previous := mount("[materials]\n\t{\n\tmysheet=metal;\n\t}\n")
+	effectsOnly := mount("[effects]\n\t{\n\tweapons=40;\n\t}\n")
+	unreadable := mount("this is not a TDF document")
+	var cl *Client
+	for _, next := range []struct {
+		name    string
+		fs      *vfs.FS
+		wantErr bool
+		weapons int
+	}{{"effects only", effectsOnly, false, 40}, {"unreadable", unreadable, true, GlowFamilyDefault}} {
+		if err := LoadMaterialTable(previous); err != nil || modelTextureMaterial("mysheet") != drawlist.ModelMaterialMetal {
+			t.Fatalf("the previous content's override was not installed: %v", err)
+		}
+		if err := LoadMaterialTable(next.fs); (err != nil) != next.wantErr {
+			t.Fatalf("%s: LoadMaterialTable error = %v, want error %v", next.name, err, next.wantErr)
+		}
+		if modelTextureMaterial("corsea6d") != drawlist.ModelMaterialMetal || modelTextureMaterial("mysheet") != drawlist.ModelMaterialDefault {
+			t.Fatalf("%s: the previous content's texture table survived the load", next.name)
+		}
+		if w, _, _ := cl.GlowFamilies(); w != next.weapons {
+			t.Fatalf("%s: weapons family %d, want %d", next.name, w, next.weapons)
+		}
+	}
 }
 
 // restoreGlowFamilies puts the family strengths in force back after a test

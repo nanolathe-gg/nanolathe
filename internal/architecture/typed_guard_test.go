@@ -500,7 +500,10 @@ var mapFunctionHashes = map[string]string{
 	// precision [08 "Arithmetic and clamping"]. The key union, its sort and the
 	// order every consumer sees are unchanged (I1).
 	"internal/ai/strategic.go *Strategic.recomputeClassVectors": "5d879af01880139d273155d9a616fbd7256484085ee699ffb0d8e22e7f9bb9f3",
-	"internal/cob/binding.go BindStrict":                        "833dd320728882053831252fe1cf9315c0a42c67042b3f2ae9d510bb912ef0f4",
+	// Re-audited: the piece link now uses retail's slot pass and records link
+	// notes [04 R-COB-01 §4]. The two port-install ranges are unchanged and
+	// still only install handlers by key (I1).
+	"internal/cob/binding.go BindStrict":                        "0cbb3d03f9c57fd1b3a93bcaa6964a92a743639c281abc0aa15e97dbdd937f0a",
 	"internal/construction/placement.go *Service.BuilderLinks":  "ab64326b5234a8e82416673727052e72d47df694047af752dba5b34341f3c0bf",
 	"internal/construction/placement.go *Service.SnapshotLinks": "c001891b664d5693829dc524e5c7bad19b8a14c4341d396557013d6a5c1b40ca",
 	// Re-audited: the rebuild now also fills the parallel value row the two
@@ -510,9 +513,10 @@ var mapFunctionHashes = map[string]string{
 	"internal/features/service.go *Service.sortedInstanceKeys":    "039ab36d7a77f4e480107a0613c31452e218f0e58a6ccbfec64b6f5689119730",
 	"internal/save/battle_image.go validateCarrierReferenceGraph": "3dd0048516ffdf5e47c88f0d813e8ea79da1990b598ab004ebc0fd0f6d031da0",
 	// Re-audited: the manager literal now also takes the bound rule set's
-	// think step and construction membership rule. The catalog-key union, its sort and
-	// the order every consumer sees are unchanged (I1).
-	"internal/session/ai_entry.go initializeBattleAI": "693f7ff9ac94511053b3036dea8d53c41bf07638f8dbeb996882a004a23cdba1",
+	// think step, construction membership rule and the projected ProTA package
+	// AI switches. The catalog-key union, its sort and the order every consumer
+	// sees are unchanged (I1).
+	"internal/session/ai_entry.go initializeBattleAI": "d16f7cb07404e2562c8de87850e13ca625ee89fee5ec5272b280404316fb4dbd",
 	// Re-audited: both immutable membership lists are filtered after the same
 	// sorted builder-key walk; no map-order-dependent decisions were added.
 	"internal/session/mission.go pruneRestrictedBuildMenus":       "c3aa02729cb3a830ca92bcefe79a443222aec45bbb113205058dbd0579365b29",
@@ -645,7 +649,8 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/economy/maker.go func addContribution":                  {9, "I2 production contributions and discounts [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
 	"internal/economy/maker.go func *Service.PerUnitProductionFills":  {9, "I2 production contributions [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
 	"internal/economy/maker.go func creditReclaimedMaterial":          {9, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},
-	"internal/economy/maker.go func *Service.CreditFeatureReclaim":    {2, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},
+	"internal/economy/maker.go func *Service.CreditFeatureReclaim":    {4, "I2 reclaimed-material accounting [05 R-ECO-01 §1]"},
+	"internal/economy/maker.go func proTAIncomeCredit":                {8, "I2 ProTA 4.8 package income credit at the retail working precision [05 R-ECO-01 §1][05 R-ECO-01 §3]"},
 	"internal/economy/maker.go func *Service.CreditUnitReclaimRefund": {2, "I2 construction refund [05 R-ECO-01 §11]"},
 
 	"internal/movement/airorders.go func airReleaseLead":  {5, "I2 AirStrike release lead [04 R-AIR-01 §8]"},

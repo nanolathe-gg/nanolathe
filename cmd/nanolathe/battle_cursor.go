@@ -163,7 +163,8 @@ func (b *battleSession) overWorld(x, y int32) bool {
 // hoverFeature returns the definition of the feature occupying the cell under
 // the pointer, or nil [07 §8][05 "Feature instance and terrain cell"].
 func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
-	if b.cam == nil {
+	// Over the megamap the feature lookup reports no feature (§3.15).
+	if b.cam == nil || b.megamapOwnsPointer(sx, sy) {
 		return nil
 	}
 	wx, wy, wz := b.cursorWorld(sx, sy)
@@ -204,6 +205,10 @@ func (b *battleSession) updateFooterHover(mx, my int32) {
 	}
 	var iconHover uint64
 	switch {
+	case b.megamapOwnsPointer(mx, my):
+		// The megamap writes the hovered-unit word while it owns the pointer
+		// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		b.footerHoverUnit = b.megamapHoverUnit(f, mx, my)
 	case b.classifyPointer(mx, my) == battlePointerMinimap:
 		b.footerHoverUnit = b.minimapHoverUnit(f, mx, my)
 	case b.overWorld(mx, my) && !b.battleState().Input.DragActive:

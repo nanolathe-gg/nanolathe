@@ -543,8 +543,10 @@ textured — evaluates retail's own two-chain span mapping per fragment from the
 parameter image (§11.2 "Textured quads without strips"), rather than a generic
 inverse-bilinear map, so a non-parallelogram quad does not develop the diagonal
 bend that motivated the original strip path. And the key pass and the colour
-pass evaluate the same mapping, so the two never disagree about a texel's key.
-Rings that are not four-corner faces interpolate their lanes linearly.
+pass evaluate the same mapping, so they agree about a texel's key except where
+the shader compiler rounds the two contexts differently: one key apart, at a
+fraction of a percent of a mapped face's texels (§22.4 "Owed", item 4). Rings
+that are not four-corner faces interpolate their lanes linearly.
 
 The remaining visible difference inside a face is shade rounding: retail looks a
 shaded texel up in the SHD table, and the lane multiplies by the scale that
@@ -596,6 +598,27 @@ Lighting, glow and antialiasing are no longer deferred: model antialiasing is
 §17, glow is §19, battle lighting is §23 and §31. Each is a named divergence
 with its own section, its own switch (§30) and its own verification. The
 classic executor composes identical pixels whatever any of them says.
+
+### 5.5 Enhanced unit overlap order
+
+Retail and Original draw units in 16-pixel world-Z rows, with ascending slot
+order inside a row `[03 R-RAST-01 §7]`. Two overlapping units can reverse
+which one covers the other when just one crosses a row boundary, even if their
+front-to-back positions never reverse. Enhanced keeps the same row admission,
+grounded/airborne passes, feature tail, and per-subject height planes, but
+orders units within each row by their full 16.16 world Z, then by slot on an
+exact tie. Adjacent rows already have that Z order, so an unrelated row
+boundary cannot reverse an overlapping pair. `RecordModernFrame` selects
+this order while recording the modern list. Classic composition retains the
+retail order even in a two-renderer comparison capture where Enhanced art is
+enabled for the modern half. This is a presentation policy only:
+it does not change occupancy, collision, selection, RNG, or the simulation
+frame. Units that genuinely pass one another in Z can still exchange visual
+priority. The Classic list preserves retail's slot tie.
+
+The boundary fixture draws the same overlapping pair just before and after a
+plot-row edge in both executors. The enhanced bucket check also holds equal-Z
+slot ties, feature order, repeated walks, and warm-frame allocation behavior.
 
 ## 6. Verification
 
@@ -1005,13 +1028,55 @@ active edge on the decreasing-index chain and on the increasing-index chain of
 the quad, interpolates every lane along each edge by the row's parameter, then
 interpolates across the row by the column's parameter [03 R-RAST-01 §1]. A
 four-corner face therefore draws as two device triangles whose key and colour
-passes evaluate exactly that two-chain mapping per fragment from a per-frame
-parameter image — twelve RGBA8 texels per entry: corner positions, corner texel
-coordinates, corner key and shade, and the subject's verdict lanes — then floor
-before sampling. This is not a generic inverse-bilinear map, which differs from
-the retail mapping on a non-parallelogram. It removes the diagonal bend the
-strip path was introduced for (§5.1) without CPU scanline work. Rings that are
-not four-corner faces interpolate their lanes linearly.
+passes evaluate that two-chain mapping per fragment from a per-frame parameter
+image, then floor before sampling. This is not a generic inverse-bilinear map,
+which differs from the retail mapping on a non-parallelogram. It removes the
+diagonal bend the strip path was introduced for (§5.1) without CPU scanline
+work. Rings that are not four-corner faces interpolate their lanes linearly.
+
+The parameter image is made of twelve-texel RGBA8 slots, two 16-bit values a
+texel. A subject's verdict entry takes one slot (§22.1); a mapped quad takes two
+(`model_quads.go`):
+
+* The **corner entry**: the corners' positions, texel coordinates, keys and
+  shade rows, rotated so the top corner comes first, with the bottom corner's
+  index. The colour pass and the water reflection walk it: each chain's edges in
+  turn, every edge's slope divided out at the fragment.
+* The **key entry**: the span writer's edge setup for the key, made once per quad
+  on the CPU — the corner rows and the bottom corner's index, the corners' keys
+  and columns, and each ring edge's 16.16 slope in the direction its chain walks
+  it. The key pass reads it. The fragment chooses each chain's edge by comparing
+  its row with the corner rows: an edge that descends owns the rows from its top
+  corner down, and a later edge overrides an earlier one, so the edge a row
+  belongs to is the last descending edge that starts at or above it — the "later
+  edge wins" rule of the span writer's edge table. It walks the column with the
+  stored slope, with the same truncation, +65535 bias and half-open rows, and
+  interpolates the key along two edges rather than up to six. That is eight
+  texel fetches instead of twelve, and no integer division.
+
+The colour pass keeps the walk because the shader compiler rounds by the shape
+of the code. With fast math, it rounds the product of each chain's first edge
+separately and adds it to the top corner, and it fuses a later edge's
+interpolation into one multiply-add. Where a shader reads all four lanes, as the
+colour pass does, it rounds some of them differently again, for example the
+right chain's first edge. The key entry's code keeps the walk's shape: each
+chain starts from the top corner, its first edge updates that value, and a
+later edge overrides it. So it gives the walk's key bit for bit where a shader
+reads the key alone. No shape tried gave the colour pass's four lanes bit for
+bit.
+
+The same rounding means the walk's key in the colour pass can differ by one from
+the key its key pass wrote. In a probe of 512 random quads that happened at
+0.28% of texels, the colour pass's key lower at three quarters of them. Where
+it is lower, the colour pass rejects that texel of its own face. The two passes
+behaved this way before the key entry, and the key entry keeps that behaviour
+(§22.4 "Owed").
+
+At the Moon Quartet Survival capture (`--benchmark-capture`, 30 draws a second,
+GPU timestamps from a locally instrumented Ebitengine), the key pass's fragment
+stage fell from 1.07–1.12 ms to 0.86–0.88 ms (median). The colour pass is
+unchanged. `battle.png` is byte-identical at both zoom levels and both draw
+rates.
 
 **Allocation policy.** Steady-state frames allocate nothing in the executor.
 Batch vertex and index storage is pooled by power-of-two size class and each
@@ -1202,7 +1267,16 @@ end.
   destination factor source-alpha, so `out = dst · (src.rgb + src.a)`; the
   fragment carries `(min(k,1), min(k,1), min(k,1), max(k−1, 0))`. A factor above
   2 clamps at 2 (SHD row 31 is 2.13; the difference is below the quantization
-  floor).
+  floor). Repeated scaling of one picture compounds the difference. The results
+  darkening is the case that shows it: ten `FillShadeRect` steps, rows 13 down
+  to 4, over the retained battle picture `[08 R-CAMP-01 §6]`. The classic
+  chain re-quantizes to the palette after every step, while the composite
+  keeps the product. On the retail tables, one row's lookup already differs
+  from its formula by a mean of about 10 and up to 22–35 levels per channel at
+  rows 4–8. Mid-sequence a battle view differs by up to about 30 levels per
+  channel between executors, and both converge to black by the last step. This
+  is the intended consequence of the true-colour composite, not a parity
+  defect, and it predates the in-battle end titles.
 * *Fog keeps one read copy.* The gray remap is a desaturation, which no
   fixed-function blend expresses, so the fog command stays a shader run over a
   copy of its region: luminance `floor((r+g+b)/3)` for the gray fills and gray
@@ -1263,6 +1337,8 @@ The composite draws one recorded list in a few passes, so the modern window can
 record and replay a list every presented frame. Interpolation needs no new
 draw-list family: the recorder is handed a blended view of the two most recent
 committed ticks and records it exactly as it records a committed tick.
+Under the asynchronous simulation of §13.13 the pair is the one before the
+latest release, pinned for the frame.
 Everything below is an Enhanced presentation rule; Original keeps committed-tick
 sampling.
 
@@ -1280,7 +1356,14 @@ Draw. `--fps N` caps how often Enhanced presents: a Draw that arrives
 sooner than the cap's interval (less an eighth of it, the vsync jitter
 allowance) returns without recording and the retained screen keeps the last
 frame. Draw still sits on the display's vsync grid, so the cap lands on the
-nearest refresh multiple below it. Original ignores the cap.
+nearest refresh multiple below it. The refresh is measured, not assumed — half
+the median spacing of two consecutive Draw arrivals — because a ProMotion panel
+changes it mid-battle, dropping from 120 Hz to 60 Hz and back. When the
+measured refresh is no faster than the cap every refresh is due, and only a
+Draw within half a refresh of the last present, one of a burst, is skipped:
+at 60 Hz the eighth-interval test skipped the refresh after any present more
+than 2 ms late, so one hitch cost two refreshes and a quiet battle counted
+55–59. Original ignores the cap.
 
 The default cap is 60 FPS. The Nanolathe options page offers 30 / 60 / 120 and
 previews changes immediately; OK persists them, Cancel restores the entry value.
@@ -1288,11 +1371,44 @@ Explicit `--fps` overrides the saved preference at window startup, with zero
 retaining display-refresh presentation. Captures and benchmarks use their
 command-line settings independently of saved window preferences.
 
-**FPS counter — Nanolathe host presentation policy.** `+fps` toggles a small
-counter at the upper-right of the modern battle surface. It starts off and
-retains its state across battles in the same process, without changing saved
-settings. The value counts completed modern presentations over elapsed host
-time in one-second windows, so cap-skipped Draw callbacks do not inflate it.
+**FPS counter and frame graph — Nanolathe host presentation policy.** `+fps`
+toggles a diagnostic overlay at the upper-right of the modern battle surface.
+It starts off and retains its state across battles in the same process, without
+changing saved settings. Its FPS number comes from the median completed-frame
+interval over the most recent 500 ms, so cap-skipped Draw callbacks do not
+inflate it and an isolated stall does not make the readout flicker.
+The graph retains up to 30 seconds of completed-frame intervals and phase
+durations in a fixed 8,192-sample ring (30 seconds through 273 FPS; faster
+displays retain a shorter span). Its six aligned lanes show frame cadence,
+whole Draw callback time, client/authoritative step time, committed-frame
+interpolation, frame recording (including that interpolation), and renderer
+`Execute` time (CPU preparation and GPU command enqueue). Each horizontal
+pixel is an equal slice of 30 seconds and keeps the worst time in that slice,
+so brief spikes stay visible at their approximate time. Lane labels show a
+500 ms median and the 30-second peak. Frame and Draw medians include every
+recent sample; Sim, Blend, Record and Submit medians include only frames where
+that phase ran. With no such phase sample in 500 ms its live value is zero.
+The graph, peak and late count remain unsmoothed. Cadence bars turn orange when
+an interval exceeds the requested cap by more than 1 ms. The overlay reports
+how many intervals did so, the 30-second cadence peak and its amount over cap,
+and the render passes the last presented frame issued (`ModelStats.Passes`):
+on the development machine's Metal driver a frame past about 80 passes makes
+the windowed present wait for the GPU, so that number is watched against the
+§22 budget.
+Changing the live FPS cap starts a fresh history, so the
+late count uses one budget. A line in each lane marks the cap interval. The
+Draw "room" is cap interval minus the median callback time and may be negative.
+It is a partial wall-time margin: the sim step may run in Update or the Draw
+tail, and an asynchronous pre-record can overlap other work, so lanes are never
+added.
+Paused foreground redraws report their own recording and renderer calls; Blend
+is zero while the world is paused. Draw includes the overlay itself, so the
+diagnostic has some cost. Draw excludes later GPU completion, display swap and
+pacing; the interval includes those effects and scheduling but cannot
+attribute a stall to one of them. Ebitengine does not expose a GPU execution
+timer here, so `Submit` must not be read as GPU execution time. With `--fps=0`,
+the overlay omits cap and room because the display refresh is not an explicit
+budget.
 Classic shows no counter. The overlay is applied after modern replay, outside
 the recorded draw list and authoritative session; it has no RNG or resource
 effects. It is absent from F11's GPU-image capture.
@@ -1971,6 +2087,141 @@ with committed-off-screen fillers; both assert the finished frame does not
 change. Neither reproduces the defect at fixture scale, so the failing evidence
 is the measurement in the history file, which the 180-frame benchmark reproduces
 in two minutes.
+
+### 13.13 The asynchronous simulation
+
+**Why.** Before this, the window ran a host step's sub-ticks inside the Draw
+tail that deferred it (§13.10), so every other presented frame at a 60 cap
+carried a whole tick besides recording, `Execute` and Ebitengine's present,
+and every simulation spike became a dropped frame. Timed through the real
+window at a Survival capture on Moon Quartet (1280x827, 120 Hz ProMotion
+panel, 60 cap), the tick cost 4.0-4.3 ms per stepping frame at 803 units and
+6.5-7.7 ms at about 1,600, with spikes past 20 ms. The modern window now runs
+the sub-ticks on their own goroutine. A tick then has a whole host period,
+about 33 ms at 1x, on a core of its own, and a presented frame carries only
+presentation.
+
+**Scope.** The modern (Enhanced) window only. Original presents the committed
+tick after each update and stays on the synchronous path, as do `--shot`,
+film, the benchmarks and headless runs; nothing but the window sets
+`Client.SetAsyncSimulation`. Switching to Original (F10 or the saved
+preference) calls the client's `JoinSimulation` hook, which joins and stops the
+goroutine before presentation reads the committed buffer unpinned again.
+
+**The order — Nanolathe host policy.** Every decision stays on the game
+goroutine, in the order the synchronous step made it (`cmd/nanolathe/battle_sim.go`):
+
+1. At the start of a host step (`gameShell.step`) the host joins the batch the
+   previous step launched. With the session quiescent it then applies what the
+   batch left for the client — the captions its audio inserts resolved and the
+   executor tail's message-ring retire [01 R-PLAT-02 §8], in that order, and
+   the feature definitions it admitted to the model texture registry — feeds
+   each publication the batch made, oldest first, to the observers the
+   synchronous batch ran inline — the published camera (follow and shake) and
+   the Enhanced history layers (`Client.ObserveCommittedFrame`) — runs the
+   follow hotkeys retail handles after the sub-tick batch, and drains audio.
+2. Input is handled and human commands are queued exactly as before.
+   `Session.PrepareStep` runs the session's state dispatch and the tick budget
+   [01 §4.2] [01 §4.3] and stamps the release.
+3. When the host step returns, `Session.ExecuteStep` runs the released
+   sub-ticks, their publications and the executor tail
+   [01 §4.4] [01 R-PLAT-02 §7] on the simulation goroutine, until the next
+   host step joins it. The one exception is a pump with a gameplay switch
+   queued (`HumanGameplay`): it rebinds rule state the HUD reads while it draws,
+   so that pump runs inside the host step instead.
+
+`Session.Step` is exactly `ExecuteStep(PrepareStep(scaled))`, commands reach the
+same sub-ticks, and the authoritative sequence is unchanged; only where the
+sub-ticks run moves. The retail test `TestAsynchronousSimulationMatchesSynchronous`
+steps one seeded skirmish through the host step both ways, with a human order
+and a commander self-destruct mid-run, and requires the same partial-state
+fingerprint, global tick and both random-stream states. Each step also pins,
+drains, digests and records a modern frame as the window's Draw does, beside
+the running batch in the asynchronous run, so under `-race` the test is the
+shared-state check below.
+
+**Presentation — Nanolathe host policy.** A presented frame shows the tick
+before the last released one, but never a tick the host has not yet joined.
+At 1x the two agree: the tick the simulation finished while it computes the
+next, one tick behind the synchronous view. When a pump releases several ticks
+(2x, or catch-up after a stall) presentation stays on the newest joined tick
+until the next join, a pump behind rather than a tick. Everything the join
+applies is therefore in place before a publication is drawn, and a pre-recorded
+pass and the Draw that consumes it name the same pair (§13.10). The blend
+fraction of §13.5 is paced from the release stamp rather than from when the
+batch finished. Because the name is held at the tick before the last release,
+pumps that release nothing (slow speeds) and a pause leave the blended pose
+where it was; a command applied at the paused-input boundary republishes the
+committed tick, and that republication is presented at once, unblended
+(DESIGN_INTERFACE_HUD_INPUT §3.12). Should a named tick ever have left the
+buffer, the newest publication is presented unblended rather than waited for.
+Unit motion therefore reaches the screen a pump later; the camera, cursor,
+selection box and interface are presentation state and do not move.
+
+**The committed buffer.** `frame.Buffer` widens from two slots to an eight-slot
+rotation (`SetConcurrentReaders`). A reader beside the writer pins what it
+reads (`PinTick`, `PinLatest`), and the writer refills only the oldest slot that
+is neither pinned nor committed, so a recording pass reads one publication
+throughout. The host pins the pair a presented frame shows at the start of its
+Draw (`Client.PinPresentation`), and `StartPreRecord` pins the pair its
+pre-record will read before waking the worker, so the pipeline's digest and the
+record name the same publication (§13.10). `PublicationsSince` feeds the
+host's in-order observation. The two-slot default keeps synchronous routes at
+their old footprint, and the unpinned `Current`/`Previous` rules are unchanged;
+`Current` is an atomic load, since the synchronous recorders call it per drawn
+object.
+
+**Shared state.** Found by running the window under the race detector, or by
+reading every presentation path the simulation reaches:
+
+- The audio cue queue: the simulation inserts cues and presentation drains them,
+  and the drain's resolver reads live units. Under the asynchronous simulation
+  the drain runs in the host step with the simulation joined; queue pops were
+  already gated to one per host step, so nothing is lost.
+- The model texture registry: phase 7 advances its cursors while recording reads
+  them, so a cursor's position and playing flag are atomic
+  (`render.TexturePlayer`). Feature admissions write the registry's maps and
+  wait for the join.
+- Terrain heights: presentation samples heights while movement writes the
+  occupant bytes of the same plot cells, so `PlotCell.Height` reads through the
+  pointer instead of copying the cell.
+- The Enhanced history layers (trails, scorch marks, hover wakes, water motion)
+  are fed only by the in-order observation at the join; a recording pass places
+  nothing itself.
+- The message ring: recording reads it, and two simulation paths wrote it — the
+  executor tail's retire and the caption a full audio queue's silent resolve
+  posts. The batch notes the tail's tick and the client holds those captions
+  (`Client.DeferCaptions`); the join applies both, so only the game goroutine
+  writes the ring.
+- The effect-bank cache: the session's effect-timing resolver loads banks on
+  its first miss, from the simulation goroutine, while recording resolves art
+  from the same cache, so the cache and the art diagnostics its misses record
+  are locked.
+- The HUD's world overlays (build ghost, drag previews, the nanoframe preview)
+  are drawn inside the recording pass, so they read the presented publication
+  (`Client.PresentedFrame`) and take the local player from it, not from the
+  live session.
+
+**Threads — Nanolathe host policy.** On macOS the main (render) thread, the game
+loop, the simulation and the pre-record goroutine lock their threads and ask for
+the user-interactive quality-of-service class
+(`ebitenapp.RaiseCurrentThread`), which keeps them on performance cores while
+other processes load the machine. The record pool's workers keep the default
+class. Other hosts keep their default scheduling.
+
+**Measured.** Interleaved runs of one binary with the simulation synchronous
+and asynchronous, at the capture above:
+
+| | synchronous | asynchronous |
+|---|---|---|
+| 803 units: host step on the critical path, mean | 4.0-4.3 ms | 0.4 ms |
+| 803 units: Draw callback work, p95 / p99 / max | 10.1-10.6 / 10.8-11.5 / 28-34 ms | 6.2-6.5 / 6.6-7.4 / 13-14 ms |
+| 803 units: presented per second | 59.6-59.9 | 59.7-59.9 |
+| ~1,600 units: presented per second | 34.2-38.8 | 43.3-46.6 |
+
+At about 1,600 units the frame is then bounded by Ebitengine's present waiting
+on the GPU (13-15 ms), not by the tick. The frame graph's Sim lane adds the
+batch's time on its goroutine to the host step's.
 
 ## 14. The detail view: native and 2× steps and load-time remaster
 
@@ -3142,8 +3393,15 @@ The path may name the exact INI or a package/config directory containing
 exactly one case-insensitive `iconcfg.ini` at its root, `Icon/`, or `ZIcon/`.
 No match or multiple matches reports the searched directory and retains the
 generated catalog; an exact file path always remains the user's selection.
-Empty keeps the generated
-catalog above. `UseDefaultIcon=true`, including its source default when the key
+Empty discovers the running content's own configuration, silently: with a mod
+from the Mods & Mutators library (DESIGN_MODS_MUTATORS §4) the mod's directory
+is searched, and with a manual `--root` stack its roots are searched from the
+last to the first, the order in which they win. The first root holding exactly
+one configuration in the recognised places supplies it; a root holding none is
+passed over without a diagnostic, and a root holding several reports the
+ambiguity and keeps the generated catalog rather than trying the next root.
+The base install alone is never searched. When nothing is found the generated
+catalog above is kept. `UseDefaultIcon=true`, including its source default when the key
 is absent, also keeps that catalog and does not open any PCX named by `[Icon]`.
 An unreadable INI, malformed PCX or atlas outside the host bound reports the
 config and art paths and falls back to the complete generated catalog; a partly
@@ -3218,7 +3476,7 @@ modern-only commands and always light sources.
 The composite is bound as a source image while the glow plane is the destination,
 so reading it there is legal and reads the frame as replayed so far. The emission
 fragment's alpha is its largest channel, so the plane stays a valid premultiplied
-image through the linear-filtered shrinks.
+image through the shrink and the blurs.
 
 ### 19.3 The resolve — contract L2
 
@@ -3240,15 +3498,35 @@ page of sprites another, so a battle frame's emission is two or three device
 draws instead of one per change of source kind in record order.
 
 The resolve submits the scheduler first, so it is a barrier costing one segment,
-then: clears the full-frame emission plane and draws the runs into it under
-`BlendLighter`; shrinks it to a half and a quarter of the frame with linear
-filtering, blurs the quarter plane with a separable nine-tap Gaussian
-(`glowSigma` 2, ping-pong), shrinks that to an eighth and blurs again; and adds
-the quarter plane (×4, `glowNearWeight`) and the eighth plane (×8, `glowFarWeight`)
-onto the composite with linear magnification under a **screen** blend,
-`out = src + dst × (1 − src)`. Screen rather than additive is what keeps a
-fireball's own art: an already-white core stays white instead of clipping, and
-the halo shows where the ground is darker.
+then draws five render passes, each into one image:
+
+1. **Emission.** Clears the full-frame emission plane and draws the runs into it
+   under `BlendLighter`.
+2. **Shrink.** Shrinks it to a quarter of the frame, each texel the mean of the
+   4×4 block under it — the two 2×2 halvings the layer was tuned with, in one
+   pass.
+3. **Blur across.** Blurs both octaves along x into one plane. The near octave
+   takes the nine-tap Gaussian (`glowSigma` 2). The far octave's fragments fall
+   on every other quarter column and read every quarter texel within reach
+   through a Gaussian of `glowFarSigma` quarter texels, so the far octave
+   shrinks to an eighth of the frame's columns as it blurs.
+4. **Blur down.** Blurs both along y the same way into the octave plane, the far
+   octave shrinking to an eighth of the rows. The octave plane is cleared in the
+   same pass, so each octave sits inside a border of transparent texels.
+5. **Composite.** Adds the quarter octave (×4, `glowNearWeight`) and the eighth
+   octave (×8, `glowFarWeight`) onto the composite in one draw, each magnified
+   with linear filtering and weighted, under a **screen** blend,
+   `out = src + dst × (1 − src)`. The shader screens the two octaves together
+   and the blend screens the result onto the composite once. Screen composes
+   associatively, `1 − out = (1 − dst)(1 − near)(1 − far)`, so this is the two
+   screen blends it replaces, without the rounding between them.
+
+Screen rather than additive is what keeps a fireball's own art: an
+already-white core stays white instead of clipping, and the halo shows where the
+ground is darker. Every pass after the emission serves both octaves because the
+render pass, not its fill, is the unit of device cost (§11.5), and the Metal
+driver's stall past about 80 passes in flight makes it the budget the executor
+shares (§22.1 "Merges run in waves").
 
 **The halo is sized in world pixels, not in framebuffer pixels.** Everything a
 halo surrounds — the beam, the sprite, the flash disc — is drawn at the frame's
@@ -3259,29 +3537,38 @@ shadow does (`glowViewScale`); a frame with no terrain is the native view. A
 halo fixed in framebuffer pixels is half as wide, *relative to the units it
 comes from*, at the 2× step as at 1×, and changes size under the wheel. So
 `glowNearSigmaWorld` states the near octave's blur radius in world pixels and
-`glowBlurStep` converts it once, into the separable blur's tap spacing in texels
-of the octave being blurred; the stroke quad's half-width takes the same view
-scale. The far octave keeps the same spacing on a texel twice as wide, so it
-stays twice the near halo. At the native view the spacing is exactly one texel
-and the quad four screen pixels, so a 1× frame composes exactly as it did.
-Blur fetches are nearest, so a spacing below one texel folds taps onto the same
-texel: the kernel narrows toward the octave's own resolution rather than
-aliasing, which is the right failure at a zoomed-out view where the halo is
-already finer than the octave can hold.
+`glowBlurStep` converts it once, into the near kernel's tap spacing in quarter
+texels; the far kernel's sigma, `glowFarSigma` quarter texels at the native view,
+scales by the same factor (`glowFarKernelSigma`), and the stroke quad's
+half-width takes the same view scale. At the native view the near spacing is
+exactly one texel and the quad four screen pixels. Near fetches are nearest, so
+a spacing below one texel folds taps onto the same texel: the kernel narrows
+toward the octave's own resolution rather than aliasing, which is the right
+failure at a zoomed-out view where the halo is already finer than the octave
+can hold. The far kernel reads every texel within its cut, 2.5 sigmas, at every
+scale, so a thin source cannot comb its halo when the scale spreads the taps;
+the shader's loop is bounded (`glowFarReachMax`) and covers `camera.ZoomMax`.
+The Gaussian's value at the cut is subtracted from every weight, so the kernel
+ends at zero and changes smoothly as the zoom eases instead of gaining taps at
+once.
 
-That is nine device passes per frame with something glowing and about 2.4 frames
-of fill, most of it the two magnified adds; a frame with nothing emissive costs
-nothing. The planes are allocated once per frame size, and the emission plane is
-**unmanaged** so its texels never depend on an atlas placement (§13.12 "Page
-planes are unmanaged"). Steady-state frames allocate no options, no uniform map
-and no geometry here.
+That is five render passes per frame with something glowing. The fill is about
+two frames: the emission plane (cleared, then drawn) and the composite are a
+frame each, and the shrink and blur planes add under a quarter of one. A frame
+with nothing emissive costs nothing. The planes are allocated once per frame
+size. All four — emission, quarter, across and octave — are **unmanaged**, so
+their texels never depend on an atlas placement and no placement can put two of
+them on one texture or copy between the passes (§13.12 "Page planes are
+unmanaged"). Steady-state frames allocate no options, no uniform map and no
+geometry here.
 
 The knobs (`glowLineWidth` 4 world px, `glowGain` 1, `glowThreshold` 0.65,
 `glowSpriteGain` 0.6, `glowLightGain` 0.35, `glowNearWeight` 0.55,
 `glowFarWeight` 0.425, `glowSigma` 2 over `glowTapCount` 4 taps a side,
 `glowNearSigmaWorld` = `glowSigma` × `glowOctaveNear` = 8 world px, which is the
-eight framebuffer pixels the layer was tuned at when the view scale is 1) are
-presentation choices tuned by eye on
+eight framebuffer pixels the layer was tuned at when the view scale is 1, and
+`glowFarSigma` 4.65 quarter texels = 18.6 world px, cut at `glowFarCut` 2.5
+sigmas) are presentation choices tuned by eye on
 the battle benchmark capture; a first pass at 0.8/0.5 with an additive composite
 and no sprite gain blew every fireball to a white blob, which is the case the
 screen blend and the sprite threshold exist for.
@@ -3297,6 +3584,45 @@ the glow off and the spray unlit, on the staged film scenes: the naval battle
 adds 1.35 levels per channel in a crop around two ships against 1.59 at the
 first tuning (85 percent); a crop around two factories under construction adds
 1.33 against 3.62 (37 percent).
+
+**Nine passes to five (2026-09-24).** The resolve used to be nine render passes
+for 0.2–0.3 ms of GPU time: two linear 2×2 shrinks to a half and a quarter
+plane, a two-pass separable blur of the quarter plane, a shrink of that blurred
+plane to an eighth, a two-pass blur of the eighth, and two magnified adds. The
+half plane is gone (one 4×4 shrink), the far octave rides the near octave's two
+blur passes, and the adds are one draw. The near kernel is the one the layer
+was tuned with. The far octave was the blurred near octave shrunk by two and
+blurred again with the near kernel on its wider texel; it is now one Gaussian
+over the quarter plane, and `glowFarSigma` is fitted to the old chain's
+response to a point source. At the native view its spread, 17.0 pixels, agrees
+within half a percent, and no pixel of the response moves by more than one
+percent of its peak; at the 2× step five percent. The old chain's spread at
+fractional view scales carried fixed framebuffer-pixel stages and folded taps;
+the new one scales in proportion to the view, so its spread is 5 percent
+narrower at a view scale of 0.5 and 14 percent at 0.25, where the halo is a
+few pixels wide. Motion keeps the old granularity: the far octave inherits the
+quarter plane's 4-pixel texel, as it did.
+
+Measured at the Survival benchmark capture (Moon Quartet, 803 captured units;
+docs/BATTLE_BENCHMARK.md "Replaying the scale of a diagnostic capture"), the
+frame's passes fall from 24 to 20 at the native view and from 26 to 22 at the
+1.5× and 2× views, and `GlowPasses` from 9 to 5. Against the nine-pass build,
+`battle.png` differs by at most one level at the native and 2× views (two at
+1.5×), 0.43–0.45 levels on average over the pixels the glow touches, and the
+glow's total energy agrees within half a percent. With the glow off the frames
+are byte-identical. On the M3 Pro's per-pass GPU timestamps the resolve costs
+what it did: about 0.13 of the model lane's GPU time in both builds, the lane
+doing the same work in each.
+
+Four passes were built and measured first: the emission plane shrunk to a
+quarter plane and to an eighth (the eighth by a 16×16-pixel tent, so the far
+octave's motion stays smooth), then each octave blurred in one two-dimensional
+pass. It cost 3.3 times the nine-pass resolve's GPU time. A two-dimensional near
+kernel is 81 taps a quarter texel against the separable pair's 18, the tent is
+256 taps an eighth texel from the full-resolution plane, and a far octave
+blurred from its own eighth plane has to read every texel above a view scale of
+one — 529 taps a texel at the 2× view — or it combs thin sources. One pass was
+not worth that.
 
 ### 19.4 The switch
 
@@ -3380,12 +3706,19 @@ strength.
 1. **Device fixture.** `glow_test.go` under `NANOLATHE_GPU_DEVICE_TEST=1`: a flat
    field with one emissive stroke inside a rest-factor world region. Off, the
    frame is the exact classic expansion and the counters are zero. On, the
-   stroke's own pixels are unchanged (screen leaves white white), the field beside
-   it is clearly brighter, the brightening falls off with distance, and the far
-   corner is the field to within the blur's last tap.
+   resolve spends five passes, the stroke's own pixels are unchanged (screen
+   leaves white white), the field beside it is clearly brighter, the brightening
+   falls off with distance, and the far corner is the field to within the blur's
+   last tap. The stroke's emission is centred on texel boundaries of both
+   octaves, so the halo must be symmetric about it — a plane placed, or a tap
+   phased, half a texel off breaks that — and twenty pixels out, where the near
+   kernel has faded, the far octave must still light the field.
 2. **CI tier.** Unit tests lock the normalized kernel, run-relative indices and
    run selection of the batch (conflicting bindings split, compatible ones rejoin), the stroke quad's geometry, and the recorder's
-   emissive marks on beam and segment strokes.
+   emissive marks on beam and segment strokes. They compile the four resolve
+   shaders, check that the far kernel's sigma follows the view scale unclamped
+   from `camera.ZoomFloor` to `camera.ZoomMax` within the shader's loop, and
+   check that the octave plane keeps a transparent border around each octave.
 3. **Byte-identical off.** The modern battle benchmark with `display.glow` 0
    against the build without the layer.
 4. **Look.** The benchmark capture with the switch on beside the same frame off,
@@ -3483,9 +3816,10 @@ pass, reveal, outline, clipping, a coverage resolve and a residency table, and
 was the executor's largest CPU term. The lane keeps what retail's picture needs
 and drops the rest. `internal/platform/gpurender/model_direct.go` is the whole of
 it, plus three ops in the scene and destination shaders, `scheduler.tris`, the
-outline row walk (`model_prepare.go`), the parameter packing
-(`model_quads.go`), the retained-lane store (`model_retain.go`) and the texture
-page (`model_atlas.go`).
+construction outline rings (`model_outline.go`) and their CPU row walk
+(`model_prepare.go`), the parameter packing (`model_quads.go`), the
+retained-lane store (`model_retain.go`) and the texture page
+(`model_atlas.go`).
 
 Before `Replay`, every subject of the frame and its shadow are given a region of
 a per-frame 2× atlas page — 4096 × 4096 texels, two planes, shelf-packed
@@ -3519,14 +3853,17 @@ children as described in §22.4:
    it, into a key plane under a MAX blend, so a texel holds the highest key drawn
    there. A four-corner face, flat or textured, takes its key from the span
    writer's two-chain mapping of its corners, evaluated per fragment from the
-   parameter image; any other ring interpolates its lanes linearly.
+   quad's key entry in the parameter image (§11.2); any other ring interpolates
+   its lanes linearly.
 2. **Colour.** Each face's texel where its own key is not below the stored one —
    retail's `stored ≤ incoming` admission [03 R-REN-03A §2] — into a colour
    plane, faces in RECORDED order so a tie goes to the later-drawn face as
    retail's does. That tie is what puts a solar collector's base rim over its
    open panels, which lie at its height; a painter's sort by mean key loses it. A
-   mapped face's key is the same mapping the key pass wrote, so the passes never
-   disagree about a texel. Shadow silhouettes draw in their index with no key
+   mapped face's key is the same two-chain mapping the key pass evaluated,
+   walked from the quad's corner entry (§11.2), where the compiler rounds it
+   differently at a few texels; at those the face can lose a texel to its own
+   key (§22.4 "Owed"). Shadow silhouettes draw in their index with no key
    test. The nanoframe reveal, the waterline tint and the Digger erase are
    verdicts on the height key [03 §5.2][03 R-WATER-01 §2][03 R-REN-03A §8]; the
    fragment evaluates them on the PIXEL's key — the stored key at the block's
@@ -3538,18 +3875,18 @@ children as described in §22.4:
    off at the fragment) and the carrier's waterline and Digger then clip the
    child on the shifted key, which is what the staging image's passes do
    [03 R-REN-03A §4]. The subject's verdicts ride the parameter image beside the
-   mapped faces, eight texels of a twelve-texel entry; its ninth texel carries
+   mapped faces, eight texels of a twelve-texel slot; its ninth texel carries
    the subject's **frame origin**, the atlas texel of the raster's local (0,0),
    because a parameter entry is packed **subject-local** — corners in the
    raster's own frame at the atlas scale, plus a bias that keeps the edge walk's
    operands non-negative — and the fragment shifts its atlas position by that
    origin. Every non-shadow subject therefore has an entry, negated when it
    carries the frame alone, so the verdict block still gates on the sign.
-   Outline endpoints come
-   from the span writer's own row walk over the NATIVE packet
-   (`prepareModelOutline`) and draw as one pixel block each, key-tested once
-   against the pixel's key, between the cached and live lanes in retail's order
-   [03 R-COMP-01 §3][03 R-REN-03A §4].
+   Outline endpoints are the span writer's own row walk over the NATIVE
+   packet, one pixel block each, key-tested once against the pixel's key,
+   between the cached and live lanes in retail's order
+   [03 R-COMP-01 §3][03 R-REN-03A §4]; a ring of three or four corners is one
+   primitive whose fragment finds them ("Construction outlines" below).
 
 `Replay` then compiles, per subject and in record order through the scheduler, a
 shadow commit and a body commit. A structure's shadow commit resolves the four
@@ -3577,7 +3914,7 @@ sprites and terrain are untouched, as terrain is authored to be drawn as is.
 | span fill inclusive on the left and top, exclusive on the right and bottom [03 R-RAST-01 §1] | body corners biased half a texel of the raster being drawn, so the device's centre test equals the span writer's corner test and a face covers exactly the texels its two-chain mapping has a span for (an earlier one-texel fattening drew a flat line under and right of every silhouette); a linear textured face still clamps its texel to its authored bounds |
 | composition transparent index 1 | dropped at the fragment |
 | reveal, waterline, Digger over the 1× image after the resolve | the same verdicts per texel on the pixel's nearest-sampled key |
-| outline endpoints written at 1× after the resolve, key-tested once | native rows drawn as pixel blocks, key-tested once against the pixel's key |
+| outline endpoints written at 1× after the resolve, key-tested once | each native row's two endpoints, found per pixel by one primitive over the ring's box and drawn as pixel blocks, key-tested once against the pixel's key |
 | structure supersample, ALP downscale blending with index 1 | every subject at 2×, resolved in the commit fragment by coverage: an edge or a thin feature is a coverage alpha over what is beneath, never the red/purple fringe [03 R-REN-03A §7]; a mobile subject is supersampled too, where retail draws it at 1× |
 | structure shadow punched by body coverage | same punch, both planes resolved from the pages |
 | Digger and mobile shadow: the finished body image copied, flattened, clipped, blitted at the ground point five pixels right | the body's own raster read at that placement in the commit fragment; a mobile is never punched, as retail's is not |
@@ -3588,8 +3925,8 @@ on the composite (no key, no supersample, no reveal, no children) and its shadow
 is omitted; the benchmark never overflows at either view. The fallback fragment
 carries an opacity lane, so an overflowed cloaked subject draws the ALP
 half-colour (§33) rather than an opaque body. The parameter image grows to what a
-frame uses up to 2,048 rows (174,762 entries); a frame past it draws its
-remaining faces linearly. The commit quads bind only the colour plane, so they
+frame uses up to 2,048 rows (174,762 slots, a mapped quad taking two); a frame
+past it draws its remaining faces linearly. The commit quads bind only the colour plane, so they
 share a run with the sprites around them.
 
 **Retained packed vertices.** The lane's largest CPU term was re-deriving, for
@@ -3676,6 +4013,69 @@ reflection this frame (the reflection batch is placement-bound), the solo cargo
 pass, the fallback, and a subject whose parameter block would not fit the image
 this frame.
 
+**Construction outlines.** A nanoframe overdraws every primitive of every
+visible piece at its per-row extremes: on each row of the edge walk where the
+right chain's column is past the left's, exactly the two pixels at those
+columns [03 R-COMP-01 §3][03 R-RAST-01 §1]. The lane used to walk those rows
+on the CPU and append two one-pixel quads a row. At the Moon Quartet Survival
+capture, with about twenty factories building, that was most of the lane's
+vertices, each converted twice by Ebitengine. A ring of three or four corners is
+now one primitive: its box in native pixels, drawn at 2× about the native origin
+as the endpoint quads were. Its fragment runs the ring's edge walk and keeps
+only its row's two endpoint pixels. The ring's data is the key entry of a mapped
+quad (§11.2 "Textured quads without strips"), one slot, with the ring's own
+keys. A three-corner ring repeats its last corner: the repeated edge has no
+rows, so the chains walk the triangle's edges in the triangle's order. The
+native origin and a group child's key delta ride the primitive's vertices, so a
+carried child's solo image reuses the entries its group composition made.
+
+What must match the CPU walk, and how:
+
+* **Rows and chain choice.** The key entry's edge choice is the walk's: the
+  later matching edge of a folded chain wins, and so does the edge table
+  [03 R-RAST-01 §1].
+* **Skipped rows.** A row whose right column is not past its left draws
+  nothing.
+* **The packet-box clip.** The box is clipped to the packet's box, which is the
+  clip the walk applied to each endpoint.
+* **One pixel per endpoint.** Every texel under a native pixel evaluates that
+  pixel, so a block's texels agree, and the colour pass tests the pixel's key
+  once as before.
+* **The key.** The walk's key is a float32 mix along the edge, truncated
+  toward zero before the delta applies. The fragment computes the truncated
+  exact rational instead, in integers: (key_from·dy + (key_to − key_from)·m) /
+  dy, where dy is the edge's rows and m the row's offset down it. No compiler
+  rounding can move that. The two agree wherever the rational is not a whole
+  number, because the float's error is under (2|Δkey| + max|key|)·2⁻²⁴ with or
+  without a fused multiply-add, and such a rational lies at least 1/dy from a
+  whole number. The lane requires dy·(2|Δkey| + max|key|) ≤ 2²³. On the rows
+  where the rational is a whole number, the float can land either side of it,
+  so the lane runs the walk's own float arithmetic there (`outlineEdgeKey`, the
+  same float32 operations as the walk) and compares.
+* **Order.** Rings append in ring order, each primitive where its endpoint
+  quads were, so a key tie with another face or ring resolves as before.
+
+A ring the device cannot draw exactly keeps the CPU walk: five or more
+corners, a key that fails either test, corners or keys the entry cannot hold,
+or a full parameter image. `DirectOutlineRings` counts the rings drawn as
+primitives, `DirectOutlineTexels` the 2× texels their boxes cover (the fragment
+work they cost), and `DirectOutlineWalked` the rings walked on the CPU. A solo
+image counts its rings again.
+
+At the capture (30 draws a second), the lane's submitted vertices fell from
+184.5k to 111.0k a frame at 1× and from 241.5k to 88.1k at 2×. About 977 rings
+a frame at 1× (885 at 2×) became primitives covering 0.37M (1.25M) texels, and
+`Submit` fell from 3.85 to 2.97 ms at 1× and from 4.64 to 2.46 ms at 2× (means
+of three alternating runs against the base). The only rings walked on the CPU
+had five or more corners, about seven a frame. The primitives cost fragment
+work: at 1× about a quarter of their texels belong to rings that draw no
+endpoint and only one in twelve is an endpoint. In GPU-timestamp runs on a
+contended host, they added roughly 0.05–0.2 ms to each model pass's fragment
+stage and removed some vertex work; the frame's GPU busy time moved by less
+than the runs' spread of about ±0.3 ms. Primitives that hug each edge instead
+of covering the ring's box would cut most of that fragment work. `battle.png` is
+byte-identical at both zoom levels and both draw rates.
+
 **Counters.** `DirectRetained` reports the lanes replayed, `DirectWarm` the
 lanes appended warm, and `DirectCaptured` the lanes captured into the store —
 through a cold or a warm append, so it overlaps `DirectWarm` on the second
@@ -3727,8 +4127,24 @@ far edge, and a body whose shadow is its own silhouette placed beside it with a
 clip key (the low half casts nothing, the high half the half-blend of index 0, no
 region spent) — run once plainly and once behind a page-wide filler so every
 subject draws and commits from the second page. A unit test locks the shelf
-packer and its page turn; `model_quads_test.go` locks the parameter packing; and
-`model_retain_test.go` holds the retained store to its contract, with a device
+packer and its page turn. `model_quads_test.go` locks the parameter packing, and
+checks the key entry's chain choice, columns and keys at every row of 1,632
+rings against a port of the walk and against the CPU outline walk. It also has a
+device check that renders 512 quads over tiles larger than themselves, where
+the rows neither chain owns are included. Against the walk as it was, it
+compares the bits of every lane of the corner entry, read alone and read
+together, and of the key entry's key. `model_outline_test.go` checks that the validator's float is the walk's, that
+wherever an edge is accepted the device's key is the walk's on every row of a
+grid of 734,440 edges, and that a port of the device ring draws exactly the
+walk's endpoints for 3,000 random rings. Its device check draws one list twice,
+once with the rings on the device and once with every ring walked, and
+compares both planes of every atlas page and the composites byte for byte. The
+list covers folded, thin, back-facing and clipped rings, rings that tie the
+body's key and are tied by a live face, a five-corner ring and a ring whose
+float key truncates below a whole number, group children under a raised and a
+saturating delta with a solo image reusing their rings, and packets at twice
+the size, one with a doubled lane. `model_retain_test.go` holds the retained
+store to its contract, with a device
 check that a replayed frame is byte-identical to a cold frame of the same list at
 a shifted placement, including a nanoframe replayed under both per-frame lanes
 and a doubled live face reaching past the retained box (which is what locks
@@ -3775,6 +4191,12 @@ not reproduce that omission, and no software fallback is added.
    lane has its native faces read only by the fallback and the bounds; the doubled
    corners of a direct projection are exact rather than native × 2 plus an offset,
    so the offset alone cannot replace them.
+4. The key and colour passes can disagree by one key at a mapped face's texel,
+   because the shader compiler rounds the two-chain walk differently where all
+   four lanes are read (§11.2 "Textured quads without strips"). A texel where the
+   colour pass's key is the lower one is rejected by its own face. Evaluating the
+   colour pass's key the key pass's way, or rounding both exactly, would close
+   this. Either change moves pixels, so it needs its own visual review.
 
 #### Construction-child composition
 
@@ -3790,24 +4212,62 @@ admit the later recorded child. Ordinary groups retain the existing path.
 The construction path keeps the existing shifted-key saturation and own/carrier clip
 verdicts. After all atlas pages finish, each child's expanded rectangle merges
 in recorded order under `parentKey <= childKey`, only where the child's
-finished colour has nonzero coverage. Two reusable scratch images hold the
-merged colour and key before they are copied into the parent region. Earlier
-children need four small device draws each. The last child needs only two when
-no silhouette shadow or water reflection reads the resulting key; this covers
-ordinary land factories with one product. Child reflection geometry samples its
+finished colour has nonzero coverage. A child's merged key is written back
+only when something still reads it: a later sibling, a silhouette shadow or a
+water reflection. The last child of an ordinary land factory with one product
+therefore writes colour alone. Child reflection geometry samples its
 own finished colour and additionally tests the final group key, preserving both
 reveal holes and factory occlusion. No GPU readback or additional full atlas page
 is required by the merge itself. Independent child regions can increase normal
 atlas packing. The rectangle includes the existing two-texel margin and is
 intersected with the parent's allocation, preventing neighbour-slot reads.
-Allocation failure retains the existing whole-group overflow fallback. Source
-reset releases both scratch planes and preserves the merge shader.
+Allocation failure retains the existing whole-group overflow fallback.
+
+**Merges run in waves.** Passes are what the device pays for (§11.5). Merging
+one child at a time evaluated each merge into a small scratch pair and copied it
+back onto its page: two passes per child, or four when its key was kept, half of
+them over a whole 4096-square page. A Survival base with about twenty factories
+building spent more of a frame's passes on its merges than on everything else
+together. On the Metal driver where this was measured (an M3 Pro, macOS 26.6),
+presenting blocks until the GPU drains once a frame has more than about 80
+render passes in flight, and the windowed present then waits for most of the
+frame's GPU work, so CPU and GPU time add up instead of overlapping. Treat about
+64 passes a frame as the budget the whole executor shares.
+
+A wave evaluates every one of its merges into a slot of its own in one reusable
+scratch pair, then copies every slot back onto its carrier's page in merge
+order. It opens one pass for each scratch plane and one for each page plane it
+writes, so a wave on one page costs four passes however many merges it holds.
+Within a wave every merge reads the pages as the wave found them. That is what
+merging in order gives, as long as no merge reads a rectangle that an earlier
+merge of the same wave writes. A merge whose parent or child rectangle overlaps
+one that an earlier merge of the wave writes therefore starts the next wave:
+above all a carrier's next child, which must see what the child before it
+wrote. A merge that only writes where an earlier one read stays in the wave,
+because in order that read came first too. Two merges of a wave never write the
+same texel, and the result is texel for texel the one-at-a-time merge for any
+list. Factories that each build a single product share one wave while their
+slots fit the scratch, and a carrier's children whose boxes overlap take a wave
+each. Slots are shelf-packed about 2048 texels wide, and a wave closes before
+its shelves would pass about 2048 texels of height. A larger slot takes a wave
+of its own and the scratch grows to hold it. The scratch only grows; source
+reset releases both of its planes and preserves the merge shader. At the Moon
+Quartet Survival capture (`--benchmark-capture`, 30 draws a second), the last
+measured frame went from 64 passes to 24 at 21 merges, and `battle.png` stayed
+byte-identical at both zoom levels.
 
 `DirectGroupMerges`, `DirectGroupPixels` (2× texels) and
 `DirectGroupScratchBytes` report the extra work and retained logical scratch
-storage. The device fixture locks preserved plate pixels, visible reveal and
-outline, factory occlusion, sibling admission and ties, native/doubled reveal
-selection, and both atlas pages. Optional `NANOLATHE_FACTORY_CAPTURE` captures
+storage, and `DirectPasses` includes the passes the waves open. The device
+fixture locks preserved plate pixels, visible reveal and outline, factory
+occlusion, sibling admission and ties, native/doubled reveal selection, and both
+atlas pages. A second device fixture compares every texel of both planes of two
+pages with a CPU model of the one-at-a-time merge. Its merge list takes every
+branch of the wave rule: independent merges spread over both pages, a read after
+a write, a carrier's consecutive children, a write after a read, merges without
+a key, boxes that do not meet and a wrapped shelf. A unit test locks the rule
+itself, including the height bound and an oversized slot. Optional
+`NANOLATHE_FACTORY_CAPTURE` captures
 ARM and CORE factory products at early and halfway construction, using actual
 committed session/COB poses and relative attachment positions at scales 1 and 2.
 Resources are replenished for those diagnostic scenes; retail art stays outside
@@ -4123,7 +4583,9 @@ Client wake ownership is `water_wakes.go`, hooked from `world_draw.go` and
 `trails.go`. The hooks observe every committed tick through the session
 publication observer, **including catch-up ticks**, reset with trails at battle,
 source and renderer changes, and record the batch immediately after terrain. The
-producer uses authored `CanHover`, COB wake routines and committed piece poses; hidden,
+producer uses authored `CanHover`, COB wake routines and committed piece poses;
+the wake routine's pieces are linked to the model exactly as the unit's own
+script is `[04 R-COB-01 §4]`, so an emitter beyond the model emits nothing; hidden,
 carried, airborne and unfinished units have no active visual wake script;
 every emitted mark starts at a player-visible position, and existing fog
 composites cover the batch. A bounded ring holds the recent spray. Land emissions
@@ -5215,13 +5677,12 @@ back should be heard before the lane becomes permanent.
 - The model lane's atlas is two 4096² pages; a frame that fills both takes the
   native painter-order fallback, which has no key plane, no supersample, no
   reveal and no children, and omits its shadows (§22.1). The parameter image
-  caps at 174,762 entries, past which a frame's remaining faces interpolate
-  linearly, and the retained-lane store caps at 2,048 entries, past which the
-  least recently used lane is re-derived cold.
-- Glow's two magnified adds could be one shader pass sampling both octaves, and
-  the half plane could go if Ebitengine's mipmapped shrink proves cheaper than a
-  pass; the glow's cost is resolution-dependent and was measured only at 1080p
-  (§19.3).
+  caps at 174,762 slots — a mapped quad takes two, a verdict or outline ring
+  one — past which a frame's remaining faces interpolate linearly, and the
+  retained-lane store caps at 2,048 entries, past which the least recently used
+  lane is re-derived cold.
+- The glow's cost is resolution-dependent and was measured only at 1080p and at
+  the Survival capture's 1280×827 (§19.3).
 - The terrain atlas stores one index per RGBA8 texel; storing it in one channel
   would cut the texture to a quarter (§14.5). A half-resolution tile set for the
   strategic range is unmeasured (`TODO(question)` in `terrain.go`, §16.10).
@@ -5383,23 +5844,27 @@ live battle benchmark remain required for visual/performance review (§6).
 
 ## 37. Community placement-model preview
 
-The optional placement-model preview is a host presentation feature adopted
-from the Community patch's CP-UD-2 contract. `NanoframePreview` selects off,
-full or wireframe and defaults off. It is independent of gameplay mode: Strict,
-Modern and Community sessions see the same host choice, and changing it never
-changes placement admission, an order, simulation state or either RNG stream.
-The ordinary green/red build rectangle remains the placement verdict in every
-mode. Nanolathe animates a small white glint around that border from the
-committed tick, including when the model preview preference is off (interface
-design C12). The preview preference does not alter that border animation.
+The placement-model preview is a host presentation feature built on the
+Community patch's CP-UD-2 model selection and facing contract.
+`NanoframePreview` selects Pulse (0, the default), Full (1), Wire (2), or Off
+(3). Existing stored Full and Wire values retain their meanings; stored zero
+now shows Pulse. It is independent of gameplay mode: Strict, Modern and
+Community sessions see the same host choice, and changing it never changes
+placement admission, an order, simulation state or either RNG stream. The
+ordinary green/red build rectangle remains the steady placement verdict in
+every mode.
 
 While placement is armed and the pointer is over the world viewport, the host
 places the immutable catalog definition's model at the resolved build-cell
-centre and validated site height. Full records the production model-body draw;
-wireframe records the projected authored primitive rings as world-overlay
-lines. Both executors therefore consume the same model hierarchy and world
-transform as live units. Off records no model work. The preview has no shadow,
-construction state, animation or COB execution.
+centre and validated site height. Pulse records the construction reveal at
+its initial, empty-body stage, using the normal nanoframe edge walk and the
+two colours from `NanoframePulse(0, committedTick)` [03 §5.2]. The fixed zero
+phase reflects that the preview has no unit identifier. Wire records projected
+authored primitive rings as world-overlay lines, now coloured with the same
+committed-tick outline pulse. Full records the production model-body draw.
+Both executors therefore consume the same model hierarchy and world transform
+as live units. Off records no model work. The preview has no shadow, COB
+execution or authoritative construction state.
 
 `PreviewPiecesS/E/N/W`, when non-empty for the selected facing, takes precedence
 over non-empty `PreviewPieces`; a selected list is a case-folded whitelist split
@@ -5463,7 +5928,7 @@ only `0xa0..0xaf` reveal and outline bytes before either the classic composer or
 the geometry recorder sees them; completed model material and every colour
 outside that ramp remain unchanged. The §37 full placement preview keeps its
 production model body and adds the same model-ring outline when team colour is
-enabled; wireframe keeps its existing rings. Both use frame-list entry zero for
-that static host outline. With the switch off, full and wireframe record exactly
-their previous commands and colours. Unknown or out-of-range owner colours keep
-the corresponding stock colour in every path.
+enabled; wireframe keeps its existing rings. Pulse and Wire map the current
+outline colour through the selected owner's frame list. Full uses frame-list
+entry zero for its static host outline. Unknown or out-of-range owner colours
+keep the corresponding stock colour in every path.

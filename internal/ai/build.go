@@ -24,4 +24,9 @@ type BuildRequest struct {
 	X, Z    numeric.Fixed
 	Count   int
 	Kind    BuildKind
+	// Tick is the manager tick that produced the request. The ordinary
+	// submission helper stamps it on a counted stockpile round, the one record
+	// a factory-queue request can become without a product definition
+	// [07 R-P0-11 §1].
+	Tick uint32
 }

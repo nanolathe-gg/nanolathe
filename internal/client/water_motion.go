@@ -27,6 +27,9 @@ func (c *Client) observeWaterMotion(cur *frame.Frame) {
 	if st.valid && st.tick == cur.Tick {
 		return
 	}
+	if c.observesInOrder() && st.valid && cur.Tick < st.tick {
+		return
+	}
 	energy := min(max(float32(cur.Wind.Strength)/5000, 0), 1)
 	a := numeric.Angle(cur.Wind.Heading)
 	// Visual current: map tidal / 20 sets speed; only the wind heading sets

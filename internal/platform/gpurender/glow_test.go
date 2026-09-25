@@ -35,6 +35,23 @@ func TestGlowWeightsAreNormalized(t *testing.T) {
 	}
 }
 
+// The resolve's Kage sources are generated from the layer's constants, so a
+// changed knob that breaks one shows here rather than only on a device (§19.3).
+func TestGlowShadersCompile(t *testing.T) {
+	for _, s := range []struct{ name, src string }{
+		{"source", glowSourceShaderSource()},
+		{"shrink", glowShrinkShaderSource()},
+		{"blur", glowBlurShaderSource()},
+		{"composite", glowCompositeShaderSource()},
+	} {
+		shader, err := ebiten.NewShader([]byte(s.src))
+		if err != nil {
+			t.Fatalf("%s shader: %v", s.name, err)
+		}
+		shader.Deallocate()
+	}
+}
+
 // A run's indices are relative to the vertex slice its draw hands the device.
 // The emission plane is an order-independent sum, so a quad joins any run that
 // can bind what it reads: bindings that conflict open a new run, the same
@@ -98,6 +115,47 @@ func TestGlowBlurStepFollowsViewScale(t *testing.T) {
 	}
 	if got := glowBlurStep(0); got != 1 {
 		t.Fatalf("a frame with no source read %v, want the native view's 1", got)
+	}
+}
+
+// The far kernel keeps its world-pixel size the way the near one does: its
+// sigma rides the same view-scale factor, and neither end of the camera's
+// range reaches the bounds the shader's loop imposes — at camera.ZoomMax a
+// clamped kernel would silently shrink the halo (§19.3).
+func TestGlowFarKernelFollowsViewScale(t *testing.T) {
+	if got := glowFarKernelSigma(1); got != glowFarSigma {
+		t.Fatalf("native view far sigma %v, want %v", got, glowFarSigma)
+	}
+	widest := float32(camera.ZoomMax.Float())
+	for _, scale := range []float32{float32(camera.ZoomFloor.Float()), 0.25, 0.5, 1.5, widest} {
+		want := glowFarSigma * glowBlurStep(scale)
+		if got := glowFarKernelSigma(scale); math.Abs(float64(got-want)) > 1e-5 {
+			t.Fatalf("view scale %v far sigma %v, want %v unclamped", scale, got, want)
+		}
+	}
+	// Taps sit at half-texel offsets up to glowFarReachMax − ½; the widest
+	// kernel's last tap inside the cut must be one of them.
+	if reach := glowFarCut * glowFarKernelSigma(widest); reach > glowFarReachMax {
+		t.Fatalf("the widest far kernel reaches %v texels, past the loop's %v", reach, glowFarReachMax)
+	}
+}
+
+// Every texel a linear tap of the composite can reach from either octave lies
+// inside the octave plane, and the two octaves are kept apart by a transparent
+// column, so the composite reads no texel it did not mean to (§19.3).
+func TestGlowRegionsKeepOctavesApart(t *testing.T) {
+	for _, s := range [][2]int{{1, 1}, {7, 5}, {128, 64}, {1280, 827}, {2561, 1439}} {
+		q := glowRegionsFor(s[0], s[1])
+		ow, oh := q.octaveSize()
+		// The near octave's texels are columns 1..qw and rows 1..qh; the far
+		// octave's columns farX..farX+ew−1 and rows 1..eh. A linear tap reaches
+		// one texel past each edge.
+		if q.qw*int(glowOctaveNear) < s[0] || q.ew*int(glowOctaveFar) < s[0] || q.qh*int(glowOctaveNear) < s[1] || q.eh*int(glowOctaveFar) < s[1] {
+			t.Fatalf("%v: octaves %+v do not cover the frame", s, q)
+		}
+		if q.farX()-1 <= q.qw || q.farX()+q.ew >= ow || q.qh+1 >= oh || q.eh+1 >= oh {
+			t.Fatalf("%v: octaves %+v in a %dx%d plane leave no transparent border", s, q, ow, oh)
+		}
 	}
 }
 
@@ -222,11 +280,13 @@ func glowFixtureList(w, h int32, field, bright uint8) drawlist.List {
 }
 
 // checkGlowDevicePixels draws the fixture with the layer on and off and reads
-// both back: off, the frame is the exact classic expansion; on, the stroke's
-// own pixels are unchanged (a screen blend leaves white white), the field
-// beside the stroke is brighter than the field, the brightening falls off with
-// distance, and the far corner is the field to within the blur's last tap
-// (§19).
+// both back: off, the frame is the exact classic expansion and the counters
+// are zero; on, the resolve spends its five passes, the stroke's own pixels
+// are unchanged (a screen blend leaves white white), the field beside the
+// stroke is brighter than the field, the brightening falls off with distance,
+// the halo is symmetric about the stroke, the far octave still lights the
+// field where the near one has faded, and the far corner is the field to
+// within the blur's last tap (§19.5).
 func checkGlowDevicePixels() error {
 	pal := fixturePalette()
 	const w, h, field, bright = 128, 64, 20, 255
@@ -265,8 +325,10 @@ func checkGlowDevicePixels() error {
 	if err != nil {
 		return err
 	}
-	if r.modelStats.GlowQuads != 1 || r.modelStats.GlowPasses == 0 {
-		return fmt.Errorf("glow on counted %d quads and %d passes, want 1 quad and a resolve", r.modelStats.GlowQuads, r.modelStats.GlowPasses)
+	// The resolve is five render passes: the emission plane, its shrink, the
+	// two blur directions and the composite (§19.3).
+	if r.modelStats.GlowQuads != 1 || r.modelStats.GlowPasses != 5 {
+		return fmt.Errorf("glow on counted %d quads and %d passes, want 1 quad and the resolve's 5 passes", r.modelStats.GlowQuads, r.modelStats.GlowPasses)
 	}
 	// Strength 0 is off: the frame is the exact frame with the switch off.
 	r.SetGlowStrength(0)
@@ -291,6 +353,25 @@ func checkGlowDevicePixels() error {
 	}
 	if corner > field+2 {
 		return fmt.Errorf("the far corner reads %d, want the field %d to within the blur's reach", corner, field)
+	}
+	// The stroke's emission quad is centred on row boundary 32 and column
+	// boundary 64, which are texel boundaries of both octaves, so the halo is
+	// symmetric about both. A plane placed, or a tap or magnification phased,
+	// half a texel off breaks that.
+	for _, d := range []int{1, 4, 8, 12, 16, 24} {
+		if a, b := at(64, 31-d), at(64, 32+d); a-b > 1 || b-a > 1 {
+			return fmt.Errorf("%d pixels above the stroke reads %d and below it %d, want the same", d, a, b)
+		}
+	}
+	for _, d := range []int{0, 12, 24, 30, 36, 44} {
+		if a, b := at(63-d, 40), at(64+d, 40); a-b > 1 || b-a > 1 {
+			return fmt.Errorf("%d pixels left of the stroke's middle reads %d and right of it %d, want the same", d, a, b)
+		}
+	}
+	// The far octave reaches past the near one: twenty pixels out, where the
+	// near kernel has all but vanished, the field is still lit.
+	if reach := at(64, 52); reach < field+3 {
+		return fmt.Errorf("twenty pixels from the stroke reads %d, want the far octave's halo above the field %d", reach, field)
 	}
 	// The same recorded stroke on a frame the recorder projected at the 2x step:
 	// a world pixel is two screen pixels, so the halo is twice as many screen

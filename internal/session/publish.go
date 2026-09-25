@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/nanolathe-gg/nanolathe/internal/cob"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -383,40 +384,11 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				// clearing it here would make presentation cadence authoritative.
 				vp.CacheRevision = vm.CacheRevision()
 				vp.CacheValidityRevision = vm.CacheValidityRevision()
-				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
-					// The live array, not a copy: the loop below consumes it
-					// before anything else runs, and a per-unit allocation here
-					// was a measurable share of the publication [I6].
-					flags := vm.RenderPieceFlags()
-					prog := vm.Program()
-					var names []string
-					if prog != nil {
-						names = prog.Pieces
-					}
-					vp.Pieces = vp.Pieces[:0]
-					for i, ps := range vmPieces {
-						pv := frame.PieceView{
-							Index: i,
-							RotX:  ps.RotX,
-							RotY:  ps.RotY,
-							RotZ:  ps.RotZ,
-							Tx:    ps.Trans[0],
-							Ty:    ps.Trans[1],
-							Tz:    ps.Trans[2],
-						}
-						if i < len(names) {
-							pv.Name = names[i]
-						}
-						if i < len(flags) {
-							f := flags[i]
-							pv.Hidden = (f & 0x01) == 0     // show bit [04 §4.3]
-							pv.DontCache = (f & 0x02) == 0  // cache bit [04 §4.3]
-							pv.DontShade = (f & 0x04) == 0  // shade bit [04 §4.3] 0x1000d/e000
-							pv.DontShadow = (f & 0x08) == 0 // dont-shadow [04 §4.3] 0x1000a000
-						}
-						vp.Pieces = append(vp.Pieces, pv)
-					}
+				var link []int
+				if b := u.COBBinding(); b != nil && b.VM == vm {
+					link = b.PieceMap
 				}
+				vp.Pieces = appendPieceViews(vp.Pieces[:0], vm, link)
 			}
 			if q := orders.QueueOfUnit(u); q != nil && (q.LenPrimary() > 0 || q.LenSecondary() > 0) {
 				activeHead := q.Head()
@@ -993,6 +965,60 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 	if s.publication != nil && s.publication.events != nil {
 		s.publication.events.Reset()
 	}
+}
+
+// appendPieceViews appends one committed lane per script piece of vm, in
+// script piece order [03 §2.4]. link is the unit binding's script-to-model
+// piece link [04 R-COB-01 §4]: each lane carries the model piece it poses, so
+// presentation draws a script piece exactly where the simulation composes it —
+// including a name the model lacks, which animates the model piece its slot
+// took, and a piece beyond the model (-1), which poses nothing. A script
+// attached without a model binding has no link; its lanes carry the script
+// piece names for presentation to resolve instead.
+//
+// The VM's live piece array is read, not copied: the loop consumes it before
+// anything else runs, and a per-unit allocation here was a measurable share
+// of the publication [I6].
+func appendPieceViews(dst []frame.PieceView, vm *cob.VM, link []int) []frame.PieceView {
+	vmPieces := vm.Pieces
+	if len(vmPieces) == 0 {
+		return dst
+	}
+	flags := vm.RenderPieceFlags()
+	var names []string
+	if link == nil {
+		if prog := vm.Program(); prog != nil {
+			names = prog.Pieces
+		}
+	}
+	for i, ps := range vmPieces {
+		pv := frame.PieceView{
+			Index: i,
+			RotX:  ps.RotX,
+			RotY:  ps.RotY,
+			RotZ:  ps.RotZ,
+			Tx:    ps.Trans[0],
+			Ty:    ps.Trans[1],
+			Tz:    ps.Trans[2],
+		}
+		switch {
+		case link != nil && i < len(link):
+			pv.Index = link[i]
+		case link != nil:
+			pv.Index = -1
+		case i < len(names):
+			pv.Name = names[i]
+		}
+		if i < len(flags) {
+			f := flags[i]
+			pv.Hidden = (f & 0x01) == 0     // show bit [04 §4.3]
+			pv.DontCache = (f & 0x02) == 0  // cache bit [04 §4.3]
+			pv.DontShade = (f & 0x04) == 0  // shade bit [04 §4.3] 0x1000d/e000
+			pv.DontShadow = (f & 0x08) == 0 // dont-shadow [04 §4.3] 0x1000a000
+		}
+		dst = append(dst, pv)
+	}
+	return dst
 }
 
 // commitFrame closes the pending write. An ordinary publication advances the

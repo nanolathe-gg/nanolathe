@@ -130,3 +130,44 @@ func TestResultCursorWaitsForCompletedBars(t *testing.T) {
 		}
 	}
 }
+
+// Behind the campaign CD-check dialog retail keeps the retained battle
+// picture that the ten darkening steps of state 3 left, so state 8 still
+// composes every emitted step [08 R-CAMP-01 §6].
+func TestPostBattleCDIdleKeepsTheDarkenedPicture(t *testing.T) {
+	view := frame.ResultView{Ended: true, Kind: "victory"}
+	buf := frame.NewBuffer()
+	buf.BeginWrite().Result = view
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	cl, err := client.New(client.Options{Buffer: buf, Width: 2, Height: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.SetCursors(&client.Cursors{})
+	// Each SHD row the darkening selects moves an index up by one, so the
+	// composed index counts the steps applied to the cleared picture.
+	pal := &palette.Tables{}
+	for row := range pal.Shade {
+		for i := range pal.Shade[row] {
+			pal.Shade[row][i] = byte(min(i+1, 255))
+		}
+	}
+	b := &battleSession{
+		postBattleLastUnit: -1,
+		postBattle: session.NewPostBattleController(view,
+			session.PostBattleConfig{Kind: session.PostBattleCampaign, CampaignCDOK: false}),
+		hud: &retailBattleHUD{pal: pal},
+	}
+	cl.SetUIStage(resultOverlayStage{hud: b.hud, battle: b})
+	for i := 0; i < 40 && b.postBattle.State() != session.PostBattleCDIdle; i++ {
+		b.stepPostBattle(1.0/30, nil, cl)
+	}
+	if b.postBattle.State() != session.PostBattleCDIdle {
+		t.Fatalf("CD-check idle not reached (state %d)", b.postBattle.State())
+	}
+	if got := cl.ComposeFrameSnapshot().Indexed[0]; got != 10 {
+		t.Fatalf("CD-check idle composed %d darkening steps, want all 10", got)
+	}
+}

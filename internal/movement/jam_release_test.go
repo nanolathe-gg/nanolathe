@@ -21,6 +21,9 @@ type jamCase struct {
 	moverEndCell int32
 	blockerFoot  int32 // the blocker's square footprint in cells; 0 is 1
 	oneWayAlly   bool  // the mover's owner declares the blocker's owner allied, not back
+	moverCell    int32 // the mover's starting cell along the row; 0 is 5
+	routeless    bool  // the mover never holds a route
+	sameHeading  bool  // the blocker always heads exactly as the mover does
 }
 
 func runJamCase(t *testing.T, c jamCase, ticks uint32) (freed uint32, sys *System) {
@@ -65,13 +68,19 @@ func setupJamCase(t *testing.T, c jamCase) (*System, pool.Handle, pool.Handle, f
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := w.Create(def, 0, world.CellToWorld(5), 0, row)
+	moverCell := c.moverCell
+	if moverCell == 0 {
+		moverCell = 5
+	}
+	a, err := w.Create(def, 0, world.CellToWorld(moverCell), 0, row)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sys.BindWorld(w)
-	sys.EnsureUnit(w.Unit(a))
+	// The blocker registers first, so a mover placed inside it overlaps an
+	// incumbent that keeps its cells, as a wedge does.
 	sys.EnsureUnit(w.Unit(b))
+	sys.EnsureUnit(w.Unit(a))
 	rowZ := int32(row.Raw() >> 16)
 	move := orders.Lookup("Move_Ground")
 	q := orders.QueueForUnit(w.Unit(a))
@@ -86,11 +95,16 @@ func setupJamCase(t *testing.T, c jamCase) (*System, pool.Handle, pool.Handle, f
 		// Both routes are re-published each tick so the fixture has no
 		// scheduler and the blocker never moves: only the commit is tested.
 		handleRow(sys.Collisions, b).Heading = c.headingB
+		if c.sameHeading {
+			handleRow(sys.Collisions, b).Heading = handleRow(sys.Collisions, a).Heading
+		}
 		if c.blockerRoute {
 			handleRow(sys.Routes, b).PublishAtRevision([]Point{{X: 7*16 + 8, Z: rowZ}, {X: 30*16 + 8, Z: rowZ}}, sys.staticObstacleRevision())
 		}
-		ax := handleRow(sys.Collisions, a).X >> 16
-		handleRow(sys.Routes, a).PublishAtRevision([]Point{{X: ax, Z: rowZ}, {X: c.moverEndCell*16 + 8, Z: rowZ}}, sys.staticObstacleRevision())
+		if !c.routeless {
+			ax := handleRow(sys.Collisions, a).X >> 16
+			handleRow(sys.Routes, a).PublishAtRevision([]Point{{X: ax, Z: rowZ}, {X: c.moverEndCell*16 + 8, Z: rowZ}}, sys.staticObstacleRevision())
+		}
 		sys.BeginTick(tick)
 		res := sys.StepUnit(a, tick)
 		sys.EndTick(tick)
@@ -198,5 +212,52 @@ func TestJamReleaseNearDestinationEndsWhenClear(t *testing.T) {
 	}
 	if !passed {
 		t.Fatal("mover never passed the friend blocking it near its destination")
+	}
+}
+
+// A unit wedged inside a same-way friend is no queue member: the pair would
+// wait on itself for ever, so the jam counts and the release passes the
+// friend it overlaps. A route-less unit standing inside a friend proposes no
+// step and never reads blocked, yet is wedged all the same and is released
+// (DESIGN_MOVEMENT_PATH "Modern jam release").
+func TestJamReleaseFreesWedgedUnits(t *testing.T) {
+	queued := jamCase{rules: &ModernRules{}, sameHeading: true, blockerRoute: true, moverEndCell: 30, blockerFoot: 5}
+	if freed, _ := runJamCase(t, queued, 60); freed != 0 {
+		t.Fatalf("a unit behind a same-way friend it does not overlap left the queue on tick %d", freed)
+	}
+	wedged := queued
+	wedged.moverCell = 8 // inside the friend's cells 7-11, too deep to leave in one step
+	sys, a, _, step := setupJamCase(t, wedged)
+	if !sys.insideFriend(sys.world.Unit(a), handleRow(sys.Collisions, a)) {
+		t.Fatal("fixture: the mover does not start inside the friend")
+	}
+	cleared := uint32(0)
+	for tick := uint32(1); tick <= 150 && cleared == 0; tick++ {
+		step(tick)
+		if handleRow(sys.Collisions, a).CachedAnchor.X >= 12 {
+			cleared = tick
+		}
+	}
+	if cleared == 0 {
+		t.Fatal("a unit wedged inside a same-way friend never got past it")
+	}
+	stuck := jamCase{rules: &ModernRules{}, moverEndCell: 30, blockerFoot: 3, moverCell: 8, routeless: true}
+	sys, a, _, step = setupJamCase(t, stuck)
+	released := false
+	for tick := uint32(1); tick <= 45 && !released; tick++ {
+		step(tick)
+		released = sys.releasing(a, tick+1)
+	}
+	if !released {
+		t.Fatal("a route-less unit standing inside a friend was never released")
+	}
+	strict := stuck
+	strict.rules = StrictRules{}
+	sys, a, _, step = setupJamCase(t, strict)
+	for tick := uint32(1); tick <= 45; tick++ {
+		step(tick)
+	}
+	if sys.releasing(a, 46) || sys.jamReleases != nil {
+		t.Fatal("Strict released a wedged unit")
 	}
 }

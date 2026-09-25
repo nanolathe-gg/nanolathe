@@ -26,7 +26,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md) | the gameplay rule seams, how a Modern or Strict 3.1 rule set is bound, and what it may cost |
 | [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
 | [DESIGN_COMMUNITY_PATCH](DESIGN_COMMUNITY_PATCH.md) | the Community 3.9 gameplay profile: the third reserved rule set, the feature table a content set or player configures, the mapping of every community-patch contract onto a seam, and the decisions still open (design, not implemented) |
-| [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) | the mod library and the nanolathe.gg catalogue, global mutators applied to the per-battle catalog in every mode, and the save sidecar that records and restores a match's selection (design, not implemented) |
+| [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) | the mod library and the nanolathe.gg catalogue, global mutators applied to the per-battle catalog in every mode, and the save sidecar that records and restores a match's selection (implemented; follow-ups in its §13 unit 9) |
 | [DESIGN_SURVIVAL](DESIGN_SURVIVAL.md) | the Survival single-player mode: the attacker slot, the wave director, build-tree tech tiers, the no-victory result and score, available in every gameplay mode |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
@@ -104,7 +104,9 @@ package implements.
 | `formats/zrb` | Stateful Smacker 2 movie decoder: indexed frames, palette deltas, PCM soundtrack and authored cadence | DESIGN_CONTENT_VFS |
 | `internal/content` | Compiles authored data into immutable definitions with defaults and conversions applied once: units, weapons, features, movement classes, sides, sounds, maps, AI profiles, battle tables; the catalog hash; and the authored animation metadata the SIMULATION depends on — a feature's burn/die/reclaim frame geometry and lifetimes in visits, an effect entry's frame count (`CompileSimArt`), compiled before the session's features and strips exist so headless and windowed battles run one simulation | DESIGN_CONTENT_VFS |
 | `internal/content/profiles` | Content profiles: the embedded per-content-set directory tables and limits, marker detection and selection by name or authored JSON file, applied as a `vfs.Layout` at the mount boundary | DESIGN_CONTENT_VFS §5 |
-| `internal/settings` | Front-end preferences that survive a restart (last skirmish setup, per-slot side/colour/ally, difficulty) | DESIGN_CONTENT_VFS |
+| `internal/settings` | Front-end preferences that survive a restart (last skirmish setup, per-slot side/colour/ally, difficulty, the selected mod and mutators) | DESIGN_CONTENT_VFS |
+| `internal/modlibrary` | The installed-mod library: data directory, `nanolathe-mod.json` metadata, mod selection, and zip or folder install with extraction and validation. No network | DESIGN_MODS_MUTATORS §4 |
+| `internal/modfetch` | The nanolathe.gg mod manifest and resumable, SHA-256-verified downloads. The only package that imports `net/http`, and only `cmd/nanolathe` imports it | DESIGN_MODS_MUTATORS §5 |
 
 ### Runtime core
 
@@ -185,7 +187,7 @@ package implements.
 
 | Package | Responsibility | Design document |
 |---|---|---|
-| `internal/architecture` | Repository guards that inspect source rather than importing it: the platform boundary, random-stream ownership, retail-only content, shrink-only parity ratchets | this document, §6 |
+| `internal/architecture` | Repository guards that inspect source rather than importing it: the platform boundary, the network boundary (`net/http` only in `internal/modfetch`), random-stream ownership, retail-only content, shrink-only parity ratchets | this document, §6 |
 | `internal/cleanroom` | The clean-room lint and its per-file debt baseline | this document, §6 |
 | `internal/docs` | The citation resolver: every research citation in `docs/` and in Go comments resolves | this document, §6 |
 | `internal/compat/spec03` | Black-box checks of the published presentation boundary | DESIGN_PRESENTATION_CLIENT |
@@ -203,6 +205,7 @@ anything in a lower layer and nothing in a higher one.
 platform      cmd/nanolathe, cmd/nanolathe-headless ─► mods ─► session   (linked rule sets, DESIGN_GAMEPLAY_RULES §8)
               cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
               cmd/nanolathe ─► upscale ─► formats, palette   (load-time 2× art, DESIGN_GPU_RENDERER §14)
+              cmd/nanolathe ─► modfetch ─► modlibrary ─► content, gameplay, vfs   (mods, DESIGN_MODS_MUTATORS §4–§5)
               cmd/nanolathe-headless ─► headless
 
 presentation  client ─► render, hud, audio, camera, palette, input, model, frame,
@@ -313,6 +316,14 @@ temporary-sight expiry sweep as its last step
 Authoritative ticks run only in the battle state of the session state machine
 `[08 "Session states"]`.
 
+**Where the sub-ticks run.** A host pump is `PrepareStep` — the state dispatch
+and the budget — then `ExecuteStep`, the sub-ticks and the executor tail. The
+modern window runs `ExecuteStep` on a simulation goroutine of its own and joins
+it at the start of the next host step, so a tick overlaps presentation instead
+of sharing a presented frame's budget; every other route runs both halves
+inline. Presentation reads committed frames pinned in the buffer while the
+simulation publishes beside it (DESIGN_GPU_RENDERER §13.13).
+
 Publication assigns each live unit a presentation-only `InstanceID`. It stays
 stable for the same unit object and changes when a pool slot is reused, even
 without an intervening empty frame. Only the integer enters the snapshot;
@@ -370,22 +381,37 @@ document; none is replaced by a plausible default [I9].
 ## 6. Verification
 
 **Verification cost.** During iteration, run `tools/check ./internal/changed-package`
-(or a focused `go test -run` with `GOMAXPROCS=2` and `-p 2`). Use the whole-tree
+(or a focused `go test -run` with `GOMAXPROCS=4`, `-p 4` and `GOFLAGS=-trimpath`,
+which reuses the gates' cache). Use the whole-tree
 `tools/check` and `tools/check-retail` once on the integrated landing candidate,
 then again after landing; do not repeat them after each edit or delegate the
 same whole-tree run to every reviewer. Reviewers run the affected contracts in
 the assigned worktree; the landing owner runs the integrated gates. Documentation
 changes need diff/link review and `go test ./internal/docs` when citations change.
 
-The scripts default to `GOMAXPROCS=2` and `NANOLATHE_TEST_P=2`. This bounds
+The gate scripts default to `GOMAXPROCS=4` and `NANOLATHE_TEST_P=4`; the
+benchmark wrappers pin their own documented two-worker budget. This bounds
 runtime/GC workers as well as package builds and nested Go commands; it is not
 a strict aggregate CPU quota. Explicit caller values override these defaults.
-`tools/host-run` uses Python 3's standard library on macOS/Linux to hold the
-same per-user advisory lock as native benchmarks. Whole gates, standalone lint,
-GPU benchmarks and benchmark compilation therefore wait rather than compete
-across worktrees. The inherited descriptor releases on process exit, including
-crashes; never delete the lock file. Already-running older scripts and raw
-commands do not participate. Keep the machine quiet when comparing timings.
+`tools/go-budget` also adds `-trimpath` to `GOFLAGS`, which keeps each
+worktree's absolute path out of Go's cache keys: identical packages share
+compiled output and cached test results across worktrees, so a merge from
+`main` rebuilds only the packages it changed. A test must therefore locate its
+fixtures relative to the package directory, never through `runtime.Caller`.
+
+`tools/host-run` (Python 3 standard library, macOS/Linux) coordinates two
+classes of work through per-user advisory locks. `tools/host-run --gate`, which
+`tools/check`, `tools/check-retail` and `tools/lint` take, claims one of
+`NANOLATHE_GATE_SLOTS` gate slots (default 3, four workers each on a
+twelve-core host). Plain `tools/host-run`, used by the benchmark wrappers, and
+the native benchmark binaries hold the benchmark lock, so benchmarks run one
+at a time. The two classes never wait for each other: a landing must not stall
+behind a long benchmark sweep. A benchmark therefore prints a note when gates
+are running beside it; its timings are noisier then, so compare alternating
+runs taken under similar load. Focused `go test` runs, probes and long
+research sweeps take **no** lock: wrapping them in `tools/host-run` stalls
+every benchmark on the host for their whole duration. Inherited descriptors
+release on process exit, including crashes; never delete the lock files.
 
 **Test tiers.** `tools/check` clears retail-asset variables and runs tracked-file
 `gofmt`, build, vet and cached short synthetic tests. Package arguments narrow

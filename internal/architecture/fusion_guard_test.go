@@ -196,6 +196,9 @@ func fusionSites(t *testing.T, root, arch, amd64Level string, fused func(string)
 		path := filepath.ToSlash(match[1])
 		if relative, err := filepath.Rel(root, match[1]); err == nil && !strings.HasPrefix(relative, "..") {
 			path = filepath.ToSlash(relative)
+		} else if trimmed, ok := strings.CutPrefix(path, module+"/"); ok {
+			// -trimpath (tools/go-budget) reports module paths, not files.
+			path = trimmed
 		}
 		sites[path+":"+match[2]]++
 	}

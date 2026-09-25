@@ -80,5 +80,8 @@ func TestMenuPreviewUsesProfileViewAndReadCap(t *testing.T) {
 		if preview.tnt != nil && preview.tnt.Minimap[0] != 91 {
 			t.Fatal("menu preview lost the authored minimap")
 		}
+		if preview.tnt != nil && (len(preview.tnt.Raw) != 0 || len(preview.tnt.Attributes) != 0 || len(preview.tnt.TileIndices) != 0) {
+			t.Fatal("menu preview retained the full terrain decode")
+		}
 	}
 }

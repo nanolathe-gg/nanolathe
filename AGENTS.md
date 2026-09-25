@@ -86,8 +86,10 @@ Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-mod
 [group destination slots](docs/DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots), and
 [allied pass-through](docs/DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through), and
 [unreachable moves](docs/DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves), and
-[jam release](docs/DESIGN_MOVEMENT_PATH.md#modern-jam-release), and
+[jam release](docs/DESIGN_MOVEMENT_PATH.md#modern-jam-release) with its
+[pocket release](docs/DESIGN_MOVEMENT_PATH.md#modern-pocket-release), and
 [route straightening](docs/DESIGN_MOVEMENT_PATH.md#modern-route-straightening), and
+[wedge escape](docs/DESIGN_MOVEMENT_PATH.md#modern-wedge-escape), and
 [wave air targets](docs/DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
@@ -406,6 +408,12 @@ ticks with no window, renderer or audio device: three 250-unit computer armies
 fighting on one map, with per-phase attribution, a census that proves the
 workload, and CPU and allocation profiles of the measured window. It shares the
 same host lock, so it never runs beside the windowed benchmark.
+
+Benchmarks take the benchmark lock one at a time; verification gates take
+`tools/host-run --gate` slots and never wait for a benchmark. A focused test,
+probe or research sweep takes no lock; never wrap one in `tools/host-run`,
+which would stall every agent's benchmark for its whole duration
+([ARCHITECTURE §6](docs/ARCHITECTURE.md#6-verification)).
 
 For pathfinding and movement-policy changes, use the opt-in
 [path benchmark](docs/PATH_BENCHMARK.md) (`tools/path-bench`): authored

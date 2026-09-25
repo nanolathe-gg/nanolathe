@@ -93,11 +93,12 @@ def main():
         with (output / "run.log").open("w") as log:
             # The pure geometry file and exporter compile as a named-file
             # package, so importing the window application's main is unnecessary.
-            for args in [
+            # Only the timed suite takes the benchmark lock. The export measures
+            # nothing, and locking each step separately queued the run twice.
+            for cmd in [
                 [*go, "cmd/nanolathe/battle_drag_geometry.go", "cmd/nanolathe/path_bench_formation_test.go", "-run=^TestPathBenchFormationExport$"],
-                [*go, "./internal/session", "-run=^TestPathBenchmark$"],
+                [str(ROOT / "tools/host-run"), *go, "./internal/session", "-run=^TestPathBenchmark$"],
             ]:
-                cmd = [str(ROOT / "tools/host-run"), *args]
                 with subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
                     for line in proc.stdout:
                         log.write(line)

@@ -326,6 +326,14 @@ type Skirmish struct {
 	Players        []Player `json:"players"`
 }
 
+// ModSelection is the settings key `mod`: one mod's id and, optionally, its
+// version; an empty version selects the newest installed one
+// (docs/DESIGN_MODS_MUTATORS.md §4.3).
+type ModSelection struct {
+	ID      string `json:"id,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
 // Settings is the whole persisted block.
 type Settings struct {
 	// Gameplay is the selected rule set: `modern`, `strict-3.1`, or the name
@@ -343,7 +351,23 @@ type Settings struct {
 	// load-time content fact, not a gameplay rule set
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
 	ContentProfile string `json:"contentProfile,omitempty"`
-	Version        int    `json:"version"`
+	// Mutators is the selected mutator set, each key mapped to its canonical
+	// factor spelling, e.g. {"buildSpeed": "2"} (docs/DESIGN_MODS_MUTATORS.md
+	// §6.6). It is kept verbatim: this package does not import content, so a
+	// reader parses it with content.ParseMutators and reports an invalid entry
+	// there. A command-line --mutator wins over it.
+	Mutators map[string]string `json:"mutators,omitempty"`
+	// Mod is the saved mod choice (docs/DESIGN_MODS_MUTATORS.md §4.3). It is
+	// only stored and round-tripped here; the mod library resolves it. The
+	// zero value selects no mod and is omitted from the file.
+	Mod ModSelection `json:"mod,omitzero"`
+	// ControlsOffered lists the content whose recommended settings (a
+	// controls preset) the player has already been offered, one entry per mod
+	// id, or `profile:<name>` for a content profile mounted without a mod
+	// (docs/DESIGN_MODS_MUTATORS.md §4.3). The offer is made once per entry,
+	// whatever the answer.
+	ControlsOffered []string `json:"controlsOffered,omitempty"`
+	Version         int      `json:"version"`
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
@@ -448,7 +472,7 @@ type Presentation struct {
 	BuildRotateKey       string     `json:"buildRotateKey"`
 	ClickSnapOverrideKey string     `json:"clickSnapOverrideKey"`
 	BuildRotationOverlay int        `json:"buildRotationOverlay"`
-	NanoframePreview     int        `json:"nanoframePreview"`
+	NanoframePreview     int        `json:"nanoframePreview"` // 0 pulse, 1 full, 2 wire, 3 off (DESIGN_GPU_RENDERER §37).
 	QueuedOrderDrag      int        `json:"queuedOrderDrag"`
 	StrategicIconConfig  string     `json:"strategicIconConfig"`
 	TeamColorNanolathe   int        `json:"teamColorNanolathe"`
@@ -496,6 +520,38 @@ type Presentation struct {
 	// TrailStrength is a percentage of the trail layer's tuned peak opacity.
 	// Zero hides trails while leaving the Marks switch's scorch layer intact.
 	TrailStrength int `json:"trailStrength"`
+
+	// Overview and the Megamap* keys are the optional megamap overview
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15; megamap.go).
+	Overview               int     `json:"overview"`
+	MegamapWheel           int     `json:"megamapWheel"`
+	MegamapWheelMove       int     `json:"megamapWheelMove"`
+	MegamapDoubleClickMove int     `json:"megamapDoubleClickMove"`
+	MegamapFlash           int     `json:"megamapFlash"`
+	MegamapRadarMinimum    int     `json:"megamapRadarMinimum"`
+	MegamapSonarMinimum    int     `json:"megamapSonarMinimum"`
+	MegamapSonarJamMinimum int     `json:"megamapSonarJamMinimum"`
+	MegamapAntiNukeMinimum int     `json:"megamapAntiNukeMinimum"`
+	PlayerDotColors        [10]int `json:"playerDotColors"`
+	// The eight `Megamap*Color` ring colours: -1 keeps the ring's research
+	// default, any other value is the palette index it draws in.
+	MegamapWeapon1Color  int `json:"megamapWeapon1Color"`
+	MegamapWeapon2Color  int `json:"megamapWeapon2Color"`
+	MegamapWeapon3Color  int `json:"megamapWeapon3Color"`
+	MegamapRadarColor    int `json:"megamapRadarColor"`
+	MegamapSonarColor    int `json:"megamapSonarColor"`
+	MegamapRadarJamColor int `json:"megamapRadarJamColor"`
+	MegamapSonarJamColor int `json:"megamapSonarJamColor"`
+	MegamapAntinukeColor int `json:"megamapAntinukeColor"`
+	// AlliedDotSwatches draws each allied resource row's 8×8 player-colour
+	// square (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	AlliedDotSwatches int `json:"alliedDotSwatches"`
+
+	// VictoryCue plays the `Victory Condition` alias when the local viewer's
+	// won result first shows, as ProTA 4.8 does for every win
+	// (DESIGN_INTERFACE_HUD_INPUT §3.16). Zero, the default, is retail: only
+	// the campaign trigger cue plays [08 R-TRIG-01 §8].
+	VictoryCue int `json:"victoryCue"`
 }
 
 // DefaultPresentation selects the modern executor with a 60 FPS cap and every
@@ -507,6 +563,12 @@ func DefaultPresentation() Presentation {
 		Water: DefaultEffectSwitch, Lighting: DefaultEffectSwitch, Finish: DefaultEffectSwitch,
 		Distortion: DefaultEffectSwitch, Marks: DefaultEffectSwitch,
 		TrailStrength: DefaultTrailStrength,
+		MegamapWheel:  1, MegamapWheelMove: 1, MegamapFlash: 1,
+		PlayerDotColors:     DefaultPlayerDotColors,
+		MegamapWeapon1Color: MegamapColorDefault, MegamapWeapon2Color: MegamapColorDefault, MegamapWeapon3Color: MegamapColorDefault,
+		MegamapRadarColor: MegamapColorDefault, MegamapSonarColor: MegamapColorDefault,
+		MegamapRadarJamColor: MegamapColorDefault, MegamapSonarJamColor: MegamapColorDefault,
+		MegamapAntinukeColor: MegamapColorDefault,
 	}
 }
 
@@ -514,7 +576,7 @@ func DefaultPresentation() Presentation {
 // refresh choice (zero) and arbitrary positive presentation caps. The effect
 // switches are booleans, so only a negative value is repaired.
 func (p *Presentation) Normalize() {
-	if p.NanoframePreview < 0 || p.NanoframePreview > 2 {
+	if p.NanoframePreview < 0 || p.NanoframePreview > 3 {
 		p.NanoframePreview = 0
 	}
 	if p.MexSnapRadius < 0 {
@@ -539,7 +601,7 @@ func (p *Presentation) Normalize() {
 	if p.ExpandedSidebar < 0 {
 		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
 	}
-	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe} {
+	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe, &p.VictoryCue, &p.AlliedDotSwatches} {
 		if *value < 0 {
 			*value = 0
 		} else {
@@ -556,6 +618,7 @@ func (p *Presentation) Normalize() {
 	} else if p.TrailStrength > MaxTrailStrength {
 		p.TrailStrength = MaxTrailStrength
 	}
+	p.normalizeMegamap()
 }
 
 // Display is the `VISUALS` page's persisted block. The two size values are
@@ -767,6 +830,12 @@ func (s *Settings) Normalize() {
 	// neither vocabulary. An unknown selector is rejected where it is
 	// resolved, at the mount boundary, so a typo names itself there.
 	s.ContentProfile = strings.TrimSpace(s.ContentProfile)
+	// The mutator entries are kept verbatim for the reader that parses them;
+	// only an empty set is folded to absent.
+	if len(s.Mutators) == 0 {
+		s.Mutators = nil
+	}
+	s.ControlsOffered = normalizeOffered(s.ControlsOffered)
 	if s.Version == 0 {
 		s.Version = FileVersion
 	}
@@ -945,4 +1014,34 @@ func (s Settings) SaveTo(path string) error {
 		return fmt.Errorf("settings: rename onto %s: %w", path, err)
 	}
 	return nil
+}
+
+// ControlsWereOffered reports whether the recommended settings for key have
+// already been offered (docs/DESIGN_MODS_MUTATORS.md §4.3).
+func ControlsWereOffered(offered []string, key string) bool {
+	for _, entry := range offered {
+		if entry == key {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkControlsOffered records that key's recommended settings were offered.
+// The list keeps its order and never holds an entry twice.
+func MarkControlsOffered(offered []string, key string) []string {
+	if key == "" || ControlsWereOffered(offered, key) {
+		return offered
+	}
+	return append(append([]string(nil), offered...), key)
+}
+
+// normalizeOffered drops empty and repeated entries from a hand-edited list,
+// and folds an empty list to absent.
+func normalizeOffered(offered []string) []string {
+	var out []string
+	for _, entry := range offered {
+		out = MarkControlsOffered(out, strings.TrimSpace(entry))
+	}
+	return out
 }

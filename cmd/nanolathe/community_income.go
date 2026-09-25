@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
@@ -73,7 +74,15 @@ func (h *retailBattleHUD) drawCommunityIncome(c *client.Client, b *battleSession
 			break
 		}
 		c.UIFillRect(left, top, x+14-left, 38, h.guiColor(0))
-		c.UIText(h.console, f.Players[slot].Name, left+3, top, h.guiColor(15))
+		nameX := left + 3
+		if dot, ok := alliedDotSwatch(b.hostPreferences(), f, slot); ok {
+			// The row's 8×8 square in the player's dot colour, 36 pixels
+			// right of and one below the row origin; the name moves past it
+			// (host layout).
+			c.UIFillRect(left+alliedSwatchX, top+alliedSwatchY, 8, 8, dot)
+			nameX = left + alliedSwatchX + 8 + 3
+		}
+		c.UIText(h.console, f.Players[slot].Name, nameX, top, h.guiColor(15))
 		for i, row := range []struct {
 			stock, capacity, income float32
 			color                   int32
@@ -94,6 +103,33 @@ func (h *retailBattleHUD) drawCommunityIncome(c *client.Client, b *battleSession
 		}
 		top += 40
 	}
+}
+
+// The allied row's player-colour square sits 36 pixels right of and one pixel
+// below the row's origin [draw-engine-interface "Allied resource bars"].
+const (
+	alliedSwatchX = 36
+	alliedSwatchY = 1
+)
+
+// alliedDotSwatch is the colour of an allied resource row's square, drawn
+// only with `alliedDotSwatches` on: the `Player1..10DotColors` table indexed
+// by the player's logo colour, not the slot, so a logo change moves it. A
+// player index above 9 gives palette index 0. The table is the only colour in
+// the panel it touches [draw-engine-interface "Allied resource bars"]
+// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+func alliedDotSwatch(p settings.Presentation, f *frame.Frame, slot int) (uint8, bool) {
+	if p.AlliedDotSwatches == 0 || f == nil || slot < 0 {
+		return 0, false
+	}
+	if slot > 9 || slot >= len(f.Players) {
+		return 0, true
+	}
+	logo := int(f.Players[slot].Logo)
+	if logo >= len(p.PlayerDotColors) {
+		return 0, true
+	}
+	return uint8(p.PlayerDotColors[logo]), true
 }
 
 func communityWeatherPower(cat *content.Catalog, speed, minSpeed, maxSpeed int32) (current, lo, hi int32) {

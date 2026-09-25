@@ -63,6 +63,14 @@ type battleSession struct {
 	tickFiredCarry float32
 	tickFiredTick  uint32
 	tickFiredValid bool
+	// sim is the asynchronous simulation's goroutine and bookkeeping, nil on
+	// the synchronous path (battle_sim.go, DESIGN_GPU_RENDERER §13.13). Under
+	// it the tick stamp above is taken at release, and simPaused/simActive
+	// are the clock's pause bit and speed at the last release, which the blend
+	// reads instead of the live clock the simulation goroutine is advancing.
+	sim       *battleSim
+	simPaused bool
+	simActive int32
 
 	// surfaceW/surfaceH is the negotiated presentation surface the pointer and
 	// the world viewport are measured against. The interface art is authored in
@@ -171,6 +179,12 @@ type battleSession struct {
 	dragScrollLastX      int32
 	dragScrollLastY      int32
 
+	// megamap is the optional megamap overview's host state
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	megamap battleMegamap
+	// iconRoots is where an empty strategicIconConfig preference looks for
+	// the running content's icon configuration (DESIGN_GPU_RENDERER §18.7).
+	iconRoots []string
 	// switchAlt is captured once when the battle installs its settings. It is
 	// presentation input state only; routeDigit reads this cached bit rather
 	// than opening the settings file on a keypress [07 R-CAM-01 §4][I6].
@@ -300,12 +314,30 @@ func stockpileClickDelta(modifiers input.Modifiers, rightClick bool) int {
 
 var clPtr *client.Client
 
+// directBattleView is a composed direct battle view and its client.
+type directBattleView struct {
+	shell *gameShell
+	cl    *client.Client
+}
+
 // runBattleView launches the windowed battle view over the real session.
-func runBattleView(opts Options, cs *contentSet) error {
-	shell, cl, err := newDirectBattleView(opts, cs)
+// Like the menu start, it never fails because of the saved mod: a saved mod
+// whose battle cannot be built or bound falls back to no mod, naming the mod
+// and the reason on standard error, while a --mod failure stays an error
+// (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"). launch is the
+// command line as given.
+func runBattleView(launch, opts Options, cs *contentSet) error {
+	view, running, err := startWithSavedModFallback(launch, opts, cs, func(opts Options, cs *contentSet) (directBattleView, error) {
+		shell, cl, err := newDirectBattleView(opts, cs)
+		return directBattleView{shell: shell, cl: cl}, err
+	})
 	if err != nil {
 		return err
 	}
+	if running != cs {
+		defer running.Close()
+	}
+	shell, cl := view.shell, view.cl
 	shell.settingsWritable = true
 	defer shell.teardownBattle(cl)
 	return ebitenapp.Run(cl, rendererMode(shell.opts), shell.windowOptions())
@@ -329,6 +361,14 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	if err != nil {
 		return nil, nil, err
 	}
+	// A view that fails from here releases the shell's audio, so a start that
+	// falls back from the saved mod leaves no voices of the abandoned shell.
+	entered := false
+	defer func() {
+		if !entered {
+			shell.releaseAudio()
+		}
+	}()
 	shell.applySettings(saved)
 	if err := validatePresentationZoom(shell.opts); err != nil {
 		return nil, nil, err
@@ -348,6 +388,17 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 				return 0
 			}
 			return shell.battle.tickFraction()
+		},
+		PresentationTick: func() (uint32, bool) {
+			if shell.battle == nil {
+				return 0, false
+			}
+			return shell.battle.presentationTick()
+		},
+		JoinSimulation: func() {
+			if shell.battle != nil {
+				shell.battle.stopSimulation(cl)
+			}
 		},
 	})
 	if err != nil {
@@ -371,6 +422,7 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	if err := shell.enterBattle(sess, sess.Catalog); err != nil {
 		return nil, nil, err
 	}
+	entered = true
 	return shell, cl, nil
 }
 
@@ -469,7 +521,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 		return nil, err
 	}
 	b := &battleSession{
-		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
+		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell, iconRoots: strategicIconSearchRoots(cs),
 		showRanges: cs.presentation.ShowRanges, rangePreferences: cs.presentation,
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 	}
@@ -488,7 +540,16 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	sess.SetPhase7Service(b.modelTextures)
 	sess.SetFragmentMaterialResolver(b.modelTextures.FreezeFragmentMaterial)
 	if sess.Features != nil {
-		sess.Features.SetDefinitionAdmissionObserver(b.modelTextures.AdmitFeatureDefinition)
+		sess.Features.SetDefinitionAdmissionObserver(func(def *content.FeatureDef) {
+			if b.sim != nil {
+				// The registry is presentation state the recorder reads; under
+				// the asynchronous simulation an admission made by a batch is
+				// applied when the host joins it (battle_sim.go).
+				b.sim.admissions = append(b.sim.admissions, def)
+				return
+			}
+			b.modelTextures.AdmitFeatureDefinition(def)
+		})
 	}
 	// Prime the scroll-speed cache once here, at battle entry, instead of
 	// leaving the first camera-pan frame to fault it in lazily [WU-19-114].
@@ -565,7 +626,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetMessageLogos(b.hud.logos)
 	// Strategic icons use the HUD team logos; generic contacts retain the radar
 	// art/options bindings (DESIGN_GPU_RENDERER §18.4).
-	icons, iconErr := configuredStrategicIcons(b.cat, b.hostPreferences().StrategicIconConfig)
+	icons, iconErr := battleStrategicIcons(b.cat, b.hostPreferences().StrategicIconConfig, b.iconRoots)
 	if iconErr != nil {
 		fmt.Fprintln(os.Stderr, iconErr)
 	}
@@ -670,6 +731,8 @@ func (b *battleSession) teardown(cl *client.Client) {
 	if b == nil {
 		return
 	}
+	// The session is retired below; its simulation goroutine goes first.
+	b.stopSimulation(cl)
 	// LoadGame can leave ENDMSN through replacement rather than its Start or
 	// MainMenu routes. Retire the same temporary display state on every exit.
 	if b.postBattle != nil {
@@ -811,7 +874,16 @@ func (b *battleSession) tickFraction() float32 {
 	if b == nil || b.sess == nil || b.sess.Clock == nil {
 		return 0
 	}
-	if b.sess.Clock.Paused {
+	// Under the asynchronous simulation the clock's fields are sampled at each
+	// pump's release, on the game goroutine (prepareSimulationStep).
+	var paused bool
+	var active int32
+	if b.sim != nil {
+		paused, active = b.simPaused, b.simActive
+	} else {
+		paused, active = b.sess.Clock.Paused, b.sess.Clock.Active
+	}
+	if paused {
 		return b.lastTickFraction
 	}
 	if b.millisSource == nil {
@@ -831,7 +903,6 @@ func (b *battleSession) tickFraction() float32 {
 	// tick and then jumped it two ticks forward — the piece jiggle of §13.5.
 	// The clamp at one holds the current pose when an Update releases
 	// nothing; the blend never moves backwards within one tick.
-	active := b.sess.Clock.Active
 	if active < 1 {
 		active = 1
 	} else if active > 20 {
@@ -954,6 +1025,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// cursor own the presentation sequence; no live-world value is read
 		// [03 §2.4][08 R-CAMP-01 §6].
 		b.ensurePostBattleController()
+		if cur, ok := b.currentSnapshot(); ok {
+			b.serviceVictoryCue(cur)
+		}
 		b.stepPostBattle(delta, in, cl)
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
@@ -996,7 +1070,9 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// options root and the save/load dialog both do — so the toggle is
 		// suppressed for as long as one is open and the modal dispatcher
 		// routes the frame to it instead [07 R-WGT-01 §1][07 R-FE-01 §6].
-		if (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !shortcutKeyboard.KeyHeld(input.KeyCtrl)) && state.Modal() == ui.BattleModalOptions &&
+		// In the Megamap overview Tab belongs to the megamap and closes nothing
+		// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+		if (keyDown(input.KeyTab) && !b.megamapMode() || keyDown(input.KeyF2) && !shortcutKeyboard.KeyHeld(input.KeyCtrl)) && state.Modal() == ui.BattleModalOptions &&
 			!b.battlePrefsActive() && !(b.shell != nil && (b.shell.saveLoadPanelActive() || b.shell.frontend.Panels.Modal() != nil)) {
 			in.DiscardTokens(1)
 			b.closeBattleMenu()
@@ -1049,6 +1125,18 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		in = battleTokenInput(in, tokenClaimed)
 	}
 	shortcutKeyboard = battleShortcutKeyboard(in)
+	// The Megamap overview takes Tab: the press is consumed and its release
+	// toggles the view; the wheel enters and leaves it
+	// (DESIGN_INTERFACE_HUD_INPUT §3.15).
+	if !talkOwned && b.serviceMegamapTab(keyDown(input.KeyTab), in, cl) {
+		residual := *in
+		residual.ShortcutToken, residual.ShortcutTokenMode = input.Token{}, true
+		in = &residual
+		shortcutKeyboard = battleShortcutKeyboard(in)
+	}
+	if !talkOwned {
+		b.serviceMegamapWheel(in.Mouse, cl)
+	}
 	shiftHeld := shortcutKeyboard != nil && shortcutKeyboard.HasShift()
 	ctrlHeld := shortcutKeyboard != nil && shortcutKeyboard.KeyHeld(input.KeyCtrl)
 	if !talkOwned && (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !ctrlHeld && !shiftHeld) {
@@ -1095,6 +1183,8 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		sample := b.pointerSample(in, delta)
 		if talkOwned {
 			sample = talkOwnedInput(producerIn, delta)
+		} else if !b.palettePointerOwned {
+			sample = b.serviceMegamapPointer(in, sample, cl)
 		}
 		b.controller.Step(sample, cl)
 		resourceInputServiced = true
@@ -1140,6 +1230,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// Every scroll-pass write is a jump by delta, and a jump by the scroll
 		// pass cancels the follow triple [07 R-CAM-01 §12].
 		scroll := func(dir camera.Direction, keyboard bool) {
+			if b.megamapShown() {
+				// Host choice: the camera the megamap hides holds still, so
+				// leaving returns to where the player left (§3.15).
+				return
+			}
 			if keyboard {
 				b.cam.ScrollScreen(scrollSetting, rawDelta, dir)
 			} else {
@@ -1186,7 +1281,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			scroll(camera.DirDown, heldDown)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
-		if !talkActive && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
+		if !talkActive && !b.megamapShown() && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
 			dx := int32(mouse.X - b.battleState().Input.PrevMouseX)
 			dy := int32(mouse.Y - b.battleState().Input.PrevMouseY)
 			if dx != 0 || dy != 0 {
@@ -1200,11 +1295,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// pass only ever sees a wheel the chrome did not want, and takes it only
 		// over the world, only outside TALK, and only in the executor that can
 		// present a free factor.
-		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap &&
+		if cl.Enhanced() && !talkActive && !modalActive && !overMinimap && !b.megamapTakesWheel() &&
 			mouse.ZoomScrollY != 0 && !b.communityPlacementWheelOwned(in) && b.overBattleViewport(mx, my) {
 			b.wheelZoom(mx, my, float64(mouse.ZoomScrollY))
 		}
-		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned &&
+		b.applyTrackpadGestures(mouse, cl.Enhanced() && focused && !talkActive && !talkOwned && !b.megamapShown() &&
 			!modalActive && !overMinimap && !b.palettePointerOwned && !unitInfoOpen() &&
 			b.overBattleViewport(mx, my), mx, my)
 		gesturesServiced = true

@@ -1,9 +1,31 @@
 package main
 
 import (
-	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
+
+// The allied row's square takes the dot colour table by the player's logo
+// colour, not the slot, and draws only with alliedDotSwatches on
+// [draw-engine-interface "Allied resource bars"].
+func TestAlliedDotSwatchIndexesByLogo(t *testing.T) {
+	p := settings.DefaultPresentation()
+	f := &frame.Frame{}
+	f.Players[2].Logo = 5
+	if _, ok := alliedDotSwatch(p, f, 2); ok {
+		t.Fatal("swatch drawn with the setting off")
+	}
+	p.AlliedDotSwatches = 1
+	if dot, ok := alliedDotSwatch(p, f, 2); !ok || dot != uint8(p.PlayerDotColors[5]) {
+		t.Fatalf("swatch = %d %v, want the logo-5 colour %d", dot, ok, p.PlayerDotColors[5])
+	}
+	if dot, ok := alliedDotSwatch(p, f, 10); !ok || dot != 0 {
+		t.Fatalf("player index 10 = %d %v, want palette index 0", dot, ok)
+	}
+}
 
 func TestCommunityWeatherReferenceFallbackAndRounding(t *testing.T) {
 	solar := &content.UnitDef{EnergyUse: -20}

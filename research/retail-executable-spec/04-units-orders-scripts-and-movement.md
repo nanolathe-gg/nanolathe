@@ -7437,7 +7437,8 @@ retained:
 unit initializer tests exactly one thing: whether the definition carries a
 compiled script. If it does, it allocates the VM instance, constructs it,
 stores it on the unit record, binds the program ([R-COB-01 §1]), builds the
-strict piece map from the model and the script, links the two, and starts
+render-piece table from the model and permutes it into script order
+([R-COB-01 §4]), links the two, and starts
 `Create` once in immediate mode. If it does not, it stores a null VM, builds
 the model-only piece map, and starts nothing.
 
@@ -7486,6 +7487,80 @@ Nanolathe diagnostic condition with no retail analog: surface it as an error
 state, and never unwind the allocator's draws or reorder the successful path
 around it. The only retail-shaped refusal is "definition has no compiled
 script", which yields a live unit with no VM.
+
+### Script-to-model piece linking [R-COB-01 §4]
+
+How a compiled script's piece-name table is matched to the unit's model, and
+what happens when a name is missing or the script declares more pieces than
+the model has.
+
+**Established — the render-piece table.** Creation builds one render record
+per model piece, in the model's depth-first order (a piece, then its child
+subtree, then its following siblings). Each record holds the model object, a
+copy of its vertex list, its parent, child and sibling links, and the initial
+draw/cache/shade bits of [R-COB-01 §1]. The scriptless branch stops here.
+
+**Established — the link pass.** With a compiled script, the table is then
+permuted in place, one script piece at a time, and nothing else:
+
+```text
+for s = 0 .. scriptPieceCount - 1:
+    for r = s .. modelPieceCount - 1:        # no iterations when s >= modelPieceCount
+        if name(record[r]) equals scriptPieceName[s]:
+            swap whole records s and r
+            break
+```
+
+The comparison is a byte-wise case-insensitive compare that folds only ASCII
+letters; no whitespace is trimmed. After the pass every record's parent, child
+and sibling links are rebuilt by finding each model object's record wherever
+it now sits, so the hierarchy and the drawn model are unchanged — only the
+record order moves. The VM is then linked to the table, and from that point a
+script piece index **is** a record index: the piece opcodes, the draw, cache
+and shade adapters, the piece-position ports, the piece-naming queries
+(`Query*`, `AimFrom*`, `SweetSpot`, `QueryNanoPiece`, …) and the piece locator
+all address record `index` directly.
+
+**Established — consequences of the pass.** None of these is a refusal; the
+bind never compares the two piece counts, never reports a name, and has no
+failure path ([R-COB-01 §3]).
+
+- A name found at or after its own slot takes that model piece.
+- A name with **no match from its own slot onward** keeps the record already
+  in its slot: the unclaimed model piece that the earlier swaps left there.
+  Its animation, flags and piece position then act on that model piece.
+- The search starts at the script piece's own slot, so a model piece claimed
+  by an earlier script piece, or moved below the slot by an earlier swap, is
+  never found again. Duplicate model names therefore go to successive script
+  entries of that name; a swap can carry the first duplicate behind the
+  second, in which case the second is found first.
+- The map is one-to-one: no two script pieces share a model piece.
+
+**Established — script pieces beyond the model.** A script piece whose index
+is at or above the model's piece count gets no search and has **no record** —
+the table ends before its index. The VM's own per-piece animation array is
+sized by the script's piece count, so the VM side of such a piece (targets,
+speeds, busy words) exists. The engine side does not:
+
+- the per-tick piece interpolation visits only pieces whose busy word a
+  `move`, `turn` or `spin` set, so a declared piece the script never animates
+  reaches no adapter during play;
+- the draw, cache and shade adapters and the position and angle commits have
+  no bound test, so a script that animates, shows, hides, caches, shades or
+  explodes such a piece reads and writes memory past the table (undefined);
+- the piece locator is bounded by the model's piece count and answers a zero
+  offset — the unit's own position — for such an index ([R-REV-02],
+  [R-COB-03 §2] ports 7 and 8);
+- the save writer walks every script piece and reads its three flags, position
+  and angles through the adapters, and the loader writes them back the same
+  way, so saving and loading such a unit reads and writes past the table even
+  when its script never touches the piece.
+
+**Established — shipped content.** Every retail 3.1 unit definition links
+with each script name matched at or after its own slot and no script piece
+beyond its model, so for stock content the pass gives the same result as a
+plain first-match lookup; the alias and beyond-the-model cases arise only in
+third-party content.
 
 ## 5. Engine-to-COB callbacks
 

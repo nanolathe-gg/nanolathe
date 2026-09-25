@@ -169,7 +169,7 @@ phase byte is order-record state, so it survives a save `[08 R-SAVE-ORDER-01]`:
 |---|---|---|
 | 0 | building-class gate, then raise the activate edge on a positive count and advance in the same pass | skip the door handshake, zero the blocked-area counter, advance |
 | 1 | wait, as a level test with no timeout, for the script to set the in-build-stance bit | the approach: install the rectangle goal at the site and walk |
-| 2 | resolve the exit spot, validate it, allocate the nanoframe | validate the chosen site, allocate the nanoframe |
+| 2 | resolve the exit spot, validate it, allocate the nanoframe | validate the chosen site; on a legal site take all three weapon slots through `orders.TakeWorkSlots`, then write the site height and allocate the nanoframe |
 | 3 | the work visit: one shared construction step per visit, retrying a tick later | the same |
 | 4 | lower the building edge, repeat the completion transition idempotently, restart a counted successor in the same pass | the same |
 
@@ -198,6 +198,14 @@ builds abandon on product removal and complete on cancellation, leaving any
 unfinished product to its normal `GetBuilt` lifecycle. Aircraft allocation
 refusal also abandons; ground allocation refusal retains its retry
 `[04 R-ORD-01 §5]` `[04 R-ORD-02 §2]`.
+
+The ground row's slot take is retail's all-slot release, and the record
+destructor returns the slots when the record ends, so a Strict builder's
+weapons are silent while it builds. The aircraft row takes them in its takeoff
+preamble instead and makes no placement-time call. The ProTA working-weapons
+switch selects the inhibit verb at the same ground call
+`[04 R-ORD-01 §5]` `[04 R-ORD-01 §7]` `[04 R-ORD-02 §2]`
+([DESIGN_COMMUNITY_PATCH §4.7](DESIGN_COMMUNITY_PATCH.md#47-prota-48-package-behaviours)).
 
 **Exit spots and the placement seam.** `QueryBuildInfo` runs the factory
 script's build-info query synchronously with its output cell pre-initialized to

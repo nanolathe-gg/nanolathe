@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
@@ -44,6 +45,19 @@ type RetailLoadDeps struct {
 	// profile (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero
 	// value is the retail baseline.
 	ContentLimits content.Limits
+	// Mutators are the multipliers the restored battle runs under, applied to
+	// the restore clone in every gameplay mode (docs/DESIGN_MODS_MUTATORS.md
+	// §6.3). A save without a sidecar restores with the zero value, which
+	// applies none (§7.3 step 1).
+	Mutators content.Mutators
+	// EntryCommunity is the battle-entry Community table a save's sidecar
+	// recorded (docs/DESIGN_MODS_MUTATORS.md §7.3 step 4). When set, it is
+	// the restored session's entry table in place of one resolved from the
+	// sources, so parameters fixed at the original entry — capacities, the
+	// unit limit — survive a rule-set switch made before the save. The live
+	// table is still resolved from Gameplay and CommunitySources, exactly as
+	// the command boundary resolves it.
+	EntryCommunity *community.Features
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
@@ -71,6 +85,9 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	entryFeatures, err := ResolveCommunity(deps.Gameplay, deps.CommunitySources)
 	if err != nil {
 		return nil, err
+	}
+	if deps.EntryCommunity != nil {
+		entryFeatures = *deps.EntryCommunity
 	}
 	preflight, err := PreflightRetailLoad(bank)
 	if err != nil {
@@ -143,7 +160,17 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 			return nil, err
 		}
 	}
-	terrain, err := loadTerrainStrict(deps.FS, cat, m)
+	// Mutators follow the restriction here as they do in fresh mission entry
+	// (docs/DESIGN_MODS_MUTATORS.md §6.3), for two reasons: the restriction
+	// recomputes the catalog digest from the authored records, which would
+	// discard the mutated identity, and it decides which corpse chains the
+	// build-cost mutator reaches. Applying them in the same order makes a
+	// restored battle's catalog the one its fresh entry built.
+	cat, err = applyEntryMutators(cat, deps.Mutators)
+	if err != nil {
+		return nil, err
+	}
+	terrain, err := loadTerrainStrict(deps.FS, cat, m, entryFeatures)
 	if err != nil {
 		return nil, fmt.Errorf("session: retail map resolution: %w", err)
 	}
@@ -161,6 +188,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 		CommunitySources: deps.CommunitySources,
 		Community:        entryFeatures,
 		EntryCommunity:   entryFeatures,
+		Mutators:         deps.Mutators,
 		State:            StateBattle,
 		Catalog:          cat,
 		World:            terrain,
