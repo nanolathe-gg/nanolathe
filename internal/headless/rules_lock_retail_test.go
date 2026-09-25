@@ -81,7 +81,7 @@ const (
 	lockAshapModern6000            = "partial-v1:320cbaa11e9fd28a"
 	lockAshapStrict54000           = "partial-v1:4a62d6ab26833264"
 	lockAshapCommunity54000        = "partial-v1:ae0cc2ee810199ec"
-	lockAshapModern54000           = "partial-v1:9bfdd19e13a3809a"
+	lockAshapModern54000           = "partial-v1:d7f48d704d2eb5d3"
 	lockAshapCommunityEnd   uint32 = 53430
 	lockAshapModernEnd      uint32 = 54000
 
@@ -93,10 +93,10 @@ const (
 	lockBenchModernInitial           = "partial-v1:f6cbc51b5ef4deff"
 	lockBenchStrictWarm              = "partial-v1:dce20f30bcdeef34"
 	lockBenchCommunityWarm           = "partial-v1:f907fb371a053c87"
-	lockBenchModernWarm              = "partial-v1:3e207cfb11bc3644"
+	lockBenchModernWarm              = "partial-v1:6d06c2320bc9cd10"
 	lockBenchStrictFinal             = "partial-v1:d0eaf19c8a8f135b"
 	lockBenchCommunityFinal          = "partial-v1:81b03660538b0eac"
-	lockBenchModernFinal             = "partial-v1:ee6fd800ec1b6ea1"
+	lockBenchModernFinal             = "partial-v1:28977ed152d78088"
 )
 
 // TestStrictFingerprintIsLocked holds the retail baseline. Nothing in a Modern

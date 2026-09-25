@@ -2126,10 +2126,15 @@ Community inherits it.
    uncarried, not a structure, of the mover's owner or a mutually allied
    owner, through the same per-tick alliance query as allied pass-through)
    that is not a *same-way mover* — a unit with an active route heading
-   within 0x2AAA (about 60°) of the mover. A rejected unit with no route
-   counts the tick as jammed when a friendly ground unit holds a cell of or
-   around its footprint: its search failed because friends walled it in. Any
-   other tick resets the count.
+   within 0x2AAA (about 60°) of the mover — or that is one the mover already
+   overlaps: a pair wedged into each other would otherwise each wait behind
+   the other for ever. A rejected unit with no route counts the tick as
+   jammed when a friendly ground unit holds a cell of or around its
+   footprint: its search failed because friends walled it in. A unit with no
+   route that stands inside a friend counts every tick as jammed even though
+   its commit reads no rejection — it proposes no step, so it never
+   revalidates, and only a release's search plans it out. Any other tick
+   resets the count.
 2. *Release.* On the thirtieth consecutive jammed tick the unit is released
    for 90 ticks, unless its previous release ended fewer than 60 ticks ago.
    Within 128 world units of its movement goal or its route's final point
@@ -2146,7 +2151,8 @@ Community inherits it.
    count restarts when the unit's order ends.
 3. *During the release.* In the ground commit's per-cell occupant test, a
    cell held by a friendly ground unit is free when either unit is released
-   and the occupant is not a same-way mover. Searches opened for a released
+   and the occupant is not a same-way mover, or is one the mover already
+   overlaps. Searches opened for a released
    unit read the static view of its class layer — the view the
    [unreachable-move](#modern-unreachable-moves) probe reads, in which
    structures, terrain, features and unexplored ground keep their answers —
@@ -2212,7 +2218,14 @@ formations (arrivals 4,108 → 4,145; a 256-unit formation whose last columns
 stranded 18 units after 1,200 ticks now strands 5). On its own that start
 lowered the 1,500-unit waves from 886 to 833; with
 [route straightening](#modern-route-straightening) they reach 1,070.
-The near-destination start adds a few overlaps where an order finishes
+Treating a same-way friend the unit already overlaps, and a route-less unit
+standing inside a friend, as wedged rather than queued freed the pairs that
+stayed overlapped mid-route (opt-in path benchmark, whole corpus against the
+contract without it: arrivals 4,167 → 4,189, pending 1,486 → 1,465; scripted
+waves 68 → 97 at 64 units and 282 → 293 at 256, 1,070 → 1,058 at 1,500;
+opposed columns through the two-flea choke 57 → 64, the one-cell choke 13 → 16;
+units left overlapping and blocked at the end of a window 6 → 3 pairs). The
+near-destination start adds a few overlaps where an order finishes
 mid-pass: units left overlapping at the end of a fixture's window rose from
 16 to 19 pairs across the corpus without the 1,500-unit waves.
 
@@ -2246,7 +2259,10 @@ are never released; a Strict run allocates no state), `TestJamReleaseAnswers`,
 `TestJamReleaseNeverEndsInsideAFriend` (a 1x1 mover passing a parked 3x3
 friend just before its goal is never left inside it),
 `TestJamReleaseStateIsCleared` (a deactivated move forgets its run, a
-forgotten unit its release), `TestStaticPassableSeesThroughMobilesOnly`
+forgotten unit its release), `TestJamReleaseFreesWedgedUnits` (a unit
+wedged inside a same-way friend gets past it where one merely behind such a
+friend keeps queuing; a route-less unit inside a friend is released; Strict
+releases neither), `TestStaticPassableSeesThroughMobilesOnly`
 (kept movers wall their anchors); the Strict, Community and Modern
 `headless` fingerprint locks, including the long Modern Ashap end tick
 (`tools/check-retail --full`).
@@ -2327,9 +2343,11 @@ iteration; the walk is in route order. Strict and Community fingerprints do
 not move. The Modern locks move, together with those of the jam release's
 near-destination start that landed with this policy: the 6,000-tick Modern
 Ashap lock to `partial-v1:320cbaa11e9fd28a` (it had equalled Community's),
-the long Modern Ashap battle runs to its 54,000-tick bound again at
-`partial-v1:9bfdd19e13a3809a`, and the benchmark-fixture warm and final locks
-to `partial-v1:3e207cfb11bc3644` and `partial-v1:ee6fd800ec1b6ea1`.
+the long Modern Ashap battle runs to its 54,000-tick bound again, and the
+benchmark-fixture warm and final locks moved with it. Jam release's wedge
+rule then moved them to their current values: the long Modern Ashap battle
+`partial-v1:d7f48d704d2eb5d3` (still to 54,000 ticks) and the benchmark
+fixture `partial-v1:6d06c2320bc9cd10` / `partial-v1:28977ed152d78088`.
 
 **Verification.** `path.TestStraightenRemovesSawtoothTurns` (a two-row
 sawtooth becomes one row; probes are charged; the route publishes on the
