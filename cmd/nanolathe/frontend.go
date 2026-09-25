@@ -393,6 +393,17 @@ func runGameShell(launch, opts Options, cs *contentSet) error {
 			}
 			return host.shell.battle.tickFraction()
 		},
+		PresentationTick: func() (uint32, bool) {
+			if host.shell.battle == nil {
+				return 0, false
+			}
+			return host.shell.battle.presentationTick()
+		},
+		JoinSimulation: func() {
+			if host.shell.battle != nil {
+				host.shell.battle.stopSimulation(cl)
+			}
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
@@ -891,6 +902,12 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
+	// Nothing below may touch the battle's session while its simulation
+	// goroutine runs; join it first (battle_sim.go, DESIGN_GPU_RENDERER §13.13).
+	if g.battle != nil {
+		g.battle.joinSimulation(cl)
+		g.battle.syncSimulationMode(cl)
+	}
 	if g.startupMoviePending {
 		g.startupMoviePending = false
 		reportRetailMessageError(g.startMovie(cl, startupMoviePath, false))
@@ -915,8 +932,11 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 	g.playPendingMenuBGM()
 	switch g.frontend.Mode {
 	case modeBattle:
-		if g.battle != nil {
-			g.battle.viewerStep(delta, cl)
+		if battle := g.battle; battle != nil {
+			battle.viewerStep(delta, cl)
+			// The sub-ticks this step released run on the simulation goroutine
+			// from here until the next step joins them (battle_sim.go).
+			battle.launchSimulation(cl)
 		}
 	case modeLoading:
 		// The transition that blocks on catalog and map loading installs the

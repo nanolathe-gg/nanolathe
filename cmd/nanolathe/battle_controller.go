@@ -94,14 +94,20 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	c.battle.stepFollowCamera()
 	state := input.StateFromSample(frame)
 	if c.battle.sess != nil {
-		c.battle.sess.SetPublicationObserver(func(cur *committedframe.Frame) {
-			c.battle.applyPublishedCamera(cur)
-			// Observe every committed position before a catch-up tick replaces it.
-			// Recording alone skips history at high speed or after a slow frame,
-			// suppressing hover dust (DESIGN_GPU_RENDERER §26). Repeated capture
-			// and draw observations are idempotent; this consumes only frames [I6].
-			cl.ObserveCommittedTick()
-		})
+		if c.battle.sim != nil {
+			// The batch runs on the simulation goroutine; the host feeds these
+			// observers each publication after joining it (battle_sim.go).
+			c.battle.sess.SetPublicationObserver(nil)
+		} else {
+			c.battle.sess.SetPublicationObserver(func(cur *committedframe.Frame) {
+				c.battle.applyPublishedCamera(cur)
+				// Observe every committed position before a catch-up tick replaces it.
+				// Recording alone skips history at high speed or after a slow frame,
+				// suppressing hover dust (DESIGN_GPU_RENDERER §26). Repeated capture
+				// and draw observations are idempotent; this consumes only frames [I6].
+				cl.ObserveCommittedTick()
+			})
+		}
 		shift := state.Kbd.HasShift()
 		if cl != nil && cl.Input() != nil {
 			shift = cl.Input().Kbd.HasShift()
@@ -120,6 +126,12 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	defer func() {
 		if pending := c.battle.pendingFollowInput; pending != nil {
 			c.battle.pendingFollowInput = nil
+			if c.battle.sim != nil && c.battle.sim.pending != nil {
+				// Retail handles these after the sub-tick batch, which now runs
+				// after this step; the join that completes it runs them.
+				c.battle.sim.followAfterBatch = pending
+				return
+			}
 			pending()
 		}
 	}()
@@ -145,6 +157,10 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 		c.cursorScaled = scaled
 	} else {
 		c.cursorScaledValid = false
+	}
+	if c.battle.sim != nil {
+		c.battle.prepareSimulationStep(scaled)
+		return
 	}
 	c.battle.sess.Step(scaled)
 	c.battle.noteTickTiming()

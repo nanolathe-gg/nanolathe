@@ -297,7 +297,7 @@ func (b *battleSession) drawBuildGhost(c *client.Client) {
 	// the stationary verdict border. The site rectangle and its legal/illegal
 	// colour remain the retail ones [07 §9]; only committed presentation time
 	// moves this accent, with no input or simulation state change.
-	if cur, ok := b.currentSnapshot(); ok {
+	if cur, ok := b.presentedSnapshot(c); ok {
 		if x, y, width, height, visible := buildGhostGlint(l, t, r, btm, int32(thickness), cur.Tick); visible {
 			c.UIFillRect(int(x), int(y), int(width), int(height), c.GUIColor(15))
 		}

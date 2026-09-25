@@ -79,7 +79,7 @@ func (c *Client) PausedWorldDigest() (PausedWorldInputs, bool) {
 	if c == nil || !c.presentationPaused || c.buffer == nil || c.cam == nil || c.rendererTraceSink != nil || c.ArrivalActive() {
 		return PausedWorldInputs{}, false
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	if cur == nil {
 		return PausedWorldInputs{}, false
 	}

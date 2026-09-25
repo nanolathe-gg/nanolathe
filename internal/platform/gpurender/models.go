@@ -47,8 +47,9 @@ type ModelStats struct {
 	WreckHeatPlumes int
 	// The model lane's accounting (§22): subjects and shadows placed on the
 	// atlas, faces appended and rings culled, packets the atlas could not hold
-	// (which took the fallback), the atlas passes (two a page), the atlas
-	// rows the regions reached over every page, and the pages used.
+	// (which took the fallback), the lane's passes (two a page, plus those the
+	// construction-group waves open), the atlas rows the regions reached over
+	// every page, and the pages used.
 	DirectSubjects, DirectShadows, DirectFaces, DirectCulled, DirectOverflow, DirectPasses int
 	DirectAtlasRows, DirectPages                                                           int
 	// DirectCargoImages is the carried children composed a second time in a

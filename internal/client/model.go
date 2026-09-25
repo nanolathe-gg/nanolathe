@@ -319,7 +319,7 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 	}
 	now := uint32(0)
 	if c.buffer != nil {
-		if committed := c.buffer.Current(); committed != nil {
+		if committed := c.committedFrame(); committed != nil {
 			now = committed.Tick
 		}
 	}

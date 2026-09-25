@@ -14,7 +14,7 @@ package frame
 // superseded tick's events — cue delivery would depend on render cadence,
 // which [03 §8.3] and [I6] do not permit.
 //
-// The retained queue below is therefore independent of the two-slot rotation:
+// The retained queue below is therefore independent of the slot rotation:
 // publication appends, the presentation drain removes. Nothing here reaches
 // authoritative state, and no playback happens on this side of the boundary.
 
@@ -31,7 +31,7 @@ const retainedEventCapacity = 4096
 
 // retainCommittedEvents appends one committed tick's events to the retained
 // queue in raise order. Duration slices are cloned because the frame slot they
-// came from is reset and reused by the next BeginWrite.
+// came from is reset and reused by a later BeginWrite. The caller holds b.mu.
 func (b *Buffer) retainCommittedEvents(events []EventView) {
 	if b == nil {
 		return
@@ -65,7 +65,12 @@ func cloneDurations(src []int32) []int32 {
 // which is the "exactly once" half of [03 R-AUD-01 §7].
 func (b *Buffer) DrainCommittedEvents(dst []EventView) []EventView {
 	dst = dst[:0]
-	if b == nil || len(b.pendingEvents) == 0 {
+	if b == nil {
+		return dst
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pendingEvents) == 0 {
 		return dst
 	}
 	if cap(dst) < len(b.pendingEvents) {
@@ -83,6 +88,8 @@ func (b *Buffer) PendingCommittedEvents() int {
 	if b == nil {
 		return 0
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return len(b.pendingEvents)
 }
 
@@ -93,5 +100,7 @@ func (b *Buffer) RetainedEventsDropped() (uint64, bool) {
 	if b == nil {
 		return 0, false
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.pendingDropped, b.pendingOverflow
 }

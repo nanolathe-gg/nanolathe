@@ -70,7 +70,12 @@ func (c *Client) BeginPresentationFrame() {
 		return
 	}
 	c.displayedResources, c.resourceTimers = c.nextResourceDisplayState()
-	c.TickPresentationAudio()
+	// Under the asynchronous simulation the host drains audio in its update,
+	// with the simulation goroutine joined: the queue's resolver reads live
+	// unit state (§13.13).
+	if !c.asyncSim {
+		c.TickPresentationAudio()
+	}
 }
 
 func (c *Client) nextDisplayedResources() DisplayedResources {
@@ -86,7 +91,7 @@ func (c *Client) nextResourceDisplayState() (DisplayedResources, [10]resourceDis
 	if c.buffer == nil {
 		return next, timers
 	}
-	f := c.buffer.Current()
+	f := c.committedFrame()
 	if f == nil {
 		return next, timers
 	}

@@ -148,11 +148,11 @@ func (c *Client) presentationFrame() *frame.Frame {
 	if c == nil {
 		return nil
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	if cur == nil || !c.interpolation {
 		return cur
 	}
-	prev := c.buffer.Previous()
+	prev := c.committedPrevious()
 	if prev == nil {
 		return cur
 	}
@@ -288,10 +288,24 @@ type pausedBlendInputs struct {
 	fraction                  int64
 }
 
+// committedPrevious is the older frame of the pair presentation blends: the
+// pinned one under the asynchronous simulation (§13.13), otherwise the
+// buffer's publication before its current one. All previous-frame reads stay
+// in this file [I6].
+func (c *Client) committedPrevious() *frame.Frame {
+	if c.pin.buf != nil && c.pin.buf == c.buffer {
+		return c.pin.prev
+	}
+	if c.buffer == nil {
+		return nil
+	}
+	return c.buffer.Previous()
+}
+
 // hasCameraBlend keeps the paused raster key on the recorder's exact admission
 // rule. All previous-frame reads stay in this file [I6].
 func (c *Client) hasCameraBlend() bool {
-	return c.interpolation && c.buffer != nil && c.buffer.Previous() != nil &&
+	return c.interpolation && c.committedPrevious() != nil &&
 		c.cam != nil && c.camSamples >= 2 && c.cameraFractionSet
 }
 

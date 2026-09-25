@@ -316,6 +316,14 @@ temporary-sight expiry sweep as its last step
 Authoritative ticks run only in the battle state of the session state machine
 `[08 "Session states"]`.
 
+**Where the sub-ticks run.** A host pump is `PrepareStep` — the state dispatch
+and the budget — then `ExecuteStep`, the sub-ticks and the executor tail. The
+modern window runs `ExecuteStep` on a simulation goroutine of its own and joins
+it at the start of the next host step, so a tick overlaps presentation instead
+of sharing a presented frame's budget; every other route runs both halves
+inline. Presentation reads committed frames pinned in the buffer while the
+simulation publishes beside it (DESIGN_GPU_RENDERER §13.13).
+
 Publication assigns each live unit a presentation-only `InstanceID`. It stays
 stable for the same unit object and changes when a pool slot is reused, even
 without an intervening empty frame. Only the integer enters the snapshot;

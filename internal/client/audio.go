@@ -42,6 +42,12 @@ func (c *Client) SetAudioService(a *audio.Service) {
 		a.Queue.OnCaption(func(line string, _ audio.Slot, unit pool.Handle) {
 			// The queue has already applied liveness, caption/default-text,
 			// UNITCHAT priority and cooldown gates when this callback runs.
+			if c.captionsDeferred {
+				// A full queue's silent resolve inside a batch on the
+				// simulation goroutine (DeferCaptions).
+				c.deferredCaptions = append(c.deferredCaptions, deferredCaption{line: line, unit: unit, tick: c.messageEventsTick})
+				return
+			}
 			c.messages.Append(line, 1, unit, 10, c.messageEventsTick)
 		})
 	}

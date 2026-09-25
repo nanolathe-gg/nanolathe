@@ -1,6 +1,8 @@
 package ebitenapp
 
 import (
+	"time"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 )
@@ -25,11 +27,11 @@ func (p *pausedWorld) clear() {
 // drawPaused presents a split frame when reuse is eligible. Audio/resource
 // advancement and fraction sampling have already run. Its caller always runs
 // the ordinary update-ledger tail, even when the world was reused (§13.10).
-func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
+func (a *app) drawPaused(screen *ebiten.Image, width, height int, timing bool) (presented bool, record, submit time.Duration) {
 	inputs, eligible := a.c.PausedWorldDigest()
 	if !eligible || width <= 0 || height <= 0 {
 		a.paused.clear()
-		return false
+		return false, 0, 0
 	}
 	// The last running Draw may have launched a speculative full frame. It
 	// must be discarded before either split pass reuses its list and arenas.
@@ -43,10 +45,22 @@ func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
 	// so the digest below already rejects the cached raster (§30).
 	a.gpu.SetEffects(a.c.Effects())
 	if !a.paused.valid || a.paused.inputs != inputs {
-		world := a.gpu.Execute(a.c.RecordPausedWorld(), width, height)
+		var started time.Time
+		if timing {
+			started = time.Now()
+		}
+		worldList := a.c.RecordPausedWorld()
+		if timing {
+			record += time.Since(started)
+			started = time.Now()
+		}
+		world := a.gpu.Execute(worldList, width, height)
+		if timing {
+			submit += time.Since(started)
+		}
 		if world == nil {
 			a.paused.clear()
-			return false
+			return false, 0, 0
 		}
 		if a.paused.image == nil || a.paused.image.Bounds().Dx() != width || a.paused.image.Bounds().Dy() != height {
 			a.paused.clear()
@@ -58,13 +72,27 @@ func (a *app) drawPaused(screen *ebiten.Image, width, height int) bool {
 	} else {
 		a.paused.reuses++
 	}
+	var started time.Time
+	if timing {
+		started = time.Now()
+	}
 	foreground := a.c.RecordPausedForeground()
+	if timing {
+		record += time.Since(started)
+	}
 	x, y := ebiten.CursorPosition()
 	a.c.PositionPresentationCursor(foreground, x, y)
-	if img := a.gpu.ExecuteOver(foreground, a.paused.image, width, height); img != nil {
+	if timing {
+		started = time.Now()
+	}
+	img := a.gpu.ExecuteOver(foreground, a.paused.image, width, height)
+	if timing {
+		submit += time.Since(started)
+	}
+	if img != nil {
 		a.c.CommitStrategicPresentation()
 		screen.DrawImage(img, &ebiten.DrawImageOptions{})
 	}
 	a.pipe.synchronous++ // a live foreground was presented without speculation
-	return true
+	return true, record, submit
 }

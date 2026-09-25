@@ -348,6 +348,24 @@ func (s *Session) EnqueueHumanCommandWithSequence(c HumanCommand) (uint64, error
 	return c.Sequence, nil
 }
 
+// HasPendingHumanCommand reports whether a command of this kind waits for the
+// next authoritative boundary. A host that runs the sub-ticks on their own
+// goroutine asks before handing a pump over (docs/DESIGN_GPU_RENDERER.md
+// §13.13).
+func (s *Session) HasPendingHumanCommand(kind HumanCommandKind) bool {
+	if s == nil {
+		return false
+	}
+	s.humanMu.Lock()
+	defer s.humanMu.Unlock()
+	for i := range s.pendingHuman {
+		if s.pendingHuman[i].Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // PendingHumanCommands returns immutable command copies for diagnostics/tests
 // and presentation of input intent awaiting the next authoritative tick.
 func (s *Session) PendingHumanCommands() []HumanCommand {

@@ -26,6 +26,19 @@ func (b *battleSession) currentSnapshot() (*frame.Frame, bool) {
 	return cur, cur != nil
 }
 
+// presentedSnapshot is the committed frame a draw pass shows: the client's
+// pinned publication under the asynchronous simulation, the newest otherwise
+// (battle_sim.go). Draw-path readers — the HUD's world overlays, which run on
+// the pre-record goroutine while a batch publishes — use it; host-step readers
+// keep currentSnapshot.
+func (b *battleSession) presentedSnapshot(cl *client.Client) (*frame.Frame, bool) {
+	if cl == nil {
+		return b.currentSnapshot()
+	}
+	cur := cl.PresentedFrame()
+	return cur, cur != nil
+}
+
 func (b *battleSession) hasSelection() bool {
 	if f, ok := b.currentSnapshot(); ok {
 		return len(f.Selection.Handles) != 0

@@ -96,7 +96,7 @@ func (c *Client) DebugSnapshot() map[string]any {
 		d["camera"] = cam
 	}
 	if c.buffer != nil {
-		if f := c.buffer.Current(); f != nil {
+		if f := c.committedFrame(); f != nil {
 			d["committed_tick"] = f.Tick
 			d["committed_paused"] = f.Paused
 		}

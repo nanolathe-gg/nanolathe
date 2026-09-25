@@ -1211,7 +1211,35 @@ func (s *Session) stepPausedInput() {
 // P0-I10: Session.Step executes authoritative ticks only in StateBattle (6) [08 "Session states"].
 // Loading completion defers first battle dispatch to next dispatch (C2). Abort and victory/defeat
 // transition through 7/2 rather than leaving battle ticking behind overlay [08].
+//
+// It is exactly PrepareStep followed by ExecuteStep. A host that runs the
+// sub-ticks on their own goroutine calls the two halves itself
+// (docs/DESIGN_GPU_RENDERER.md §13.13); nothing may touch the session between
+// them except that goroutine.
 func (s *Session) Step(scaledNow int32) {
+	s.ExecuteStep(s.PrepareStep(scaledNow))
+}
+
+// StepPlan is what one host pump decided before any sub-tick ran: whether the
+// pump reaches the battle's tick loop at all, and how many sub-ticks the
+// budget released [01 §4.2][01 §4.3].
+type StepPlan struct {
+	run   bool
+	ticks int
+}
+
+// Ticks is the number of sub-ticks the pump released; zero for a paused or
+// idle pump and for a pump that never reached the tick loop.
+func (p StepPlan) Ticks() int { return p.ticks }
+
+// Runs reports whether the pump reaches the tick loop, including a zero-tick
+// pump whose paused-input boundary and executor tail still run.
+func (p StepPlan) Runs() bool { return p.run }
+
+// PrepareStep is the first half of Step: the session state dispatch and the
+// tick budget. It decides, and advances the clock's anchor and carry for, the
+// pump's sub-ticks without running any of them [01 §4.2][01 §4.3].
+func (s *Session) PrepareStep(scaledNow int32) StepPlan {
 	if s.Clock == nil {
 		s.Clock = &clock.State{Requested: 10, Active: 10}
 	}
@@ -1236,14 +1264,24 @@ func (s *Session) Step(scaledNow int32) {
 			// Not yet ready to tick: still not in battle, or just became pending,
 			// or just transitioned Router/Preload->Loading. There is no presentation
 			// callback at this authoritative boundary [01 §4.4][03 §1].
-			return
+			return StepPlan{}
 		}
 	}
 	// Authoritative ticks only in StateBattle [08][P0-I10].
 	if s.State != StateBattle {
+		return StepPlan{}
+	}
+	return StepPlan{run: true, ticks: s.Clock.AdvanceSP(scaledNow)}
+}
+
+// ExecuteStep is the second half of Step: it runs the sub-ticks plan released,
+// publishing after each, and the executor tail once for the pump. A plan that
+// never reached the tick loop does nothing.
+func (s *Session) ExecuteStep(plan StepPlan) {
+	if !plan.run {
 		return
 	}
-	ticks := s.Clock.AdvanceSP(scaledNow)
+	ticks := plan.ticks
 	if ticks == 0 {
 		// The paused-input boundary stands exactly where the sub-ticks would
 		// have been, so the executor tail below still runs once per pump

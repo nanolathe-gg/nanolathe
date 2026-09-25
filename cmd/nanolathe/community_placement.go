@@ -273,7 +273,11 @@ func (b *battleSession) drawCommunityReclaimSnap(c *client.Client) {
 	if ticksPerFrame == 0 {
 		ticksPerFrame = 1
 	}
-	ref := entry.Frames[(b.currentTick()/ticksPerFrame)%uint32(len(entry.Frames))]
+	var tick uint32
+	if cur, ok := b.presentedSnapshot(c); ok {
+		tick = cur.Tick
+	}
+	ref := entry.Frames[(tick/ticksPerFrame)%uint32(len(entry.Frames))]
 	if ref.Frame == nil {
 		return
 	}

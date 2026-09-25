@@ -10,10 +10,20 @@ type ArtDiagnostic struct {
 
 const maxArtDiagnostics = 64
 
-// Called by the serial asset resolver, never by parallel model workers. Failed
-// banks remain negatively cached. Re-records can encounter an entry again but
-// cannot append duplicate diagnostics or grow storage beyond this host limit.
+// Called by the serial asset resolver, never by parallel model workers, and by
+// the session's effect-timing resolver, which may run on the simulation
+// goroutine; artMu orders the two. Failed banks remain negatively cached.
+// Re-records can encounter an entry again but cannot append duplicate
+// diagnostics or grow storage beyond this host limit.
 func (c *Client) recordArtDiagnostic(path, entry, message string) {
+	if mu := c.artMu; mu != nil {
+		mu.Lock()
+		defer mu.Unlock()
+	}
+	c.recordArtDiagnosticLocked(path, entry, message)
+}
+
+func (c *Client) recordArtDiagnosticLocked(path, entry, message string) {
 	for _, d := range c.artDiagnostics {
 		if d.Path == path && d.Entry == entry {
 			return

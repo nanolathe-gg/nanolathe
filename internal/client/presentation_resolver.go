@@ -256,6 +256,13 @@ func (c *Client) EffectBank(name string) *formats.GAF {
 	if key == "" {
 		key = defaultEffectBank
 	}
+	// The session's effect-timing resolver reaches this from the simulation
+	// goroutine while a recording pass may resolve art (§13.13). A miss loads
+	// under the lock, so each bank still costs one VFS attempt.
+	if mu := c.artMu; mu != nil {
+		mu.Lock()
+		defer mu.Unlock()
+	}
 	if c.effectBanks == nil {
 		c.effectBanks = map[string]*formats.GAF{}
 	}
@@ -268,7 +275,7 @@ func (c *Client) EffectBank(name string) *formats.GAF {
 		if loaded, err := formats.LoadGAFFile(c.modelFS, path); err == nil {
 			bank = loaded
 		} else {
-			c.recordArtDiagnostic(path, "", err.Error())
+			c.recordArtDiagnosticLocked(path, "", err.Error())
 		}
 	}
 	c.effectBanks[key] = bank

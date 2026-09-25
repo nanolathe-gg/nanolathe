@@ -126,6 +126,11 @@ func (c *Client) placeSurfaceWakes(cur *frame.Frame) {
 	if st.valid && st.tick == cur.Tick && st.viewer == cur.ViewingPlayer {
 		return
 	}
+	// A pinned pass may read a tick older than the host has already observed
+	// (§13.13); the wake history only moves forward.
+	if c.observesInOrder() && st.valid && cur.Tick < st.tick && st.viewer == cur.ViewingPlayer {
+		return
+	}
 	if st.valid && (cur.Tick != st.tick+1 || st.viewer != cur.ViewingPlayer) {
 		*st = surfaceWakeState{}
 	}

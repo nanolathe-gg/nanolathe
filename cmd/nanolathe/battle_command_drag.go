@@ -8,6 +8,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
+	committedframe "github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
@@ -82,7 +83,7 @@ func (b *battleSession) beginCommandDrag(cl *client.Client, mouse input.MouseSta
 			}
 			button = input.MouseButtonRight
 		}
-		if len(b.dragMoveActors()) == 0 {
+		if len(b.dragMoveActors(f)) == 0 {
 			return false
 		}
 	default:
@@ -203,13 +204,13 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 			}
 			b.playUICue(cl, "oktobuild")
 		case input.LatchRepair, input.LatchReclaim:
-			targets := b.dragAreaTargets(d)
+			targets := b.dragAreaTargets(f, d)
 			if len(targets) == 0 {
 				return true
 			}
 			_ = b.DispatchOrderCommand(session.HumanOrderCommand{Handles: b.selectedHandlesInSlotOrder(), Code: hud.LatchToCode(d.latch), Targets: targets, Queued: modifiers.Shift})
 		default:
-			actors := b.dragMoveActors()
+			actors := b.dragMoveActors(f)
 			points := make([]dragPoint, len(actors))
 			for i, h := range actors {
 				v, _ := snapshotUnitByHandle(f, h)
@@ -286,15 +287,18 @@ func (b *battleSession) updateCommandDrag(cl *client.Client, mx, my int32, modif
 	}
 }
 
-func (b *battleSession) dragMoveActors() []pool.Handle {
-	f, ok := b.currentSnapshot()
-	if !ok || b.cat == nil {
+// dragMoveActors and dragAreaTargets read the committed frame they are given:
+// the host step passes the newest publication, the drag preview the one the
+// pass presents (presentedSnapshot). The local player is the frame's own, so
+// a preview drawn while the simulation goroutine runs reads nothing live.
+func (b *battleSession) dragMoveActors(f *committedframe.Frame) []pool.Handle {
+	if f == nil || b.cat == nil {
 		return nil
 	}
 	var out []pool.Handle
 	for _, h := range b.selectedHandlesInSlotOrder() {
 		v, found := snapshotUnitByHandle(f, h)
-		if !found || v.Owner != b.sess.LocalOwner || v.BuildRemaining != 0 {
+		if !found || v.Owner != f.Selection.LocalPlayer || v.BuildRemaining != 0 {
 			continue
 		}
 		def, found := b.cat.Unit(v.DefName)
@@ -305,9 +309,8 @@ func (b *battleSession) dragMoveActors() []pool.Handle {
 	return out
 }
 
-func (b *battleSession) dragAreaTargets(d *battleCommandDrag) []session.HumanOrderTarget {
-	f, ok := b.currentSnapshot()
-	if !ok {
+func (b *battleSession) dragAreaTargets(f *committedframe.Frame, d *battleCommandDrag) []session.HumanOrderTarget {
+	if f == nil {
 		return nil
 	}
 	inside := func(x, z numeric.Fixed) bool {
@@ -316,7 +319,7 @@ func (b *battleSession) dragAreaTargets(d *battleCommandDrag) []session.HumanOrd
 	var out []session.HumanOrderTarget
 	if d.latch == input.LatchRepair {
 		for _, v := range f.Units {
-			if v.Owner != b.sess.LocalOwner || (v.Health >= v.MaxHealth && v.BuildRemaining == 0) || !inside(v.X, v.Z) || !client.SnapshotVisible(f, v, f.ViewingPlayer) {
+			if v.Owner != f.Selection.LocalPlayer || (v.Health >= v.MaxHealth && v.BuildRemaining == 0) || !inside(v.X, v.Z) || !client.SnapshotVisible(f, v, f.ViewingPlayer) {
 				continue
 			}
 			out = append(out, session.HumanOrderTarget{Target: v.Slot, Position: orders.ResolvePos{X: v.X, Y: v.Y, Z: v.Z}})
@@ -364,6 +367,7 @@ func (b *battleSession) drawCommandDrag(cl *client.Client) {
 	if !d.dragged {
 		return
 	}
+	presented, _ := b.presentedSnapshot(cl)
 	project := func(pos orders.ResolvePos) hud.QueuePoint {
 		x, y := cl.WorldToScreenPx(pos.X, pos.Y, pos.Z)
 		return hud.QueuePoint{X: x - camera.OriginX, Y: y - camera.OriginY}
@@ -379,14 +383,14 @@ func (b *battleSession) drawCommandDrag(cl *client.Client) {
 		line(dragPoint{z.x, a.z}, z)
 		line(z, dragPoint{a.x, z.z})
 		line(dragPoint{a.x, z.z}, a)
-		for _, target := range b.dragAreaTargets(d) {
+		for _, target := range b.dragAreaTargets(presented, d) {
 			mark(target.Position)
 		}
 	} else {
 		for i := 1; i < len(d.path); i++ {
 			line(d.path[i-1], d.path[i])
 		}
-		for _, p := range dragSamplePath(d.path, len(b.dragMoveActors())) {
+		for _, p := range dragSamplePath(d.path, len(b.dragMoveActors(presented))) {
 			mark(dragGroundPosition(cl, p))
 		}
 	}

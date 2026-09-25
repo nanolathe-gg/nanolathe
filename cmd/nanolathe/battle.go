@@ -63,6 +63,14 @@ type battleSession struct {
 	tickFiredCarry float32
 	tickFiredTick  uint32
 	tickFiredValid bool
+	// sim is the asynchronous simulation's goroutine and bookkeeping, nil on
+	// the synchronous path (battle_sim.go, DESIGN_GPU_RENDERER §13.13). Under
+	// it the tick stamp above is taken at release, and simPaused/simActive
+	// are the clock's pause bit and speed at the last release, which the blend
+	// reads instead of the live clock the simulation goroutine is advancing.
+	sim       *battleSim
+	simPaused bool
+	simActive int32
 
 	// surfaceW/surfaceH is the negotiated presentation surface the pointer and
 	// the world viewport are measured against. The interface art is authored in
@@ -381,6 +389,17 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 			}
 			return shell.battle.tickFraction()
 		},
+		PresentationTick: func() (uint32, bool) {
+			if shell.battle == nil {
+				return 0, false
+			}
+			return shell.battle.presentationTick()
+		},
+		JoinSimulation: func() {
+			if shell.battle != nil {
+				shell.battle.stopSimulation(cl)
+			}
+		},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("nanolathe: client: %w", err)
@@ -521,7 +540,16 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	sess.SetPhase7Service(b.modelTextures)
 	sess.SetFragmentMaterialResolver(b.modelTextures.FreezeFragmentMaterial)
 	if sess.Features != nil {
-		sess.Features.SetDefinitionAdmissionObserver(b.modelTextures.AdmitFeatureDefinition)
+		sess.Features.SetDefinitionAdmissionObserver(func(def *content.FeatureDef) {
+			if b.sim != nil {
+				// The registry is presentation state the recorder reads; under
+				// the asynchronous simulation an admission made by a batch is
+				// applied when the host joins it (battle_sim.go).
+				b.sim.admissions = append(b.sim.admissions, def)
+				return
+			}
+			b.modelTextures.AdmitFeatureDefinition(def)
+		})
 	}
 	// Prime the scroll-speed cache once here, at battle entry, instead of
 	// leaving the first camera-pan frame to fault it in lazily [WU-19-114].
@@ -703,6 +731,8 @@ func (b *battleSession) teardown(cl *client.Client) {
 	if b == nil {
 		return
 	}
+	// The session is retired below; its simulation goroutine goes first.
+	b.stopSimulation(cl)
 	// LoadGame can leave ENDMSN through replacement rather than its Start or
 	// MainMenu routes. Retire the same temporary display state on every exit.
 	if b.postBattle != nil {
@@ -844,7 +874,16 @@ func (b *battleSession) tickFraction() float32 {
 	if b == nil || b.sess == nil || b.sess.Clock == nil {
 		return 0
 	}
-	if b.sess.Clock.Paused {
+	// Under the asynchronous simulation the clock's fields are sampled at each
+	// pump's release, on the game goroutine (prepareSimulationStep).
+	var paused bool
+	var active int32
+	if b.sim != nil {
+		paused, active = b.simPaused, b.simActive
+	} else {
+		paused, active = b.sess.Clock.Paused, b.sess.Clock.Active
+	}
+	if paused {
 		return b.lastTickFraction
 	}
 	if b.millisSource == nil {
@@ -864,7 +903,6 @@ func (b *battleSession) tickFraction() float32 {
 	// tick and then jumped it two ticks forward — the piece jiggle of §13.5.
 	// The clamp at one holds the current pose when an Update releases
 	// nothing; the blend never moves backwards within one tick.
-	active := b.sess.Clock.Active
 	if active < 1 {
 		active = 1
 	} else if active > 20 {

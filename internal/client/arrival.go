@@ -176,10 +176,10 @@ func (c *Client) applyArrivalHeat(g *drawlist.ModelGeometry, v frame.UnitView) {
 // Fog Ch0 == 15 is wholly unexplored; partial edges and explored gray terrain
 // still contain image pixels and participate [03 §3.3]. No GPU readback needed.
 func (c *Client) arrivalRevealRadius(a drawlist.Arrival) float32 {
-	if c.buffer == nil || c.buffer.Current() == nil || c.cam == nil || a.Scale <= 0 {
+	if c.buffer == nil || c.committedFrame() == nil || c.cam == nil || a.Scale <= 0 {
 		return 0
 	}
-	fog := c.buffer.Current().Fog
+	fog := c.committedFrame().Fog
 	if !fog.Valid {
 		return 0
 	}

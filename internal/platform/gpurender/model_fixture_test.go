@@ -95,6 +95,7 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		checkFactoryRevealCaptures,
 		checkFactoryRevealDevicePixels,
 		checkModelGroupReflectionPixels,
+		checkModelGroupMergeWaves,
 		checkWorldAffineDevicePixels,
 		checkArrivalDevicePixels,
 		checkLensDevicePixels,

@@ -247,7 +247,7 @@ func (c *Client) PresentationDigest() PresentationInputs {
 		Resources:       c.displayedResources,
 	}
 	if c.buffer != nil {
-		if cur := c.buffer.Current(); cur != nil {
+		if cur := c.committedFrame(); cur != nil {
 			d.Committed, d.Tick = cur, cur.Tick
 		}
 	}
@@ -290,6 +290,10 @@ func (c *Client) StartPreRecord(tickFraction16, cameraFraction16 int32, cameraFr
 	c.tickFraction16 = tickFraction16
 	c.cameraFraction16 = cameraFraction16
 	c.cameraFractionSet = cameraFractionSet
+	// Under the asynchronous simulation the pair the worker records is pinned
+	// here, on the game goroutine, so the digest below and the record name the
+	// same publication however far the simulation runs ahead (§13.13).
+	c.PinPresentation()
 	c.savePresentationCRT()
 	c.pre.recorded = c.PresentationDigest()
 	// Prediction is pure: retries and discards leave the retained pair alone.
@@ -301,6 +305,9 @@ func (c *Client) StartPreRecord(tickFraction16, cameraFraction16 int32, cameraFr
 }
 
 func (c *Client) servePreRecord() {
+	if c.workerThreadSetup != nil {
+		c.workerThreadSetup()
+	}
 	for range c.pre.wake {
 		start := time.Now()
 		c.recordNextResources = true

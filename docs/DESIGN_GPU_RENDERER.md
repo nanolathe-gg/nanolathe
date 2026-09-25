@@ -1293,6 +1293,8 @@ The composite draws one recorded list in a few passes, so the modern window can
 record and replay a list every presented frame. Interpolation needs no new
 draw-list family: the recorder is handed a blended view of the two most recent
 committed ticks and records it exactly as it records a committed tick.
+Under the asynchronous simulation of §13.13 the pair is the one before the
+latest release, pinned for the frame.
 Everything below is an Enhanced presentation rule; Original keeps committed-tick
 sampling.
 
@@ -1310,7 +1312,14 @@ Draw. `--fps N` caps how often Enhanced presents: a Draw that arrives
 sooner than the cap's interval (less an eighth of it, the vsync jitter
 allowance) returns without recording and the retained screen keeps the last
 frame. Draw still sits on the display's vsync grid, so the cap lands on the
-nearest refresh multiple below it. Original ignores the cap.
+nearest refresh multiple below it. The refresh is measured, not assumed — half
+the median spacing of two consecutive Draw arrivals — because a ProMotion panel
+changes it mid-battle, dropping from 120 Hz to 60 Hz and back. When the
+measured refresh is no faster than the cap every refresh is due, and only a
+Draw within half a refresh of the last present, one of a burst, is skipped:
+at 60 Hz the eighth-interval test skipped the refresh after any present more
+than 2 ms late, so one hitch cost two refreshes and a quiet battle counted
+55–59. Original ignores the cap.
 
 The default cap is 60 FPS. The Nanolathe options page offers 30 / 60 / 120 and
 previews changes immediately; OK persists them, Cancel restores the entry value.
@@ -1318,11 +1327,44 @@ Explicit `--fps` overrides the saved preference at window startup, with zero
 retaining display-refresh presentation. Captures and benchmarks use their
 command-line settings independently of saved window preferences.
 
-**FPS counter — Nanolathe host presentation policy.** `+fps` toggles a small
-counter at the upper-right of the modern battle surface. It starts off and
-retains its state across battles in the same process, without changing saved
-settings. The value counts completed modern presentations over elapsed host
-time in one-second windows, so cap-skipped Draw callbacks do not inflate it.
+**FPS counter and frame graph — Nanolathe host presentation policy.** `+fps`
+toggles a diagnostic overlay at the upper-right of the modern battle surface.
+It starts off and retains its state across battles in the same process, without
+changing saved settings. Its FPS number comes from the median completed-frame
+interval over the most recent 500 ms, so cap-skipped Draw callbacks do not
+inflate it and an isolated stall does not make the readout flicker.
+The graph retains up to 30 seconds of completed-frame intervals and phase
+durations in a fixed 8,192-sample ring (30 seconds through 273 FPS; faster
+displays retain a shorter span). Its six aligned lanes show frame cadence,
+whole Draw callback time, client/authoritative step time, committed-frame
+interpolation, frame recording (including that interpolation), and renderer
+`Execute` time (CPU preparation and GPU command enqueue). Each horizontal
+pixel is an equal slice of 30 seconds and keeps the worst time in that slice,
+so brief spikes stay visible at their approximate time. Lane labels show a
+500 ms median and the 30-second peak. Frame and Draw medians include every
+recent sample; Sim, Blend, Record and Submit medians include only frames where
+that phase ran. With no such phase sample in 500 ms its live value is zero.
+The graph, peak and late count remain unsmoothed. Cadence bars turn orange when
+an interval exceeds the requested cap by more than 1 ms. The overlay reports
+how many intervals did so, the 30-second cadence peak and its amount over cap,
+and the render passes the last presented frame issued (`ModelStats.Passes`):
+on the development machine's Metal driver a frame past about 80 passes makes
+the windowed present wait for the GPU, so that number is watched against the
+§22 budget.
+Changing the live FPS cap starts a fresh history, so the
+late count uses one budget. A line in each lane marks the cap interval. The
+Draw "room" is cap interval minus the median callback time and may be negative.
+It is a partial wall-time margin: the sim step may run in Update or the Draw
+tail, and an asynchronous pre-record can overlap other work, so lanes are never
+added.
+Paused foreground redraws report their own recording and renderer calls; Blend
+is zero while the world is paused. Draw includes the overlay itself, so the
+diagnostic has some cost. Draw excludes later GPU completion, display swap and
+pacing; the interval includes those effects and scheduling but cannot
+attribute a stall to one of them. Ebitengine does not expose a GPU execution
+timer here, so `Submit` must not be read as GPU execution time. With `--fps=0`,
+the overlay omits cap and room because the display refresh is not an explicit
+budget.
 Classic shows no counter. The overlay is applied after modern replay, outside
 the recorded draw list and authoritative session; it has no RNG or resource
 effects. It is absent from F11's GPU-image capture.
@@ -2001,6 +2043,141 @@ with committed-off-screen fillers; both assert the finished frame does not
 change. Neither reproduces the defect at fixture scale, so the failing evidence
 is the measurement in the history file, which the 180-frame benchmark reproduces
 in two minutes.
+
+### 13.13 The asynchronous simulation
+
+**Why.** Before this, the window ran a host step's sub-ticks inside the Draw
+tail that deferred it (§13.10), so every other presented frame at a 60 cap
+carried a whole tick besides recording, `Execute` and Ebitengine's present,
+and every simulation spike became a dropped frame. Timed through the real
+window at a Survival capture on Moon Quartet (1280x827, 120 Hz ProMotion
+panel, 60 cap), the tick cost 4.0-4.3 ms per stepping frame at 803 units and
+6.5-7.7 ms at about 1,600, with spikes past 20 ms. The modern window now runs
+the sub-ticks on their own goroutine. A tick then has a whole host period,
+about 33 ms at 1x, on a core of its own, and a presented frame carries only
+presentation.
+
+**Scope.** The modern (Enhanced) window only. Original presents the committed
+tick after each update and stays on the synchronous path, as do `--shot`,
+film, the benchmarks and headless runs; nothing but the window sets
+`Client.SetAsyncSimulation`. Switching to Original (F10 or the saved
+preference) calls the client's `JoinSimulation` hook, which joins and stops the
+goroutine before presentation reads the committed buffer unpinned again.
+
+**The order — Nanolathe host policy.** Every decision stays on the game
+goroutine, in the order the synchronous step made it (`cmd/nanolathe/battle_sim.go`):
+
+1. At the start of a host step (`gameShell.step`) the host joins the batch the
+   previous step launched. With the session quiescent it then applies what the
+   batch left for the client — the captions its audio inserts resolved and the
+   executor tail's message-ring retire [01 R-PLAT-02 §8], in that order, and
+   the feature definitions it admitted to the model texture registry — feeds
+   each publication the batch made, oldest first, to the observers the
+   synchronous batch ran inline — the published camera (follow and shake) and
+   the Enhanced history layers (`Client.ObserveCommittedFrame`) — runs the
+   follow hotkeys retail handles after the sub-tick batch, and drains audio.
+2. Input is handled and human commands are queued exactly as before.
+   `Session.PrepareStep` runs the session's state dispatch and the tick budget
+   [01 §4.2] [01 §4.3] and stamps the release.
+3. When the host step returns, `Session.ExecuteStep` runs the released
+   sub-ticks, their publications and the executor tail
+   [01 §4.4] [01 R-PLAT-02 §7] on the simulation goroutine, until the next
+   host step joins it. The one exception is a pump with a gameplay switch
+   queued (`HumanGameplay`): it rebinds rule state the HUD reads while it draws,
+   so that pump runs inside the host step instead.
+
+`Session.Step` is exactly `ExecuteStep(PrepareStep(scaled))`, commands reach the
+same sub-ticks, and the authoritative sequence is unchanged; only where the
+sub-ticks run moves. The retail test `TestAsynchronousSimulationMatchesSynchronous`
+steps one seeded skirmish through the host step both ways, with a human order
+and a commander self-destruct mid-run, and requires the same partial-state
+fingerprint, global tick and both random-stream states. Each step also pins,
+drains, digests and records a modern frame as the window's Draw does, beside
+the running batch in the asynchronous run, so under `-race` the test is the
+shared-state check below.
+
+**Presentation — Nanolathe host policy.** A presented frame shows the tick
+before the last released one, but never a tick the host has not yet joined.
+At 1x the two agree: the tick the simulation finished while it computes the
+next, one tick behind the synchronous view. When a pump releases several ticks
+(2x, or catch-up after a stall) presentation stays on the newest joined tick
+until the next join, a pump behind rather than a tick. Everything the join
+applies is therefore in place before a publication is drawn, and a pre-recorded
+pass and the Draw that consumes it name the same pair (§13.10). The blend
+fraction of §13.5 is paced from the release stamp rather than from when the
+batch finished. Because the name is held at the tick before the last release,
+pumps that release nothing (slow speeds) and a pause leave the blended pose
+where it was; a command applied at the paused-input boundary republishes the
+committed tick, and that republication is presented at once, unblended
+(DESIGN_INTERFACE_HUD_INPUT §3.12). Should a named tick ever have left the
+buffer, the newest publication is presented unblended rather than waited for.
+Unit motion therefore reaches the screen a pump later; the camera, cursor,
+selection box and interface are presentation state and do not move.
+
+**The committed buffer.** `frame.Buffer` widens from two slots to an eight-slot
+rotation (`SetConcurrentReaders`). A reader beside the writer pins what it
+reads (`PinTick`, `PinLatest`), and the writer refills only the oldest slot that
+is neither pinned nor committed, so a recording pass reads one publication
+throughout. The host pins the pair a presented frame shows at the start of its
+Draw (`Client.PinPresentation`), and `StartPreRecord` pins the pair its
+pre-record will read before waking the worker, so the pipeline's digest and the
+record name the same publication (§13.10). `PublicationsSince` feeds the
+host's in-order observation. The two-slot default keeps synchronous routes at
+their old footprint, and the unpinned `Current`/`Previous` rules are unchanged;
+`Current` is an atomic load, since the synchronous recorders call it per drawn
+object.
+
+**Shared state.** Found by running the window under the race detector, or by
+reading every presentation path the simulation reaches:
+
+- The audio cue queue: the simulation inserts cues and presentation drains them,
+  and the drain's resolver reads live units. Under the asynchronous simulation
+  the drain runs in the host step with the simulation joined; queue pops were
+  already gated to one per host step, so nothing is lost.
+- The model texture registry: phase 7 advances its cursors while recording reads
+  them, so a cursor's position and playing flag are atomic
+  (`render.TexturePlayer`). Feature admissions write the registry's maps and
+  wait for the join.
+- Terrain heights: presentation samples heights while movement writes the
+  occupant bytes of the same plot cells, so `PlotCell.Height` reads through the
+  pointer instead of copying the cell.
+- The Enhanced history layers (trails, scorch marks, hover wakes, water motion)
+  are fed only by the in-order observation at the join; a recording pass places
+  nothing itself.
+- The message ring: recording reads it, and two simulation paths wrote it — the
+  executor tail's retire and the caption a full audio queue's silent resolve
+  posts. The batch notes the tail's tick and the client holds those captions
+  (`Client.DeferCaptions`); the join applies both, so only the game goroutine
+  writes the ring.
+- The effect-bank cache: the session's effect-timing resolver loads banks on
+  its first miss, from the simulation goroutine, while recording resolves art
+  from the same cache, so the cache and the art diagnostics its misses record
+  are locked.
+- The HUD's world overlays (build ghost, drag previews, the nanoframe preview)
+  are drawn inside the recording pass, so they read the presented publication
+  (`Client.PresentedFrame`) and take the local player from it, not from the
+  live session.
+
+**Threads — Nanolathe host policy.** On macOS the main (render) thread, the game
+loop, the simulation and the pre-record goroutine lock their threads and ask for
+the user-interactive quality-of-service class
+(`ebitenapp.RaiseCurrentThread`), which keeps them on performance cores while
+other processes load the machine. The record pool's workers keep the default
+class. Other hosts keep their default scheduling.
+
+**Measured.** Interleaved runs of one binary with the simulation synchronous
+and asynchronous, at the capture above:
+
+| | synchronous | asynchronous |
+|---|---|---|
+| 803 units: host step on the critical path, mean | 4.0-4.3 ms | 0.4 ms |
+| 803 units: Draw callback work, p95 / p99 / max | 10.1-10.6 / 10.8-11.5 / 28-34 ms | 6.2-6.5 / 6.6-7.4 / 13-14 ms |
+| 803 units: presented per second | 59.6-59.9 | 59.7-59.9 |
+| ~1,600 units: presented per second | 34.2-38.8 | 43.3-46.6 |
+
+At about 1,600 units the frame is then bounded by Ebitengine's present waiting
+on the GPU (13-15 ms), not by the tick. The frame graph's Sim lane adds the
+batch's time on its goroutine to the host step's.
 
 ## 14. The detail view: native and 2× steps and load-time remaster
 
@@ -3827,24 +4004,62 @@ admit the later recorded child. Ordinary groups retain the existing path.
 The construction path keeps the existing shifted-key saturation and own/carrier clip
 verdicts. After all atlas pages finish, each child's expanded rectangle merges
 in recorded order under `parentKey <= childKey`, only where the child's
-finished colour has nonzero coverage. Two reusable scratch images hold the
-merged colour and key before they are copied into the parent region. Earlier
-children need four small device draws each. The last child needs only two when
-no silhouette shadow or water reflection reads the resulting key; this covers
-ordinary land factories with one product. Child reflection geometry samples its
+finished colour has nonzero coverage. A child's merged key is written back
+only when something still reads it: a later sibling, a silhouette shadow or a
+water reflection. The last child of an ordinary land factory with one product
+therefore writes colour alone. Child reflection geometry samples its
 own finished colour and additionally tests the final group key, preserving both
 reveal holes and factory occlusion. No GPU readback or additional full atlas page
 is required by the merge itself. Independent child regions can increase normal
 atlas packing. The rectangle includes the existing two-texel margin and is
 intersected with the parent's allocation, preventing neighbour-slot reads.
-Allocation failure retains the existing whole-group overflow fallback. Source
-reset releases both scratch planes and preserves the merge shader.
+Allocation failure retains the existing whole-group overflow fallback.
+
+**Merges run in waves.** Passes are what the device pays for (§11.5). Merging
+one child at a time evaluated each merge into a small scratch pair and copied it
+back onto its page: two passes per child, or four when its key was kept, half of
+them over a whole 4096-square page. A Survival base with about twenty factories
+building spent more of a frame's passes on its merges than on everything else
+together. On the Metal driver where this was measured (an M3 Pro, macOS 26.6),
+presenting blocks until the GPU drains once a frame has more than about 80
+render passes in flight, and the windowed present then waits for most of the
+frame's GPU work, so CPU and GPU time add up instead of overlapping. Treat about
+64 passes a frame as the budget the whole executor shares.
+
+A wave evaluates every one of its merges into a slot of its own in one reusable
+scratch pair, then copies every slot back onto its carrier's page in merge
+order. It opens one pass for each scratch plane and one for each page plane it
+writes, so a wave on one page costs four passes however many merges it holds.
+Within a wave every merge reads the pages as the wave found them. That is what
+merging in order gives, as long as no merge reads a rectangle that an earlier
+merge of the same wave writes. A merge whose parent or child rectangle overlaps
+one that an earlier merge of the wave writes therefore starts the next wave:
+above all a carrier's next child, which must see what the child before it
+wrote. A merge that only writes where an earlier one read stays in the wave,
+because in order that read came first too. Two merges of a wave never write the
+same texel, and the result is texel for texel the one-at-a-time merge for any
+list. Factories that each build a single product share one wave while their
+slots fit the scratch, and a carrier's children whose boxes overlap take a wave
+each. Slots are shelf-packed about 2048 texels wide, and a wave closes before
+its shelves would pass about 2048 texels of height. A larger slot takes a wave
+of its own and the scratch grows to hold it. The scratch only grows; source
+reset releases both of its planes and preserves the merge shader. At the Moon
+Quartet Survival capture (`--benchmark-capture`, 30 draws a second), the last
+measured frame went from 64 passes to 24 at 21 merges, and `battle.png` stayed
+byte-identical at both zoom levels.
 
 `DirectGroupMerges`, `DirectGroupPixels` (2× texels) and
 `DirectGroupScratchBytes` report the extra work and retained logical scratch
-storage. The device fixture locks preserved plate pixels, visible reveal and
-outline, factory occlusion, sibling admission and ties, native/doubled reveal
-selection, and both atlas pages. Optional `NANOLATHE_FACTORY_CAPTURE` captures
+storage, and `DirectPasses` includes the passes the waves open. The device
+fixture locks preserved plate pixels, visible reveal and outline, factory
+occlusion, sibling admission and ties, native/doubled reveal selection, and both
+atlas pages. A second device fixture compares every texel of both planes of two
+pages with a CPU model of the one-at-a-time merge. Its merge list takes every
+branch of the wave rule: independent merges spread over both pages, a read after
+a write, a carrier's consecutive children, a write after a read, merges without
+a key, boxes that do not meet and a wrapped shelf. A unit test locks the rule
+itself, including the height bound and an oversized slot. Optional
+`NANOLATHE_FACTORY_CAPTURE` captures
 ARM and CORE factory products at early and halfway construction, using actual
 committed session/COB poses and relative attachment positions at scales 1 and 2.
 Resources are replenished for those diagnostic scenes; retail art stays outside

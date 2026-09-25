@@ -476,12 +476,17 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// switches (§30); each is gated here rather than inside its producer so the
 	// recording is identical to the one a build without the effect would make.
 	if c.effects.Marks {
-		c.drawScorchMarks(c.buffer.Current())
+		c.drawScorchMarks(c.committedFrame())
 	}
+	// Under the asynchronous simulation the host feeds these layers every
+	// publication in order when it joins a batch (ObserveCommittedFrame), so a
+	// pass places nothing itself (§13.13).
 	if c.effects.Water && !c.strategicView() {
-		c.placeSurfaceWakes(c.buffer.Current())
+		if !c.observesInOrder() {
+			c.placeSurfaceWakes(c.committedFrame())
+		}
 		c.drawSurfaceWakes()
-		c.drawBuildingFoam(c.buffer.Current())
+		c.drawBuildingFoam(c.committedFrame())
 	}
 	// The Enhanced trail layer lies on the terrain under every strip
 	// (DESIGN_GPU_RENDERER §15). Marks are placed from the committed tick, not
@@ -489,7 +494,9 @@ func (c *Client) drawCommittedWorld(cur *frame.Frame, ok bool) {
 	// Below the strategic cut the marks are smaller than a pixel and cost more
 	// than they show, so they are one of the layers §16.10 drops.
 	if c.effects.Marks && !c.strategicView() {
-		c.placeTrails(c.buffer.Current())
+		if !c.observesInOrder() {
+			c.placeTrails(c.committedFrame())
+		}
 		c.drawTrails()
 	}
 	// Strips 0 and 1 are unconditional but producerless; strip 2 is the first
@@ -980,7 +987,7 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// the executor gates the lighting pass itself (§30).
 		burning := false
 		if c.enhanced && f.IsBurning && c.buffer != nil {
-			cur := c.buffer.Current()
+			cur := c.committedFrame()
 			burning = cur != nil && SnapshotPointVisible(cur.Visibility, f.X, f.Y, f.Z, cur.ViewingPlayer)
 		}
 		heat := burning && c.effects.Distortion

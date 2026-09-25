@@ -132,8 +132,8 @@ func (c *Client) drawStrategicMarkers(cur *frame.Frame) {
 	// Identification must use committed visibility, even when the world models
 	// are interpolated. Radar contact coordinates themselves are not blended.
 	committed := cur
-	if c.buffer != nil && c.buffer.Current() != nil {
-		committed = c.buffer.Current()
+	if c.buffer != nil && c.committedFrame() != nil {
+		committed = c.committedFrame()
 	}
 	viewer := uint8(0)
 	if committed != nil {

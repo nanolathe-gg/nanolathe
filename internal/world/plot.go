@@ -39,7 +39,12 @@ const (
 )
 
 // Height returns the terrain height byte, byte 0x04 [GAP T14][02 "Terrain file"].
-func (p PlotCell) Height() uint8 { return p[4] }
+//
+// It reads through the pointer so a caller touches only this byte: the plot's
+// occupant and flag bytes change every tick, and presentation samples heights
+// while the simulation runs on another goroutine (DESIGN_GPU_RENDERER §13.13).
+// A value receiver would copy the whole cell, occupant words included.
+func (p *PlotCell) Height() uint8 { return p[4] }
 
 // MinHeight returns the derived floor minimum at byte 0x06. Byte order is the
 // runtime field convention: byte 0x05 carries the max and byte 0x06 the min

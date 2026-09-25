@@ -40,6 +40,18 @@ type Options struct {
 	// client that never interpolates.
 	TickFraction func() float32
 
+	// PresentationTick names the committed tick an Enhanced frame presents
+	// while the session publishes from another goroutine
+	// (docs/DESIGN_GPU_RENDERER.md §13.13). It is read on the game goroutine
+	// when a pair is pinned; false, or a nil producer, presents the newest
+	// publication. The synchronous path never reads it.
+	PresentationTick func() (tick uint32, ok bool)
+
+	// JoinSimulation returns the session to the synchronous path: it joins the
+	// asynchronous simulation goroutine and stops it. SetAsyncSimulation(false)
+	// calls it before presentation reads the buffer unpinned again (§13.13).
+	JoinSimulation func()
+
 	// Presentation snapshot source. If nil, an empty buffer is used.
 	Buffer *frame.Buffer
 
@@ -53,6 +65,18 @@ type Options struct {
 // keeps retail's 8-bit indexed renderer and presents one RGBA upload per
 // frame. Rendering consumes only the currently committed frame (I6).
 type Client struct {
+	// asyncSim says the session publishes from another goroutine, so every
+	// presentation read goes through pin (async_sim.go, §13.13).
+	asyncSim bool
+	pin      framePin
+	// workerThreadSetup runs once on the pre-record goroutine when it starts.
+	workerThreadSetup func()
+	// simulationTime accumulates NoteSimulationTime for the frame graph.
+	simulationTime int64 // nanoseconds
+	// frameTiming is presentation-only instrumentation for the +fps overlay.
+	// The window adapter changes it only after joining any pre-record worker.
+	frameTiming         bool
+	blendNanos          int64
 	arrival             arrivalPresentation
 	presentationPaused  bool
 	pausedWorldRevision uint64
@@ -384,6 +408,14 @@ type Client struct {
 	// load is memoised as a nil entry — retail treats that as a fatal fault
 	// with a modal message box and exit; a presentation client draws nothing
 	// instead and lets the rest of the frame compose [I6].
+	//
+	// Under the asynchronous simulation the session's effect-timing resolver
+	// reads this cache from the simulation goroutine while a recording pass
+	// reads it too, so artMu guards it and the art diagnostics it records
+	// (DESIGN_GPU_RENDERER §13.13). It is a pointer so the parallel record
+	// workers' copies of the client share it; a client built without New has
+	// none, and no second goroutine either.
+	artMu                   *sync.Mutex
 	effectBanks             map[string]*formats.GAF
 	artDiagnostics          []ArtDiagnostic
 	artDiagnosticsTruncated bool
@@ -453,6 +485,11 @@ type Client struct {
 	// [07 R-HUD-03 §14][I6].
 	messages          frame.MessageRing
 	messageEventsTick uint32
+	// captionsDeferred holds the captions the audio queue resolves while a
+	// batch runs on the simulation goroutine; DeferCaptions(false) appends
+	// them to the ring in order at the join (§13.13).
+	captionsDeferred bool
+	deferredCaptions []deferredCaption
 	// committedEvents is the scratch destination for the retained committed
 	// events drained once per rendered frame. Reusing it keeps the drain
 	// allocation-free after the first busy frame [03 R-AUD-01 §7][I6].
@@ -542,6 +579,7 @@ func New(opts Options) (*Client, error) {
 	c := &Client{
 		opts:   opts,
 		buffer: buf,
+		artMu:  &sync.Mutex{},
 		// The settings reader looks Anti_Alias up under the registry key
 		// Anti-Alias alongside Shadows/VehicleShadows/FeatureShadows; on a
 		// miss it sets the bit and writes the default back, so anti-aliasing
@@ -728,7 +766,11 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 		// the four rate latches survive this reset [07 R-HUD-03 §4].
 		c.displayedResources.Energy, c.displayedResources.Metal = 0, 0
 		c.resourceTimers = [10]resourceDisplayTimer{}
+		c.releasePin()
 		c.buffer = b
+		if c.asyncSim {
+			b.SetConcurrentReaders()
+		}
 		c.arrival = arrivalPresentation{}
 		c.SetPresentationPaused(false)
 	}
@@ -944,9 +986,15 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.projectileGAF = nil
 	c.projectileGAFErr = nil
 	c.projectileGAFLoaded = false
+	if mu := c.artMu; mu != nil {
+		mu.Lock()
+	}
 	c.effectBanks = nil
 	c.artDiagnostics = nil
 	c.artDiagnosticsTruncated = false
+	if mu := c.artMu; mu != nil {
+		mu.Unlock()
+	}
 	c.blastSizes = nil
 	c.flash = flashTables{}
 	c.fogGAF = nil
@@ -1145,7 +1193,7 @@ type ComposedFrameSnapshot struct {
 // caller to copy its tick identity. It never exposes that frame beyond the
 // documented Buffer.Current reader lifetime [03 §2.4][I6].
 func (c *Client) composeCurrentFrame() *frame.Frame {
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	// The recording pass writes nothing to c.indexed: composeIndexed records the
 	// clear and every world/interface draw, drawCursor records the cursor, and
 	// the expansion marker is recorded last. Replaying the whole list once through

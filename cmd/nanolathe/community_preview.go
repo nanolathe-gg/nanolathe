@@ -40,7 +40,7 @@ func (b *battleSession) drawCommunityBuildPreview(c *client.Client) {
 	if !ok || def == nil || def.ObjectName == "" {
 		return
 	}
-	cur, ok := b.currentSnapshot()
+	cur, ok := b.presentedSnapshot(c)
 	if !ok {
 		return
 	}

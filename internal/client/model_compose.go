@@ -136,7 +136,7 @@ func (c *Client) featureTeamColor() teamColor {
 	if c.buffer == nil {
 		return teamColor{}
 	}
-	current := c.buffer.Current()
+	current := c.committedFrame()
 	if current == nil || !current.Players[0].Present {
 		return teamColor{}
 	}
@@ -897,7 +897,7 @@ func (c *Client) waterlineTints(draw *presentationrender.UnitDraw, owner, kind u
 	if draw.SonarContact {
 		return true
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	return cur != nil && cur.ViewingPlayer < 10 && owner == cur.ViewingPlayer
 }
 
@@ -909,7 +909,7 @@ func (c *Client) seaLevel() numeric.Fixed {
 	if c == nil {
 		return 0
 	}
-	cur := c.buffer.Current()
+	cur := c.committedFrame()
 	if cur == nil {
 		return 0
 	}
