@@ -1355,11 +1355,12 @@ keeps its animation phase. Shape selection is the four-step chooser of §2.5
 placement is armed, `cursorfindsite` is drawn with its artwork centred on the
 pointer used for site picking. The retail GAF offset puts that one reticle
 down-right of the pointer; this display choice changes neither the chosen
-cursor shape nor the site, click or order. A white glint walks clockwise around
-the green/red footprint border using the committed tick. The full border keeps
-the retail validity colour and cell-aligned rectangle. The accent pauses with
-the committed tick and consumes no RNG. Both choices apply in every gameplay
-mode because they are presentation only `[07 §8][07 §9]`.
+cursor shape nor the site, click or order. The green/red footprint border keeps
+its retail validity colour and cell-aligned rectangle. The default preview is
+the building's pulsing nanoframe wireframe, using the committed tick and the
+construction colour ramp [03 §5.2]. The preview pauses with the committed
+tick and consumes no RNG. Both choices apply in every gameplay mode because
+they are presentation only `[07 §8][07 §9]`.
 
 **C13 — the panel slide.** On entering battle a flip surface is allocated at the
 negotiated video-mode dimensions with the static `PANEL` backdrop blitted in,

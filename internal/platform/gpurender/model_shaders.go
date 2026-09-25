@@ -10,15 +10,18 @@ import "fmt"
 // than uniforms, so one draw can carry every subject of one slot atlas page
 // [DESIGN_GPU_RENDERER.md §11.2].
 // modelQuadMapperSource is shared by the key and colour passes. A textured quad
-// draws as two device triangles and recovers every lane here, so both passes
-// narrow the same key at the same fragment and a mapped face is never rejected
-// by a key its own key pass did not write
+// draws as two device triangles and recovers every lane here
 // (docs/DESIGN_GPU_RENDERER.md §11.2 "Textured quads without strips").
 //
-// Source 3 is the frame's quad parameter image: twelve RGBA8 texels per quad
-// holding two 16-bit values each — four corner positions, four corner texel
-// coordinates, then four corner key/shade pairs with the bottom corner's
-// rotated index in the first pair's spare byte.
+// Source 3 is the frame's quad parameter image. A mapped quad's entry is two
+// slots (model_quads.go). The first is twelve RGBA8 texels holding two 16-bit
+// values each — four corner positions, four corner texel coordinates, then four
+// corner key/shade pairs with the bottom corner's rotated index in the first
+// pair's spare byte — and modelQuadLanes, which the colour pass and the water
+// reflection call, walks it. The second is the span writer's edge setup for
+// the key alone, made once on the CPU, and modelQuadKey, which the key pass
+// calls, reads it: the same key without a division per fragment and from
+// fewer texels.
 //
 // Corner positions are subject-local plus modelQuadLocalBias (model_quads.go),
 // so a caller shifts the fragment's atlas position into the same frame first:
@@ -125,5 +128,168 @@ func modelQuadLanes(q float, d vec2) vec4 {
 		t = clamp((col-lx)/(rx-lx), 0.0, 1.0)
 	}
 	return ll + (rl-ll)*t
+}
+
+// modelQuadRows decodes a key entry's four corner rows, top corner first, and
+// the rotated index of its bottom corner (model_quads.go).
+func modelQuadRows(base float) (vec4, int) {
+	a := modelQuadTexel(base)
+	b := modelQuadTexel(base+1.0)
+	top := modelQuadU16(a.r, a.g)
+	mm := floor(top/` + fmt.Sprint(modelQuadRowLimit) + `.0)
+	return vec4(top-mm*` + fmt.Sprint(modelQuadRowLimit) + `.0, modelQuadU16(a.b, a.a), modelQuadU16(b.r, b.g), modelQuadU16(b.b, b.a)), int(mm)
+}
+
+// modelQuadBottom is the bottom corner's row: the chains own the rows from the
+// top corner's up to, and not including, this one.
+func modelQuadBottom(y vec4, mm int) float {
+	if mm == 1 {
+		return y.y
+	}
+	if mm == 2 {
+		return y.z
+	}
+	return y.w
+}
+
+// modelQuadLeft is the left chain's edge at a row inside the ring, and that
+// edge's from and to rows. The chain steps from the top corner towards
+// decreasing indices until it reaches the bottom corner, over ring edges 3, 2
+// and 1; an edge owns the rows from its from row up to its to row when it
+// descends, and a row a folded chain crosses twice keeps the later edge, as the
+// span writer's edge table does [03 R-RAST-01 §1]. The edges that descend start
+// in chain order at non-decreasing rows, so the later edge owning a row is the
+// last one starting at or above it.
+func modelQuadLeft(y vec4, mm int, row float) (int, float, float) {
+	e := 3
+	yf := y.x
+	yt := y.w
+	if mm <= 2 && y.z > y.w && row >= y.w {
+		e = 2
+		yf = y.w
+		yt = y.z
+	}
+	if mm == 1 && y.y > y.z && row >= y.z {
+		e = 1
+		yf = y.z
+		yt = y.y
+	}
+	return e, yf, yt
+}
+
+// modelQuadRight is modelQuadLeft for the right chain, which steps towards
+// increasing indices over ring edges 0, 1 and 2.
+func modelQuadRight(y vec4, mm int, row float) (int, float, float) {
+	e := 0
+	yf := y.x
+	yt := y.y
+	if mm >= 2 && y.z > y.y && row >= y.y {
+		e = 1
+		yf = y.y
+		yt = y.z
+	}
+	if mm == 3 && y.w > y.z && row >= y.z {
+		e = 2
+		yf = y.z
+		yt = y.w
+	}
+	return e, yf, yt
+}
+
+// modelQuadStep decodes an edge's 16.16 slope, stored offset by 2^31.
+func modelQuadStep(t vec4) int {
+	return (int(modelQuadU16(t.r, t.g))-32768)*65536 + int(modelQuadU16(t.b, t.a))
+}
+
+// modelQuadStepX is the span writer's fixed-point edge walk at a row: the from
+// column promoted to 16.16 with the +65535 bias, advanced by the stored slope
+// once per row, so the row's first covered column is the ceiling of the edge
+// position [03 R-RAST-01 §1]. It is modelQuadEdgeX with the division made once
+// per quad on the CPU; the operands and the result are the same integers.
+func modelQuadStepX(xf float, step int, yf float, row float) float {
+	x := int(xf)*65536 + 65535 + step*(int(row)-int(yf))
+	return float(x / 65536)
+}
+
+// modelQuadPick is one of a key entry's four corner values.
+func modelQuadPick(v vec4, i int) float {
+	if i == 0 {
+		return v.x
+	}
+	if i == 1 {
+		return v.y
+	}
+	if i == 2 {
+		return v.z
+	}
+	return v.w
+}
+
+// modelQuadKey is modelQuadLanes' key, for the key pass: the two-chain mapping
+// of [03 R-RAST-01 §1] at one fragment from the quad's key entry, the chains'
+// edges chosen by comparing the row with the corner rows and each edge's slope
+// read once. Its value at every fragment is the key modelQuadLanes returns
+// where a shader reads the key alone, as the key pass and the reflection do;
+// that is what keeps the key plane where it was
+// (docs/DESIGN_GPU_RENDERER.md §11.2).
+//
+// The arithmetic keeps the shape of modelQuadLanes' walk because the shader
+// compiler rounds by shape: each chain starts from the top corner's key, its
+// first edge (which starts at that corner) updates it when the row is on it,
+// and a later edge overrides that. Written so, the compiler rounds the first
+// edge's product separately and fuses a later edge's interpolation into one
+// multiply-add, as it does in the walk; written straight, every edge fuses,
+// which moves some keys by a unit in the last place. A later edge's operands
+// are picked by index, so it shares no operand with the first edge's for the
+// compiler to merge into a third rounding.
+func modelQuadKey(q float, d vec2) float {
+	base := q*` + fmt.Sprint(modelQuadTexels) + `.0
+	y, mm := modelQuadRows(base)
+	row := floor(d.y)
+	col := floor(d.x)
+	a := modelQuadTexel(base + ` + fmt.Sprint(modelQuadKeyCornerTexel) + `.0)
+	b := modelQuadTexel(base + ` + fmt.Sprint(modelQuadKeyCornerTexel+1) + `.0)
+	k := vec4(modelQuadU16(a.r, a.g), modelQuadU16(a.b, a.a), modelQuadU16(b.r, b.g), modelQuadU16(b.b, b.a)) - vec4(32768.0)
+	top := k.x
+	if row < y.x || row >= modelQuadBottom(y, mm) {
+		// Neither chain owns the row: the walk leaves both at the top corner.
+		return top
+	}
+	f := modelQuadTexel(base + ` + fmt.Sprint(modelQuadKeyColumnTexel) + `.0)
+	g := modelQuadTexel(base + ` + fmt.Sprint(modelQuadKeyColumnTexel+1) + `.0)
+	xs := vec4(modelQuadU16(f.r, f.g), modelQuadU16(f.b, f.a), modelQuadU16(g.r, g.g), modelQuadU16(g.b, g.a))
+	le, lyf, lyt := modelQuadLeft(y, mm, row)
+	re, ryf, ryt := modelQuadRight(y, mm, row)
+	// The left chain walks edge e from corner e+1 to corner e, the right chain
+	// from corner e to corner e+1.
+	lf := le + 1
+	if lf == 4 {
+		lf = 0
+	}
+	lx := modelQuadStepX(modelQuadPick(xs, lf), modelQuadStep(modelQuadTexel(base+` + fmt.Sprint(modelQuadKeyStepTexel) + `.0+float(le))), lyf, row)
+	rx := modelQuadStepX(modelQuadPick(xs, re), modelQuadStep(modelQuadTexel(base+` + fmt.Sprint(modelQuadKeyStepTexel) + `.0+float(re))), ryf, row)
+	// Each chain's first edge runs from the top corner: to corner 3 on the
+	// left, to corner 1 on the right.
+	lk := top
+	if y.w > y.x && row >= y.x && row < y.w {
+		lk = top + (k.w-top)*((row-y.x)/(y.w-y.x))
+	}
+	if le < 3 {
+		la := modelQuadPick(k, lf)
+		lk = la + (modelQuadPick(k, le)-la)*((row-lyf)/(lyt-lyf))
+	}
+	rk := top
+	if y.y > y.x && row >= y.x && row < y.y {
+		rk = top + (k.y-top)*((row-y.x)/(y.y-y.x))
+	}
+	if re > 0 {
+		ra := modelQuadPick(k, re)
+		rk = ra + (modelQuadPick(k, re+1)-ra)*((row-ryf)/(ryt-ryf))
+	}
+	t := 0.0
+	if rx > lx {
+		t = clamp((col-lx)/(rx-lx), 0.0, 1.0)
+	}
+	return lk + (rk-lk)*t
 }
 `

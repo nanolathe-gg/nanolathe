@@ -558,7 +558,10 @@ func (s *modelRetainStore) finishCapture(d *modelDirectLane, g *drawlist.ModelGe
 	e := s.capture
 	s.capture = nil
 	src := d.verts[s.vertBase:]
-	if d.params.count >= modelDirectParamCap || d.noQuads || len(src) > schedRunVertexLimit/2 {
+	// A face the image refused a quad is packed linearly, which a replay
+	// with room would not reproduce; once no quad fits, one may have been
+	// refused, so the capture is abandoned.
+	if d.params.count+modelQuadSlots > modelDirectParamCap || d.noQuads || len(src) > schedRunVertexLimit/2 {
 		return
 	}
 	e.verts = append(e.verts[:0], src...)

@@ -125,6 +125,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		checkCombinedDistortionDevicePixels,
 		checkWreckHeatDevicePixels,
 		checkNanoDevicePixels,
+		checkModelQuadMapperDevicePixels,
+		checkModelOutlineDevicePixels,
 		checkModelDirectDevicePixels,
 		checkModelDirectFallbackCloak,
 		checkModelRetainDevicePixels,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -19,11 +20,13 @@ import (
 // effect, projectile or strip sprite, an explosion flash disc or ground halo —
 // appends a second quad to a batch this file owns. When the fog composite is
 // about to compile, or the world region closes without one, the batch is drawn
-// into a full-frame source plane, that plane is shrunk and blurred at a quarter
-// and an eighth of the frame, and the two blurred octaves are added back onto
-// the composite. Everything after that — the fog, the chrome, the cursor — is
-// drawn over the glow as it always was, so the glow never reaches the
-// interface and the black fog still hides it.
+// into a full-frame source plane, that plane is shrunk to a quarter of the
+// frame and blurred there into a near octave and, shrinking further as it
+// blurs, a far octave at an eighth, and the two octaves are added back onto
+// the composite: five render passes in all (resolveGlow). Everything after
+// that — the fog, the chrome, the cursor — is drawn over the glow as it always
+// was, so the glow never reaches the interface and the black fog still hides
+// it.
 //
 // What a source emits:
 //
@@ -80,9 +83,9 @@ const (
 	// octaves' weights, and 0 turns the layer off.
 	GlowStrengthDefault = 100
 	GlowStrengthMax     = 200
-	// glowTapCount is the number of taps on each side of the centre of the
-	// separable blur, and glowSigma its standard deviation in steps of the tap
-	// spacing the blur is drawn with.
+	// glowTapCount is the number of taps on each side of the centre of the near
+	// kernel, and glowSigma its standard deviation in steps of the tap spacing
+	// the kernel is drawn with.
 	glowTapCount = 4
 	glowSigma    = 2.0
 	// glowOctaveNear and glowOctaveFar are the two blurred octaves' shrink
@@ -95,12 +98,41 @@ const (
 	// surrounds — the beam, the sprite, the flash disc — is drawn at the frame's
 	// view scale (§16.3): a halo fixed in screen pixels is half as wide, relative
 	// to the units it comes from, at the 2x step as at 1x, and changes size under
-	// the wheel. The far octave is twice this, as it is twice the near octave's
-	// texel. At the native view scale this is the eight framebuffer pixels the
-	// layer was tuned at, so a 1x frame composes exactly as it did.
+	// the wheel. At the native view scale this is the eight framebuffer pixels
+	// the layer was tuned at, so the near octave composes as it did.
 	glowNearSigmaWorld = glowSigma * glowOctaveNear
+	// glowFarSigma is the far kernel's standard deviation in quarter-plane
+	// texels at the native view, 18.6 world pixels. The far octave was once the
+	// near octave shrunk by two and blurred again with the near kernel on its
+	// wider texel, which took three passes of its own. It is now a Gaussian over
+	// the quarter plane, read at every quarter texel and evaluated at the eighth
+	// plane's texels, so it shrinks as it blurs and rides the near octave's two
+	// blur passes. The value is fitted to the old chain's response to a point
+	// source: at the native view its spread (17.0 pixels) agrees within half a
+	// percent and no pixel of the response moves by more than one percent of its
+	// peak (§19.3).
+	glowFarSigma = 4.65
+	// glowFarCut is where the far kernel ends, in multiples of its sigma.
+	glowFarCut = 2.5
+	// glowFarReachMax is the most far-kernel taps on each side of the centre:
+	// the bound of the shader's loop, which Kage requires to be constant. Taps
+	// sit half a texel off the centre, so the loop reaches glowFarReachMax − ½
+	// texels. The widest kernel the camera asks for, at camera.ZoomMax, takes
+	// twenty-three.
+	glowFarReachMax = 24
+	// glowFarSigmaMin and glowFarSigmaMax bound the far kernel: below the minimum
+	// the two taps nearest the centre would lose their weight to the cut, and
+	// the maximum is the widest kernel the loop holds.
+	glowFarSigmaMin = 0.25
+	glowFarSigmaMax = glowFarReachMax / glowFarCut
 	// glowRunVertexLimit bounds one device draw, as the scheduler's runs are.
 	glowRunVertexLimit = schedRunVertexLimit
+)
+
+// The blur shader's op selector, in Custom3: which octave a quad blurs.
+const (
+	glowBlurNear = 0
+	glowBlurFar  = 1
 )
 
 // The glow source shader's op selector, in Custom3.
@@ -198,23 +230,55 @@ type glowLayer struct {
 	last  int
 	quads int
 
-	// source is the full-frame emission plane; half, quarter and eighth its
-	// shrunk octaves, quarterB and eighthB the blur ping-pong partners. The
-	// source is unmanaged so its texels never depend on an atlas placement
-	// (§13.12 "The defect this round exposed").
-	source                                   *ebiten.Image
-	half, quarter, quarterB, eighth, eighthB *ebiten.Image
-	w, h                                     int
+	// The planes, one per resolve pass (glowRegions has their layout). source
+	// is the full-frame emission plane and quarter its 4×4 shrink. across holds
+	// both octaves blurred along x: the near octave at quarter resolution, the
+	// far octave already shrunk to the eighth plane's columns. octaves holds
+	// both blurred along y as well, the far octave shrunk to the eighth plane's
+	// rows, inside a border of transparent texels. Each resolve pass draws into
+	// one of these four or into the composite, so each is one render pass. All
+	// four are unmanaged, so no atlas placement can put two of them on one
+	// texture or insert a copy between the passes (§13.12 "Page planes are
+	// unmanaged").
+	source, quarter, across, octaves *ebiten.Image
+	w, h                             int
+	regions                          glowRegions
 
-	sourceShader, blurShader *ebiten.Shader
-	shaderErr                error
-	compiled                 bool
+	sourceShader, shrinkShader, blurShader, compositeShader *ebiten.Shader
+	shaderErr                                               error
+	compiled                                                bool
 
 	shaderOpts ebiten.DrawTrianglesShaderOptions
-	imageOpts  ebiten.DrawImageOptions
-	quadVerts  [4]ebiten.Vertex
-	quadIdx    [6]uint32
+	// resolveVerts and resolveIdx are the resolve passes' quads: at most two a
+	// pass, one per octave.
+	resolveVerts [8]ebiten.Vertex
+	resolveIdx   [12]uint32
 }
+
+// glowRegions is the resolve planes' layout for one frame size. The near
+// octave is qw×qh texels, a quarter of the frame, and the far octave ew×eh, an
+// eighth, each rounding up.
+//
+//   - quarter is exactly the near octave's qw×qh.
+//   - across is (qw+ew)×qh: the near octave at the origin and the far
+//     octave's eighth-resolution columns at (qw, 0), still at quarter rows.
+//   - octaves is (qw+ew+3)×(qh+2): the near octave at (1, 1) and the far
+//     octave at (qw+2, 1), each inside a border of transparent texels, which
+//     is where the composite's linear taps land when they step off an octave.
+type glowRegions struct {
+	qw, qh, ew, eh int
+}
+
+// glowRegionsFor lays out the planes of a w×h frame.
+func glowRegionsFor(w, h int) glowRegions {
+	return glowRegions{qw: (w + 3) / 4, qh: (h + 3) / 4, ew: (w + 7) / 8, eh: (h + 7) / 8}
+}
+
+// farX is the far octave's first column in the octave plane.
+func (g glowRegions) farX() int { return g.qw + 2 }
+
+// octaveSize is the octave plane's size.
+func (g glowRegions) octaveSize() (w, h int) { return g.farX() + g.ew + 1, g.qh + 2 }
 
 // SetGlow switches the Enhanced glow layer (docs/DESIGN_GPU_RENDERER.md §19).
 // The switch is read as the frame replays, so it takes effect on the next
@@ -467,8 +531,7 @@ func (r *Renderer) glowHalo(cx0, cy0, cx1, cy1 int, high, lx0, ly0, lx1, ly1, r2
 		})
 }
 
-// ensureGlowPlanes sizes the planes to the frame. The source plane is the
-// frame's size; each octave halves the one above, rounding up.
+// ensurePlanes sizes the planes to the frame (glowRegions).
 func (g *glowLayer) ensurePlanes(w, h int) bool {
 	if w <= 0 || h <= 0 {
 		return false
@@ -476,21 +539,39 @@ func (g *glowLayer) ensurePlanes(w, h int) bool {
 	if g.source != nil && g.w == w && g.h == h {
 		return true
 	}
+	for _, img := range []*ebiten.Image{g.source, g.quarter, g.across, g.octaves} {
+		if img != nil {
+			img.Deallocate()
+		}
+	}
 	g.w, g.h = w, h
-	g.source = ebiten.NewImageWithOptions(image.Rect(0, 0, w, h), &ebiten.NewImageOptions{Unmanaged: true})
-	g.half = ebiten.NewImage((w+1)/2, (h+1)/2)
-	g.quarter = ebiten.NewImage((w+3)/4, (h+3)/4)
-	g.quarterB = ebiten.NewImage((w+3)/4, (h+3)/4)
-	g.eighth = ebiten.NewImage((w+7)/8, (h+7)/8)
-	g.eighthB = ebiten.NewImage((w+7)/8, (h+7)/8)
+	q := glowRegionsFor(w, h)
+	g.regions = q
+	ow, oh := q.octaveSize()
+	unmanaged := &ebiten.NewImageOptions{Unmanaged: true}
+	g.source = ebiten.NewImageWithOptions(image.Rect(0, 0, w, h), unmanaged)
+	g.quarter = ebiten.NewImageWithOptions(image.Rect(0, 0, q.qw, q.qh), unmanaged)
+	g.across = ebiten.NewImageWithOptions(image.Rect(0, 0, q.qw+q.ew, q.qh), unmanaged)
+	g.octaves = ebiten.NewImageWithOptions(image.Rect(0, 0, ow, oh), unmanaged)
 	return true
 }
 
 // resolveGlow draws the batch, blurs it and adds it onto the composite
-// (§19). It is called before the fog composite compiles and when the world
+// (§19.3). It is called before the fog composite compiles and when the world
 // region closes, and runs at most once per frame. The scheduler is submitted
 // first, so the composite the light sources read and the surface the glow is
 // added to are the frame as replayed so far.
+//
+// It is five render passes, each drawing into one image: the emission plane,
+// its quarter shrink, both octaves blurred along x, both blurred along y, and
+// the composite. Every pass after the emission serves both octaves at once —
+// the far octave shrinks to the eighth plane inside the two blur passes rather
+// than in passes of its own — because a render pass, not its fill, is the
+// unit the Metal driver stalls on (§11.5, §22.1). Blurring both axes in one
+// pass would save one more, but it takes 81 taps a quarter texel against the
+// separable pair's 18, and a four-pass prototype built that way cost 3.3 times
+// the old resolve's GPU time on the device, so the blur stays separable
+// (§19.3).
 func (r *Renderer) resolveGlow() {
 	if r == nil || r.glow.resolved {
 		return
@@ -502,12 +583,9 @@ func (r *Renderer) resolveGlow() {
 	}
 	if !g.compiled {
 		g.compiled = true
-		g.sourceShader, g.shaderErr = ebiten.NewShader([]byte(glowSourceShaderSource()))
-		if g.shaderErr == nil {
-			g.blurShader, g.shaderErr = ebiten.NewShader([]byte(glowBlurShaderSource()))
-		}
+		g.shaderErr = g.compileShaders()
 	}
-	if g.sourceShader == nil || g.blurShader == nil {
+	if g.shaderErr != nil {
 		return
 	}
 	r.submitSchedule()
@@ -515,6 +593,7 @@ func (r *Renderer) resolveGlow() {
 		return
 	}
 	r.modelStats.GlowQuads += g.quads
+	passes := r.modelStats.Passes
 
 	// 1. The emission plane: every source quad, added together.
 	g.source.Clear()
@@ -538,43 +617,53 @@ func (r *Renderer) resolveGlow() {
 		r.frameDraws++
 	}
 
-	// 2. Shrink to the two octaves and blur each separably. The tap spacing is
-	// what carries the halo's world-pixel size onto the octaves: the near
-	// octave's kernel has to reach glowNearSigmaWorld world pixels, which is
-	// that many framebuffer pixels times the view scale, and one near texel is
-	// glowOctaveNear framebuffer pixels. The far octave takes the same spacing
-	// on a texel twice as wide, so it stays twice the near halo as it was. At
-	// the native view scale the spacing is exactly one texel, which is the
-	// kernel the layer was tuned with.
-	step := glowBlurStep(g.viewScale)
-	r.glowShrink(g.half, g.source)
-	r.glowShrink(g.quarter, g.half)
-	r.glowBlur(g.quarterB, g.quarter, step, 0)
-	r.glowBlur(g.quarter, g.quarterB, 0, step)
-	r.glowShrink(g.eighth, g.quarter)
-	r.glowBlur(g.eighthB, g.eighth, step, 0)
-	r.glowBlur(g.eighth, g.eighthB, 0, step)
-
-	// 3. Add the octaves back, magnified with linear filtering so the blur's
-	// texels do not show as blocks.
+	// 2. Shrink the emission plane to the quarter plane.
+	// 3–4. Blur both octaves along x, then along y. The view scale reaches the
+	// halo here and only here, through the near kernel's tap spacing and the
+	// far kernel's width (glowBlurStep, glowFarKernelSigma).
+	// 5. Add both octaves onto the composite in one draw.
+	step, farSigma := glowBlurStep(g.viewScale), glowFarKernelSigma(g.viewScale)
+	r.glowShrink()
+	r.glowBlurAcross(step, farSigma)
+	r.glowBlurDown(step, farSigma)
 	near, far := g.octaveWeights()
-	r.glowAdd(r.surfaces[0], g.quarter, glowOctaveNear, near)
-	r.glowAdd(r.surfaces[0], g.eighth, glowOctaveFar, far)
-	r.modelStats.GlowPasses += 9
+	r.glowComposite(near, far)
+	r.modelStats.GlowPasses += r.modelStats.Passes - passes
 	g.dropRuns()
 }
 
-// glowBlurStep is the separable blur's tap spacing, in texels of the octave
-// being blurred, for a frame drawn at viewScale screen pixels per world pixel.
-// It is the one place the halo's world-pixel size becomes screen pixels:
+// compileShaders compiles the four resolve shaders, once.
+func (g *glowLayer) compileShaders() error {
+	for _, s := range []struct {
+		dst *(*ebiten.Shader)
+		src string
+	}{
+		{&g.sourceShader, glowSourceShaderSource()},
+		{&g.shrinkShader, glowShrinkShaderSource()},
+		{&g.blurShader, glowBlurShaderSource()},
+		{&g.compositeShader, glowCompositeShaderSource()},
+	} {
+		shader, err := ebiten.NewShader([]byte(s.src))
+		if err != nil {
+			return err
+		}
+		*s.dst = shader
+	}
+	return nil
+}
+
+// glowBlurStep is the near kernel's tap spacing, in texels of the quarter
+// plane, for a frame drawn at viewScale screen pixels per world pixel. It is
+// the one place the halo's world-pixel size becomes screen pixels:
 // glowSigma taps of spacing t cover t × glowOctaveNear × glowSigma framebuffer
 // pixels of the near octave, and that has to be glowNearSigmaWorld × viewScale.
-// A zero or negative scale is the native view.
+// The far kernel's width scales by the same factor (glowFarKernelSigma). A
+// zero or negative scale is the native view.
 //
-// Fetches are nearest, so a spacing below one texel folds taps onto the same
-// texel — the kernel narrows toward the octave's own resolution rather than
-// aliasing, which is the right failure at a zoomed-out view where the halo is
-// already finer than the octave can hold.
+// Near fetches are nearest, so a spacing below one texel folds taps onto the
+// same texel — the kernel narrows toward the octave's own resolution rather
+// than aliasing, which is the right failure at a zoomed-out view where the
+// halo is already finer than the octave can hold.
 func glowBlurStep(viewScale float32) float32 {
 	if viewScale <= 0 {
 		viewScale = 1
@@ -582,39 +671,107 @@ func glowBlurStep(viewScale float32) float32 {
 	return viewScale * glowNearSigmaWorld / (glowSigma * glowOctaveNear)
 }
 
-// glowShrink halves src into dst with linear filtering: each destination
-// texel is the mean of the four source texels under it.
-func (r *Renderer) glowShrink(dst, src *ebiten.Image) {
-	op := &r.glow.imageOpts
-	op.GeoM.Reset()
-	op.GeoM.Scale(0.5, 0.5)
-	op.ColorScale.Reset()
-	op.Filter = ebiten.FilterLinear
-	op.Blend = ebiten.BlendCopy
+// glowFarKernelSigma is the far kernel's standard deviation, in texels of the
+// quarter plane, at viewScale: glowFarSigma at the native view, scaled with
+// the near kernel's spacing so the far halo keeps its world-pixel size too.
+// It is held between glowFarSigmaMin and glowFarSigmaMax, the bounds of the
+// shader's loop, and no view scale the camera allows reaches either.
+func glowFarKernelSigma(viewScale float32) float32 {
+	return min(max(glowFarSigma*glowBlurStep(viewScale), glowFarSigmaMin), glowFarSigmaMax)
+}
+
+// glowQuad fills quad i of the resolve's geometry: the destination rectangle
+// (x0, y0)–(x1, y1), whose top-left corner samples the source at (sx, sy) and
+// which advances sx1 source texels along x, and sy1 along y, per destination
+// pixel, carrying col and custom unchanged to every fragment.
+func (g *glowLayer) glowQuad(i int, x0, y0, x1, y1, sx, sy, sx1, sy1 float32, col, custom [4]float32) {
+	xs := [4]float32{x0, x1, x0, x1}
+	ys := [4]float32{y0, y0, y1, y1}
+	for c := 0; c < 4; c++ {
+		g.resolveVerts[4*i+c] = ebiten.Vertex{
+			DstX: xs[c], DstY: ys[c], SrcX: sx + (xs[c]-x0)*sx1, SrcY: sy + (ys[c]-y0)*sy1,
+			ColorR: col[0], ColorG: col[1], ColorB: col[2], ColorA: col[3],
+			Custom0: custom[0], Custom1: custom[1], Custom2: custom[2], Custom3: custom[3],
+		}
+	}
+	b := uint32(4 * i)
+	idx := [6]uint32{b, b + 1, b + 2, b + 1, b + 2, b + 3}
+	copy(g.resolveIdx[6*i:6*i+6], idx[:])
+}
+
+// glowDraw draws the first quads quads of the resolve's geometry from src into
+// dst: one device draw, and one render pass when dst is not the destination
+// already open.
+func (r *Renderer) glowDraw(dst, src *ebiten.Image, shader *ebiten.Shader, quads int, blend ebiten.Blend) {
+	g := &r.glow
+	fill := r.placeholderImage()
+	g.shaderOpts.Images = [4]*ebiten.Image{src, fill, fill, fill}
+	g.shaderOpts.Blend = blend
 	r.beginPass(dst)
-	dst.Clear()
-	dst.DrawImage(src, op)
+	r.recordSubmission(4*quads, 6*quads)
+	dst.DrawTrianglesShader32(g.resolveVerts[:4*quads], g.resolveIdx[:6*quads], shader, &g.shaderOpts)
 	r.frameDraws++
 }
 
-// glowBlur draws src into dst through the separable Gaussian along (stepX,
-// stepY), in texels. dst and src are the same size.
-func (r *Renderer) glowBlur(dst, src *ebiten.Image, stepX, stepY float32) {
+// glowShrink draws the quarter plane from the emission plane: each texel the
+// mean of the 4×4 block under it, which is the two 2×2 halvings the layer was
+// tuned with in one pass. A fragment's source position is its block's centre.
+func (r *Renderer) glowShrink() {
 	g := &r.glow
-	w, h := float32(dst.Bounds().Dx()), float32(dst.Bounds().Dy())
-	corners := [4][2]float32{{0, 0}, {w, 0}, {0, h}, {w, h}}
-	for i, c := range corners {
-		g.quadVerts[i] = ebiten.Vertex{DstX: c[0], DstY: c[1], SrcX: c[0], SrcY: c[1],
-			ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1, Custom0: stepX, Custom1: stepY}
-	}
-	g.quadIdx = [6]uint32{0, 1, 2, 1, 2, 3}
-	fill := r.placeholderImage()
-	g.shaderOpts.Images = [4]*ebiten.Image{src, fill, fill, fill}
-	g.shaderOpts.Blend = ebiten.BlendCopy
-	r.beginPass(dst)
-	r.recordSubmission(4, 6)
-	dst.DrawTrianglesShader32(g.quadVerts[:], g.quadIdx[:], g.blurShader, &g.shaderOpts)
-	r.frameDraws++
+	q := g.regions
+	g.glowQuad(0, 0, 0, float32(q.qw), float32(q.qh), 0, 0, glowOctaveNear, glowOctaveNear,
+		[4]float32{}, [4]float32{})
+	r.glowDraw(g.quarter, g.source, g.shrinkShader, 1, ebiten.BlendCopy)
+}
+
+// glowBlurAcross blurs the quarter plane along x into the across plane. The
+// near octave takes the nine-tap kernel of glowWeights at tap spacing step,
+// the kernel the layer was tuned with. The far octave's fragments fall on
+// every other quarter column — at the corner between the two quarter texels an
+// eighth texel covers — and read every quarter texel within reach through a
+// Gaussian of farSigma, so the far octave shrinks to the eighth plane's
+// columns as it blurs and needs no plane or pass of its own. Reading every
+// texel rather than every step-th keeps a thin source from combing the halo
+// when the view scale spreads the taps.
+func (r *Renderer) glowBlurAcross(step, farSigma float32) {
+	g := &r.glow
+	q := g.regions
+	qw, qh, ew := float32(q.qw), float32(q.qh), float32(q.ew)
+	g.glowQuad(0, 0, 0, qw, qh, 0, 0, 1, 1,
+		[4]float32{}, [4]float32{step, 0, 0, glowBlurNear})
+	g.glowQuad(1, qw, 0, qw+ew, qh, 0, 0, glowOctaveFar/glowOctaveNear, 1,
+		[4]float32{}, [4]float32{1, 0, farSigma, glowBlurFar})
+	r.glowDraw(g.across, g.quarter, g.blurShader, 2, ebiten.BlendCopy)
+}
+
+// glowBlurDown blurs the across plane along y into the octave plane, the far
+// octave shrinking to the eighth plane's rows as it did to its columns. The
+// octave plane is cleared first, within the same pass, so the border around
+// each octave is transparent.
+func (r *Renderer) glowBlurDown(step, farSigma float32) {
+	g := &r.glow
+	q := g.regions
+	qw, qh, ew, eh, fx := float32(q.qw), float32(q.qh), float32(q.ew), float32(q.eh), float32(q.farX())
+	g.glowQuad(0, 1, 1, 1+qw, 1+qh, 0, 0, 1, 1,
+		[4]float32{}, [4]float32{0, step, 0, glowBlurNear})
+	g.glowQuad(1, fx, 1, fx+ew, 1+eh, qw, 0, 1, glowOctaveFar/glowOctaveNear,
+		[4]float32{}, [4]float32{0, 1, farSigma, glowBlurFar})
+	g.octaves.Clear()
+	r.glowDraw(g.octaves, g.across, g.blurShader, 2, ebiten.BlendCopy)
+}
+
+// glowComposite adds both blurred octaves, magnified with linear filtering and
+// weighted by near and far, onto the composite in one draw. A screen blend
+// composes associatively — 1 − out = (1 − dst)(1 − n)(1 − f) — so screening
+// the two octaves together in the shader and once onto the composite is the
+// two screen blends the layer used to draw, without the rounding between them.
+// A fragment's source position is its own position in near-octave texels.
+func (r *Renderer) glowComposite(near, far float32) {
+	g := &r.glow
+	w, h := float32(r.w), float32(r.h)
+	g.glowQuad(0, 0, 0, w, h, 0, 0, 1/glowOctaveNear, 1/glowOctaveNear,
+		[4]float32{near, far, 0, 0}, [4]float32{float32(g.regions.farX()), 0, 0, 0})
+	r.glowDraw(r.surfaces[0], g.octaves, g.compositeShader, 1, blendScreen)
 }
 
 // blendScreen is the composite's blend: out = src + dst × (1 − src), which adds
@@ -627,21 +784,6 @@ var blendScreen = ebiten.Blend{
 	BlendFactorDestinationAlpha: ebiten.BlendFactorOne,
 	BlendOperationRGB:           ebiten.BlendOperationAdd,
 	BlendOperationAlpha:         ebiten.BlendOperationAdd,
-}
-
-// glowAdd adds src, magnified by scale with linear filtering and weighted by
-// weight, onto dst.
-func (r *Renderer) glowAdd(dst, src *ebiten.Image, scale float64, weight float32) {
-	op := &r.glow.imageOpts
-	op.GeoM.Reset()
-	op.GeoM.Scale(scale, scale)
-	op.ColorScale.Reset()
-	op.ColorScale.Scale(weight, weight, weight, 1)
-	op.Filter = ebiten.FilterLinear
-	op.Blend = blendScreen
-	r.beginPass(dst)
-	dst.DrawImage(src, op)
-	r.frameDraws++
 }
 
 // glowSourceShaderSource is the emission pass. Source 0 is the scene atlas
@@ -701,26 +843,120 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 `
 }
 
-// glowBlurShaderSource is one direction of the separable Gaussian. The step
-// vector rides Custom0/1 in texels; taps outside the source read transparent
-// black, which is the plane's own border.
-func glowBlurShaderSource() string {
-	weights := glowWeights()
-	src := `//kage:unit pixels
+// glowShrinkShaderSource draws the quarter plane: the mean of the block of
+// emission texels around the fragment's source position, which is its
+// block's centre. Taps outside the emission plane read transparent black, the
+// frame's own border.
+func glowShrinkShaderSource() string {
+	n := int(glowOctaveNear)
+	var b strings.Builder
+	b.WriteString(`//kage:unit pixels
 
 package main
 
 func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
-	step := custom.xy
-	sum := imageSrc0At(srcPos) * ` + fmt.Sprintf("%.6f", weights[0]) + `
-`
-	for i := 1; i <= glowTapCount; i++ {
-		src += fmt.Sprintf("\tsum += (imageSrc0At(srcPos+step*%d.0) + imageSrc0At(srcPos-step*%d.0)) * %.6f\n", i, i, weights[i])
+	sum := vec4(0.0)
+`)
+	half := float64(n-1) / 2
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			fmt.Fprintf(&b, "\tsum += imageSrc0At(srcPos + vec2(%.1f, %.1f))\n", float64(x)-half, float64(y)-half)
+		}
 	}
-	src += `	return sum
+	fmt.Fprintf(&b, "\treturn sum / %d.0\n}\n", n*n)
+	return b.String()
 }
-`
-	return src
+
+// glowBlurShaderSource is one direction of both octaves' blur. Custom3
+// selects the octave. The near octave's step vector rides Custom0/1 in texels,
+// as the layer's separable blur always took it. The far octave's unit
+// direction rides Custom0/1 and its sigma Custom2; its fragment's source
+// position is the corner the eighth texel's centre falls on. Taps outside the
+// source read transparent black, the plane's own border: each octave's taps
+// run along its own row or column of the source, so they meet no other
+// octave's texels.
+func glowBlurShaderSource() string {
+	weights := glowWeights()
+	var b strings.Builder
+	fmt.Fprintf(&b, `//kage:unit pixels
+
+package main
+
+// farCut is where the far kernel ends, in multiples of its sigma.
+const farCut = %.4f
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
+	if custom.w < %d.5 {
+		step := custom.xy
+		sum := imageSrc0At(srcPos) * %.6f
+`, glowFarCut, glowBlurNear, weights[0])
+	for i := 1; i <= glowTapCount; i++ {
+		fmt.Fprintf(&b, "\t\tsum += (imageSrc0At(srcPos+step*%d.0) + imageSrc0At(srcPos-step*%d.0)) * %.6f\n", i, i, weights[i])
+	}
+	fmt.Fprintf(&b, `		return sum
+	}
+	// The far octave: a Gaussian read at every texel within farCut sigmas, the
+	// taps half a texel off the corner. The Gaussian's value at the cut is
+	// subtracted, so the weights reach zero there and a kernel whose sigma
+	// eases with the zoom changes smoothly rather than gaining taps at once.
+	dir := custom.xy
+	k := 0.5 / (custom.z * custom.z)
+	reach := farCut * custom.z
+	tail := exp(-0.5 * farCut * farCut)
+	sum := vec4(0.0)
+	norm := 0.0
+	for i := 0; i < %d; i++ {
+		d := float(i) - %.1f
+		if abs(d) > reach {
+			continue
+		}
+		w := max(exp(-d*d*k)-tail, 0.0)
+		norm += w
+		sum += imageSrc0At(srcPos+dir*d) * w
+	}
+	return sum / norm
+}
+`, 2*glowFarReachMax, float64(glowFarReachMax)-0.5)
+	return b.String()
+}
+
+// glowCompositeShaderSource adds both blurred octaves onto the composite. The
+// octave plane is source 0, the colour lanes carry the near and far weights
+// and Custom0 the far octave's first column. Each octave is magnified with
+// linear filtering, weighted and clamped as the premultiplied colour a
+// weighted draw hands the blend, and the two are screened together; the
+// pass's blendScreen screens the result onto the composite.
+func glowCompositeShaderSource() string {
+	return fmt.Sprintf(`//kage:unit pixels
+
+package main
+
+// texel is the octave plane's texel centred at c, relative to its origin. The
+// octaves sit inside a border of transparent texels, so the linear taps below
+// never leave the plane and read no other octave.
+func texel(c vec2) vec4 {
+	return imageSrc0UnsafeAt(imageSrc0Origin() + c)
+}
+
+// bilinear samples the octave plane at p with linear filtering, texel centres
+// at half-integers, as a magnified DrawImage samples its source.
+func bilinear(p vec2) vec4 {
+	q := p - 0.5
+	f := fract(q)
+	c := floor(q) + 0.5
+	top := mix(texel(c), texel(c+vec2(1.0, 0.0)), f.x)
+	bottom := mix(texel(c+vec2(0.0, 1.0)), texel(c+vec2(1.0, 1.0)), f.x)
+	return mix(top, bottom, f.y)
+}
+
+func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
+	// p is the fragment in near-octave texels; a far texel is %[1]s of them.
+	p := srcPos - imageSrc0Origin()
+	n := clamp(bilinear(p+1.0).rgb*color.r, 0.0, 1.0)
+	f := clamp(bilinear(p/%[1]s+vec2(custom.x, 1.0)).rgb*color.g, 0.0, 1.0)
+	return vec4(n+f-n*f, 1.0)
+}
+`, fmt.Sprintf("%.1f", glowOctaveFar/glowOctaveNear))
 }
 
 // glowWeights is the normalized one-sided Gaussian: index 0 the centre, then

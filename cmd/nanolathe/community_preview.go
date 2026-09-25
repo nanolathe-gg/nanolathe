@@ -30,7 +30,7 @@ func (b *battleSession) drawCommunityBuildPreview(c *client.Client) {
 		return
 	}
 	style := client.CommunityPreviewStyle(b.hostPreferences().NanoframePreview)
-	if style != client.CommunityPreviewFull && style != client.CommunityPreviewWireframe {
+	if style != client.CommunityPreviewPulse && style != client.CommunityPreviewFull && style != client.CommunityPreviewWireframe {
 		return
 	}
 	if b.cat == nil {

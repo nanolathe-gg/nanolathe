@@ -52,6 +52,13 @@ type ModelStats struct {
 	// every page, and the pages used.
 	DirectSubjects, DirectShadows, DirectFaces, DirectCulled, DirectOverflow, DirectPasses int
 	DirectAtlasRows, DirectPages                                                           int
+	// DirectOutlineRings is the construction outline rings drawn as one device
+	// primitive each, DirectOutlineTexels the 2× texels those primitives
+	// covered, and DirectOutlineWalked the rings whose endpoints the CPU
+	// walked instead — five or more corners, a key the device cannot make
+	// exact, or no room in the parameter image (model_outline.go). A carried
+	// child's solo image counts its rings again.
+	DirectOutlineRings, DirectOutlineTexels, DirectOutlineWalked int
 	// DirectCargoImages is the carried children composed a second time in a
 	// region of their own, because their shadow is cut from the child's own
 	// finished image and the group region holds the carrier's texels too

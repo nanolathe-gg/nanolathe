@@ -472,7 +472,7 @@ type Presentation struct {
 	BuildRotateKey       string     `json:"buildRotateKey"`
 	ClickSnapOverrideKey string     `json:"clickSnapOverrideKey"`
 	BuildRotationOverlay int        `json:"buildRotationOverlay"`
-	NanoframePreview     int        `json:"nanoframePreview"`
+	NanoframePreview     int        `json:"nanoframePreview"` // 0 pulse, 1 full, 2 wire, 3 off (DESIGN_GPU_RENDERER §37).
 	QueuedOrderDrag      int        `json:"queuedOrderDrag"`
 	StrategicIconConfig  string     `json:"strategicIconConfig"`
 	TeamColorNanolathe   int        `json:"teamColorNanolathe"`
@@ -576,7 +576,7 @@ func DefaultPresentation() Presentation {
 // refresh choice (zero) and arbitrary positive presentation caps. The effect
 // switches are booleans, so only a negative value is repaired.
 func (p *Presentation) Normalize() {
-	if p.NanoframePreview < 0 || p.NanoframePreview > 2 {
+	if p.NanoframePreview < 0 || p.NanoframePreview > 3 {
 		p.NanoframePreview = 0
 	}
 	if p.MexSnapRadius < 0 {
