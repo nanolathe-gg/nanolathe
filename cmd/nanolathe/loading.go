@@ -234,19 +234,59 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	if g == nil || g.cs == nil || g.cs.fs == nil {
 		return fmt.Errorf("nanolathe: retail save load requires mounted content")
 	}
+	// A Nanolathe sidecar records the match selection the bank was written
+	// under; a save without one loads exactly as before
+	// (docs/DESIGN_MODS_MUTATORS.md §7.3).
+	sidecar, hasSidecar, err := save.ReadSidecar(path)
+	if err != nil {
+		return err
+	}
+	var selection sidecarSelection
+	var modPlan sidecarModPlan
+	if hasSidecar {
+		if modPlan, err = g.planSidecarMod(sidecar); err != nil {
+			return err
+		}
+		if selection, err = resolveSidecarSelection(sidecar); err != nil {
+			return err
+		}
+		if modPlan.switchTo != "" {
+			return g.switchModForLoad(path, modPlan, selection)
+		}
+	}
 	sim, crt := seedsFor(g.opts)
 	// Strict sizes a restored skirmish from the configured limit [05 R-SHARE-01 §7].
 	// Modern uses the saved limit when available (DESIGN_SESSIONS_AI_SAVE
 	// "Modern save unit limits").
-	loaded, err := session.LoadRetailSavePath(path, session.RetailLoadDeps{
+	deps := session.RetailLoadDeps{
 		BuilderOptions: sessionBuilderOptions(g.builderOptions),
 		FS:             g.cs.fs, ContentLimits: g.cs.limits, CommunitySources: communitySources(g.opts, g.cs), SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit, Gameplay: g.gameplay,
-	})
+	}
+	if hasSidecar {
+		// The recorded rule set, Community sources and entry table, unit
+		// limit and mutators replace the host's (§7.3 steps 3–6). The
+		// configured word is set before staging, so Strict sizes its pool
+		// from it exactly as it would from a configured limit.
+		deps.Gameplay, deps.CommunitySources, deps.Mutators = selection.gameplay, selection.sources, selection.mutators
+		deps.EntryCommunity = &selection.entry.Entry
+		deps.UnitLimit = sidecar.UnitLimit
+	}
+	loaded, err := session.LoadRetailSavePath(path, deps)
 	if err != nil {
 		return err
 	}
 	if loaded.Route == session.RetailLoadRouteCampaignContinuation {
-		return g.applyRetailContinuation(loaded.Continuation)
+		if err := g.applyRetailContinuation(loaded.Continuation); err != nil {
+			return err
+		}
+		// A continuation starts the next mission fresh, so what it takes
+		// from its sidecar is the selection that mission is entered under:
+		// the mutators, the rule set and the unit limit.
+		if hasSidecar {
+			g.setup.UnitLimit = sidecar.UnitLimit
+			g.selectFromSidecar(selection, modPlan.selection)
+		}
+		return nil
 	}
 	if loaded.Battle == nil || loaded.Battle.Session == nil || loaded.Battle.Image == nil {
 		return fmt.Errorf("nanolathe: retail save load returned no battle candidate")
@@ -282,6 +322,14 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	// preparation [08 R-SESS-01 §9]. Pool sizing is already complete: Strict
 	// used the pre-load setting; Modern selected the saved skirmish layout
 	// (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits").
+	if hasSidecar {
+		g.setup.UnitLimit = sidecar.UnitLimit
+		// A different base install or different mod bytes produce another
+		// catalog; the game still loads, with a warning (§7.3 step 7, P8).
+		if sidecar.Catalog != "" && sess.Catalog != nil && sess.Catalog.Hash != sidecar.Catalog {
+			selection.warnings = append(selection.warnings, "This game was saved with different content and may not play the same")
+		}
+	}
 	g.applyRestoredUnitLimit(loaded.Battle.Image)
 	// `LOADGAME`'s `LOAD` reaches the battle through the loading transition, so
 	// the restored battle gets the same second-half resize a fresh one does:
@@ -294,9 +342,13 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		g.installCampaignSelection(*campaign)
 	}
 	g.importedRetailBattle = true
+	if hasSidecar {
+		g.selectFromSidecar(selection, modPlan.selection)
+	}
 	g.commitBattleCandidate(battle)
 	clPtr.PrepareBattlePresentation()
 	battle.beginBattleArrival(g.opts, clPtr, true)
+	g.postLoadWarnings(selection.warnings)
 	return nil
 }
 

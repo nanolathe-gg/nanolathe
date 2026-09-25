@@ -274,25 +274,25 @@ extension-specific migration hook; do not assume it cancels or converts work.
 
 ## 6. Save interaction
 
-A save records **no rule-set name**. The retail bank's box vocabulary is
-fixed and Nanolathe adds no metadata area of its own, so there is nowhere to
-store `RuleSet.Name` without inventing a box, and this design does not change
-retail save bytes. The gameplay word lives in the settings file, not in the
-save.
+The retail bank records **no rule-set name**; its box vocabulary is fixed and
+this design does not change retail save bytes. Nanolathe records the name in
+a sidecar file beside the bank instead
+([DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar)),
+together with the Community sources, the battle-entry table, the unit limit,
+the mod and the mutators.
 
-Consequently **a loaded game runs under the session's current rule set.** The
+**A save with a sidecar restores its own rule set.** The load binds the
+recorded name during staging, stages with the recorded Community sources and
+entry table, and makes the recorded set the host's selection, so the options
+control, a restart and the next battle agree with the loaded game. A recorded
+name this build cannot select (a registered set that is not linked) loads
+under its recorded base, with a warning on the battle message line.
+
+**A save without a sidecar** — every retail save and every Nanolathe save
+written before the sidecar — runs under the session's current rule set. The
 load path carries the caller's mode word, binds the matching set during
-composition, and the restored battle continues under it. The code site
-carries a `TODO(question)` naming what is missing: a decision on a
-Nanolathe-side save metadata area — a sidecar file, or an agreed additional
-box — which is a save-format question rather than a retail one.
-
-**Planned change.** [DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar)
-settles that question with a Nanolathe sidecar file beside the bank. The
-sidecar records the bound set, the Community sources, the unit limit, the mod
-and the mutators, and a load restores them. Until that design is implemented,
-this section describes the code. A save without a sidecar keeps this
-behaviour afterwards.
+composition, and the restored battle continues under it. Nothing is inferred
+from the loaded content.
 
 A future extension that needs persistent identity or private state must first
 settle the metadata format, versioning, missing-set behavior and restoration
@@ -432,9 +432,9 @@ Two consequences are worth stating because they are observable:
   or settings-file choice.
 - Headless and simulation-cost reports include `rules` for the bound set
   name; session debug captures also include `rules`. The headless report
-  exposes the session base separately as `gameplay`. A retail save still
-  carries no rule-set name (§6). Reports identify a run's selection but do not
-  make loading a save restore that selection.
+  exposes the session base separately as `gameplay`. A retail bank still
+  carries no rule-set name; the Nanolathe sidecar beside it does, and a load
+  restores that selection (§6).
 
 ## 9. Extending the existing mechanism
 

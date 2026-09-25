@@ -1514,6 +1514,20 @@ random-draw count `[08 R-AI-01 §3]`.
   policy, not an established retail empty-yard default; retail may read beyond
   that text `[fmt fbi]` `[08 R-AI-03 §2]`.
 
+* **Every save has a Nanolathe sidecar.** Beside `SAVEGAME/<name>.SAV` the
+  shell writes `<name>.SAV.nanolathe.json`, recording the mod, content
+  profile, bound rule set, Community sources and entry table, configured unit
+  limit and mutators the battle ran under; the bank's bytes are unchanged and
+  the enumerator never lists the sidecar. A load that finds one restores
+  under that selection instead of the host's: the recorded rule set is bound
+  at staging, the recorded entry table replaces a resolved one
+  (`RetailLoadDeps.EntryCommunity`), the configured unit-limit word is set to
+  the recorded one before the Strict pool is sized, and the mutators are
+  applied to the restore clone. The Modern saved-limit policy below is asked
+  exactly as before; the configured word already equals the saved limit. A
+  save without a sidecar loads as retail does. The contract, including mod
+  switching and warnings, is owned by
+  [DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar).
 * **Close the save dialog after a successful write.** This user-requested host
   UI policy dismisses the save dialog after the writer returns success, for
   both battle and campaign-continuation saves. Empty names and failed writes

@@ -26,7 +26,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md) | the gameplay rule seams, how a Modern or Strict 3.1 rule set is bound, and what it may cost |
 | [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
 | [DESIGN_COMMUNITY_PATCH](DESIGN_COMMUNITY_PATCH.md) | the Community 3.9 gameplay profile: the third reserved rule set, the feature table a content set or player configures, the mapping of every community-patch contract onto a seam, and the decisions still open (design, not implemented) |
-| [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) | the mod library and the nanolathe.gg catalogue, global mutators applied to the per-battle catalog in every mode, and the save sidecar that records and restores a match's selection (implemented except the save sidecar, mod switching on load and drop-to-install) |
+| [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) | the mod library and the nanolathe.gg catalogue, global mutators applied to the per-battle catalog in every mode, and the save sidecar that records and restores a match's selection (implemented; follow-ups in its §13 unit 9) |
 | [DESIGN_SURVIVAL](DESIGN_SURVIVAL.md) | the Survival single-player mode: the attacker slot, the wave director, build-tree tech tiers, the no-victory result and score, available in every gameplay mode |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);

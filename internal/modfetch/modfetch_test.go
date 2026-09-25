@@ -232,6 +232,18 @@ func TestFetchManifestFallsBackToCache(t *testing.T) {
 	server.route("/mods/manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "down for maintenance", http.StatusServiceUnavailable)
 	})
+	// The offline read a save load uses reaches the same cache and no server.
+	before := len(server.seen())
+	if cached, at, ok := client.CachedManifest(); !ok || !at.Equal(stamp) {
+		t.Fatalf("CachedManifest = (%v, %v), want the cache from %v", ok, at, stamp)
+	} else if _, offered := cached.Offers("sample", "1.0"); !offered {
+		t.Fatal("the cached catalogue does not offer sample 1.0")
+	} else if _, offered := cached.Offers("sample", "2.0"); offered {
+		t.Fatal("the cached catalogue offers a version it does not list")
+	}
+	if len(server.seen()) != before {
+		t.Fatal("CachedManifest used the network")
+	}
 	result, err := client.FetchManifest(context.Background())
 	if err != nil {
 		t.Fatalf("FetchManifest with a cache = %v, want the cached catalogue", err)

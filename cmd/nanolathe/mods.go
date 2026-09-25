@@ -2,8 +2,7 @@ package main
 
 // The mod library, mutators and the Mods & Mutators screen, per
 // docs/DESIGN_MODS_MUTATORS.md §4 (library and selection), §5 (catalogue),
-// §6 (mutators) and §8 (screens). Save sidecars (§7) are not implemented yet:
-// a save restores with no mutators (§7.3 step 1).
+// §6 (mutators) and §8 (screens). Save sidecars (§7) live in save_sidecar.go.
 
 import (
 	"context"
@@ -288,6 +287,9 @@ type contentReloadRequest struct {
 	mutators content.Mutators
 	gameplay gameplay.Mode // the gameplay selection raised to the mod's minimum, "" to keep it
 	controls string        // the controls preset to write once (§4.3, P10), "" for none
+	// loadSave is a save to load once the new content is bound: a game saved
+	// under another mod switches to it first (§7.3 step 2).
+	loadSave string
 }
 
 // pendingContentReload is the switch a screen asked for. The window loop
@@ -316,6 +318,14 @@ func (h *shellHost) step(delta float64, cl *client.Client) {
 // the player is looking: on the Mods & Mutators screen, else on the main menu.
 func (h *shellHost) reload(request contentReloadRequest, cl *client.Client) {
 	old := h.shell
+	// Loading a game leaves the battle it was loaded from, whatever mod
+	// the game needs; leave it before the switch so neither shell's battle
+	// holds the client while the other binds it.
+	if request.loadSave != "" && old.battle != nil {
+		old.teardownBattle(cl)
+		old.bindFrontendClient(cl)
+		old.openMenu(modeMenuMain)
+	}
 	fail := func(err error) {
 		fmt.Fprintf(os.Stderr, "nanolathe: mod switch failed: %v\n", err)
 		notice := "Mod switch failed: " + noticeReason(err)
@@ -401,6 +411,24 @@ func (h *shellHost) reload(request contentReloadRequest, cl *client.Client) {
 	old.releaseAudio()
 	_ = old.cs.Close()
 	h.shell = shell
+	if request.loadSave != "" {
+		h.loadAfterReload(request.loadSave)
+	}
+}
+
+// loadAfterReload loads the game a mod switch was made for. The new content
+// is the recorded mod, so the load does not ask for another switch; if it
+// somehow does, the request is dropped rather than repeated.
+func (h *shellHost) loadAfterReload(path string) {
+	err := h.shell.loadRetailSavePath(path)
+	if err == nil && pendingContentReload != nil && pendingContentReload.loadSave == path {
+		pendingContentReload = nil
+		err = refuseLoad("This game's mod could not be selected")
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nanolathe: loading %s after the mod switch: %v\n", path, err)
+		reportRetailMessageError(h.shell.showRetailMessage(loadFailureMessage(err)))
+	}
 }
 
 // releaseAudio stops a shell's voices and closes its music. The audio service

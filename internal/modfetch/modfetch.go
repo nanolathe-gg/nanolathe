@@ -289,6 +289,30 @@ func (c *Client) FetchManifest(ctx context.Context) (FetchResult, error) {
 	return FetchResult{}, liveErr
 }
 
+// CachedManifest returns the last fetched catalogue without using the
+// network, when a cache exists and still validates against the current
+// origin. A save that names a mod which is not installed uses it to say
+// whether the catalogue offers that version (docs/DESIGN_MODS_MUTATORS.md
+// §7.3 step 2); the client talks to the network only for a fetch the
+// player asks for (§5.2, D5).
+func (c *Client) CachedManifest() (Manifest, time.Time, bool) {
+	base, allowed, err := catalogOrigin(c.catalog())
+	if err != nil {
+		return Manifest{}, time.Time{}, false
+	}
+	return c.readCache(base, allowed)
+}
+
+// Offers reports the entry that lists a mod id and version, if any.
+func (m Manifest) Offers(id, version string) (Entry, bool) {
+	for _, e := range m.Mods {
+		if e.ID == id && e.Version == version {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
 func (c *Client) fetchLive(ctx context.Context, base *url.URL, allowed origin) (Manifest, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc

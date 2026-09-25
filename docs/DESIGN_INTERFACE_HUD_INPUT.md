@@ -854,6 +854,17 @@ unestablished and carries a `TODO(question)`; this build resamples it with its
 own aspect preserved and centres it, so nothing of the saved battle is cut
 away.
 
+Below the authored summary fields the window gains one Nanolathe label,
+`NLSIDECAR`, a copy of `TIME` moved beneath it and widened. It names the
+selected save's mod and active mutators from the save's Nanolathe sidecar
+(*ProTA 4.8 - Health x2*, *(not installed)* after a mod the library lacks),
+so the player knows before loading that the game will switch; a save with no
+sidecar leaves it empty. This is a Nanolathe divergence from the authored
+window ([DESIGN_MODS_MUTATORS §8.4](DESIGN_MODS_MUTATORS.md#84-the-load-dialog)).
+A restored battle opens without the loading screen, so the sidecar's load
+warnings (§7.3) are posted to the battle message line instead of the loading
+screen's lines.
+
 The GAF-font text path is `retail_font.go`. Retail's interface text has two
 pens: the side `.FNT` and the GAF fonts loaded as window font slots.
 `retailGAFGlyph` indexes a `formats.GAFEntry` by character code;

@@ -7,16 +7,15 @@ multipliers)
 are selected and locked for a battle; and how a Nanolathe save records all of
 it so that loading the save restores the same match.
 
-**Status: partly implemented (2026-09-23).** The mutators, the mod library,
-the remote catalogue client, the in-process reload and the screens are in
-place (§13 units 1, 2, 4, 6 and 7). Not yet: the save sidecar and mod
-switching on load (units 3 and 5). A save would restore with no mutators
-(§7.3 step 1), so until the sidecar exists a battle that runs with mutators
-cannot be saved (§7); drop-to-install (`--install-mod` installs a zip or
-folder instead); the nanolathe.gg manifest and zips (unit 8), so *Get more mods*
-shows *Catalogue unavailable* until they are hosted. The
-maintainer's decisions of 2026-09-23 are in §2. The proposals this document
-made were confirmed the same day and are listed in §12.
+**Status: implemented (2026-09-24)** apart from the follow-ups in §13 unit 9.
+The mutators, the mod library, the remote catalogue client and the hosted
+catalogue, the in-process reload, the screens, the save sidecar and mod
+switching on load are in place (§13 units 1–8). A load that needs a mod which
+is not installed is refused with a message naming it and saying whether
+*Get more mods* offers it; the load does not start the download itself
+(§7.3 step 2). The maintainer's decisions of 2026-09-23 are in §2. The
+proposals this document made were confirmed the same day and are listed in
+§12.
 
 This document owns the mod library, the remote catalogue, the mutator
 transform and the save sidecar. It builds on mechanisms owned elsewhere and
@@ -523,14 +522,11 @@ and lists anything it finds here.
 
 ## 7. The save sidecar
 
-**Until the sidecar exists** (units 3 and 5), a battle that runs with
-mutators cannot be saved. The save dialog's opening, from the battle menu or
-the results screen, its switch from loading to saving, and its commit all
-refuse with *Saving is not available while mutators are active*; the
-between-missions continuation is included, because the sidecar is what will
-record its mutators too (§7.1). Loading is unaffected. Without the refusal a
-load would restore a mutated battle with no mutators (§7.3 step 1), on unit
-health saved under a mutated `maxdamage`.
+The sidecar is `save.Sidecar` (read and written by `internal/save`); the
+session builds its half (`session.SaveSidecar`) and the desktop command adds
+the mod, the content profile and the configured unit limit and applies a
+loaded one (`cmd/nanolathe/save_sidecar.go`). Saving a battle that runs with
+mutators was refused until the sidecar existed; it no longer is.
 
 ### 7.1 Placement and lifecycle
 
@@ -540,7 +536,11 @@ and the bank bytes are unchanged; a retail executable can still read the bank.
 
 The sidecar is written, through a temporary file and a rename, immediately
 after the bank is written successfully. Campaign continuation saves get one
-too. Deleting or overwriting a save through the dialog does the same to its
+too. Overwriting a save removes its old sidecar before the new bank is
+written, so an interrupted overwrite never pairs the new bank with the old
+selection; a sidecar that then cannot be written removes the new bank as
+well and reports the failure, because the bank alone would load as if no
+mutators had been active. Deleting a save through the dialog deletes its
 sidecar. A sidecar whose bank is missing is ignored.
 
 ### 7.2 Contents
@@ -562,7 +562,11 @@ sidecar. A sidecar whose bank is missing is ignored.
 ```
 
 `mod` is `null` when no mod was selected, and the string `custom` for a manual
-root stack. `community` records the session's Community sources and its
+root stack. `unitLimit` is the configured unit-limit word, the one that sizes
+a battle. `catalog` and `contentManifest` are the battle catalog's identity
+after mutators and the mounted set's manifest hash. A sidecar with another
+`schema`, or one that does not parse, refuses the load rather than being read
+as absent, which would silently drop the selection it records. `community` records the session's Community sources and its
 battle-entry table (`Session.CommunitySources`, `Session.EntryCommunity`), so
 a restored battle resolves and switches exactly as the saved one did, whatever
 the host's current settings are.
@@ -573,14 +577,25 @@ the host's current settings are.
    exactly as today. Use the current selection, the existing unit-limit rules
    and no mutators, and infer nothing from the loaded content
    ([DESIGN_GAMEPLAY_RULES §6](DESIGN_GAMEPLAY_RULES.md#6-save-interaction)).
-2. **Mod.** If the recorded mod differs from the running one: if that version
-   is installed, switch to it (§4.4); if the manifest offers it, offer the
-   download, then switch; otherwise refuse with the standard diagnostic
-   naming the mod and version. The load makes the recorded mod the selected
-   mod (P6). A `custom` sidecar loads only in a matching manual stack.
+2. **Mod.** If the recorded mod differs from the running one and that
+   version is installed, switch to it (§4.4) carrying the recorded mutators
+   and rule set, then load the save on the new content. A load made from
+   inside a battle leaves that battle before the switch, as any load
+   replaces it. The direct battle view (`--map`) has no menu shell to
+   reload, so it refuses and says to start without `--map`. A mod whose
+   base requirements (§4.2) are unmet is refused, naming the missing path.
+   A version that is not installed is refused with a message naming it;
+   when the cached catalogue (§5.2, read offline) offers it, the message
+   says to download it from *Get more mods* and load again. The load does
+   not start the download itself. The load makes the recorded mod the
+   selected mod (P6). A `custom` sidecar loads only in a manual stack, and a
+   manual stack loads only a `custom` sidecar.
 3. **Rule set.** Bind the recorded name. If this build cannot select it (a
    registered set that is not linked), load under the recorded base and show a
-   warning on the loading screen.
+   warning on the battle message line. The load also makes the bound set the
+   host's gameplay selection, as it does for the mutators, so the options
+   control shows the set the restored battle runs and a restart or the next
+   battle agrees with it.
 4. **Community.** Stage with the recorded sources and entry table in place of
    the host's.
 5. **Unit limit.** Set the configured limit to the recorded one before
@@ -593,7 +608,17 @@ the host's current settings are.
    battle and the next new battle then all match the game that was loaded.
 7. **Integrity.** Compare the recorded `catalog` hash with the restored
    catalog's. A mismatch (a different base install, different mod bytes) loads
-   with a warning on the loading screen rather than refusing.
+   with a warning on the battle message line rather than refusing.
+
+A restored battle opens without the loading screen, so its warnings are
+posted to the battle message line (and standard error) rather than as
+loading-screen lines (§8.3).
+
+**Continuation saves.** A between-missions save starts the next mission
+fresh, so what it takes from its sidecar is the selection that mission is
+entered under: the mod (step 2), the mutators, the rule set and the unit
+limit. Its Community sources are not carried forward; the fresh entry
+resolves the host's, as every new battle does.
 
 ### 7.4 Contracts this replaces
 
@@ -601,7 +626,7 @@ the host's current settings are.
   still records none; the sidecar does, and a load restores it. A save without
   a sidecar keeps the §6 behaviour.
 - The `TODO(question)` in `internal/session/retail_save.go` asking for a
-  Nanolathe-side save metadata area is settled by §7 once it is implemented.
+  Nanolathe-side save metadata area is settled by §7.
 - The Modern and Community saved-unit-limit policy
   ([DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits))
   is unchanged. With a sidecar, the configured word already equals the saved
@@ -683,13 +708,16 @@ line:
 3. any warning from §7.3.
 
 This is a Nanolathe divergence from the authored screen
-([07 "The loading screen"]), recorded in DESIGN_INTERFACE_HUD_INPUT when
-implemented.
+([07 "The loading screen"]). A restored battle does not pass through the
+loading screen, so §7.3's warnings go to the battle message line instead.
 
 ### 8.4 The load dialog
 
 The selected save's summary panel gains one line with the sidecar's mod and
-mutators, so the player knows before loading that it will switch.
+mutators, so the player knows before loading that it will switch. It is a
+Nanolathe label (`NLSIDECAR`) beneath the authored `TIME` field; a mod the
+library lacks is marked *(not installed)*, and a save without a sidecar
+leaves the line empty (DESIGN_INTERFACE_HUD_INPUT §2.6).
 
 ## 9. Packages and boundaries
 
@@ -723,7 +751,8 @@ dependencies.
 | Zero mutators leave the clone deep-equal with an equal `Hash`; each mutator changes exactly its fields; rounding, minimum-one, saturation and `v ≤ 0` boundaries; the hash is independent of field order | `content` |
 | Mutators reach fresh skirmish, mission entry and restore; all six fingerprint locks unchanged | `session`, `headless` |
 | Under Strict 3.1 with Build speed ×2, a fixed construction finishes in half the ticks and bills the same total resources (a relationship, not a census) | `session` |
-| Sidecar round trip; a load without one behaves as today; a load restores rule set, Community sources and entry table, unit limit and mutators, and selects the recorded mod and mutators (P6); bank bytes unchanged | `session`, `save`, `cmd/nanolathe` |
+| Sidecar round trip; a load without one behaves as today; a load restores rule set, Community sources and entry table, unit limit and mutators, and selects the recorded mod and mutators (P6); bank bytes unchanged | `save.TestSidecarRoundTripsEveryModSpelling`, `save.TestSidecarRefusesAnotherSchemaAndMalformedFiles`, `main.TestSaveSidecarRestoresTheRecordedSelection` (retail tier) |
+| A save made under another installed mod reloads onto it and then restores; one whose mod is not installed is refused, naming it | `main.TestLoadingAnotherModsSaveSwitchesToItFirst`, `main.TestSaveSidecarRestoresTheRecordedSelection` (retail tier) |
 | The reclaim-pulse product at the maximum step for the stock catalog (§6.5) | `content`, retail tier |
 | Chip on retail, ProTA and Escalation menus; Mods & Mutators screen and the *Get more mods* dialog; loading-screen lines | `--shot` captures, reviewed |
 | A merged hosted zip resolves the same winners and catalog hash as its original root list | the check tool (§13 unit 8) |
@@ -771,8 +800,7 @@ that a save selects its mutators as well as its mod.
 ## 13. Work units
 
 Ordered so each lands green on its own. No unit moves an existing
-fingerprint. Units 1, 2, 4 (except drop-to-install), 6 (except the
-load-dialog line, which needs the sidecar) and 7 are implemented.
+fingerprint. Units 1–8 are implemented.
 
 1. **Mutator core.** `content.Factor`, `Mutators`, `ApplyMutators`, the
    mutated identity and boundary tests; the derived-value audit and the

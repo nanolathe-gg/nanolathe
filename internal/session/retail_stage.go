@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
@@ -49,6 +50,14 @@ type RetailLoadDeps struct {
 	// §6.3). A save without a sidecar restores with the zero value, which
 	// applies none (§7.3 step 1).
 	Mutators content.Mutators
+	// EntryCommunity is the battle-entry Community table a save's sidecar
+	// recorded (docs/DESIGN_MODS_MUTATORS.md §7.3 step 4). When set, it is
+	// the restored session's entry table in place of one resolved from the
+	// sources, so parameters fixed at the original entry — capacities, the
+	// unit limit — survive a rule-set switch made before the save. The live
+	// table is still resolved from Gameplay and CommunitySources, exactly as
+	// the command boundary resolves it.
+	EntryCommunity *community.Features
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
@@ -76,6 +85,9 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	entryFeatures, err := ResolveCommunity(deps.Gameplay, deps.CommunitySources)
 	if err != nil {
 		return nil, err
+	}
+	if deps.EntryCommunity != nil {
+		entryFeatures = *deps.EntryCommunity
 	}
 	preflight, err := PreflightRetailLoad(bank)
 	if err != nil {
