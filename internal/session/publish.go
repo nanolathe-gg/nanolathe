@@ -825,28 +825,6 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			Visible: radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
 		})
 	}
-	for i := range published.Features {
-		// By pointer: a feature view is over 250 bytes, and copying six
-		// thousand of them a tick was a measurable share of the publication.
-		f := &published.Features[i]
-		palette, paletteKnown := radarOwnerPalette(s, f.Owner, f.OwnerKnown)
-		// Written through the destination element, keeping whatever ring
-		// storage the slot's previous contact at this index owned, for the
-		// same reason the unit and feature views are.
-		contactIdx := len(published.Radar.Contacts)
-		var rings []frame.RadarRingView
-		if contactIdx < len(existingContacts) {
-			rings = existingContacts[contactIdx].Rings[:0]
-		}
-		published.Radar.Contacts = reserveRadarContact(published.Radar.Contacts)
-		c := &published.Radar.Contacts[contactIdx]
-		*c = frame.RadarContactView{
-			Kind: frame.RadarContactFeature, Owner: f.Owner, OwnerKnown: f.OwnerKnown, Palette: palette, PaletteKnown: paletteKnown, X: f.X, Y: f.Y, Z: f.Z,
-			Graphic: f.Model, AssetID: f.Filename, Status: f.Status,
-			Visible: radarFeatureVisible(s, f),
-			Rings:   rings,
-		}
-	}
 	if s.Build != nil && s.Units != nil {
 		// BuilderLinks is the construction service's authoritative product→builder
 		// relation [05 C18]. SnapshotLinks provides deterministic product order;
@@ -991,8 +969,15 @@ func appendPieceViews(dst []frame.PieceView, vm *cob.VM, link []int) []frame.Pie
 			names = prog.Pieces
 		}
 	}
-	for i, ps := range vmPieces {
-		pv := frame.PieceView{
+	for i := range vmPieces {
+		ps := &vmPieces[i]
+		if len(dst) == cap(dst) {
+			dst = append(dst, frame.PieceView{})
+		} else {
+			dst = dst[:len(dst)+1]
+		}
+		pv := &dst[len(dst)-1]
+		*pv = frame.PieceView{
 			Index: i,
 			RotX:  ps.RotX,
 			RotY:  ps.RotY,
@@ -1016,7 +1001,6 @@ func appendPieceViews(dst []frame.PieceView, vm *cob.VM, link []int) []frame.Pie
 			pv.DontShade = (f & 0x04) == 0  // shade bit [04 §4.3] 0x1000d/e000
 			pv.DontShadow = (f & 0x08) == 0 // dont-shadow [04 §4.3] 0x1000a000
 		}
-		dst = append(dst, pv)
 	}
 	return dst
 }
@@ -1233,7 +1217,7 @@ func publishSelectionAggregate(s *Session, handles []pool.Handle, page *frame.Co
 }
 
 // radarOwnerPalette resolves the player-record color used as the authored
-// radar/feature frame selector. Neutral selectors and unresolved owners have
+// radar frame selector. Neutral selectors and unresolved owners have
 // no player color and therefore publish no owner art [03 §3.9].
 func radarOwnerPalette(s *Session, owner uint8, ownerKnown bool) (uint8, bool) {
 	if s == nil || !ownerKnown || owner >= 10 {
@@ -1285,29 +1269,6 @@ func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric
 		return true
 	}
 	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), x, y, z)
-}
-
-// radarFeatureVisible is the minimap contacts pass's second-pass admission
-// test for a feature candidate. Retail draws projectiles and features from
-// one shared, kind-agnostic list and admits a candidate through the
-// mode-selected local player visibility source sampled at its own projected
-// point, with owner-local identity as the only bypass [03 §3.9] — the same
-// one-point test as radarPointVisible above, not the world composer's
-// two-corner footprint test of [03 §5.1.5], which is a distinct gate keyed to
-// `nodrawundergray` and the plot placer nibble (see
-// `featureVisibleForFrame` in internal/client/world_draw.go). The minimap
-// contacts pass carries neither of those terms.
-func radarFeatureVisible(s *Session, f *frame.FeatureView) bool {
-	if s == nil {
-		return false
-	}
-	if f == nil {
-		return false
-	}
-	if f.OwnerKnown && f.Owner < 10 && f.Owner == s.ViewingOwner {
-		return true
-	}
-	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), f.X, f.Y, f.Z)
 }
 
 // publishVisibilityView copies the viewing player's visibility masks into the

@@ -1365,6 +1365,13 @@ category, and there is no `armor.tdf`. Default damage is read as an unsigned
 case-insensitive binary search over the table sorted at catalog compile time
 `[06 §9.2]` `[06 R-DMG-01 §1]`.
 
+`WeaponDef.DamageOverride` searches the compiler's private order directly;
+`DamageKeysSorted` still returns a detached copy for callers that need a list.
+Lookup preserves the first fold-equal entry, reads the current map value, and
+keeps the deterministic sorted-map fallback for definitions authored in Go.
+This avoids a table allocation on every hit in every rule set without caching
+damage amounts or changing the default/override widths.
+
 **C20 — the funnel's step order** `[06 §9.2]`:
 
 1. select the name override or the default damage;

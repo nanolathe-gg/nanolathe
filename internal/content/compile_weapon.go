@@ -184,6 +184,28 @@ func (w *WeaponDef) DamageKeysSorted() []string {
 	return sortedFoldedKeys(w.Damage, CanonicalKey)
 }
 
+// DamageOverride finds the first case-insensitive unit-name match without
+// copying the compiled lookup order [06 §9.2][06 R-DMG-01 §1]. The order stays
+// private, and the value is read from Damage on every call so battle catalog
+// edits remain visible. Authored Go fixtures keep their sorted-map fallback.
+func (w *WeaponDef) DamageOverride(unitName string) (int32, bool) {
+	if w == nil || len(w.Damage) == 0 {
+		return 0, false
+	}
+	keys := w.damageOrder
+	if keys == nil {
+		keys = w.DamageKeysSorted()
+	}
+	name := strings.ToLower(unitName)
+	i := sort.Search(len(keys), func(i int) bool {
+		return strings.ToLower(keys[i]) >= name
+	})
+	if i < len(keys) && strings.EqualFold(keys[i], unitName) {
+		return w.Damage[keys[i]], true
+	}
+	return 0, false
+}
+
 // UnknownKeysSorted returns inert keys sorted for hash stability (I1).
 func (w *WeaponDef) UnknownKeysSorted() []string {
 	return sortedFoldedKeys(w.Unknown, CanonicalKey)

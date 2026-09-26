@@ -218,14 +218,19 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.StringVar(&profiles.heapPath, "memprofile", "", "write a pprof allocation profile of the authoritative run to this file")
 	flags.StringVar(&bench.OutputDir, "sim-benchmark", "", "run the simulation-cost benchmark and write its artifacts to this NEW directory")
 	flags.StringVar(&bench.Map, "sim-benchmark-map", headless.SimBenchDefaultMap, "map for the simulation-cost benchmark scene")
+	flags.IntVar(&bench.ArmySize, "sim-benchmark-army-size", headless.SimBenchDefaultArmySize, "placed units per computer army, excluding commander (250..1000; must fit the resolved unit limit)")
 	flags.Int64Var(&warmup, "warmup-ticks", int64(headless.SimBenchDefaultWarmupTicks), "unmeasured ticks run before the benchmark window opens")
 	flags.Int64Var(&measured, "benchmark-ticks", int64(headless.SimBenchDefaultMeasureTicks), "measured authoritative ticks in the benchmark window")
 	flags.IntVar(&unitLimit, "unit-limit", 0, "per-player skirmish unit setting (20..3276); gameplay feature table may override it (benchmark setting 400)")
 	flags.IntVar(&bench.CensusCount, "census-samples", headless.SimBenchDefaultCensusCount, "census samples taken across the benchmark window")
 	flags.BoolVar(&bench.PhaseTiming, "phase-timing", true, "attribute measured time to the twelve authoritative phases")
+	flags.BoolVar(&bench.ThreadTiming, "thread-cpu-timing", false, "diagnostic per-tick CPU samples on a pinned OS thread (clock overhead can materially affect results)")
 	flags.BoolVar(&bench.Profiles, "benchmark-profiles", true, "write cpu.pprof and the allocation profile pair for the measured window")
 	if err := flags.Parse(args); err != nil {
 		return request, reportPath, profiles, bench, err
+	}
+	if bench.ArmySize < headless.SimBenchMinArmySize || bench.ArmySize > headless.SimBenchMaxArmySize {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid simulation benchmark army size: logical path <command line>, providers searched [sim-benchmark-army-size], expected %d..%d units excluding commander", headless.SimBenchMinArmySize, headless.SimBenchMaxArmySize)
 	}
 	if pace, err := survival.ParsePace(survivalPace); err != nil {
 		return request, reportPath, profiles, bench, err

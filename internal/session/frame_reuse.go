@@ -34,13 +34,6 @@ func reserveFeatureView(dst []frame.FeatureView) []frame.FeatureView {
 	return append(dst, frame.FeatureView{})
 }
 
-func reserveRadarContact(dst []frame.RadarContactView) []frame.RadarContactView {
-	if i := len(dst); i < cap(dst) {
-		return dst[:i+1]
-	}
-	return append(dst, frame.RadarContactView{})
-}
-
 func appendOrderQueueView(dst []frame.OrderQueueView, src orders.SnapshotQueue, cat *content.Catalog) []frame.OrderQueueView {
 	i := len(dst)
 	if i < cap(dst) {

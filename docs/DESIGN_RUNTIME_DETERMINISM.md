@@ -336,6 +336,12 @@ rows, the visibility and fog channels, the radar picture, the selection and
 command page, the shake offset, the result, and the scheduler's two speed words
 plus the unit limit. Nothing presents between phases.
 
+The radar contact channel contains live units followed by live projectiles;
+features remain in `Frame.Features` and produce no radar contacts [03 §3.9].
+Removing the unused feature contact projection reduces this internal diagnostic
+channel without changing gameplay or rendered output: the minimap, strategic
+icons and megamap already ignore that record kind.
+
 **The paused boundary.** A pump with the pause bit set runs no sub-tick, and the
 input queue's only consumer is phase 1. The boundary that drains that queue and
 republishes the committed tick — without advancing the global tick, the

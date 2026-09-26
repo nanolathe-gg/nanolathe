@@ -1,9 +1,6 @@
 package combat
 
 import (
-	"sort"
-	"strings"
-
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
@@ -161,35 +158,10 @@ func SelectBaseDamage(w *content.WeaponDef, targetUnitName string) int32 {
 	if len(w.Damage) == 0 {
 		return int32(uint16(w.DamageDefault))
 	}
-	// Deterministic case-insensitive binary search over sorted keys (I1).
-	// WeaponDef.DamageKeysSorted sorts case-insensitively, matching retail's
-	// case-insensitive binary search [06 §9.2].
-	keys := w.DamageKeysSorted()
-	// Binary search with case-insensitive compare.
-	i := sort.Search(len(keys), func(i int) bool {
-		return compareCaseInsensitive(keys[i], targetUnitName) >= 0
-	})
-	if i < len(keys) && strings.EqualFold(keys[i], targetUnitName) { // [06 §9.2] case-insensitive
-		// Matched override is signed 32-bit [06 §9.2].
-		return w.Damage[keys[i]]
+	if damage, ok := w.DamageOverride(targetUnitName); ok {
+		return damage // matched override remains signed 32-bit [06 §9.2]
 	}
 	return int32(uint16(w.DamageDefault)) // unsigned 16-bit default [06 §9.2]
-}
-
-// compareCaseInsensitive returns -1,0,1 for case-insensitive compare [06 §9.2].
-// It compares lowercased forms only; equality is lower-case equality, matching
-// EqualFold semantics for the binary search. Tie-break by original case is
-// irrelevant for equality, so it is not used here (search uses lower bound).
-func compareCaseInsensitive(a, b string) int {
-	la := strings.ToLower(a)
-	lb := strings.ToLower(b)
-	if la < lb {
-		return -1
-	}
-	if la > lb {
-		return 1
-	}
-	return 0
 }
 
 // Blast radius helpers [06 §9.3].

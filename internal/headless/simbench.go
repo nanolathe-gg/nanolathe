@@ -1,6 +1,6 @@
 // Simulation-cost benchmark: a displayless, bounded run of one dense
-// three-army battle whose authoritative ticks are the only thing measured.
-// Everything in this file is host-side — a fixture, a wall clock and a report.
+// three-army battle, with tick costs and process-wide window measurements.
+// Everything in this file is host-side — a fixture, host clocks and a report.
 // No simulation behavior lives here [I6].
 package headless
 
@@ -41,12 +41,14 @@ const SimBenchDefaultMap = "Town & Country"
 // (every thirty eligible manager entries), the first construction, resource
 // and wave deadlines, and the march that brings the three armies into contact
 // around tick one thousand; the measured window then runs from battle onset
-// through sustained engagement while all three armies are still at full
-// strength.
+// through sustained engagement while all three armies remain active.
 const (
 	SimBenchDefaultWarmupTicks  uint32 = 1200
 	SimBenchDefaultMeasureTicks uint32 = 3000
 	SimBenchDefaultUnitLimit           = 400
+	SimBenchDefaultArmySize            = 250
+	SimBenchMinArmySize                = SimBenchDefaultArmySize
+	SimBenchMaxArmySize                = 1000
 	SimBenchDefaultCensusCount         = 7
 )
 
@@ -67,13 +69,18 @@ type SimBenchOptions struct {
 	Seed           uint32
 	Difficulty     int
 	UnitLimit      int
-	WarmupTicks    uint32
-	MeasureTicks   uint32
-	CensusCount    int
+	// ArmySize is the placed roster per computer army, excluding its commander.
+	ArmySize     int
+	WarmupTicks  uint32
+	MeasureTicks uint32
+	CensusCount  int
 	// PhaseTiming installs the host phase observer. It costs one wall-clock
 	// read per phase boundary; the authoritative run is identical either way,
-	// which the report proves by carrying the fingerprint.
+	// with partial fingerprints recorded as regression evidence.
 	PhaseTiming bool
+	// ThreadTiming samples CPU time around each tick on a pinned OS thread.
+	// Clock reads can be expensive, so only diagnostic runs opt in.
+	ThreadTiming bool
 	// Profiles writes cpu.pprof and the allocation pair for the measured
 	// window only.
 	Profiles bool
@@ -83,6 +90,9 @@ type SimBenchOptions struct {
 func (o *SimBenchOptions) applyDefaults() {
 	if o.Map == "" {
 		o.Map = SimBenchDefaultMap
+	}
+	if o.ArmySize == 0 {
+		o.ArmySize = SimBenchDefaultArmySize
 	}
 	if o.UnitLimit == 0 {
 		o.UnitLimit = SimBenchDefaultUnitLimit
@@ -96,6 +106,13 @@ func (o *SimBenchOptions) applyDefaults() {
 	if o.CensusCount <= 0 {
 		o.CensusCount = SimBenchDefaultCensusCount
 	}
+}
+
+func (o SimBenchOptions) validateArmySize() error {
+	if o.ArmySize < SimBenchMinArmySize || o.ArmySize > SimBenchMaxArmySize {
+		return fmt.Errorf("nanolathe: invalid simulation benchmark army size: logical path %s, providers searched [benchmark options], expected %d..%d units per army excluding commander, got %d", o.Map, SimBenchMinArmySize, SimBenchMaxArmySize, o.ArmySize)
+	}
+	return nil
 }
 
 // SimBenchTeamCensus is one owner's row of one census sample.
@@ -192,6 +209,8 @@ type SimBenchReport struct {
 	WarmupTicks        uint32              `json:"warmup_ticks"`
 	MeasuredTicks      uint32              `json:"measured_ticks"`
 	PhaseTiming        bool                `json:"phase_timing"`
+	ThreadTiming       bool                `json:"thread_cpu_timing"`
+	Profiles           bool                `json:"profiles"`
 	Scene              *SimBenchScene      `json:"scene"`
 	CatalogHash        string              `json:"catalog_hash,omitempty"`
 	InitialFingerprint string              `json:"initial_fingerprint"`
@@ -208,9 +227,14 @@ type SimBenchReport struct {
 	MillisPerTickP99   float64             `json:"ms_per_tick_p99"`
 	MillisPerTickMax   float64             `json:"ms_per_tick_max"`
 	Phases             []SimBenchPhaseCost `json:"phases,omitempty"`
+	ProcessCPU         SimBenchCPUCost     `json:"process_cpu"`
+	ThreadCPU          SimBenchCPUCost     `json:"thread_cpu"`
 	GC                 SimBenchGC          `json:"gc"`
 	Runtime            SimBenchRuntime     `json:"runtime"`
 	Census             []SimBenchCensus    `json:"census"`
+	// TickThreadCPUMillis is the parallel CPU series for the pinned host
+	// thread, omitted if its clock is unavailable or any sample fails.
+	TickThreadCPUMillis []float64 `json:"tick_thread_cpu_ms,omitempty"`
 	// TickMillis and TickRestamps are parallel per-tick series over the
 	// measured window: how long the tick took, and how many end-to-end
 	// movement class-layer rebuilds ran inside it. Sampling the counter is a
@@ -242,6 +266,9 @@ type SimBenchRestampCorrelation struct {
 // silently mix two runs' artifacts.
 func RunSimBenchmark(opts SimBenchOptions) (SimBenchReport, error) {
 	opts.applyDefaults()
+	if err := opts.validateArmySize(); err != nil {
+		return SimBenchReport{}, err
+	}
 	log := opts.Log
 	if log == nil {
 		log = io.Discard
@@ -287,6 +314,7 @@ func RunSimBenchmark(opts SimBenchOptions) (SimBenchReport, error) {
 }
 
 func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *content.Catalog, log io.Writer) (SimBenchReport, error) {
+	opts.applyDefaults()
 	composed, scene, err := ComposeSimBenchBattle(opts, fs, catalog)
 	if err != nil {
 		return SimBenchReport{}, err
@@ -302,7 +330,7 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 		SceneVersion:    SimBenchSceneVersion, Map: opts.Map,
 		SimulationSeed: opts.Seed, CRTSeed: opts.Seed, Difficulty: opts.Difficulty,
 		WarmupTicks: opts.WarmupTicks, MeasuredTicks: opts.MeasureTicks,
-		PhaseTiming: opts.PhaseTiming, Scene: scene,
+		PhaseTiming: opts.PhaseTiming, ThreadTiming: opts.ThreadTiming, Profiles: opts.Profiles && opts.OutputDir != "", Scene: scene,
 		InitialFingerprint: composed.InitialFingerprint,
 		Runtime:            simBenchRuntime(),
 	}
@@ -335,22 +363,53 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 		}
 	}
 
+	// Optional thread CPU samples must use the same OS thread across each
+	// measured step. Process-only timing requires no pin or per-tick CPU
+	// clock calls. Neither host observation reaches authoritative state [I6].
+	if opts.ThreadTiming {
+		runtime.LockOSThread()
+	}
 	var startStats, endStats runtime.MemStats
 	runtime.ReadMemStats(&startStats)
 	millis := make([]float64, 0, opts.MeasureTicks)
 	restamps := make([]uint32, 0, opts.MeasureTicks)
+	var threadMillis []float64
+	var threadTotal int64
+	var threadErr error
+	if opts.ThreadTiming {
+		threadMillis = make([]float64, 0, opts.MeasureTicks)
+	} else {
+		threadErr = fmt.Errorf("disabled")
+	}
 	lastStamps := simBenchRestampCounter(sess)
 	next := 0
+	processStart, processErr := simBenchProcessCPU()
 	windowStart := time.Now()
 	for tick := uint32(0); tick < opts.MeasureTicks; tick++ {
+		var threadStart int64
+		if threadErr == nil {
+			threadStart, threadErr = simBenchThreadCPU()
+		}
 		timing.beginTick()
 		before := time.Now()
 		simBenchStep(sess)
 		elapsed := time.Since(before)
+		if threadErr == nil {
+			var threadEnd int64
+			threadEnd, threadErr = simBenchThreadCPU()
+			if threadErr == nil && threadEnd < threadStart {
+				threadErr = fmt.Errorf("thread CPU clock moved backwards")
+			}
+			if threadErr == nil {
+				delta := threadEnd - threadStart
+				threadTotal += delta
+				threadMillis = append(threadMillis, float64(delta)/1e6)
+			}
+		}
 		timing.endTick(before, elapsed)
 		millis = append(millis, float64(elapsed.Nanoseconds())/1e6)
 		// Sampled between ticks, after the wall clock is stopped, so reading
-		// the counter is never inside a measurement.
+		// the counter is outside the individual tick timing.
 		stamps := simBenchRestampCounter(sess)
 		restamps = append(restamps, uint32(stamps-lastStamps))
 		lastStamps = stamps
@@ -364,7 +423,16 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 		}
 	}
 	wall := time.Since(windowStart)
+	var processTotal int64
+	if processErr == nil {
+		var processEnd int64
+		processEnd, processErr = simBenchProcessCPU()
+		processTotal = processEnd - processStart
+	}
 	runtime.ReadMemStats(&endStats)
+	if opts.ThreadTiming {
+		runtime.UnlockOSThread()
+	}
 	stopCPU()
 	sess.PhaseObserver = nil
 	report.Census = append(report.Census, simBenchTakeCensus(sess, scene, "window-close", deaths))
@@ -383,6 +451,11 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 		report.CRTDraws = crt.Draws()
 	}
 	report.State = sess.State.String()
+	report.ProcessCPU = simBenchCPUSummary(processTotal, len(millis), processErr)
+	report.ThreadCPU = simBenchCPUSummary(threadTotal, len(millis), threadErr)
+	if report.ThreadCPU.Available {
+		report.TickThreadCPUMillis = threadMillis
+	}
 	report.TickMillis = millis
 	report.TickRestamps = restamps
 	report.Restamps = summarizeSimBenchRestamps(millis, restamps)
@@ -401,6 +474,11 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 	}
 	fmt.Fprintf(log, "nanolathe: %d measured ticks in %s (%.1f ticks/s, median %.3f ms, p95 %.3f ms)\n",
 		len(millis), wall.Round(time.Millisecond), report.TicksPerSecond, report.MillisPerTickP50, report.MillisPerTickP95)
+	if report.ProcessCPU.Available {
+		fmt.Fprintf(log, "nanolathe: process CPU %.3f ms/tick across the measured window\n", report.ProcessCPU.MillisPerTick)
+	} else {
+		fmt.Fprintf(log, "nanolathe: process CPU unavailable: %s\n", report.ProcessCPU.UnavailableReason)
+	}
 	return report, nil
 }
 
@@ -409,6 +487,9 @@ func runSimBenchmarkWithContent(opts SimBenchOptions, fs vfs.FSOps, catalog *con
 // fingerprints without measuring anything.
 func ComposeSimBenchBattle(opts SimBenchOptions, fs vfs.FSOps, catalog *content.Catalog) (FreshBattle, *SimBenchScene, error) {
 	opts.applyDefaults()
+	if err := opts.validateArmySize(); err != nil {
+		return FreshBattle{}, nil, err
+	}
 	cfg := simBenchConfig(opts.Map, opts.UnitLimit)
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
 		Gameplay:         opts.Gameplay,
@@ -421,7 +502,7 @@ func ComposeSimBenchBattle(opts SimBenchOptions, fs vfs.FSOps, catalog *content.
 	if err != nil {
 		return FreshBattle{}, nil, err
 	}
-	scene, err := buildSimBenchScene(composed.Session, opts.Map, composed.Session.Units.UnitLimit())
+	scene, err := buildSimBenchScene(composed.Session, opts.Map, composed.Session.Units.UnitLimit(), opts.ArmySize)
 	if err != nil {
 		return FreshBattle{}, nil, err
 	}
@@ -809,6 +890,10 @@ func startCPUProfile(path string) (func(), error) {
 }
 
 func writeAllocProfile(path string) error {
+	// The allocation profile otherwise trails collection cycles and may show
+	// no window allocations when a short run completes without a GC. Finish
+	// a collection and publish its profile outside every measured interval.
+	runtime.GC()
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("nanolathe: create allocation profile %q: %w", path, err)

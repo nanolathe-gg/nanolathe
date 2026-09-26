@@ -149,7 +149,7 @@ func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 	}
 
 	// Neutral/unknown contacts have no player-record selector and therefore no
-	// owner art. The helper is the same path used by projectile/feature contacts.
+	// owner art. The helper is the same path used by projectile contacts.
 	neutral, known := radarOwnerPalette(s, 10, true)
 	if known || neutral != 0 {
 		t.Fatalf("neutral radar palette = (%d, %t), want unknown zero", neutral, known)
@@ -259,22 +259,8 @@ func TestRadarProjectileContactUsesOwnerAndLocalVisibility(t *testing.T) {
 	}
 }
 
-func TestRadarFeatureContactUsesPlacerOwnerAndExtents(t *testing.T) {
+func TestFeatureOwnerSelectorKeepsPlayerZero(t *testing.T) {
 	terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
-	vis := visibility.New(terrain, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
-	local := uint8(0)
-	owned := frame.FeatureView{Owner: local, OwnerKnown: true, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
-	if !radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, &owned) {
-		t.Fatal("local placer owner should bypass feature LOS")
-	}
-	unknown := frame.FeatureView{Owner: combat.NeutralSide, OwnerKnown: false, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
-	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, &unknown) {
-		t.Fatal("unknown feature owner must not bypass LOS")
-	}
-	unknownZero := frame.FeatureView{Owner: 0, OwnerKnown: false, CX: 4, CZ: 4, FootX: 1, FootZ: 1, Y: 0}
-	if radarFeatureVisible(&Session{Vis: vis, LocalOwner: local, ViewingOwner: local}, &unknownZero) {
-		t.Fatal("unknown owner-zero feature must not bypass LOS")
-	}
 	inst := &features.Instance{Terrain: terrain, CX: 4, CZ: 4}
 	if owner, known := featureOwnerSelector(inst); !known || owner != 0 {
 		t.Fatalf("zero placer selector = (%d, %t), want owner zero/known", owner, known)
@@ -426,9 +412,8 @@ func TestSnapshotPublicationUsesWordCoverageWhenBytesDisabled(t *testing.T) {
 	if client.SnapshotVisible(got, got.Units[0], 0) {
 		t.Fatal("foreign unit bypassed disabled byte coverage through permissive fill")
 	}
-	foreignFeature := frame.FeatureView{Owner: 1, OwnerKnown: true, CX: 0, CZ: 0, FootX: 1, FootZ: 1, Y: 0}
-	if radarFeatureVisible(s, &foreignFeature) {
-		t.Fatal("foreign feature bypassed disabled byte coverage through permissive fill")
+	if radarPointVisible(s, 1, true, 0, 0, 0) {
+		t.Fatal("foreign projectile bypassed disabled byte coverage through permissive fill")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -35,7 +36,7 @@ const (
 	simBenchTeams        = 3
 	simBenchHumanSlot    = 0
 	simBenchFirstAISlot  = 1
-	simBenchUnitsPerTeam = 250
+	simBenchUnitsPerTeam = SimBenchDefaultArmySize
 	// Per-unit pitch in world pixels. The largest mobile footprint in the
 	// roster is 3 cells (48 px) and the largest building footprint is 8 cells
 	// (128 px), so both pitches leave at least one free cell around every
@@ -56,10 +57,10 @@ const (
 // simBenchRosterEntry is one row of the per-team composition table. Arm and
 // Core name the same role on each side; Count is the number placed per team.
 type simBenchRosterEntry struct {
-	Role  string
-	Arm   string
-	Core  string
-	Count int
+	Role  string `json:"role"`
+	Arm   string `json:"arm"`
+	Core  string `json:"core"`
+	Count int    `json:"count"`
 }
 
 // simBenchBuildings is the fixed per-team building composition: energy,
@@ -131,17 +132,27 @@ type simBenchTeamPlacement struct {
 	ScriptedBuilds  int    `json:"scripted_builds"`
 }
 
+// simBenchPassiveHumanPlacement records the enlarged fixture's remote human
+// commander. The default scene keeps its original map start position.
+type simBenchPassiveHumanPlacement struct {
+	X int32 `json:"x"`
+	Z int32 `json:"z"`
+}
+
 // SimBenchScene is the placed fixture: what was created, and where.
 type SimBenchScene struct {
-	Version   int                     `json:"scene_version"`
-	Map       string                  `json:"map"`
-	TerrainW  int32                   `json:"terrain_width"`
-	TerrainH  int32                   `json:"terrain_height"`
-	CentreX   int32                   `json:"battle_centre_x"`
-	CentreZ   int32                   `json:"battle_centre_z"`
-	Flatness  float64                 `json:"battle_centre_flatness"`
-	UnitLimit int                     `json:"unit_limit"`
-	Teams     []simBenchTeamPlacement `json:"teams"`
+	Version      int                            `json:"scene_version"`
+	Map          string                         `json:"map"`
+	TerrainW     int32                          `json:"terrain_width"`
+	TerrainH     int32                          `json:"terrain_height"`
+	CentreX      int32                          `json:"battle_centre_x"`
+	CentreZ      int32                          `json:"battle_centre_z"`
+	Flatness     float64                        `json:"battle_centre_flatness"`
+	UnitLimit    int                            `json:"unit_limit"`
+	ArmySize     int                            `json:"army_size"`
+	MobileRoster []simBenchRosterEntry          `json:"mobile_roster"`
+	Teams        []simBenchTeamPlacement        `json:"teams"`
+	PassiveHuman *simBenchPassiveHumanPlacement `json:"passive_human,omitempty"`
 
 	factories []*units.Unit
 }
@@ -178,9 +189,8 @@ func simBenchConfig(mapName string, unitLimit int) session.SkirmishConfig {
 	// and a shuffled assignment would move the commanders between runs of the
 	// same seed pair for no benefit [P0-04].
 	cfg.Location = 1
-	// Commander death must not eliminate an owner: the human placeholder owns
-	// exactly one commander, and losing it would end the battle in the middle
-	// of the measured window [08 R-SKIR-01 §3].
+	// Losing a computer commander must not eliminate its remaining army.
+	// The human still loses when its sole unit dies [08 R-SKIR-01 §3].
 	cfg.ApplyDefaults()
 	cfg.CommanderDeath = int(session.CommanderDeathContinues)
 	return cfg
@@ -188,9 +198,12 @@ func simBenchConfig(mapName string, unitLimit int) session.SkirmishConfig {
 
 // buildSimBenchScene places the three armies and scripts their opening orders.
 // It runs before the first tick, so nothing here is on a measured path.
-func buildSimBenchScene(sess *session.Session, mapName string, unitLimit int) (*SimBenchScene, error) {
+func buildSimBenchScene(sess *session.Session, mapName string, unitLimit, armySize int) (*SimBenchScene, error) {
 	if sess == nil || sess.World == nil || sess.Units == nil || sess.Catalog == nil {
 		return nil, fmt.Errorf("nanolathe: sim benchmark scene: incomplete session: logical path %s, providers searched [none], expected a composed authoritative session", mapName)
+	}
+	if armySize+1 > unitLimit {
+		return nil, fmt.Errorf("nanolathe: simulation benchmark army exceeds unit limit: logical path %s, providers searched [resolved gameplay rules], expected army size %d plus its commander within the per-player limit %d", mapName, armySize, unitLimit)
 	}
 	terrain := sess.World
 	centreX, centreZ, flatness := simBenchBattleCentre(terrain)
@@ -198,7 +211,8 @@ func buildSimBenchScene(sess *session.Session, mapName string, unitLimit int) (*
 		Version: SimBenchSceneVersion, Map: mapName,
 		TerrainW: terrain.CellW * 16, TerrainH: terrain.CellH * 16,
 		CentreX: centreX, CentreZ: centreZ, Flatness: flatness,
-		UnitLimit: unitLimit,
+		UnitLimit: unitLimit, ArmySize: armySize,
+		MobileRoster: simBenchMobileRoster(armySize),
 	}
 	for t := 0; t < simBenchTeams; t++ {
 		place, err := placeSimBenchTeam(sess, scene, t, centreX, centreZ)
@@ -207,7 +221,88 @@ func buildSimBenchScene(sess *session.Session, mapName string, unitLimit int) (*
 		}
 		scene.Teams = append(scene.Teams, place)
 	}
+	if armySize != SimBenchDefaultArmySize {
+		if err := relocateSimBenchPassiveHuman(sess, scene); err != nil {
+			return nil, err
+		}
+	}
 	return scene, nil
+}
+
+// relocateSimBenchPassiveHuman keeps the enlarged fixture's idle human away
+// from the battle. Losing that slot's only unit can end the measured window
+// even while all three computer armies remain active. This is authored setup
+// geometry, not protection from ordinary damage or result evaluation.
+func relocateSimBenchPassiveHuman(sess *session.Session, scene *SimBenchScene) error {
+	human := sess.Units.FirstLive(func(u *units.Unit) bool {
+		return u.Owner == simBenchHumanSlot && u.Def != nil && u.Def.Commander
+	})
+	if human == nil || sess.Movement == nil || sess.Movement.Grid == nil || int(human.Handle) >= len(sess.Movement.Collisions) {
+		return fmt.Errorf("nanolathe: simulation benchmark passive human placement failed: logical path %s, providers searched [session], expected a live human commander with movement occupancy", scene.Map)
+	}
+	coll := sess.Movement.Collisions[human.Handle]
+	if coll == nil {
+		return fmt.Errorf("nanolathe: simulation benchmark passive human placement failed: logical path %s, providers searched [movement], expected the human commander's committed footprint", scene.Map)
+	}
+	// The normal host binds this world on its first tick; setup needs that
+	// same binding before the direct placement entry point can find the unit.
+	sess.Movement.BindWorld(sess.Units)
+	profile := sess.Movement.ProfileFor(human.Handle)
+	bx, bz := coll.HalfBias()
+	live := sess.Units.Iter()
+	// A coarse interior lattice gives deterministic ties in Z/X order and
+	// leaves a margin around every footprint. Maximise distance to the nearest
+	// opponent, including the original commanders outside the placed blocks.
+	const margin, stride int32 = 256, 128
+	var bestX, bestZ int32
+	bestDistance := int64(-1)
+	for z := margin; z <= scene.TerrainH-margin; z += stride {
+		for x := margin; x <= scene.TerrainW-margin; x += stride {
+			fx, fz := numeric.FixedFromInt(int64(x)), numeric.FixedFromInt(int64(z))
+			if sess.World.HeightAt(fx, fz) <= numeric.FixedFromInt(int64(sess.World.SeaLevel)) {
+				continue
+			}
+			anchor := movement.QuantizedAnchor(int32(fx.Raw()), int32(fz.Raw()), bx, bz)
+			if !sess.Movement.Grid.RectOnMap(anchor, coll.FootPrintX, coll.FootPrintZ) ||
+				sess.Movement.Grid.FootprintOccupied(anchor, coll.FootPrintX, coll.FootPrintZ, int(human.Handle)) {
+				continue
+			}
+			legal := true
+			for dz := int32(0); dz < int32(coll.FootPrintZ) && legal; dz++ {
+				for dx := int32(0); dx < int32(coll.FootPrintX); dx++ {
+					if !profile.IsPassableCommitCell(sess.World, anchor.X+dx, anchor.Z+dz) {
+						legal = false
+						break
+					}
+				}
+			}
+			if !legal {
+				continue
+			}
+			nearest := int64(1 << 62)
+			for _, other := range live {
+				if other.Owner == simBenchHumanSlot {
+					continue
+				}
+				dx, dz := int64(other.X>>16)-int64(x), int64(other.Z>>16)-int64(z)
+				if distance := dx*dx + dz*dz; distance < nearest {
+					nearest = distance
+				}
+			}
+			if nearest > bestDistance {
+				bestX, bestZ, bestDistance = x, z, nearest
+			}
+		}
+	}
+	if bestDistance < simBenchBuildingRadius*simBenchBuildingRadius {
+		return fmt.Errorf("nanolathe: simulation benchmark passive human placement failed: logical path %s, providers searched [terrain and unit occupancy], expected a free land footprint at least %d world units from every opponent", scene.Map, simBenchBuildingRadius)
+	}
+	x, z := numeric.FixedFromInt(int64(bestX)), numeric.FixedFromInt(int64(bestZ))
+	if !sess.Movement.PlaceUnit(orders.PlaceRequest{Unit: human.Handle, X: x, Y: sess.World.HeightAt(x, z), Z: z}) {
+		return fmt.Errorf("nanolathe: simulation benchmark passive human placement failed: logical path %s, providers searched [movement], expected a committed remote commander position", scene.Map)
+	}
+	scene.PassiveHuman = &simBenchPassiveHumanPlacement{X: bestX, Z: bestZ}
+	return nil
 }
 
 // placeSimBenchTeam lays out one army: buildings in a rear block away from the
@@ -256,8 +351,8 @@ func placeSimBenchTeam(sess *session.Session, scene *SimBenchScene, team int, ce
 	}
 
 	index = 0
-	total := simBenchUnitsPerTeam - out.Buildings
-	for _, row := range simBenchMobiles {
+	total := scene.ArmySize - out.Buildings
+	for _, row := range scene.MobileRoster {
 		name := rosterName(row, side)
 		def, ok := sess.Catalog.Unit(name)
 		if !ok || def == nil {
@@ -297,6 +392,23 @@ func placeSimBenchTeam(sess *session.Session, scene *SimBenchScene, team int, ce
 	}
 	out.Mobiles = index
 	return out, nil
+}
+
+// simBenchMobileRoster preserves the default role proportions using cumulative
+// integer quotas. The difference of adjacent quotas assigns every mobile once,
+// including remainders, and the default size reproduces the original table.
+func simBenchMobileRoster(armySize int) []simBenchRosterEntry {
+	rows := append([]simBenchRosterEntry(nil), simBenchMobiles...)
+	mobileTotal := armySize - rosterTotal(simBenchBuildings)
+	baseTotal := rosterTotal(simBenchMobiles)
+	cumulative, assigned := 0, 0
+	for i := range rows {
+		cumulative += simBenchMobiles[i].Count
+		quota := cumulative * mobileTotal / baseTotal
+		rows[i].Count = quota - assigned
+		assigned = quota
+	}
+	return rows
 }
 
 // rosterTotal sums a composition table's rows.

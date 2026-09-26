@@ -1,6 +1,10 @@
 package headless
 
 import (
+	"encoding/json"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,11 +16,17 @@ import (
 func TestSimBenchOptionDefaults(t *testing.T) {
 	var opts SimBenchOptions
 	opts.applyDefaults()
+	if opts.ThreadTiming {
+		t.Fatal("thread CPU sampling must be opt-in because clock overhead perturbs the measured workload")
+	}
 	if opts.Map != SimBenchDefaultMap {
 		t.Fatalf("map = %q, want %q", opts.Map, SimBenchDefaultMap)
 	}
 	if opts.WarmupTicks != SimBenchDefaultWarmupTicks || opts.MeasureTicks != SimBenchDefaultMeasureTicks {
 		t.Fatalf("window = %d + %d ticks, want %d + %d", opts.WarmupTicks, opts.MeasureTicks, SimBenchDefaultWarmupTicks, SimBenchDefaultMeasureTicks)
+	}
+	if opts.ArmySize != SimBenchDefaultArmySize || opts.validateArmySize() != nil {
+		t.Fatalf("default army size %d is not the supported default %d", opts.ArmySize, SimBenchDefaultArmySize)
 	}
 	if opts.UnitLimit < simBenchUnitsPerTeam {
 		t.Fatalf("unit limit %d is below the %d units the scene places per team", opts.UnitLimit, simBenchUnitsPerTeam)
@@ -139,5 +149,57 @@ func TestSimBenchRestampCorrelation(t *testing.T) {
 	// (20+30+8)/3 against (5+6+4)/3.
 	if got.MeanMillisWith <= got.MeanMillisWithout {
 		t.Fatalf("mean with restamp %.3f is not above mean without %.3f", got.MeanMillisWith, got.MeanMillisWithout)
+	}
+}
+
+// Scaling keeps all fifty buildings and assigns every mobile with integer
+// quotas. The default must preserve every row; the larger scene must not lose
+// rounding remainders or mutate the shared default roster.
+func TestSimBenchArmySizeScaling(t *testing.T) {
+	if got := simBenchMobileRoster(SimBenchDefaultArmySize); !slices.Equal(got, simBenchMobiles) {
+		t.Fatalf("default mobile roster changed: %+v", got)
+	}
+	wantCounts := []int{39, 40, 34, 40, 34, 34, 20, 17, 8, 9, 9}
+	got := simBenchMobileRoster(334)
+	for i, row := range got {
+		if row.Count != wantCounts[i] {
+			t.Errorf("334-unit roster %s count = %d, want %d", row.Role, row.Count, wantCounts[i])
+		}
+	}
+	for _, size := range []int{SimBenchMinArmySize, 334, SimBenchMaxArmySize} {
+		if total := rosterTotal(simBenchBuildings) + rosterTotal(simBenchMobileRoster(size)); total != size {
+			t.Errorf("army size %d placed roster totals %d", size, total)
+		}
+	}
+	if !slices.Equal(simBenchMobileRoster(SimBenchDefaultArmySize), simBenchMobiles) {
+		t.Fatal("scaling changed the shared default roster")
+	}
+	for _, size := range []int{-1, SimBenchMinArmySize - 1, SimBenchMaxArmySize + 1} {
+		if err := (SimBenchOptions{ArmySize: size}).validateArmySize(); err == nil {
+			t.Errorf("army size %d accepted outside the fixture bounds", size)
+		}
+	}
+}
+
+// A failed host clock is explicitly unavailable, never a successful zero-CPU
+// report; a process interval is divided by the actual completed tick count.
+func TestSimBenchCPUAccounting(t *testing.T) {
+	got := simBenchCPUSummary(12_000_000, 3, nil)
+	if !got.Available || got.TotalMillis != 12 || got.MillisPerTick != 4 {
+		t.Fatalf("CPU summary = %+v, want 12 ms total and 4 ms/tick", got)
+	}
+	for _, unavailable := range []SimBenchCPUCost{
+		simBenchCPUSummary(0, 3, errors.New("clock unsupported")),
+		simBenchCPUSummary(0, 3, errors.New("disabled")),
+		simBenchCPUSummary(-1, 3, nil),
+		simBenchCPUSummary(12_000_000, 0, nil),
+	} {
+		data, err := json.Marshal(unavailable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unavailable.Available || unavailable.UnavailableReason == "" || strings.Contains(string(data), "total_ms") || strings.Contains(string(data), "ms_per_tick") {
+			t.Fatalf("unavailable clock fabricated a measurement: %s", data)
+		}
 	}
 }

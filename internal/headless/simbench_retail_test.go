@@ -5,7 +5,9 @@ package headless
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport/retailcat"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // TestSimBenchSceneComposesThreeFullArmies is the scene's contract against the
@@ -25,6 +27,9 @@ func TestSimBenchSceneComposesThreeFullArmies(t *testing.T) {
 	}
 	if scene.Version != SimBenchSceneVersion || len(scene.Teams) != simBenchTeams {
 		t.Fatalf("scene version %d with %d teams, want version %d with %d", scene.Version, len(scene.Teams), SimBenchSceneVersion, simBenchTeams)
+	}
+	if scene.PassiveHuman != nil {
+		t.Fatal("default scene relocated its passive human commander")
 	}
 	wantBuildings := rosterTotal(simBenchBuildings)
 	wantMobiles := rosterTotal(simBenchMobiles)
@@ -78,5 +83,69 @@ func TestSimBenchSceneComposesThreeFullArmies(t *testing.T) {
 	}
 	if first.InitialFingerprint != second.InitialFingerprint {
 		t.Fatalf("two composes of seed %d disagree: %s vs %s", opts.Seed, first.InitialFingerprint, second.InitialFingerprint)
+	}
+}
+
+// 334 placed units in each of three armies, plus all four commanders, produce
+// the optional thousand-unit workload without changing the default scene.
+func TestSimBenchLargerArmyScene(t *testing.T) {
+	catalog, fs := retailcat.Shared(t)
+	opts := SimBenchOptions{Seed: 7, Difficulty: 1, ArmySize: 334, Gameplay: gameplay.Strict31}
+	composed, scene, err := ComposeSimBenchBattle(opts, fs, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scene.ArmySize != opts.ArmySize || rosterTotal(scene.MobileRoster) != opts.ArmySize-50 {
+		t.Fatalf("larger scene provenance does not describe the requested roster: %+v", scene)
+	}
+	total := composed.Session.Units.LiveCountForPlayer(simBenchHumanSlot)
+	for _, team := range scene.Teams {
+		if team.Buildings != 50 || team.Mobiles != 284 {
+			t.Fatalf("larger scene changed its building/mobile split: %+v", team)
+		}
+		total += composed.Session.Units.LiveCountForPlayer(team.Player)
+	}
+	if total != 1006 {
+		t.Fatalf("larger scene starts with %d units, want 1006 including commanders", total)
+	}
+	human := composed.Session.Units.FirstLive(func(u *units.Unit) bool {
+		return u.Owner == simBenchHumanSlot && u.Def != nil && u.Def.Commander
+	})
+	if human == nil || scene.PassiveHuman == nil || int32(human.X>>16) != scene.PassiveHuman.X || int32(human.Z>>16) != scene.PassiveHuman.Z {
+		t.Fatalf("remote passive commander disagrees with scene provenance: %+v", scene.PassiveHuman)
+	}
+	t.Logf("passive human commander relocated to (%d, %d)", scene.PassiveHuman.X, scene.PassiveHuman.Z)
+	anchor, fx, fz, ok := composed.Session.Movement.CommittedFootprint(human.Handle)
+	if !ok || !composed.Session.Movement.Grid.RectOnMap(anchor, fx, fz) {
+		t.Fatal("remote commander has no on-map committed footprint")
+	}
+	profile := composed.Session.Movement.ProfileFor(human.Handle)
+	for dz := int32(0); dz < int32(fz); dz++ {
+		for dx := int32(0); dx < int32(fx); dx++ {
+			if !profile.IsPassableCommitCell(composed.Session.World, anchor.X+dx, anchor.Z+dz) {
+				t.Fatal("remote commander occupies an invalid terrain footprint")
+			}
+		}
+	}
+	for _, other := range composed.Session.Units.Iter() {
+		if other.Owner == simBenchHumanSlot {
+			continue
+		}
+		dx, dz := int64(other.X>>16)-int64(human.X>>16), int64(other.Z>>16)-int64(human.Z>>16)
+		if dx*dx+dz*dz < simBenchBuildingRadius*simBenchBuildingRadius {
+			t.Fatalf("remote commander remains near opposing unit %d", other.Handle)
+		}
+	}
+	before := *scene.PassiveHuman
+	simDraws, crtDraws := composed.Session.SimRNG().Draws(), composed.Session.CrtRNG().Draws()
+	if err := relocateSimBenchPassiveHuman(composed.Session, scene); err != nil {
+		t.Fatal(err)
+	}
+	if *scene.PassiveHuman != before || composed.Session.SimRNG().Draws() != simDraws || composed.Session.CrtRNG().Draws() != crtDraws {
+		t.Fatal("passive commander placement is not deterministic without random draws")
+	}
+	opts.UnitLimit = opts.ArmySize
+	if _, _, err := ComposeSimBenchBattle(opts, fs, catalog); err == nil {
+		t.Fatal("army that leaves no unit-limit slot for its commander was accepted")
 	}
 }

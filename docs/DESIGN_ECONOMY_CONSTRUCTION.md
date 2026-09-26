@@ -1054,6 +1054,14 @@ static-obstacle revision alone cannot safely skip reconciliation. A narrow
 optimization requires covering those writers or routing them through the
 feature service; that ownership change remains open.
 
+The existing deterministic lookup cache reuses its key and pointer buffers
+when feature placement or removal invalidates it. Its only borrowers are
+`AppendInstances`, which copies into caller-owned storage, and grid
+reconciliation, which completes before another rebuild. Pointer tails are
+cleared on rebuild; the sorted order, live value mirrors and active-list
+lifecycle order are unchanged. This reduces allocation during feature churn
+without using obstacle revisions to skip any work.
+
 **Feature arena boundary (EC-G2).** The service enforces the researched live
 arena capacity and active-list order, but its Go records are fresh allocations,
 not identities reused from a retained arena. A resting sprite also has a

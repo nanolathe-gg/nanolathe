@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -101,5 +102,32 @@ func TestFeaturePublicationSteadyStateAllocations(t *testing.T) {
 	tick := uint32(4)
 	if got := testing.AllocsPerRun(20, func() { s.publishSnapshot(tick); tick++ }); got != 0 {
 		t.Fatalf("feature-only steady-state publication allocated %v times", got)
+	}
+}
+
+// Features remain in the world publication but never enter the minimap's
+// unit/projectile contacts pass, even when owned or visible [03 §3.9].
+func TestFeaturePublicationOmitsRadarContacts(t *testing.T) {
+	s := featurePublicationFixture(t, 2)
+	s.World = s.Features.Terrain
+	s.LocalOwner, s.ViewingOwner = 3, 3
+	s.Vis = visibility.New(s.World, visibility.ModeCurrentEnabled)
+	s.World.PlotAt(0, 0).SetPlacerNibble(s.ViewingOwner)
+	s.World.PlotAt(1, 0).SetPlacerNibble(1)
+	for i := range s.Vis.ByteGrid(visibility.PlayerID(s.ViewingOwner)) {
+		s.Vis.ByteGrid(visibility.PlayerID(s.ViewingOwner))[i] = 1
+	}
+	s.publishSnapshot(1)
+	f := s.Snapshot.Current()
+	if len(f.Features) != 2 || f.Features[0].Owner != s.ViewingOwner || f.Features[1].Owner != 1 {
+		t.Fatalf("feature ownership publication = %+v", f.Features)
+	}
+	for _, feature := range f.Features {
+		if !feature.OwnerKnown || !s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), feature.X, feature.Y, feature.Z) {
+			t.Fatalf("fixture feature is not owned and visible: %+v", feature)
+		}
+	}
+	if len(f.Radar.Contacts) != 0 {
+		t.Fatalf("features produced %d radar contacts", len(f.Radar.Contacts))
 	}
 }

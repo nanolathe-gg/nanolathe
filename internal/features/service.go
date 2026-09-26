@@ -6,6 +6,7 @@ package features
 import (
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -1226,12 +1227,17 @@ func (s *Service) sortedInstanceKeys() []int {
 	if !s.instanceKeysStale && s.instanceKeys != nil {
 		return s.instanceKeys
 	}
-	keys := make([]int, 0, len(s.instances))
+	keys := slices.Grow(s.instanceKeys[:0], len(s.instances))
 	for k := range s.instances {
 		keys = append(keys, k)
 	}
 	sort.Ints(keys)
-	values := make([]*Instance, len(keys))
+	// Both borrowers finish before another rebuild: AppendInstances copies
+	// the pointers to caller-owned storage, and grid reconciliation never
+	// rebuilds recursively. Keep capacity across feature churn, clearing the
+	// old pointer tail so removed records can be collected.
+	clear(s.instanceValues)
+	values := slices.Grow(s.instanceValues[:0], len(keys))[:len(keys)]
 	for i, k := range keys {
 		values[i] = s.instances[k]
 	}

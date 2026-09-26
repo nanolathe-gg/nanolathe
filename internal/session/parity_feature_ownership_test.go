@@ -16,7 +16,7 @@ import (
 // Death hands the dying owner's identity to the stamp, including player zero.
 // Ordinary stamps use neutral ownership. The same identities are published
 // after the feature and PlayerFeatures restore passes [05 R-FEAT-01 §3, §13]
-// [03 §5.1.5][03 §3.9][08 R-SAVE-02 §12].
+// [03 §5.1.5][08 R-SAVE-02 §12].
 func TestCorpseOwnershipPublishesAndSurvivesPlayerFeaturesRestore(t *testing.T) {
 	for _, owner := range []uint8{0, 1} {
 		t.Run(fmt.Sprintf("owner %d", owner), func(t *testing.T) {
@@ -64,9 +64,6 @@ func TestCorpseOwnershipPublishesAndSurvivesPlayerFeaturesRestore(t *testing.T) 
 					}
 					if s.Vis.VisiblePoint(visibility.PlayerID(owner), f.X, f.Y, f.Z) {
 						t.Fatal("fixture feature has current LOS")
-					}
-					if radarFeatureVisible(s, &f) != (wantOwner == owner) {
-						t.Fatalf("owner %d feature did not follow owner-only visibility outside LOS", f.Owner)
 					}
 				}
 			}
