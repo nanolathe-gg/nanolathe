@@ -437,6 +437,13 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
+	if c.screenOnly(cur) {
+		c.emitClear()
+		if c.pausedLayer != pausedWorldLayer {
+			c.drawInterface(cur)
+		}
+		return
+	}
 	if c.pausedLayer != pausedForegroundLayer {
 		c.drawCommittedWorld(cur, ok)
 	}

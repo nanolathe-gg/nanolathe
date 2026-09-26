@@ -172,6 +172,12 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, 
 	h.drawResultStats(c, b, view)
 }
 
+func (b *battleSession) resultScreenActive(cur *frame.Frame) bool {
+	return b != nil && cur != nil && cur.Result.Ended &&
+		!b.battleState().Input.ResultDismissed && b.postBattle != nil &&
+		b.postBattle.State() == session.PostBattleEndMission
+}
+
 // postBattleShadesPicture reports whether the results state still shows the
 // retained battle picture under the darkening steps emitted so far. That
 // covers states 2 to 5 and the campaign CD-check idle, state 8. In state 8

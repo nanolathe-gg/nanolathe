@@ -768,6 +768,11 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// presentation gate and releasing it returns without constructing or
 	// mutating any authoritative data [I6][07 §9][R-P0-11 §4].
 	cur := presented.Committed
+	if b != nil && b.resultScreenActive(cur) {
+		h.drawResultOverlay(c, b, cur.Result, localSlotWatching(cur))
+		h.drawFrontendDialog(c, b)
+		return
+	}
 	frameOK := cur != nil
 	paused := pauseOverlayVisible(b, cur)
 	// World-space overlays come first, while the composed world is still the

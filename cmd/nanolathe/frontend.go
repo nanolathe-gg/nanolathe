@@ -310,6 +310,10 @@ func (s battleHUDUIStage) DrawUI(c *client.Client, presented client.UIFrame) {
 	}
 }
 
+func (s battleHUDUIStage) ScreenOnly(cur *frame.Frame) bool {
+	return s.battle != nil && s.battle.resultScreenActive(cur)
+}
+
 // newGameShell builds the frontend state: the skirmish map list, the retail
 // resource set, and the opening panel used by the windowed entry.
 func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {

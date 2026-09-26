@@ -24,6 +24,19 @@ type UIStage interface {
 	DrawUI(*Client, UIFrame)
 }
 
+// ScreenOnlyStage paints an opaque front-end screen over the entire surface.
+// The retained battle picture is needed through the ending fade, but ENDMSN
+// replaces it outright [08 R-CAMP-01 §6][08 R-CAMP-01 §8]. A stage may expose
+// this narrower contract so the client skips world recording for that screen.
+type ScreenOnlyStage interface {
+	ScreenOnly(*frame.Frame) bool
+}
+
+func (c *Client) screenOnly(cur *frame.Frame) bool {
+	stage, ok := c.uiStage.(ScreenOnlyStage)
+	return ok && stage.ScreenOnly(cur)
+}
+
 // SetUIStage installs the one typed UI adapter used by the client. A nil stage
 // leaves the committed-world surface without authored UI, which is useful for
 // the loading hand-off and focused renderer tests.

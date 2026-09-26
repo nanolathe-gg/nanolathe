@@ -1110,6 +1110,12 @@ menu, a campaign additionally exposes the continuation when a successor mission
 exists. Its rendering is DESIGN_INTERFACE_HUD_INPUT's `[08 R-CAMP-01 §6]`
 `[08 R-CAMP-01 §8]` `[07 R-FE-01 §10]`.
 
+The frozen battle picture remains through the darkening fade. Once ENDMSN is
+entered, the result UI owns the entire surface: the client clears it and
+records the authored result art without blending, traversing, or submitting
+the retired battle world. This also keeps a large final army out of the
+result screen's input and present path.
+
 Three things about that sequence are easy to get backwards, and are pinned by
 tests in `cmd/nanolathe/postbattle_integration_test.go`. The glamour fade runs
 **from black up into the picture's own palette**, not from the picture's

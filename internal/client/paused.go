@@ -83,6 +83,9 @@ func (c *Client) PausedWorldDigest() (PausedWorldInputs, bool) {
 	if cur == nil {
 		return PausedWorldInputs{}, false
 	}
+	if c.screenOnly(cur) {
+		return PausedWorldInputs{}, false
+	}
 	for _, p := range cur.Projectiles {
 		if p.RenderType == render.RenderTypeSegmented {
 			return PausedWorldInputs{}, false

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
@@ -140,6 +141,50 @@ func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
 	img = c.ComposeFrame()
 	if got := img.RGBAAt(6, 25); got != (color.RGBA{A: 255}) {
 		t.Fatalf("dismissed terminal result pixel = %#v, stale ENDMSN/title art still rendered", got)
+	}
+}
+
+// ENDMSN replaces the battle picture [08 R-CAMP-01 §8]. A large final
+// publication must not keep the world recorder or the battle chrome in the
+// path of the results screen's next input/present cycle.
+func TestEndMissionPresentsWithoutRecordingTheBattleWorld(t *testing.T) {
+	buf := frame.NewBuffer()
+	result := frame.ResultView{Ended: true, Kind: "victory"}
+	w := buf.BeginWrite()
+	w.Result = result
+	w.Units = make([]frame.UnitView, 1000)
+	if err := buf.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	h := &retailBattleHUD{victoryFrame: &formats.GAFFrame{
+		Width: 1, Height: 1, Pixels: []byte{7}, Transparent: []bool{false},
+	}}
+	b := &battleSession{hud: h, postBattle: session.NewPostBattleController(result, session.PostBattleConfig{Kind: session.PostBattleSkirmish})}
+	stage := battleHUDUIStage{hud: h, battle: b}
+	if stage.ScreenOnly(w) {
+		t.Fatal("ending fade discarded the frozen battle picture")
+	}
+	b.postBattle = endMissionController(t, result)
+	c, err := client.New(client.Options{Buffer: buf, Width: 64, Height: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetCamera(&camera.Camera{ViewW: 64, ViewH: 64, MapW: 256, MapH: 256})
+	c.SetUIStage(stage)
+	list := c.RecordModernFrame()
+	if x, y := list.RecordedWorldExtent(); x != 0 || y != 0 {
+		t.Fatalf("ENDMSN recorded the battle world at %dx%d", x, y)
+	}
+	c.SetPresentationPaused(true)
+	if _, eligible := c.PausedWorldDigest(); eligible {
+		t.Fatal("ENDMSN reused the old battle picture as a paused world")
+	}
+	img := c.ComposeFrame()
+	if got := img.RGBAAt(32, 28); got != (color.RGBA{R: 7, G: 7, B: 7, A: 255}) {
+		t.Fatalf("ENDMSN title pixel = %#v, want authored title", got)
+	}
+	if got := img.RGBAAt(2, 2); got != (color.RGBA{A: 255}) {
+		t.Fatalf("ENDMSN retained battle chrome at the corner: %#v", got)
 	}
 }
 

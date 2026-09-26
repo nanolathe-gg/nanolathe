@@ -168,11 +168,17 @@ func (c *Client) recordFrameNoAudio() {
 	if c.frameTiming {
 		blendStarted = time.Now()
 	}
-	cur := c.presentationFrame()
+	// ENDMSN replaces the battle picture. Its UI needs the frozen committed
+	// result, so avoid blending a large final battle that will not be drawn.
+	committed := c.committedFrame()
+	cur := committed
+	if !c.screenOnly(committed) {
+		cur = c.presentationFrame()
+	}
 	ok := cur != nil
 	// blending is true when presentationFrame returned the interpolator's view
 	// rather than the committed frame itself.
-	blending := ok && cur != c.committedFrame()
+	blending := ok && cur != committed
 	if c.frameTiming {
 		c.blendNanos = 0
 		if blending {
