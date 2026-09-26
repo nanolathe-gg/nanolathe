@@ -306,8 +306,8 @@ func (b *battleSession) siteBuildAtMinimapPoint(cl *client.Client, mx, my int32,
 }
 
 // minimapHoverUnit is the minimap half of the pointer's unit word. The HOT
-// RADAR list contains every live unit, projected to radar pixels; the pointer
-// admits squared pixel distance < 4, nearest first, else 0 [03 §3.9]
+// RADAR list contains the admitted radar contacts, projected to radar pixels;
+// the pointer admits squared pixel distance < 4, nearest first, else 0 [03 §3.9]
 // [07 R-SEL-02B2]. Ties keep the lower pool slot so the result is stable [I1].
 func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Handle {
 	layout, dst, ok := b.minimapLayout()
@@ -322,13 +322,13 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 	width, height := right-left+1, bottom-top+1
 	best := pool.Handle(0)
 	bestDist := int64(1 << 62)
-	for i := range f.Units {
-		v := f.Units[i]
-		// The radar hover list contains every live unit in pool order. Its
-		// two-pixel hit test does not use the viewport's direct-visibility
-		// gate; a sensor contact can be picked even when the unit is outside
-		// line of sight [03 §3.9][07 R-SEL-02B2].
-		if v.Slot == 0 {
+	for i := range f.Radar.Contacts {
+		v := &f.Radar.Contacts[i]
+		// Contact admission precedes both projection and hover-list insertion.
+		// A radar-only contact remains pickable, including during the off phase
+		// of its damage blink, but an unknown enemy cannot leak through hover
+		// [03 §3.9][07 R-SEL-02B2].
+		if v.Handle == 0 || !b.radarUnitContactAdmitted(f, v) {
 			continue
 		}
 		rx, ry := render.RadarProjection(radarMapPixel(v.X), radarMapPixel(v.Z), radarMapPixel(v.Y), playW, playH, layout)
@@ -341,8 +341,8 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 		if d >= 4 {
 			continue
 		}
-		if d < bestDist || (d == bestDist && (best == 0 || v.Slot < best)) {
-			bestDist, best = d, v.Slot
+		if d < bestDist || (d == bestDist && (best == 0 || v.Handle < best)) {
+			bestDist, best = d, v.Handle
 		}
 	}
 	return best

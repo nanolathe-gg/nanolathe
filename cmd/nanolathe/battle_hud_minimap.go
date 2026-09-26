@@ -82,6 +82,18 @@ func radarContactAdmitted(c render.MinimapContact, blink render.BlinkState) bool
 	return admit && (c.BlinkSuppress == 0 || blink.Phase&1 != 0)
 }
 
+// radarUnitContactAdmitted is contact admission before the regular blip's
+// damage-blink term. The minimap hover list retains admitted contacts through
+// that blink [03 §3.9]. The megamap uses the same admission, with its separate
+// UnderAttackFlash presentation [draw-engine-interface "Unit icons"].
+func (b *battleSession) radarUnitContactAdmitted(f *frame.Frame, p *frame.RadarContactView) bool {
+	if p.Kind != frame.RadarContactUnit {
+		return false
+	}
+	c := render.MinimapContact{Owner: p.Owner, Status: p.Status, Visible: p.Visible, LocalPlayer: f.ViewingPlayer, Options: b.radarOptions, MinimapMode: f.Radar.MappingLOS}
+	return radarContactAdmitted(c, render.BlinkState{})
+}
+
 func radarPublishedContactVisible(c frame.RadarContactView, local uint8) bool {
 	// Retail's second pass over the projectile list admits through the
 	// mode-selected local player visibility source at the projected cell,

@@ -345,7 +345,7 @@ func (b *battleSession) drawMegamapUnits(cur *frame.Frame, lens camera.MegamapLe
 	slots := b.megamapUnitSlots(cur)
 	for i := range cur.Radar.Contacts {
 		p := &cur.Radar.Contacts[i]
-		if !b.megamapContactAdmitted(cur, p) {
+		if !b.radarUnitContactAdmitted(cur, p) {
 			continue
 		}
 		u, ok := megamapUnitView(cur, slots, p.Handle)

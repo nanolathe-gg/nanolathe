@@ -1865,10 +1865,13 @@ is routed through exactly one path, chosen on the **press** edge. In order:
    capture it. The canvas letterbox bars suppress a viewport
    drag but are not lens/world-pointer input; cursor, footer and command paths
    share that classification `[07 R-CAM-01 §5]` `[07 R-CAM-01 §11]` `[07 §8]`.
-   Its unit hover uses the HOT RADAR unit list in pool order and the nearest
-   projected point within squared pixel distance `< 4`. The viewport's direct
-   visibility gate does not apply here, so a radar-only contact can be the
-   target of an armed attack `[03 §3.9]` `[07 R-SEL-02B2]`.
+   Its unit hover uses the admitted radar contacts in pool order and the nearest
+   projected point within squared pixel distance `< 4`. Admission uses the
+   committed contact's sensor/ownership flags and radar options, shared with
+   the megamap; it excludes unknown enemies without dropping radar-only
+   contacts. The regular blip's damage blink does not affect hover membership.
+   The viewport's direct visibility gate does not apply here, so a radar-only
+   contact can be the target of an armed attack `[03 §3.9]` `[07 R-SEL-02B2]`.
 2. **Right button, anywhere else.** Under `Interface Type 0`, right is
    deselect and cancel only. Under `Interface Type 1`, an idle right-down in
    the viewport issues the contextual order; an armed placement or latch still

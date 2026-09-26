@@ -60,6 +60,9 @@ type battleSim struct {
 	observed                   uint64
 	observedTick               uint32
 	observedValid, republished bool
+	// terminal is copied only from a joined publication. No later sub-tick
+	// can release the normal presentation delay once that result is latched.
+	terminal bool
 	// followAfterBatch holds follow hotkeys that retail handles after the
 	// sub-tick batch; they run at the join that completes it.
 	followAfterBatch func()
@@ -111,6 +114,7 @@ func (b *battleSession) syncSimulationMode(cl *client.Client) {
 		r.observed = b.sess.Snapshot.PublicationSeq()
 		if cur := b.sess.Snapshot.Current(); cur != nil {
 			r.observedTick, r.observedValid = cur.Tick, true
+			r.terminal = cur.Result.Ended
 		}
 		b.sim = r
 		b.sess.BindMessageRetirement(r.noteRetire)
@@ -156,6 +160,7 @@ func (b *battleSession) joinSimulation(cl *client.Client) {
 		r.observed = b.sess.Snapshot.PublicationsSince(r.observed, func(f *committedframe.Frame) {
 			r.republished = r.observedValid && f.Tick == r.observedTick
 			r.observedTick, r.observedValid = f.Tick, true
+			r.terminal = f.Result.Ended
 			b.applyPublishedCamera(f)
 			if cl != nil {
 				cl.ObserveCommittedFrame(f)
@@ -246,13 +251,16 @@ func (b *battleSession) prepareSimulationStep(scaled int32) {
 // A command applied at the paused-input boundary republishes the committed
 // tick; that republication is presented at once, and unblended, because the
 // buffer pairs no previous frame with a publication that repeats its tick.
+// A terminal publication also presents at once after its join: no later tick
+// will release the delay, and both the end title and ENDMSN must see the same
+// frozen result as the host's post-battle controller [07 §11][08 R-CAMP-01 §6].
 func (b *battleSession) presentationTick() (uint32, bool) {
 	if b == nil || b.sim == nil || !b.sim.observedValid {
 		return 0, false
 	}
 	r := b.sim
 	tick := r.observedTick
-	if r.republished {
+	if r.republished || r.terminal {
 		return tick, true
 	}
 	if b.tickFiredValid && b.tickFiredTick > 0 && b.tickFiredTick-1 < tick {

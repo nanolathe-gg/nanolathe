@@ -4824,9 +4824,17 @@ Stock reach: `targetable` on `nuclear_missile`, `crblmssl`, `armemp_weapon`
 and `cortron_weapon`; `interceptor` on `amd_rocket`, `fmd_rocket`,
 `armscab_weapon` and `cormabm_weapon`; `noradar` on `earthquake` alone.
 
-**HOT list.** Every unit visited in pool (ascending-slot) order appends a
-10-byte entry — id, originX + rx, originY + ry, and two pad shorts — to the
-HOT RADAR list. The list allocation is 100 bytes per entry of the session
+**HOT list — Established (direct-static, corrected 2026-09-25).** The
+ascending-slot unit walk appends only units admitted by the contact gate above:
+full radar, both mapping/LOS mask bits clear, a friendly/seen status bit, or
+ownership by the viewing player. A rejected unit skips projection and list
+insertion as well as drawing. The regular blip's damage-blink test does not
+control list insertion, so an admitted contact remains pickable during its
+blink's off phase. This replaces the incorrect claim that every live unit
+enters the hover list, which would expose enemies outside sensor coverage.
+
+Each admitted unit appends its identity and its projected radar point plus the
+radar origin to the HOT RADAR list. The list allocation is 100 bytes per entry of the session
 **per-player unit limit** ([05 R-SHARE-01 §7]) — not per unit definition —
 so with the 10-byte stride the capacity is `limit · 10` entries, 2,500 at the
 stock skirmish limit of 250. **Bounded-negative.** No capacity check precedes

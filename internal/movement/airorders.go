@@ -1017,12 +1017,14 @@ func (s *System) landable(u *units.Unit, x, z numeric.Fixed) bool {
 			if cell.StructureYard() {
 				return false
 			}
-			// An occupant blocks only when it is somebody else: a unit's own
-			// cells must not block, or "is where I am landable" could never be
-			// answered yes [04 R-AIR-01 §6a].
+			// Landing reads both planes: another aircraft over this cell must
+			// make us search elsewhere before descent, even though it holds no
+			// ground word yet. Self never blocks either plane [04 R-AIR-01 §6a].
 			if s.Grid != nil {
-				if occ, ok := s.Grid.OccupantAt(Cell{X: cx, Z: cz}); ok && occ != coll.ID {
-					return false
+				for _, plane := range [...]Plane{PlaneGround, PlaneAir} {
+					if occ, ok := s.Grid.OccupantAtPlane(plane, Cell{X: cx, Z: cz}); ok && occ != coll.ID {
+						return false
+					}
 				}
 			}
 			lo, hi := int32(cell.MinHeight()), int32(cell.MaxHeight())

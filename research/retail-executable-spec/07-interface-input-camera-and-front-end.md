@@ -6056,9 +6056,12 @@ score; they are fixed-point narrowing steps, not floating-point rounding
 (**Established**, direct-static). The winner is replaced only when
 `score < bestScore`.
 Equal scores retain the earlier `HOT UNITS` member, hence the lower stable pool
-position. The minimap branch uses `HOT RADAR UNITS` instead and admits a
+position. The minimap branch uses `HOT RADAR UNITS` instead: its producer
+retains only contacts admitted by the minimap's sensor/ownership/options gate,
+independently of their damage-blink phase [03 §3.9]. The picker admits a
 contact only when planar squared distance is strictly less than four; it also
-retains the first member on an equal distance.
+retains the first member on an equal distance. An unseen enemy is absent from
+that list, even though the general committed unit set contains it.
 
 **Established (direct-static).** The click path consumes the hover id already
 computed by the pointer update; it does not recompute the hull. Cursor target

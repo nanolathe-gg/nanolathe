@@ -1142,6 +1142,16 @@ records the authored result art without blending, traversing, or submitting
 the retired battle world. This also keeps a large final army out of the
 result screen's input and present path.
 
+The asynchronous host presents a terminal publication immediately after joining
+its batch. Its usual delay behind the latest released tick cannot apply once
+the latch stops further ticks: that would keep the renderer on a nonterminal
+frame while the host advances the results controller. The join copies the
+committed terminal bit with the observed tick, so the end title, frozen result
+and ENDMSN all read the same publication without consulting the live session.
+`TestAsynchronousPresentationReachesTerminalPublication` locks both outcomes and
+the join boundary; `TestCommanderKillReachesThePostBattleScreen` reaches that
+boundary through the real commander-death chain.
+
 Three things about that sequence are easy to get backwards, and are pinned by
 tests in `cmd/nanolathe/postbattle_integration_test.go`. The glamour fade runs
 **from black up into the picture's own palette**, not from the picture's

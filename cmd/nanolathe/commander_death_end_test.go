@@ -1,12 +1,15 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -156,11 +159,10 @@ func TestCommanderDeathSettingRoundTripsToTheSessionRuleWord(t *testing.T) {
 // screen up within the six 30-tick settlement dues plus one frame.
 //
 // It exercises the two things a session-level test cannot: that the latching
-// sub-tick's publication is what the client samples — Buffer.Current is the
-// last committed frame, so the committed-tick cursor is already at the final
-// published tick when Step breaks out [03 §2.4][I6] — and that the battle
-// frame's gate (`isResultVisible`, then the post-battle controller) fires on
-// that frame rather than on some later one.
+// sub-tick's publication is what the asynchronous client presents after the
+// host joins it [03 §2.4][I6], and that the battle frame's gate
+// (`isResultVisible`, then the post-battle controller) fires on that frame
+// rather than on some later one.
 func TestCommanderKillReachesThePostBattleScreen(t *testing.T) {
 	root := probeRetail(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 7}
@@ -191,17 +193,36 @@ func TestCommanderKillReachesThePostBattleScreen(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := composed.Session
-	cl, err := client.New(client.Options{Width: retailScreenW, Height: retailScreenH, Buffer: &frame.Buffer{}})
+	var b *battleSession
+	var cl *client.Client
+	cl, err = client.New(client.Options{Width: 800, Height: 600, Buffer: &frame.Buffer{},
+		PresentationTick: func() (uint32, bool) { return b.presentationTick() },
+		JoinSimulation:   func() { b.stopSimulation(cl) },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := composeBattleEntry(sess, sess.Catalog, cs, cl, nil)
+	previous := clPtr
+	clPtr = cl
+	defer func() { clPtr = previous }()
+	cl.SetModelFS(cs.unmappedMount)
+	b, err = composeBattleEntry(sess, sess.Catalog, cs, cl, shell)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer detachBattleAudio(cl, sess)
+	defer b.teardown(cl)
+	shell.battle = b
+	shell.frontend.Mode = modeBattle
+	cl.SetAsyncSimulation(true)
+	defer cl.SetAsyncSimulation(false)
+	b.syncSimulationMode(cl)
 
-	step := func() { sess.Step(sess.Clock.ScaledAnchor + 1) }
+	step := func() {
+		b.prepareSimulationStep(sess.Clock.ScaledAnchor + 1)
+		b.launchSimulation(cl)
+		b.joinSimulation(cl)
+		cl.PinPresentation()
+	}
 	for i := 0; i < 10; i++ {
 		step()
 	}
@@ -259,9 +280,44 @@ func TestCommanderKillReachesThePostBattleScreen(t *testing.T) {
 	if cur.Result.Kind != "victory" {
 		t.Fatalf("killing the only opponent's commander gave %q", cur.Result.Kind)
 	}
-	// The first terminal frame installs the one post-battle controller.
-	b.ensurePostBattleController()
-	if b.postBattle == nil {
-		t.Fatal("the post-battle controller was not installed on the terminal frame")
+	if presented := cl.PresentedFrame(); presented == nil || presented.Tick != visibleAt || !presented.Result.Ended {
+		t.Fatalf("the asynchronous client did not present the terminal tick %d", visibleAt)
+	}
+	if dir := os.Getenv("NANOLATHE_RESULT_SHOTS"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "victory-title.png"))
+	}
+	// The host must advance the same result the renderer sees, including the
+	// front-end size change and the authored return control [08 R-CAMP-01 §8].
+	for range 30 {
+		shell.step(1.0/30, cl)
+		cl.PinPresentation()
+	}
+	if !b.resultScreenActive(cl.PresentedFrame()) {
+		t.Fatal("the post-battle host and the presented frame did not reach ENDMSN together")
+	}
+	if w, h := cl.Size(); w != retailScreenW || h != retailScreenH {
+		t.Fatalf("ENDMSN surface = %dx%d, want 640x480", w, h)
+	}
+	cl.ComposeFrame()
+	if !b.hud.resultState.initialized || shell.resultBackground == nil {
+		t.Fatal("ENDMSN did not render its result rows and outcome background")
+	}
+	if dir := os.Getenv("NANOLATHE_RESULT_SHOTS"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "victory-results.png"))
+	}
+	panel := b.hud.resultPanel
+	r := panel.Window.PlacedRect(panel.Index("MainMenu"))
+	in := cl.Input()
+	in.Mouse.SetPosition(float32(r.X+1), float32(r.Y+1))
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
+	shell.step(1.0/30, cl)
+	in.Mouse.ResetEdges()
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
+	shell.step(1.0/30, cl)
+	if shell.battle != nil || shell.frontend.Mode != modeMenuMain {
+		t.Fatal("ENDMSN MainMenu did not return to the front end")
+	}
+	if dir := os.Getenv("NANOLATHE_RESULT_SHOTS"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "returned-main-menu.png"))
 	}
 }

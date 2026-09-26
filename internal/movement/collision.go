@@ -777,8 +777,8 @@ func (g *OccupancyGrid) OccupantAt(c Cell) (int, bool) {
 }
 
 // OccupantAtPlane returns the occupant ID at cell in one plane
-// [04 R-COLL-01 §4]. Diagnostics and tests read the air plane through it; the
-// simulation's blocking predicate stays OccupantAt.
+// [04 R-COLL-01 §4]. Landing reads both planes [04 R-AIR-01 §6a]; ground
+// commit and path classification read only OccupantAt [04 R-COLL-01 §2].
 func (g *OccupancyGrid) OccupantAtPlane(plane Plane, c Cell) (int, bool) {
 	if g == nil {
 		return 0, false

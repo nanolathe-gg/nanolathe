@@ -446,6 +446,20 @@ bounded negative: ground route failure has no flight producer, and recovered
 preemption paths either preserve the landing binding or remove the landing
 record before another movement record installs. The handler's Established
 non-arrival branches remain implemented `[04 R-AIR-01 §6]`.
+
+Landing admission reads both the ground and air occupant words under every
+footprint cell, ignoring the aircraft's own identity in either plane. The
+mapping early accept remains before that walk `[04 R-AIR-01 §6a]`. Reading
+only the ground word allowed overlapping aircraft to descend together. The
+later touchdown was refused with grounded request mode and airborne accepted
+mirror; a following construction patrol then skipped takeoff while the flight
+integrator remained inactive. `landing_overlap_test.go` locks both-plane
+admission, the mapping exception, and landing followed by construction patrol
+for overlapping and separated aircraft in Strict and Modern.
+The stock-asset counterpart, `TestRetailLandedAircraftResumePatrolAssistance`,
+checks that each aircraft then contributes an actual nanoframe fraction
+reduction through the composed construction service.
+
 Air attack preparation uses the inhibit-all slot verb, not target binding.
 The strafing and hover release phases and the bomber release phase bind only
 slot zero; dogfight phase one inhibits all, then releases and binds slot zero.

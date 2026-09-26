@@ -315,18 +315,6 @@ func megamapUnitView(f *frame.Frame, slots []int, h pool.Handle) (*frame.UnitVie
 	return &f.Units[slots[int(h)]-1], true
 }
 
-// megamapContactAdmitted is the minimap's contact gate without its blink term:
-// the megamap shows the same admitted contacts as the minimap, and its own
-// flash is the separate UnderAttackFlash rule [draw-engine-interface "Unit
-// icons"][03 §3.9].
-func (b *battleSession) megamapContactAdmitted(f *frame.Frame, p *frame.RadarContactView) bool {
-	if p.Kind != frame.RadarContactUnit {
-		return false
-	}
-	c := render.MinimapContact{Owner: p.Owner, Status: p.Status, Visible: p.Visible, LocalPlayer: f.ViewingPlayer, Options: b.radarOptions, MinimapMode: f.Radar.MappingLOS}
-	return radarContactAdmitted(c, render.BlinkState{})
-}
-
 // megamapIdentified is the LOS helper's identification: own units, and units
 // the painter's visibility predicate shows the viewer. Anything else admitted
 // is a contact drawn with the `nothing` picture.
@@ -361,7 +349,7 @@ func (b *battleSession) megamapHoverUnit(f *frame.Frame, x, y int32) pool.Handle
 	slots := b.megamapUnitSlots(f)
 	for i := range f.Radar.Contacts {
 		p := &f.Radar.Contacts[i]
-		if !b.megamapContactAdmitted(f, p) {
+		if !b.radarUnitContactAdmitted(f, p) {
 			continue
 		}
 		u, ok := megamapUnitView(f, slots, p.Handle)

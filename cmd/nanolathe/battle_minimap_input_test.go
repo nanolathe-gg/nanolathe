@@ -147,6 +147,73 @@ func TestMinimapAttackTargetsRadarOnlyContact(t *testing.T) {
 	}
 }
 
+// The radar hover list shares contact admission with the blip pass, but a
+// damage blink does not remove the contact [03 §3.9][07 R-SEL-02B2].
+func TestMinimapHoverRequiresKnownContact(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  uint32
+		visible bool
+		options uint32
+		mode    uint8
+		blink   uint8
+		want    bool
+	}{
+		{name: "unseen enemy", mode: 3},
+		{name: "radar contact", status: visibility.SeenBit, visible: true, mode: 3, want: true},
+		{name: "friendly contact", status: visibility.FriendlyMask, mode: 3, want: true},
+		{name: "damage blink off", status: visibility.SeenBit, visible: true, mode: 3, blink: 7, want: true},
+		{name: "full radar", options: radarAllContactsOption, mode: 3, want: true},
+		{name: "unmasked map", mode: 0, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newTestBattle(testCatalogON05(), testWorldON05(40, 40))
+			dst := withMinimap(b)
+			const mx, my int32 = 70, 50
+			layout, _, _ := b.minimapLayout()
+			playW, playH, _ := b.sess.PlayArea()
+			wx, wz, ok := client.MinimapPointerWorld(layout, dst, playW, playH, mx, my)
+			if !ok {
+				t.Fatal("fixture pointer is outside the minimap")
+			}
+			target := placeUnit(b, "armcons", numeric.Fixed(wx)<<16, numeric.Fixed(wz)<<16)
+			target.Owner = 1
+			actor := placeUnit(b, "armcons", numeric.Fixed(8<<16), numeric.Fixed(8<<16))
+			actor.Def.CanAttack = true
+			replaceSelectionForTest(t, b, actor)
+			cur, _ := b.currentSnapshot()
+			written := b.sess.Snapshot.BeginWrite()
+			*written = *cur
+			written.Radar.Contacts = append([]frame.RadarContactView(nil), cur.Radar.Contacts...)
+			written.Radar.MappingLOS, written.Radar.BlinkPhase = tc.mode, 0
+			for i := range written.Radar.Contacts {
+				p := &written.Radar.Contacts[i]
+				if p.Handle == target.Handle {
+					p.Status, p.Visible, p.BlinkSuppress = tc.status, tc.visible, tc.blink
+				}
+			}
+			if err := b.sess.Snapshot.Publish(cur.Tick + 1); err != nil {
+				t.Fatal(err)
+			}
+			b.radarOptions = tc.options
+			_, picked, _ := b.pickTarget(mx, my)
+			b.updateFooterHover(mx, my)
+			if got := picked != nil; got != tc.want {
+				t.Fatalf("minimap picked target=%v, want %v", got, tc.want)
+			}
+			if got := b.footerHoverUnit != 0; got != tc.want {
+				t.Fatalf("minimap footer exposed target=%v, want %v", got, tc.want)
+			}
+			b.battleState().Input.Latch = input.LatchAttack
+			b.minimapClickOrder(nil, mx, my, false)
+			pending := b.sess.PendingHumanCommands()
+			if len(pending) != 1 || (pending[0].Order.Target == target.Handle) != tc.want {
+				t.Fatalf("minimap attack queued %+v, want known target=%v", pending, tc.want)
+			}
+		})
+	}
+}
+
 // TestMinimapShiftLeftClickQueues locks the Shift modifier reaching the queued
 // flag through the same producer [07 §9][P0-I14].
 func TestMinimapShiftLeftClickQueues(t *testing.T) {
