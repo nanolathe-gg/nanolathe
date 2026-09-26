@@ -793,6 +793,15 @@ func (s *System) padPieceFree(pad *units.Unit, piece uint16) bool {
 // timed pad recheck remain runnable while a marker has not arrived
 // [04 §3.3][04 R-AIR-01 §6].
 func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32) orders.Code {
+	if s.rules().RepairPadQueue(s) && len(u.Attachment.Cargo) == 0 {
+		return s.legQueuedRepairLanding(u, n, satisfied, tick)
+	}
+	return s.legPadLanding(u, n, satisfied, tick, nil)
+}
+
+// A Modern reservation changes admission, not the flight or repair machinery.
+// A nil reservation is the unmodified retail landing sequence.
+func (s *System) legPadLanding(u *units.Unit, n *orders.Node, satisfied uint32, tick uint32, reservation *repairLanding) orders.Code {
 	pad := s.unitFor(n.Target)
 	if pad == nil || !pad.Alive {
 		orders.NotifyStatus(u, 7, "Landing aborted")
@@ -810,9 +819,9 @@ func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32,
 		}
 		return 1
 	case 1:
-		piece, ok := s.queryLandingPad(pad)
+		piece, ok := s.landingPiece(pad, reservation)
 		if !ok || !s.padPieceFree(pad, piece) {
-			_, ok = s.queryLandingPad(pad)
+			_, ok = s.landingPiece(pad, reservation)
 		}
 		if ok {
 			n.Phase = 2
@@ -832,7 +841,7 @@ func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32,
 		n.DynamicGate = 0xE8
 		return 1
 	case 3:
-		piece, ok := s.queryLandingPad(pad)
+		piece, ok := s.landingPiece(pad, reservation)
 		if !ok {
 			orders.NotifyStatus(u, 7, "Landing failed")
 			return 0
@@ -852,7 +861,7 @@ func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32,
 		piece := uint16(n.Param1)
 		if !s.padPieceFree(pad, piece) {
 			var ok bool
-			piece, ok = s.queryLandingPad(pad)
+			piece, ok = s.landingPiece(pad, reservation)
 			if !ok {
 				orders.NotifyStatus(u, 7, "Landing aborted: all pads are occupied")
 				return 0
@@ -885,6 +894,12 @@ func (s *System) legVTOLLanding(u *units.Unit, n *orders.Node, satisfied uint32,
 		}
 		if len(u.Attachment.Cargo) == 0 {
 			AttachCargo(s.world, n.Target, u.Handle, int(piece))
+			if reservation != nil && padRepairsLander(u, pad) {
+				// Leave through the ordinary move executor after SelfRepair,
+				// including when there was no suspended order to free the pad.
+				goal := s.repairHoldingPoint(reservation)
+				airSpawnAtHead(u, "VTOL_Move", 0, goal, tick)
+			}
 			if padRepairsLander(u, pad) {
 				s.ReleaseGoalPayload(n)
 				airSpawnAtHead(u, "SelfRepair", n.Target, Vec3{X: u.X, Y: u.Y, Z: u.Z}, tick)

@@ -165,6 +165,10 @@ type System struct {
 	// happens to scan first.
 	airBases combat.AirBaseRegistry
 
+	// repairLandings holds Modern landing reservations in admission order.
+	// It is rebuilt after load; exact record and unit identities prevent reuse.
+	repairLandings []*repairLanding
+
 	// pathFailures is a publication diagnostic only. It never gates, counts, or
 	// schedules recovery; WantsRepath/LastRequestTick on Route own that state
 	// [04 R-MOV-01 §7][04 R-PATH-01 §8].
@@ -3358,6 +3362,7 @@ func (s *System) BeginTick(tick uint32) {
 	}
 	s.tick = tick
 	s.tickStarted = true
+	s.pruneRepairLandings()
 	s.BuildPendingLayers()
 	w := s.world
 	// The target registry's third list, on its own cadence — the call is made

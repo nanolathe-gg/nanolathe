@@ -846,6 +846,95 @@ Thunder releases a bomb and verifies another release at the new point in
 both modes. The ordinary distance and reload gates still decide how soon
 that release occurs [04 R-AIR-01 §8][06 §4.1].
 
+### Modern repair-pad queue
+
+**Nanolathe Modern policy (user-authorized 2026-09-25).** Aircraft seeking
+repair keep their landing order until a pad can take them. They reserve
+individual landing pieces before approaching, wait near the base when its
+pieces are occupied, and clear their piece after repair. `movement.Rules`
+owns the `RepairPadQueue` answer, selected by the existing session rule set:
+Modern enables it; Strict 3.1, Community 3.9 and an unbound system bypass it.
+The rule object remains stateless.
+
+**Strict baseline.** The free-piece predicate counts attached cargo only.
+Approaching aircraft can select the same piece. Losing it in the later
+landing phases restarts the landing sequence; losing the target abandons it.
+Phase 1's waiting radius is the first weapon's range, which can be zero.
+The seven phases, query ordering and single takeoff bearing draw are
+established in [04 R-AIR-01 §6]. Automatic repair seeking and its random base
+selection remain [04 R-AIR-01 §11]. This policy does not change those callers
+or their health threshold.
+
+**Modern behavior.** Empty aircraft landing on a builder airbase join a FIFO
+in the movement system on their first landing dispatch, with same-tick ties
+resolved by the ordinary unit visit order. Completed, activated bases must
+be owned by the aircraft or mutually allied, and not themselves carried.
+The base's script supplies its actual landing-piece identifiers. Existing
+reservations survive queries and marker replacement; free pieces are granted
+to waiting requests in queue order, in authored query order. Duplicate piece
+outputs never create extra capacity. Actual cargo occupancy always wins.
+Approach, descent and attachment use the ordinary landing machine; loss of a
+piece returns the aircraft to the queue rather than to its suspended order.
+
+A waiting record stays at the queue head and retries every 30 ticks,
+independently of marker arrival. Its marker commands the aircraft's authored
+cruise altitude. Holding stations start 192 world units from the base, with
+64-unit spacing and successive rings for larger queues; each choice considers
+sixteen cardinal/diagonal stations in deterministic order. These distances
+are Modern tuning, not retail facts. Stations must fit the aircraft's full
+footprint inside the map and be clear on the air occupancy plane. Among
+feasible stations, prefer those beyond the longest weapon range of every
+currently visible armed hostile, then separation from other waiting aircraft,
+then the greatest minimum clearance from those ranges. Hidden enemy positions
+are never read for scoring. This is conservative local avoidance, not a
+promise of safety at a besieged base or a global flight-path search. If every
+station is blocked, hold the current position and reconsider on the next
+deadline. Unarmed patients use the same holding geometry.
+
+If a base dies, is carried, changes allegiance or becomes unavailable, choose
+the nearest eligible live base, with the ordinary unit order breaking equal
+distances. Full bases remain eligible: fullness never causes queue hopping.
+With no eligible base, keep the landing and wait around its last known
+location until another base becomes available or the player cancels.
+
+Touchdown still creates the ordinary `SelfRepair` on the patient and bills
+the pad through the existing construction/economy admission
+[05 R-WORK-01 §3]. Waiting requests heal nothing and request no resources.
+For a damaged patient the landing also inserts an ordinary `VTOL_Move`
+behind `SelfRepair`, ahead of suspended orders, to leave the piece for a
+holding station after repair. This frees the pad even when no subsequent
+order existed. A healthy explicit parking command stays parked; loaded
+transports and non-repair landing targets retain their existing behavior.
+The queue, station scoring and reassignment make no direct RNG draws; the
+ordinary phase-0 bearing draw and authored script execution remain intact.
+
+**Lifetime and persistence.** Entries belong to one movement system and bind
+exact unit, order and pad identities. Canceling/replacing the order or freeing
+the aircraft releases its reservation. A temporary record ahead of the same
+landing keeps its reservation, because the retained landing marker can still
+steer the aircraft. Target removal invalidates the pad identity before handle
+reuse. Switching to Strict/Community clears bookkeeping at the next tick and
+runs their ordinary landing sequence; switching back re-admits live requests.
+There is no migration that undoes earlier Modern movement or issued moves.
+
+Reservations are transient and introduce no save schema. The ordinary landing
+phase, marker, retry deadline, repair and departure records already persist.
+After load, live landings rejoin in normal dispatch order and reacquire pieces
+before a fresh approach, including saved descent/touchdown phases. The
+pre-save FIFO order is not retained. No pad script query runs during restore.
+
+**Verification.** `movement.TestModernRepairQueueReservesAuthoredPiecesInOrder`
+locks exclusivity, FIFO, unarmed holding, no healing while waiting and RNG;
+`TestRepairQueueStrictBypassAndSwitches` locks the retail collision and draw
+behavior and both switch directions. The queue lifecycle, visible-threat and
+restore tests cover cancellation, suspension, identity reuse, lost bases,
+occupied holding stations and re-admission before touchdown.
+`airdiag.TestModernAircraftRepairQueueDrains` runs five retail aircraft through
+one retail pad with real flight, COB, resource admission and departure.
+Run the movement/order/airdiag contracts, both repository gates and the
+displayless simulation-cost benchmark. Ground path search and its policies
+are unchanged; this queue never submits a path request.
+
 ### 3.4.1 Modern bomber pass completion
 
 **Nanolathe Modern policy.** An accepted bombing pass may finish before its

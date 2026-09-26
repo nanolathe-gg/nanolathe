@@ -31,6 +31,12 @@ import "github.com/nanolathe-gg/nanolathe/internal/units"
 // allocates nothing; the learned grid and the unreachable-move and
 // pocket-release certificates belong to the System.
 type Rules interface {
+	// RepairPadQueue reserves landing pieces for approaching aircraft and
+	// keeps other patients waiting near the base until a piece becomes free.
+	// Nanolathe Modern policy: DESIGN_MOVEMENT_PATH "Modern repair-pad queue".
+	// The answer is pure; the System owns the queue, never the rule object.
+	RepairPadQueue(*System) bool
+
 	// ClaimConflict reports whether claimant displaces incumbent from one
 	// contested occupancy cell. ArbitrateOverlap asks it for every ground,
 	// air and building/yard stamp, including a restamp after a host vacates.
@@ -161,6 +167,9 @@ type StrictRules struct{}
 // every unchanged answer remains retail's; Community movement contracts
 // override only the questions they own without changing the other layers.
 type CommunityRules struct{ StrictRules }
+
+func (StrictRules) RepairPadQueue(*System) bool  { return false }
+func (*ModernRules) RepairPadQueue(*System) bool { return true }
 
 // ClaimConflict preserves retail's owner-state branch under Strict 3.1.
 func (StrictRules) ClaimConflict(s *System, incumbent, _ int) bool {

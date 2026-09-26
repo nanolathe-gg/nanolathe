@@ -24,6 +24,11 @@ func (s *System) ForgetUnit(h pool.Handle) {
 	if s == nil {
 		return
 	}
+	for i := len(s.repairLandings) - 1; i >= 0; i-- {
+		if s.repairLandings[i].unit.Handle == h {
+			s.discardRepairLanding(s.repairLandings[i].node)
+		}
+	}
 	// Release the grid stamp before the collision record that describes it.
 	if coll := handleRow(s.Collisions, h); coll != nil && s.Grid != nil {
 		if coll.Building && len(coll.Yard) == int(coll.FootPrintX)*int(coll.FootPrintZ) {

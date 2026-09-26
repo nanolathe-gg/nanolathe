@@ -115,6 +115,7 @@ func (s *System) ReleaseGoalPayload(n *orders.Node) bool {
 		return false
 	}
 	s.discardModernClearance(n)
+	s.discardRepairLanding(n)
 	return s.releaseRecordGoal(n)
 }
 
@@ -125,6 +126,11 @@ func (s *System) ReleaseGoalPayload(n *orders.Node) bool {
 func (s *System) TargetRemoved(target pool.Handle) {
 	if s == nil || target == 0 {
 		return
+	}
+	for _, e := range s.repairLandings {
+		if e.pad != nil && e.pad.Handle == target {
+			e.pad, e.reserved = nil, false
+		}
 	}
 	for _, row := range s.recordGoals {
 		for _, owned := range row {

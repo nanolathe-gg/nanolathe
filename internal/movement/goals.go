@@ -60,6 +60,7 @@ func (s *System) ReleaseGoal(n *orders.Node) bool {
 		return false
 	}
 	s.discardModernClearance(n)
+	s.discardRepairLanding(n)
 	s.deleteRecordGoal(n, false)
 	return true
 }
