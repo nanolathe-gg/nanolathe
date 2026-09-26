@@ -223,6 +223,9 @@ func TestProfileRecommendations(t *testing.T) {
 		} else if name == "zero" {
 			wantControls, wantMinimum = "zero", "community-3.9"
 		}
+		if name == "escalation" {
+			wantMinimum = "community-3.9"
+		}
 		if profile.Controls != wantControls || profile.MinimumGameplay != wantMinimum {
 			t.Errorf("%s recommends controls %q, minimum %q", name, profile.Controls, profile.MinimumGameplay)
 		}

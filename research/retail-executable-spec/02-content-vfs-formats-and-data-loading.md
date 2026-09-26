@@ -1123,6 +1123,13 @@ The feature-record equivalent is different: a feature name found in no parsed
 feature node raises the fatal diagnostic `Record "%s" missing from feature
 files` (§5 above).
 
+**Established — scope of the feature model requirement.** The feature parser
+takes a requested section name and appends that definition to the catalog
+[05 R-FEAT-01 §1]. A section merely present in a loaded feature TDF is not a
+request to compile its model. The fatal model policy above applies to the
+requested definition, including its requested successors; it does not require
+loading every unused feature section's model at startup.
+
 ### Unit catalog discovery: enumeration, the sentinel record, the per-file reads, and the three drop gates [R-CAT-01 §4]
 
 This is the first of the two stages §5 opens with, as the executable runs

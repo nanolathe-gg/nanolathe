@@ -2008,13 +2008,15 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			yard = nil
 		}
 	}
-	if footX <= 0 {
+	// The resolved mobile profile owns its exact extents, including an empty
+	// pair; stamp and carried commits must not fabricate a cell [04 R-P0-08-C].
+	if footX < 0 {
 		footX = int16(u.Def.FootprintX)
 		if footX <= 0 {
 			footX = 1
 		}
 	}
-	if footZ <= 0 {
+	if footZ < 0 {
 		footZ = int16(u.Def.FootprintZ)
 		if footZ <= 0 {
 			footZ = 1
@@ -3729,7 +3731,13 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// blocked ticks included [04 R-COLL-01 §1]. It is the age term the
 		// hover bob of [04 R-MOV-01 §5] reads.
 		coll.LastProposalTick = tick
-		fastPath, isBlocked = coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+		// Bounds precede the mobile cell walk even when an empty footprint
+		// invokes no per-cell callback [04 R-P0-08-C].
+		var emptyBounds func() bool
+		if fx == 0 || fz == 0 {
+			emptyBounds = func() bool { return inBounds || coll.Mode == 2 }
+		}
+		fastPath, isBlocked = coll.CommitOne(s.Grid, coll.Mode, perCell, emptyBounds) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
 	}
 	blocked = isBlocked
 	if isBlocked && staticReject {

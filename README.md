@@ -76,6 +76,7 @@ Mods can live in separate directories. Repeat `--root` in load order:
 ```
 
 For ProTA 4.8, see the [ProTA setup and support notes](docs/PROTA_SUPPORT.md).
+For Escalation Gold 10.2.0, see the [Escalation support notes](docs/ESCALATION_SUPPORT.md).
 For TA Zero Alpha 5, see the [TA Zero setup and support notes](docs/TA_ZERO_SUPPORT.md).
 
 Every later root overrides earlier roots, even when a later `totala1.hpi`

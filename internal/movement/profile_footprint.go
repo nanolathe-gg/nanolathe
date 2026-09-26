@@ -6,10 +6,10 @@ func commitRectInBounds(t *world.Terrain, anchor Cell, fx, fz int16) bool {
 	if t == nil {
 		return true
 	}
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	return anchor.X >= 0 && anchor.Z >= 0 &&

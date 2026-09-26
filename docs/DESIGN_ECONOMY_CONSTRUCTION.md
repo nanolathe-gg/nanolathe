@@ -222,6 +222,19 @@ stamped cells in lockstep with its current door state, which is what makes a
 factory exit legal — the producer no longer holds the cells its open yard
 released `[04 R-COLL-01 §3]`.
 
+**Empty mobile factory products.** Nonnegative mobile extents with either
+axis zero are retained throughout queue preflight, `QueryBuildInfo`, typed
+placement, allocation and carried movement [04 R-P0-08-C]. Their empty cell
+walk needs no ground class or terrain limits; it still checks nonnegative
+anchors and strict upper map bounds. No ground profile is synthesized and no
+cell is reserved, stamped or cleared. The ordinary factory attachment,
+construction payment, completion and COB lifecycle remain responsible for the
+product. This supports inert content built by a parent without a mod-specific
+upgrade path. Nonempty ground products retain existing profile admission;
+building-class empty extents and negative extents remain rejected. The typed
+extent's unconstructed zero value stays invalid, distinct from an explicitly
+constructed empty pair.
+
 **Admission diagnostics** (`debug_capture.go`). This is Nanolathe diagnostic
 policy: a 256-entry ring retains recent factory placement outcomes, in visit
 order, with total recorded (including evicted) and evicted counts. Permanent

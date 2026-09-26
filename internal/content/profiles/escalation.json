@@ -1,6 +1,7 @@
 {
   "gameplay": {"table": "escalation"},
   "name": "escalation",
+  "minimumGameplay": "community-3.9",
   "detect": [
     "aE",
     "downloadsE",

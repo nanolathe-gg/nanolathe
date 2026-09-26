@@ -9169,6 +9169,46 @@ class-specific footprint validation → allocate the product only on success. A
 blocked factory exit schedules an exact 15-tick retry before allocation,
 emitting no product, sound, or placement event.
 
+**Established — empty mobile footprints [R-P0-08-C].** A non-building
+definition with nonnegative extents and either extent zero has an empty
+footprint. The mobile validator still requires nonnegative anchor coordinates
+and `anchorX + footprintX < mapWidth`, `anchorZ + footprintZ < mapHeight`.
+After these bounds, its row loop runs only for a positive depth and each
+row's cell loop only for a positive width. Thus an empty footprint accepts
+without inspecting features, occupants or terrain. This holds for both a
+zero-by-zero footprint and a single zero dimension; there is no replacement
+one-cell footprint. These conclusions are direct static trace of the shared
+validator and its factory caller.
+
+The factory caller uses the definition's selected extents unchanged in its
+half-extent snap, and allocates at the original build-piece world transform. It does not
+require a named movement class. The definition loader copies both extents
+from a resolved named class, including zero values, regardless of the FBI
+extents. Only when no named
+class resolves does it use the unit's own FBI movement record. The empty
+footprint condition therefore applies to that selected pair, not to the
+original FBI values before class resolution; the validator reads the
+copied footprint and limits directly from the definition, never the class
+pointer. The ordinary initializer copies that exact size pair. `BMcode=1`
+still allocates an ordinary mover, whose class reference may be absent;
+factory attachment and completion follow [R-FAC-02] without an empty-size
+branch. This establishes admission and the existing carried lifecycle, not a
+new order or special upgrade mechanism.
+
+The occupancy stamp and clear likewise enter a cell body only when both
+extents are positive [R-COLL-01 §4]. An empty mobile rectangle therefore
+writes neither occupancy plane and raises no cell-overlap flags. Bounds
+classification, sector filing, cached anchor and carried-position updates
+still run normally. The sector visitor selects candidates with the four
+strict comparisons
+`aMin < bEnd` and `bMin < aEnd` on both axes with no positive-extent guard.
+A degenerate interval strictly inside another can therefore be visited,
+including on the cargo walk. Its eventual empty stamp still writes no cells;
+"no cell overlap flags" does not imply exclusion from this candidate scan.
+The half-extent anchor formula of [R-COLL-01 §1] retains
+zero on the corresponding axis. Negative extents and building-class empty
+yard/terrain aggregate behavior are outside this closure.
+
 **Exit spots overlap the producing factory's own body [R-P0-08-A §1]
 (Established).** Stock factory COBs author their build-info door piece
 inside their own footprint, so the snapped exit rectangle always intersects

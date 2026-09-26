@@ -421,6 +421,11 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 //
 // It draws no random number [05 R-WORK-01 §3, "repair's randomness"].
 func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
+	// TODO(question): Gold 10.2.0 shield generators author HealTime=1,
+	// yielding zero work through this retail caller. Keep the retail cadence
+	// and quantum until licensed historical source or bounded manual evidence
+	// settles the extension caller; the repair helper alone does not do so.
+	// [research/extensions/escalation-shields.md "Unresolved passive generator healing"]
 	if s == nil || u == nil || u.Def == nil || s.Build == nil {
 		return
 	}

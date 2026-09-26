@@ -8,7 +8,7 @@ import (
 )
 
 func TestPlacementConversionRejectsInvalidExtents(t *testing.T) {
-	for _, tc := range [][2]int32{{0, 1}, {1, 0}, {-1, 2}, {2, -1}} {
+	for _, tc := range [][2]int32{{-1, 0}, {0, -1}, {-1, 2}, {2, -1}} {
 		if _, err := NewFootprintExtent(tc[0], tc[1]); !errors.Is(err, ErrInvalidFootprint) {
 			t.Errorf("NewFootprintExtent(%d,%d) error = %v, want ErrInvalidFootprint", tc[0], tc[1], err)
 		}

@@ -562,6 +562,9 @@ func occupantSlot(id int) int32 { return int32(id) + 1 }
 // the planes are already the map's size and the caller has passed RectOnMap,
 // so this is a bounds test and nothing more.
 func (g *OccupancyGrid) reserveRect(anchor Cell, fx, fz int16) bool {
+	if fx == 0 || fz == 0 {
+		return true // no storage to reserve for an empty rectangle [04 R-P0-08-C]
+	}
 	if anchor.X < 0 || anchor.Z < 0 {
 		return false
 	}
@@ -704,10 +707,10 @@ func (g *OccupancyGrid) RectOnMap(anchor Cell, fx, fz int16) bool {
 	if g == nil || g.plot == nil {
 		return true
 	}
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	// Steps 1–4 are `cellX < 0`, `cellZ < 0`, `cellX + fx >= width`,
@@ -793,16 +796,16 @@ func (g *OccupancyGrid) OccupantAtPlane(plane Plane, c Cell) (int, bool) {
 
 // FootprintOccupied reports whether any cell of the footprint anchored at
 // anchor with size fx × fz is occupied by an occupant other than ignoreID
-// [04 §8.2] C22 C25. fx or fz ≤0 is treated as 1 [profile.go fixture].
+// [04 §8.2] C22 C25. Zero extents visit no cells [04 R-P0-08-C].
 // Scan is row-major [04 §8.2] C25 (dz outer, dx inner) with immediate return.
 func (g *OccupancyGrid) FootprintOccupied(anchor Cell, fx, fz int16, ignoreID int) bool {
 	if g == nil {
 		return false
 	}
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	if g.cells == nil {
@@ -860,12 +863,14 @@ func (g *OccupancyGrid) StampPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	if g == nil {
 		return false
 	}
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
+	// Empty mobile rectangles retain sector filing but visit no cell below
+	// [04 R-P0-08-C].
 	// The sector relink runs on every stamp call ahead of everything else,
 	// the off-map filing included [04 R-COLL-01 §4A][04 R-COLL-01 §11].
 	g.fileUnit(id, anchor, fx, fz)
@@ -985,10 +990,10 @@ func (g *OccupancyGrid) ClearPlane(plane Plane, anchor Cell, fx, fz int16, id in
 	// word this identity holds is cleared whether or not the plane was ever
 	// written. That is why this is not an early return.
 	cells := g.plane(plane)
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	word, wordFits := occupancyWord(id)
@@ -1089,10 +1094,10 @@ func (g *OccupancyGrid) overlapScan(clearing int, anchor Cell, fx, fz int16) {
 	if a, rx, rz, ok := g.overlap.OverlapRect(clearing); ok {
 		anchor, fx, fz = a, rx, rz
 	}
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	// The span: the rectangle's own sectors, one sector of margin on every
@@ -1404,10 +1409,10 @@ func (g *OccupancyGrid) unitSector(id int, anchor Cell, fx, fz int16, positions 
 			return x >> sectorWorldShift, z >> sectorWorldShift, true
 		}
 	}
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	cx := int64(anchor.X)*worldUnitsPerCell + int64(fx)*worldUnitsPerCell/2
@@ -1433,19 +1438,21 @@ func (g *OccupancyGrid) Restamp(id int) {
 	g.overlap.RestampFootprint(id)
 }
 
-// rectsIntersect reports whether two cell rectangles share a cell. Both are
-// half-open in each axis, as every footprint rectangle in this file is.
+// rectsIntersect is the sector visitor's four strict interval comparisons
+// [04 R-P0-08-C][04 R-COLL-01 §4A]. Retail has no empty-axis rejection here:
+// a degenerate interval inside another is a candidate, although its later
+// stamp visits no cells. Do not replace this with a shared-cell predicate.
 func rectsIntersect(a Cell, afx, afz int16, b Cell, bfx, bfz int16) bool {
-	if afx <= 0 {
+	if afx < 0 {
 		afx = 1
 	}
-	if afz <= 0 {
+	if afz < 0 {
 		afz = 1
 	}
-	if bfx <= 0 {
+	if bfx < 0 {
 		bfx = 1
 	}
-	if bfz <= 0 {
+	if bfz < 0 {
 		bfz = 1
 	}
 	return a.X < b.X+int32(bfx) && b.X < a.X+int32(afx) &&
@@ -1526,13 +1533,13 @@ func (g *OccupancyGrid) Count() int {
 // aggregate: optional gate after scan; if non-nil and returns false the
 // footprint is rejected [04 §8.2] C25 aggregate after scan.
 //
-// fx or fz ≤0 treated as 1 (profile.go fixture). Deterministic row-major
+// Zero extents visit no cells [04 R-P0-08-C]. Deterministic row-major
 // (dz outer, dx inner) [I1][04 §8.2] C25.
 func ValidateFootprint(anchor Cell, fx, fz int16, perCell func(Cell) bool, aggregate func() bool) bool { // [04 §8.2] C25
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	for dz := int32(0); dz < int32(fz); dz++ {
@@ -1662,10 +1669,10 @@ func (s *CollisionState) HalfBias() (int32, int32) {
 	bx, bz := s.halfBiasX, s.halfBiasZ
 	if !s.halfBiasSet {
 		fx, fz := s.FootPrintX, s.FootPrintZ
-		if fx <= 0 {
+		if fx < 0 {
 			fx = 1
 		}
-		if fz <= 0 {
+		if fz < 0 {
 			fz = 1
 		}
 		halfCell := int64(worldUnitsPerCell / 2)
@@ -1785,10 +1792,10 @@ func (s *CollisionState) applyBlockedProposal(proposedX, proposedZ int32) {
 	// clamp X and Z against OLD footprint boundary using 0x7FFFF [04 §8.2] C24
 	// centre = oldAnchor*cell + halfSpan for every footprint size [GAP 04-P1-GROUND]
 	fx, fz := s.FootPrintX, s.FootPrintZ
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	halfSpanX := int64(fx) * worldUnitsPerCell / 2
@@ -1968,10 +1975,10 @@ func (s *System) OverlapRect(id int) (Cell, int16, int16, bool) {
 		return Cell{}, 0, 0, false
 	}
 	fx, fz := coll.FootPrintX, coll.FootPrintZ
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	return coll.CachedAnchor, fx, fz, true
@@ -2109,10 +2116,10 @@ func (s *System) RestampFootprint(id int) {
 		return
 	}
 	fx, fz := coll.FootPrintX, coll.FootPrintZ
-	if fx <= 0 {
+	if fx < 0 {
 		fx = 1
 	}
-	if fz <= 0 {
+	if fz < 0 {
 		fz = 1
 	}
 	if coll.Building {

@@ -28,6 +28,8 @@ func TestPlacementRulesClasslessGroundIsPermanentError(t *testing.T) {
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "broken"},
 		UnitName:         "broken",
 		BMCode:           1,
+		FootprintX:       1,
+		FootprintZ:       1,
 	}
 	_, err := PlacementRulesForUnit(&content.Catalog{Movement: map[string]*content.MovementClass{}}, def)
 	if !errors.Is(err, ErrUnclassifiedMobile) {

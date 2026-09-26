@@ -59,10 +59,12 @@ type restoreCoreFixtureUnit struct {
 func newRestoreCoreFixture(t *testing.T, n int) (*Session, []restoreCoreFixtureUnit) {
 	t.Helper()
 	def := &content.UnitDef{
-		UnitName:  "fixture",
-		MaxDamage: 100,
-		BMCode:    1, // mobile: EnsureUnit takes the rectangle-stamp path, not the yard-map one
-		Script:    &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}},
+		UnitName:   "fixture",
+		MaxDamage:  100,
+		FootprintX: 1,
+		FootprintZ: 1,
+		BMCode:     1, // mobile: EnsureUnit takes the rectangle-stamp path, not the yard-map one
+		Script:     &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}},
 	}
 	// Player 0's slice runs [1, maxDefs]; size it well past the stable IDs
 	// (7, 8, ...) the tests below use so CreateWithForcedSlot never rejects a

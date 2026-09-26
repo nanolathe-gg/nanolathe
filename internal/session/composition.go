@@ -640,6 +640,15 @@ func loadTerrainStrict(fs vfs.FSOps, cat *content.Catalog, m *mission.Mission, e
 	if err != nil {
 		return nil, fmt.Errorf("session: terrain %q: %w", key, err)
 	}
+	var featureModels []string
+	for _, placement := range m.Features {
+		if placement.IsPlaced() && cat.Features[content.CanonicalKey(placement.Name)] != nil {
+			featureModels = append(featureModels, placement.Name)
+		}
+	}
+	if err := cat.ValidateFeatureModels(fs, featureModels); err != nil {
+		return nil, err
+	}
 	if err := applySchemaStrict(terrain, cat, m); err != nil {
 		return nil, err
 	}

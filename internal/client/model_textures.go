@@ -6,7 +6,6 @@ package client
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -171,7 +170,7 @@ func NewModelTextureRegistry(fs *vfs.FS, cat *content.Catalog, terrain *world.Te
 	if err := r.bindProjectileModels(cat); err != nil {
 		return nil, fmt.Errorf("bind projectile models: %w", err)
 	}
-	if err := r.prepareFeatureModels(cat); err != nil {
+	if err := r.prepareFeatureModels(cat, terrain); err != nil {
 		return nil, fmt.Errorf("prepare feature models: %w", err)
 	}
 	preRestore, postRestore := terrainDefinitionBoundary(terrain, restoreStart)
@@ -308,35 +307,42 @@ func (r *ModelTextureRegistry) AdmitFeatureDefinition(def *content.FeatureDef) {
 	}
 }
 
-func (r *ModelTextureRegistry) prepareFeatureModels(cat *content.Catalog) error {
-	type featureKey struct {
-		key       string
-		canonical string
-	}
-	keys := make([]featureKey, 0, len(cat.Features))
-	for key, def := range cat.Features {
-		canonical := ckey(key)
-		if def != nil && ckey(def.CanonicalKey) != "" {
-			canonical = ckey(def.CanonicalKey)
+func (r *ModelTextureRegistry) prepareFeatureModels(cat *content.Catalog, terrain *world.Terrain) error {
+	// Parsing the feature files does not request every section's model
+	// [05 R-FEAT-01 §1]. Prepare only the battle's terrain/restore definitions,
+	// unit corpses and successor closure. Admission below still determines
+	// cursor order, and a later tick never reads the VFS [03 R-CRD-005 §1].
+	var roots []string
+	for _, unit := range cat.UnitRecords() {
+		if unit != nil && cat.Features[content.CanonicalKey(unit.Corpse)] != nil {
+			roots = append(roots, unit.Corpse)
 		}
-		keys = append(keys, featureKey{key: key, canonical: canonical})
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].canonical != keys[j].canonical {
-			return keys[i].canonical < keys[j].canonical
+	if terrain != nil {
+		for i, def := range terrain.FeatureDefs {
+			if def == nil {
+				continue
+			}
+			name := def.CanonicalKey
+			if name == "" && i < len(terrain.FeatureNames) {
+				name = terrain.FeatureNames[i]
+			}
+			roots = append(roots, name)
 		}
-		return keys[i].key < keys[j].key
-	})
-	for _, key := range keys {
-		def := cat.Features[key.key]
+	}
+	defs, err := cat.FeatureClosure(roots)
+	if err != nil {
+		return err
+	}
+	for _, def := range defs {
 		if def == nil || def.Object == "" {
 			continue
 		}
 		m, err := expandModelFromFSStrict(r.fs, def.Object)
 		if err != nil {
-			return fmt.Errorf("feature %q: %w", key.key, err)
+			return fmt.Errorf("feature %q: %w", def.CanonicalKey, err)
 		}
-		r.featurePrepared[key.canonical] = m
+		r.featurePrepared[ckey(def.CanonicalKey)] = m
 	}
 	return nil
 }

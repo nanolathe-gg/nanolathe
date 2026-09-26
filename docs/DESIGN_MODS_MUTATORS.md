@@ -152,7 +152,8 @@ mod:
 - A mod that omits `minimumGameplay` or `controls` takes the value its
   resolved content profile names, if any: shipped and user profiles carry the
   same two optional keys (`internal/content/profiles`; the shipped `prota`
-  profile names `community` and `community-3.9`). The metadata always wins.
+  profile names `community` and `community-3.9`, and `escalation` requires
+  `community-3.9` without imposing ProTA's controls preset). The metadata always wins.
   This is what gives a metadata-less local package (§4.5) its content set's
   recommendations.
 - `requires` lists logical paths that the **base** install must resolve, for
@@ -360,6 +361,11 @@ profile's, if the profile names them (§4.2): a ProTA package dropped without
 metadata gets ProTA's. Copying a prepared directory into the
 data directory by hand also works; it needs a metadata file and a receipt,
 which the screen can write with *Adopt*.
+
+Escalation Gold 10.2.0's package and tested capability boundaries are recorded
+in [Escalation support](ESCALATION_SUPPORT.md). Its catalog summary exposes the
+known passive-healing limitation, and its profile supplies the Community 3.9
+minimum without selecting the unrelated ProTA controls preset.
 
 ## 5. The remote catalogue
 
@@ -878,7 +884,7 @@ dependencies.
 | Extraction refuses absolute paths, `..`, symlinks and case-folded duplicates; skips executables and `__MACOSX`; enforces the caps; an interrupted install leaves nothing installed | `modlibrary` tests on authored fixture zips |
 | Metadata disagreeing with the manifest refuses the install; unmet `requires` block selection | `modlibrary` |
 | Precedence: `--mod` over setting, a manual stack disables both, a mod's profile beats a saved `contentProfile`, a command line below the minimum is rejected | `modlibrary`, `cmd/nanolathe` |
-| A mod without `controls` or `minimumGameplay` takes its content profile's; metadata wins; only `prota` ships them | `modlibrary.TestLocalPackageTakesItsProfileRecommendations`, `profiles.TestProfileRecommendations` |
+| A mod without `controls` or `minimumGameplay` takes its content profile's; metadata wins; ProTA recommends controls and a minimum, Escalation a minimum only | `modlibrary.TestLocalPackageTakesItsProfileRecommendations`, `profiles.TestProfileRecommendations` |
 | Preset contents, and the retail preset keeping skirmish rows; the offer key and its once-only record | `main.TestCommunityControlsPresetContents`, `main.TestRetailControlsPresetKeepsSkirmishRows`, `main.TestControlsOfferIsRememberedPerMod` |
 | A local ProTA package is offered its preset on the Mods & Mutators screen and once on the main menu after `--mod`; the loading line names the effective unit limit | `main.TestProTARecommendedSettingsAreOfferedOnce` (retail tier) |
 | SHA-256 and size mismatch, truncated download, resume, off-origin redirect refused, offline cache shown | `modfetch` against `httptest` |

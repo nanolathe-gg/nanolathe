@@ -731,6 +731,16 @@ row-major, returns immediately on a rejecting per-cell predicate, and applies
 the aggregate height, depth and slope gates after the scan `[04 §8.2]`
 `[04 R-COLL-01 §2]`.
 
+**Empty mobile occupancy.** The resolved mobile footprint retains authored
+zero dimensions [04 R-P0-08-C]. Collision anchor bias, strict bounds, sector
+filing, stamp, clear, restamp and carried-position updates use that exact
+pair. An empty cell loop cannot observe a blocker or change either occupancy
+plane; ordinary classless mover creation already retains the FBI scratch
+profile. The commit bounds gate runs even when there is no covered cell to
+invoke its per-cell callback. This closes the inert factory-product lifecycle;
+it does not change path-layer classification or route generation for empty
+footprints, nor admit malformed negative extents or empty buildings.
+
 #### Community contested-cell claims
 
 **Community 3.9 and Nanolathe Modern policy.** When the resolved Community

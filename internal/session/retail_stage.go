@@ -185,6 +185,25 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err != nil {
 		return nil, fmt.Errorf("session: retail map resolution: %w", err)
 	}
+	// The saved name table can introduce features absent from the original
+	// terrain and unit corpse lists [08 R-SAVE-FEATURE-01]. Validate models
+	// for records actually restored before allocating the detached session.
+	if image.Features.HasTypeNames {
+		var featureModels []string
+		for _, rows := range [][]save.FeatureRecord{image.Features.Normal, image.Features.Animating, image.Features.ThreeD} {
+			for _, row := range rows {
+				if int(row.TypeID) < len(image.Features.TypeNames) {
+					name := image.Features.TypeNames[row.TypeID]
+					if cat.Features[content.CanonicalKey(name)] != nil {
+						featureModels = append(featureModels, name)
+					}
+				}
+			}
+		}
+		if err := cat.ValidateFeatureModels(deps.FS, featureModels); err != nil {
+			return nil, err
+		}
+	}
 	unitsWorld, err := newBattleSlicedWorldWithCOBSized(cat, deps.FS, sessionKind, [pool.PlayerCount]uint32{}, poolRecords)
 	if err != nil {
 		return nil, err

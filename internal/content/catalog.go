@@ -336,7 +336,11 @@ func CompileWithOptions(fs vfs.FSOps, opts Options) (*Catalog, error) {
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelRecordCatalog(records)
-	if err := validateRequiredRecordModels(fs, records, weapons, features); err != nil {
+	corpseFeatures, err := unitCorpseFeatures(records, features)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRequiredRecordModels(fs, records, weapons, corpseFeatures); err != nil {
 		return nil, err
 	}
 	// The page-count byte is a per-record probe of the authored page windows,
@@ -1391,8 +1395,10 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 }
 
 // validateRequiredRecordModels reads each distinct named model once in
-// logical-path order. A named unit objectname, weapon model, or feature object
-// cannot degrade to an empty geometry record: retail sends its model-load
+// logical-path order. The supplied feature set contains requested definitions
+// and their successors, not every section discovered in feature files
+// [05 R-FEAT-01 §1][02 R-MAP-01 §8]. A named unit objectname, weapon model, or
+// feature object cannot degrade to an empty geometry record: retail sends its model-load
 // failure to the fatal channel [02 "Cross-reference failure policy"]
 // [02 R-CAT-01 §5]. Empty model fields remain their record family's distinct
 // authored policy. Feature animation sequences are deliberately absent here;

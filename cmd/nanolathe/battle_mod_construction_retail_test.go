@@ -23,7 +23,7 @@ func TestRetailModFactoryConstructionFromModernMenu(t *testing.T) {
 	for _, mod := range []struct {
 		name  string
 		sides int
-	}{{"prota", 2}, {"zero", 3}} {
+	}{{"prota", 2}, {"zero", 3}, {"escalation", 2}} {
 		roots := filepath.SplitList(os.Getenv("NANOLATHE_MOD_ROOTS_" + strings.ToUpper(mod.name)))
 		for side := 0; side < mod.sides; side++ {
 			t.Run(fmt.Sprintf("%s/side%d", mod.name, side), func(t *testing.T) {

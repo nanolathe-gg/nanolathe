@@ -192,7 +192,7 @@ func (s *Service) handleState2(factory *units.Unit, node *orders.Node, tick uint
 		}
 	}
 	footX, footZ := int(geometry.FootprintX), int(geometry.FootprintZ)
-	if footX <= 0 || footZ <= 0 {
+	if footX < 0 || footZ < 0 || (def.BMCode == 0 && (footX == 0 || footZ == 0)) {
 		s.rejectPermanent(factory, node, tick,
 			fmt.Errorf("%w: product %q has malformed footprint %dx%d", world.ErrMissingPlacementDefinition, def.UnitName, footX, footZ))
 		return

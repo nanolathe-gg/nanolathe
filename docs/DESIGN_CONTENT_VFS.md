@@ -961,9 +961,10 @@ user-authored-profile paths, and — on an authored fixture install published
 twice, once retail-named and once under TA: Escalation's names — an identical
 catalog hash and retail-named provenance. The retail tier adds the real
 content sets when their roots are given by environment variable: TA Zero and
-ProTA compile through their directory tables and profile limits. Escalation
-passes the definition and read caps but still stops on missing corpse models;
-this is not a claim of complete gameplay support for any mod. The Escalation
+ProTA and Escalation compile through their directory tables and profile limits.
+Escalation's unused corpse sections do not request their absent models;
+requested features retain the fatal model policy described below. This is not
+a claim of complete historical engine equivalence for any mod. The Escalation
 test separately exercises ranged header reads and the deliberately range-less
 fallback's rejection under retail caps. Synthetic terrain, menu and radar
 fixtures lock exact-size admission, smaller-cap rejection and authored versus
@@ -974,6 +975,27 @@ locks the domain itself: an authored set of 600 definitions is refused under
 profile domain of 16000, with identity, membership and intersection holding on
 both sides of ID 511; a definition's digest does not move when the domain is
 widened; and a domain past the runtime identity width is refused.
+
+**Requested feature models.** The catalog retains every parsed feature
+definition, but compilation validates models only for the compiled units'
+corpse roots and their dead/reclaim/burnt successor closure. This matches the
+name-driven feature parser [05 R-FEAT-01 §§1, 2]; a feature section's presence
+in a TDF does not request its model. `Catalog.FeatureClosure` deduplicates
+cycles and shared successors without changing definitions or catalog identity.
+`ValidateFeatureModels` preserves fatal errors for absent or invalid named
+models [02 "Cross-reference failure policy"]. Terrain loading validates the
+resolved TNT feature-table roots, mission entry validates its placed feature
+roots, and save staging validates the feature names actually used by saved
+records before adopting a restored session. Missing unit corpse names retain
+their separate no-wreck policy. Existing unresolved terrain/mission-name
+handling remains with those loaders.
+
+The model-texture registry preloads the same battle roots and successors,
+including the restored terrain suffix, before binding them in its established
+admission order [03 R-CRD-005 §1]. It never loads an unused feature model or
+reads a file during a tick. The Gold 10.2.0 case and its authored reachability
+evidence are recorded in
+[mod-engine compatibility](../research/extensions/mod-engine-compatibility.md#missing-model-and-texture-references).
 
 **Ordered roots and host discovery (Nanolathe policy).** The user-requested
 startup extension accepts repeated `--root` in both commands. Command-line

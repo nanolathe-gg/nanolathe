@@ -365,12 +365,15 @@ case-folded logical paths and reads the overlay winner without donor files.
 The corpus includes mounted but potentially unused assets; file identities
 below hash decoded authored resource bytes with SHA-256.
 
-**Established — admission.** ProTA compiles 317 unit definitions and Zero 269.
-Escalation admits its enlarged definition/map/LOS domains but stops at
-`objects3d/armast_dead.3do`. The existing
-`TestEscalationContentSetStopsAtItsPackagingGap` passes by asserting that
-failure. Conversely, `cmd/modinventory` deliberately inserts donors following
-missing-resource errors; its tolerant report does not prove original art loads.
+**Established — admission at the audited revision.** ProTA compiles 317 unit
+definitions and Zero 269. Escalation passed its enlarged definition/map/LOS
+domains but stopped at `objects3d/armast_dead.3do`. The requested-feature
+correction described under "Missing model and texture references" closes that
+admission failure: `TestEscalationContentSetCompilesWithoutUnusedFeatureModels`
+compiles the original package and separately requires an error when one of the
+unused missing-model definitions is explicitly requested. Conversely,
+`cmd/modinventory` deliberately inserts donors following missing-resource
+errors; its tolerant report does not prove original art loads.
 
 | Corpus | Decoded 3DOs | GAF banks decoded under default limits | Banks rejected by pixel budget | Unresolved textured-face names |
 |---|---:|---:|---:|---:|
@@ -384,14 +387,14 @@ the winning `textures/*.gaf` banks, case-insensitively. It establishes presence,
 not duplicate-entry precedence, face visibility, or an original-engine lookup
 rule absent from this probe.
 
-### Large effect banks exceed a host budget
+### Large effect banks exceeded the eager host budget
 
-**Established — authored content and host observation.** Four banks fail the
-production default GAF limit of 134,217,728 unique decoded pixels. Pixel-free
+**Established — authored content and original 2026-09-22 host observation.**
+Four banks failed the production default GAF limit of 134,217,728 unique decoded pixels. Pixel-free
 metadata validation succeeds when only the probe's aggregate/expanded pixel
 budgets are enlarged. The counts sum `width × height` once per distinct frame,
 including composite children: they are geometry budgets, not encoded sizes or
-peak-memory estimates. No production limit was changed.
+peak-memory estimates. That audit changed no production limit.
 
 | Bank under `anims/` | Encoded bytes | Unique frame pixels | Largest frame pixels |
 |---|---:|---:|---:|
@@ -415,15 +418,35 @@ its other faction weapon files use the bank too. Escalation's
 `esc_nuke_x_01` for `CANNON_OLYMPUS`, and `esc_nuke_a_02` for `NUKE_SSILO`,
 including water/lava variants. These files have active authored references.
 
-**Established — host consequence.** `formats.LoadGAFFile` uses that aggregate
-limit; `internal/client.EffectBank` records a diagnostic and caches a null bank
-when loading fails. The metadata loader enforces the same geometry budget.
-Thus catalog success can coexist with unresolved effect art. **Unknown — full
-presentation:** raster materialization, upload/atlas use, memory cost and
-all-frame appearance remain unverified. Settling evidence is a bounded host
-loading strategy and captures across the authored effect's complete lifetime
-on both renderers, retaining actual bank identity. Raising a file-read cap
-alone cannot fix this decoded-pixel failure.
+**Established — original host consequence.** The eager loader's aggregate
+limit made `internal/client.EffectBank` diagnose and cache a null bank. Catalog
+success therefore coexisted with unresolved effect art.
+
+**Established — bounded host closure, 2026-09-26.** The presentation path now
+validates an immutable encoded `formats.GAFSource` and decodes only requested
+root frames. Its source, decoded-frame, durable-atlas and transient-GPU caches
+have explicit byte and entry budgets, with current-draw images pinned through
+execution. Eager format callers retain their old limits. Every root in the
+three identified Escalation banks decoded successfully (158 roots); the
+largest materialized root occupied 47,962,888 bytes. Direct Classic and Modern
+captures of representative large roots matched byte for byte. The same audit
+of Zero's `ModFX`, `ModFX2` and `ModFX3` decoded every root and produced identical
+Classic/Modern captures of each bank's largest root. An ordinary event-buffer
+fixture also exercised Escalation `esc_nuke_a_02` through the effect service,
+frame publication and client composition: its 64 frames lasted two ticks each,
+were observed at frames 0, 32 and 63, and retired at tick 129. No sprite art was
+missing or skipped. The middle, tail and retired Classic/Modern images matched;
+the opening Modern ground-light effect deliberately differed. This proves the
+existing event lifecycle for that bank, not weapon-impact creation or every
+sequence. These are host observations against the identified authored resources, not historical engine
+comparisons. Implementation and budgets are owned by
+[GPU renderer, bounded effect residency](../../docs/DESIGN_GPU_RENDERER.md).
+
+**Unknown — full presentation.** The decoder sweep and direct root captures
+close admission, materialization and the exercised upload path. They do not
+certify every authored effect's complete battle lifetime or all-frame visual
+fidelity. Those claims require ordinary effect-event captures throughout the
+sequence on both renderers, retaining the actual bank identities.
 
 ### Missing model and texture references
 
@@ -438,9 +461,24 @@ by corresponding corpse sections:
 | `corcapsub_dead.3do` | `CORE_T2_corpses.tdf` |
 | `cortrog_dead.3do` | `CORE_T5_corpses.tdf` |
 
-**Unknown — package completion.** Determine whether another required authored
-archive supplies them, or whether the historical engine handles those
-references differently. A visually similar replacement settles neither.
+**Established — authored reachability, Gold 10.2.0 (2026-09-26).** The full
+manual release (`TAESC_GOLD_10_2_0_FULL.rar`, SHA-256
+`a9873e551d7fa72ad2f74ca37d8bbc7c873043d178979c842bbf8ed667eea2c3`)
+contains these feature sections but no unit definition, unit corpse link,
+incoming feature successor, terrain feature-table entry or mission placement
+requesting any of the five missing-model definitions. The audit includes the
+reference retail install beneath the seven primary Escalation archives and
+checks authored FBI, feature TDF, TNT and OTA records. The Arm/Core advanced
+shipyard names also occur in stale side build lists and weapon damage keys;
+those occurrences do not request a feature model.
+
+These are unused definitions, not a requirement to substitute wreck art.
+Retail's feature parser is invoked with a requested section name
+[05 R-FEAT-01 §1]; its fatal model policy applies when that feature is
+compiled [02 "Cross-reference failure policy"]. Nanolathe's earlier check
+requested every parsed feature model eagerly. Loading the requested feature
+closure instead preserves the missing-model error for a unit corpse, a map
+feature, a saved feature or any of their successors, without inventing art.
 
 **Established — Zero unresolved texture names.** `armcolormeta4_1` appears on
 `armcommander.3do` and `armt1aaturret.3do`; `goksphere2_5` appears in 22 models,
@@ -508,8 +546,9 @@ battle rendering are not visually certified by these model captures.
   remains open is the behavior of the old builds where it differs from the
   current source.
 
-- **Unknown — full rendering acceptance.** Resolve the large-bank admission,
-  missing references and preview-scale observation above; compare matching
+- **Unknown — full rendering acceptance.** Large-bank admission and bounded
+  root presentation are closed above; resolve the remaining visible references
+  and preview-scale observation, then compare matching
   battle scenes, animations, factions, underwater effects, team colours,
   fog/sensor states and construction on both renderers. Source contracts and
   parser success alone do not certify visual fidelity.

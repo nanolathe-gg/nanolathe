@@ -42,7 +42,10 @@ func groupSlotFixture(t *testing.T, rules movement.Rules, idleAt *orders.Resolve
 // groupSlotWorld is groupMoveFixture with room for seventeen units.
 func groupSlotWorld(t *testing.T, positions []orders.ResolvePos) (*Session, []pool.Handle) {
 	t.Helper()
-	def := &content.UnitDef{UnitName: "mover", BMCode: 1, CanMove: true, CanPatrol: true, MaxDamage: 100}
+	def := &content.UnitDef{
+		UnitName: "mover", BMCode: 1, CanMove: true, CanPatrol: true, MaxDamage: 100,
+		FootprintX: 1, FootprintZ: 1,
+	}
 	def.CanonicalKey = "mover"
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"mover": def}}
 	w := newSessionFixtureWorld(32, cat)

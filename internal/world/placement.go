@@ -19,10 +19,10 @@ const (
 	placementMaxInt32 = 1<<31 - 1
 )
 
-// ErrInvalidFootprint reports a zero or negative footprint extent. A footprint
-// is an authored count of covered cells, so there is no meaningful rectangle
-// for a non-positive extent.
-var ErrInvalidFootprint = errors.New("world: footprint extents must be positive")
+// ErrInvalidFootprint reports a negative or unconstructed extent, or an empty
+// extent passed to a consumer that requires covered cells (such as a building).
+// Mobile empty rectangles are established by [04 R-P0-08-C].
+var ErrInvalidFootprint = errors.New("world: invalid footprint extents")
 
 // ErrPlacementOverflow reports an input which cannot be represented by the
 // cell or world-coordinate types without wrapping.
@@ -42,16 +42,17 @@ var (
 // world-space point. Construct it with NewFootprintExtent so all public
 // placement conversions reject invalid dimensions explicitly.
 type FootprintExtent struct {
-	width int32
-	depth int32
+	width       int32
+	depth       int32
+	initialized bool // distinguishes an authored empty pair from a missing extent
 }
 
 // NewFootprintExtent validates and constructs an authored footprint extent.
 func NewFootprintExtent(width, depth int32) (FootprintExtent, error) {
-	if width <= 0 || depth <= 0 {
+	if width < 0 || depth < 0 {
 		return FootprintExtent{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, width, depth)
 	}
-	return FootprintExtent{width: width, depth: depth}, nil
+	return FootprintExtent{width: width, depth: depth, initialized: true}, nil
 }
 
 func checkedPlacementArea(width, depth int32) (int, error) {
@@ -122,7 +123,7 @@ type FootprintRect struct {
 // NewFootprintRect constructs the half-open validation rectangle for anchor
 // and extent.
 func NewFootprintRect(anchor FootprintAnchor, extent FootprintExtent) (FootprintRect, error) {
-	if extent.width <= 0 || extent.depth <= 0 {
+	if !extent.initialized || extent.width < 0 || extent.depth < 0 {
 		return FootprintRect{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, extent.width, extent.depth)
 	}
 	maxX := int64(anchor.cellX) + int64(extent.width)
@@ -224,7 +225,7 @@ func (p FactoryPlacement) ModelPosition() ModelWorldPosition { return p.model }
 // snapPlacementCell implements retail's signed arithmetic-shift formula:
 // (picked - (extent << 19) + (1 << 19)) >> 20 [07 §9].
 func snapPlacementCell(p numeric.Fixed, extent int32) (int32, error) {
-	if extent <= 0 {
+	if extent < 0 {
 		return 0, fmt.Errorf("%w: %d", ErrInvalidFootprint, extent)
 	}
 	halfExtent := int64(extent) * placementHalfCell
@@ -247,7 +248,7 @@ func snapPlacementCell(p numeric.Fixed, extent int32) (int32, error) {
 // SnapFootprintAnchor derives a checked typed anchor from a picked world
 // point and extent. It performs no validation side effects.
 func SnapFootprintAnchor(px, pz numeric.Fixed, extent FootprintExtent) (FootprintAnchor, error) {
-	if extent.width <= 0 || extent.depth <= 0 {
+	if !extent.initialized || extent.width < 0 || extent.depth < 0 {
 		return FootprintAnchor{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, extent.width, extent.depth)
 	}
 	x, err := snapPlacementCell(px, extent.width)
@@ -264,7 +265,7 @@ func SnapFootprintAnchor(px, pz numeric.Fixed, extent FootprintExtent) (Footprin
 // CenterForFootprint derives the mobile model/world midpoint from an anchor:
 // (extent + 2*anchor) << 19 [07 §9].
 func CenterForFootprint(anchor FootprintAnchor, extent FootprintExtent) (ModelWorldPosition, error) {
-	if extent.width <= 0 || extent.depth <= 0 {
+	if !extent.initialized || extent.width < 0 || extent.depth < 0 {
 		return ModelWorldPosition{}, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, extent.width, extent.depth)
 	}
 	center := func(cell, foot int32) numeric.Fixed {
@@ -511,6 +512,13 @@ func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (Placemen
 			rules.ProfileResolved = true
 			return rules, nil
 		}
+	}
+	if def.BMCode != 0 && def.FootprintX >= 0 && def.FootprintZ >= 0 && (def.FootprintX == 0 || def.FootprintZ == 0) {
+		// No cell consumes a terrain limit or class on an empty mobile
+		// rectangle [04 R-P0-08-C]. Keep its domain and provenance unchanged.
+		return rules, nil
+	}
+	if cat != nil && def.MovementClass != "" {
 		return PlacementRules{}, fmt.Errorf("%w %q [04 §6.4]", ErrMissingMovementProfile, def.MovementClass)
 	}
 	if domain == content.MobilityFixed {
@@ -529,8 +537,8 @@ func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (Placemen
 // the definition at compile time, falling back to the authored FBI extent.
 // This helper is shared by the HUD ghost preview and the sim so the two
 // cannot diverge on movement-class footprints (C-7). The result is clamped to
-// at least 1 on each axis so a definition that authors neither still occupies a
-// square [04 §6.2].
+// at least 1 on each axis for legacy malformed/building inputs; an authored
+// empty mobile pair remains empty [04 R-P0-08-C].
 func FootprintForUnit(cat *content.Catalog, def *content.UnitDef) (footX, footZ int32) {
 	if def == nil {
 		return 1, 1
@@ -538,6 +546,12 @@ func FootprintForUnit(cat *content.Catalog, def *content.UnitDef) (footX, footZ 
 	footX, footZ = def.FootprintX, def.FootprintZ
 	if cat != nil && def.MovementClass != "" {
 		if mc, ok := cat.Movement[content.CanonicalKey(def.MovementClass)]; ok && mc != nil {
+			// The linked class wins over FBI values, including zeros. Keep
+			// the legacy building normalization below outside this mobile
+			// closure [04 R-P0-08-C].
+			if def.BMCode != 0 {
+				footX, footZ = mc.FootprintX, mc.FootprintZ
+			}
 			if mc.FootprintX > 0 {
 				footX = mc.FootprintX
 			}
@@ -545,6 +559,9 @@ func FootprintForUnit(cat *content.Catalog, def *content.UnitDef) (footX, footZ 
 				footZ = mc.FootprintZ
 			}
 		}
+	}
+	if def.BMCode != 0 && footX >= 0 && footZ >= 0 && (footX == 0 || footZ == 0) {
+		return footX, footZ // empty mobile footprint [04 R-P0-08-C]
 	}
 	if footX <= 0 {
 		footX = 1
@@ -741,7 +758,8 @@ func (t *Terrain) placementGates(q PlacementQuery) (PlacementResult, placementRe
 	if t == nil {
 		return PlacementResult{}, placementRefusal{reason: refuseNilTerrain}
 	}
-	if q.Rect.Width() <= 0 || q.Rect.Depth() <= 0 {
+	if !q.Rect.extent.initialized || q.Rect.Width() < 0 || q.Rect.Depth() < 0 ||
+		(!q.Mobile && (q.Rect.Width() == 0 || q.Rect.Depth() == 0)) {
 		return PlacementResult{}, placementRefusal{reason: refuseRectangleExtent}
 	}
 	// Entry bounds, by CLASS. The two sides of the shared validator do not
@@ -772,6 +790,14 @@ func (t *Terrain) placementGates(q PlacementQuery) (PlacementResult, placementRe
 	_, minCell, maxX, maxZ := t.placementEntryBounds(q.Mobile)
 	if q.Rect.MinX() < minCell || q.Rect.MinZ() < minCell || q.Rect.MaxX() > maxX || q.Rect.MaxZ() > maxZ {
 		return PlacementResult{}, placementRefusal{reason: refuseEntryBounds}
+	}
+	if q.Mobile && (q.Rect.Width() == 0 || q.Rect.Depth() == 0) {
+		// The empty mobile loop reads no plot cells, but retains retail
+		// strict upper bounds even on its zero axis [04 R-P0-08-C].
+		if q.Rect.MaxX() >= t.CellW || q.Rect.MaxZ() >= t.CellH {
+			return PlacementResult{}, placementRefusal{reason: refuseEntryBounds}
+		}
+		return PlacementResult{Rect: q.Rect, SiteHeight: int32(t.SeaLevel) - q.Rules.Waterline}, placementRefusal{}
 	}
 	plotArea, ok := placementArea(t.CellW, t.CellH)
 	if !ok {
@@ -986,6 +1012,9 @@ func (t *Terrain) placementError(q PlacementQuery, r placementRefusal) error {
 		return fmt.Errorf("%w: rectangle dimensions %dx%d", ErrInvalidFootprint, q.Rect.Width(), q.Rect.Depth())
 	case refuseEntryBounds:
 		class, minCell, maxX, maxZ := t.placementEntryBounds(q.Mobile)
+		if q.Mobile && (q.Rect.Width() == 0 || q.Rect.Depth() == 0) {
+			maxX, maxZ = t.CellW-1, t.CellH-1
+		}
 		return fmt.Errorf("world: placement rectangle [%d,%d)x[%d,%d) out of bounds %dx%d: the %s entry bounds require anchor >= %d and rectangle end <= %d,%d", q.Rect.MinX(), q.Rect.MaxX(), q.Rect.MinZ(), q.Rect.MaxZ(), t.CellW, t.CellH, class, minCell, maxX, maxZ)
 	case refuseTerrainDimensions:
 		_, err := checkedPlacementArea(t.CellW, t.CellH)

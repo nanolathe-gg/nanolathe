@@ -68,7 +68,7 @@ var PortTable = []PortInfo{
 
 	{10, "unit position Y", "the same unit's Y, same gates [04 §4.4]", "— [04 §4.4]"},
 
-	{11, "unit height", "the own definition's height value; takes no unit argument [04 §4.4]", "— [04 §4.4]"},
+	{11, "unit height", "the selected alive unit's definition model height in 16.16; identifier zero reads zero [04 §4.4][04 R-MOV-03 §5]", "— [04 §4.4]"},
 
 	{12, "relative bearing", "unpacks the argument into two signed 16.16 halves, takes the arc tangent, then subtracts the unit's own heading, truncated to 16 bits [04 §4.4]", "— [04 §4.4]"},
 

@@ -157,8 +157,8 @@ func TestProTAContentSetCompilesUnderItsProfile(t *testing.T) {
 // both are read; under the retail caps both are refused, which is what keeps
 // the raised caps a profile decision rather than a change to retail admission.
 //
-// The whole-catalog compile is a separate statement below, because Escalation
-// stops on a packaging gap that is not this unit's.
+// The whole-catalog compile is a separate statement below: unused feature
+// definitions do not require their model until a caller requests the feature.
 func TestEscalationReadCapsAdmitItsMapAndLOSTable(t *testing.T) {
 	fs := mountWithMod(t, "escalation")
 	profile, err := profiles.Resolve(fs, "")
@@ -200,8 +200,8 @@ func TestEscalationReadCapsAdmitItsMapAndLOSTable(t *testing.T) {
 	} else if !strings.Contains(strings.ToLower(err.Error()), "[esc] dark prime.tnt") {
 		t.Fatalf("holding the map cap at retail did not stop the compile on that map: %v", err)
 	}
-	if _, err := content.CompileWithOptions(wholeFileView, content.Options{Limits: limits}); err == nil || !strings.Contains(err.Error(), "_dead.3do") {
-		t.Fatalf("profile cap should pass the whole-file map census and reach the known missing-model gap: %v", err)
+	if _, err := content.CompileWithOptions(wholeFileView, content.Options{Limits: limits}); err != nil {
+		t.Fatalf("profile cap should admit the whole-file map census: %v", err)
 	}
 
 	if _, err := content.CompileLOSTables(view, content.RetailLimits()); err == nil {
@@ -220,35 +220,32 @@ func TestEscalationReadCapsAdmitItsMapAndLOSTable(t *testing.T) {
 	assertLargeLOSTable(t, tables)
 }
 
-// TestEscalationContentSetStopsAtItsPackagingGap records exactly how far the
-// content profile takes TA: Escalation. Its 549 definitions, its oversize map
-// and its enlarged LOS table are all admitted, and the compile then stops on a
-// corpse model the content set does not ship — a cross-reference failure
-// retail also treats as fatal [02 "Cross-reference failure policy"], not a
-// limit and not a path. That gap is content packaging, so it is not settled by
-// raising anything.
-func TestEscalationContentSetStopsAtItsPackagingGap(t *testing.T) {
+// The Gold 10.2 archive set retains unused corpse definitions whose models it
+// does not ship. They are discovery data, not requested feature records
+// [05 R-FEAT-01 §1]. Compilation must admit the authored unit set while a later
+// request for one of those definitions still fails [02 R-MAP-01 §8].
+func TestEscalationContentSetCompilesWithoutUnusedFeatureModels(t *testing.T) {
 	fs := mountWithMod(t, "escalation")
 	profile, err := profiles.Resolve(fs, "")
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
 	view := profile.Layout().Apply(fs)
-	if got := unitDefinitionFiles(t, view); got != 549 {
-		t.Fatalf("unit definition files = %d, want the inventory's 549", got)
+	catalog, err := content.CompileWithOptions(view, content.Options{Limits: content.LimitsFromProfile(profile.Limits)})
+	if err != nil {
+		t.Fatalf("compile Escalation: %v", err)
 	}
-	_, err = content.CompileWithOptions(view, content.Options{Limits: content.LimitsFromProfile(profile.Limits)})
-	if err == nil {
-		t.Fatal("TA: Escalation compiled: the packaging gap is closed, so update this check")
+	if catalog.Units["armcom"] == nil || catalog.Units["corcom"] == nil {
+		t.Fatal("Escalation commanders did not compile")
 	}
-	for _, unwanted := range []string{"exceeds read limit", "unit definitions exceed"} {
-		if strings.Contains(err.Error(), unwanted) {
-			t.Fatalf("a limit is still the blocker under the profile's limits: %v", err)
+	assertLargeLOSTableCompiled(t, catalog)
+	for _, name := range []string{"armast_dead", "armmanta_dead", "corast_dead", "corcapsub_dead", "cortrog_dead"} {
+		if catalog.Features[name] == nil {
+			t.Fatalf("unused feature %q was discarded", name)
 		}
-	}
-	for _, want := range []string{"_dead.3do", "expected valid 3DO model"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("compile error %q is not the missing-corpse-model packaging gap: it lacks %q", err, want)
+		err := catalog.ValidateFeatureModels(view, []string{name})
+		if err == nil || !strings.Contains(err.Error(), "objects3d/"+name+".3do") || !strings.Contains(err.Error(), "expected valid 3DO model") {
+			t.Fatalf("requesting unused feature %q must reject its absent model: %v", name, err)
 		}
 	}
 	// The retail limits still refuse the same content on the definition domain,

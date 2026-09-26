@@ -123,12 +123,7 @@ func (s *Service) QueryBuildInfo(factory *units.Unit, m *model.Model) (world.Cel
 		if def != nil {
 			footX = int(def.FootprintX)
 			footZ = int(def.FootprintZ)
-			if footX <= 0 {
-				footX = 1
-			}
-			if footZ <= 0 {
-				footZ = 1
-			}
+			// Authored empty mobile extents retain the same snap [04 R-P0-08-C].
 		}
 	}
 	extent, err := world.NewFootprintExtent(int32(footX), int32(footZ))

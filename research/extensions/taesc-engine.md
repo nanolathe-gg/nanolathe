@@ -610,9 +610,45 @@ that the readme settles script timing or every arithmetic operation.
 | Automatic transports | Surface transports have manual/automatic modes and accept only own units; last-loaded units unload first. Multi-unit aircraft load nearby units after landing and account for unit-size slots; repair-pad landing does not trigger load/unload. | Authored size/capacity rules, selection order, water/land rejection, landing/attach callbacks, full capacity and save/load. |
 | Offscreen and stack penalties | Aircraft returning from outside the map temporarily lose weapon/sensor/unload capability. T3/T4 aircraft below a stack's first unit lose firing and health benefits until separated. | The transport-stack paragraph contradicts itself about unloading. Settle that branch and penalty timing from authored scripts or manual observations; do not replace it with the 2026 engine's splash fix. |
 
+### Current Nanolathe acceptance
+
+**Established — bounded current-host results, 2026-09-26.** The Gold package
+loads through the Escalation content profile. A requested feature closure
+validates actual corpse/map/mission dependencies while leaving five unused
+missing-model definitions inert. The installed package preserves all eight
+content archives, active intro, icons and local music. It declares Community
+3.9 as its minimum gameplay rules; Strict 3.1 does not implement its extension
+queries.
+
+- [Authored shields](escalation-shields.md) settles representative coverage,
+  armor, energy shortage, overlap, removal and save continuation for Aegis and
+  Corona. Generator passive healing remains a confirmed missing capability:
+  the exact historical caller quantum and cadence need licensed source or
+  bounded manual observations before implementation.
+- [Resource adjacency and charging](escalation-adjacency.md) settles nine
+  resource families, actual bonus amounts, range, completion, directional
+  alliances, non-stacking and save continuation. Weapon charging is separate.
+- [Sentinel weapon charging](escalation-weapon-charging.md) covers real firing
+  cadence with one and two fields and removal. Other weapons and upgrades
+  retain their own evidence requirements.
+- [Upgrade, gate and transport scripts](escalation-script-systems.md) cover a
+  real fusion upgrade through ordinary factory production, receiver linking
+  by ground attack and a full mixed-size automatic transport. Allied-source
+  wording conflicts and broader upgrade propagation remain separately scoped.
+- [Commander and aircraft scripts](escalation-commander-aircraft.md) cover
+  both commanders' research filtering, weapon release, kinetic armor and
+  removal, plus Atlas stack recovery and off-map cargo/save continuation.
+- [Large effect banks](mod-engine-compatibility.md#large-effect-banks-exceeded-the-eager-host-budget)
+  now admit and decode their actual roots through bounded presentation caches.
+  This does not by itself certify full historical rendering equivalence.
+
+These checks use authored content and the current host; the broader cases
+below retain their individual evidence and verification requirements.
+
 ### Package acceptance cases
 
-These are evidence-based requirements, not a report that Nanolathe passes them:
+These are evidence-based requirements. The bounded results above do not claim
+that every case below has passed:
 
 - Identify the exact archive set, resolve all renamed trees and report missing
   models, textures and effect resources with their original provenance. A

@@ -746,12 +746,24 @@ func Load(fs vfs.FSOps, cat *content.Catalog, mapKey string, opts ...LoadOption)
 	// matched case-insensitively against the feature TDF sections [fmt tnt].
 	names := make([]string, len(tnt.FeatureTable))
 	defs := make([]*content.FeatureDef, len(tnt.FeatureTable))
+	var modelRoots []string
 	for i, rec := range tnt.FeatureTable {
 		names[i] = rec.Name
 		if cat != nil && cat.Features != nil {
 			if def, ok := cat.Features[content.CanonicalKey(rec.Name)]; ok {
 				defs[i] = def
+				if def != nil {
+					modelRoots = append(modelRoots, rec.Name)
+				}
 			}
+		}
+	}
+	// Feature sections are requested by name, not all loaded eagerly
+	// [05 R-FEAT-01 §1]. A requested model remains a required resource
+	// [02 "Cross-reference failure policy"], including its successor chain.
+	if cat != nil {
+		if err := cat.ValidateFeatureModels(fs, modelRoots); err != nil {
+			return nil, err
 		}
 	}
 

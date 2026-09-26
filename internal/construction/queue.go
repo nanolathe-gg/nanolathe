@@ -155,7 +155,8 @@ func QueueFactoryBuild(factory *units.Unit, defKey string, count int, cat *conte
 
 // validateFactoryProduct is the command-boundary preflight for products that
 // have a catalog. Fixed definitions and canfly aircraft do not need a ground
-// movement profile. Other mobile products must resolve one before entering a
+// movement profile. Empty mobile products visit no cells [04 R-P0-08-C].
+// Other mobile products must resolve a profile before entering a
 // queue, preventing permanent content failures from becoming state-2 retries
 // [04 §6.4][05 "Unit creation and limits"]. Both production callers pass the
 // session catalog; a nil catalog is a fixture that has none, and defers
@@ -167,6 +168,17 @@ func validateFactoryProduct(cat *content.Catalog, key string) error {
 	def, ok := cat.Unit(key)
 	if !ok || def == nil {
 		return fmt.Errorf("%w: %q", ErrUnknownProduct, key)
+	}
+	footX, footZ := def.FootprintX, def.FootprintZ
+	if mc := cat.Movement[content.CanonicalKey(def.MovementClass)]; def.MovementClass != "" && mc != nil {
+		// Compiled definitions already carry this pair. Preserve the loader's
+		// class-first precedence for directly assembled catalogs too [04 R-P0-08-C].
+		footX, footZ = mc.FootprintX, mc.FootprintZ
+	}
+	if def.BMCode != 0 && footX >= 0 && footZ >= 0 && (footX == 0 || footZ == 0) {
+		// The empty mobile placement loop reads no class or terrain limits
+		// [04 R-P0-08-C]; creation still supplies its ordinary mover.
+		return nil
 	}
 	domain := def.MobilityDomain
 	// Definitions assembled directly by older callers predate the compiled

@@ -159,6 +159,21 @@ func TestModelTextureRegistryRejectsMutatedModelProvider(t *testing.T) {
 	}
 }
 
+func TestModelTextureRegistryOnlyPreparesRequestedFeatureModels(t *testing.T) {
+	fs, cat, terrain, _, _ := modelTextureBindingFixture(t)
+	unused := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "unused"}, Object: "missing"}
+	cat.Features["unused"] = unused
+	if _, err := NewModelTextureRegistry(fs, cat, terrain, len(terrain.FeatureDefs)); err != nil {
+		t.Fatalf("unused feature model blocked battle: %v", err)
+	}
+	// A restore suffix can request a definition absent from the terrain and
+	// corpse roots. It must keep the same required-model failure policy.
+	terrain.FeatureDefs = append(terrain.FeatureDefs, unused)
+	if _, err := NewModelTextureRegistry(fs, cat, terrain, len(terrain.FeatureDefs)-1); err == nil {
+		t.Fatal("requested restore feature accepted its missing model")
+	}
+}
+
 func playerPosition(players []phase7Stepper, want phase7Stepper) int {
 	for i, player := range players {
 		if player == want {
