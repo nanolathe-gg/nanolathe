@@ -65,7 +65,7 @@ after reserving one action for the army and one per factory with room.
 | storage | overflow (store ≥ 70% full × coverage 1.2–3.0) × `half(count)` × travel × threat |
 | factory | unmet army spending: (spendable × (100−EcoShare)% − factory capacity incl. planned) / this factory's drain; first-factory urgency rising to 3000 by `fac_time`; × suitability (best product efficiency vs the best factory on offer × air plant exposure `half(enemy AA, 3000)` × same-type `half(count, 1.5)` × tech-2 readiness `w_tech × lin(metal income, 12, 30/s)`) × affordability `half(cost ÷ supply, 90 s)` × travel |
 | defense | danger (decayed threat at our most threatened building, or a late-game baseline at the front; anti-air towers answer seen aircraft) × efficiency vs the best tower × `half(towers within 500 wu)` × affordability × travel |
-| radar | time ramp (1–3 min) × `half(3 × count)` × affordability × travel × threat |
+| radar | time ramp (1–3 min) × `half(3 × count)` × affordability × travel × threat; veto within the larger authored radar radius of an own stationary sensor or live build reservation, across definitions |
 | assist nanoframe | resource slack `lin(min(covM, covE), 500, 1400)` × priority (factory 1500, economy 1000, defense 1000+danger, other 700) × travel |
 | guard factory | `lin(covM, 900, 2500)` × army share × travel — only factories that are producing |
 

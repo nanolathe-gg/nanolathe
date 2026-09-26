@@ -923,17 +923,48 @@ func (e *Economy) evalRadar(b *core.Board, u *aikit.OwnUnit, p *aikit.UnitInfo) 
 	s := e.s
 	c := cand{kind: cRadar, prod: p, spacing: 1}
 	need := mul(lin(int64(s.tick), 1800, 5400), half(int64(s.count[p.Index])*3000, 1000))
-	if need == 0 {
+	if need == 0 || p.Radar <= 0 {
 		return c
 	}
 	travel, thr, ok := e.place(b, u, &c)
-	if !ok {
+	if !ok || e.radarCovered(b, &c) {
 		return c
 	}
 	aff := e.afford(p)
 	c.score = mul(mul(mul(mul(int64(s.p.WRadar)*10, need), aff), travel), thr)
 	c.f = [4]int64{need, aff, travel, thr}
 	return c
+}
+
+// radarCovered reserves the larger authored radius between stationary
+// sensors, across definitions and before their frames exist. This is Modern
+// AI planning policy, not the engine's sensor test (DESIGN_SESSIONS_AI_SAVE,
+// "Modern AI computer player", "Radar coverage").
+func (e *Economy) radarCovered(b *core.Board, c *cand) bool {
+	near := func(p *aikit.UnitInfo, x, z int32) bool {
+		if p == nil || p.Radar <= 0 || p.Role.Has(aikit.RoleMobile) {
+			return false
+		}
+		r := int64(max(c.prod.Radar, p.Radar))
+		return aikit.Dist2(c.x, c.z, x, z) < r*r
+	}
+	for i := range b.O.Own {
+		u := &b.O.Own[i]
+		if near(u.Info, u.X, u.Z) {
+			return true // completed towers and nanoframes both reserve coverage
+		}
+		cm := e.s.commitIf(u)
+		if cm == nil || !cm.kind.build() || cm.prod == nil {
+			continue
+		}
+		// An assignment reserves its point immediately, while this think's
+		// observation still says idle. Later, the live build target keeps it
+		// reserved; cancelled orders and recycled builder slots do not.
+		if (cm.tick == e.s.tick || u.Target == cm.prod) && near(cm.prod, cm.x, cm.z) {
+			return true
+		}
+	}
+	return false
 }
 
 // evalAssist scores helping the most useful nearby nanoframe and guarding

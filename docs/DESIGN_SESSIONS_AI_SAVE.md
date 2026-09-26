@@ -1915,6 +1915,32 @@ is the retail baseline and every fingerprint lock runs Classic.
   background think whose result equals the synchronous one
   ([DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-modern-ai-controller)).
 
+**Radar coverage.** Nanolathe Modern policy (user-requested correction,
+2026-09-26): the utility economy offers a radar only when its request point
+is at least the larger of its authored radar range and each nearby own
+stationary sensor's authored radar range away from that sensor. The boundary
+is inclusive: exactly one larger radius apart is allowed. Completed sensors
+and nanoframes reserve coverage across unit definitions, including radar on
+other buildings. Live construction commitments reserve their request points
+immediately, so builders in the same think cannot duplicate one another;
+on later thinks only a matching build target keeps that reservation alive.
+A dead builder, recycled slot or cancelled order cannot hold an empty site.
+Mobile sensors reserve nothing because they may leave. Destroyed towers free
+their coverage, and uncovered expansion sites remain eligible. A candidate
+with no authored radar range is not offered.
+
+This is a construction-planning spacing rule, not a visibility calculation:
+it does not model elevation, activation or jamming, change actual sensor
+reach, reclaim existing towers, or search for a different radar site when the
+chosen point is covered. The existing time, count, affordability, travel and
+threat scores still rank an eligible tower. Evaluation draws no RNG and
+spends no resources; an accepted order uses ordinary construction. It belongs
+to the Modern computer player in every gameplay mode, including Strict 3.1;
+Classic planners retain their bound rules and the retail baseline is
+unchanged. `utility.TestRadarCoverage`, `utility.TestRadarReservations` and
+`utility.TestRadarRebuildAfterLoss` lock spacing, cross-definition coverage,
+unfinished and pending towers, reservation lifetime and replacement after loss.
+
 **Configuration** (user request 2026-09-24: "keep some of the AI behaviors
 & personalities configurable (not in the UI). By default we could randomize
 it, so each round the AI might behave slightly differently but overall still
