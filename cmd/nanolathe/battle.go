@@ -304,6 +304,18 @@ func factoryBuildDelta(modifiers input.Modifiers, rightClick bool) int {
 	return count
 }
 
+// The hundred batch is an independent host preference, with Alt's existing
+// batch taking precedence (DESIGN_INTERFACE_HUD_INPUT §3.13).
+func (b *battleSession) factoryBuildDelta(modifiers input.Modifiers, rightClick bool) int {
+	if b != nil && b.shell != nil && b.shell.presentation.FactoryHundredBatch&1 != 0 && !modifiers.Alt && modifiers.Ctrl && modifiers.Shift {
+		if rightClick {
+			return -100
+		}
+		return 100
+	}
+	return factoryBuildDelta(modifiers, rightClick)
+}
+
 // stockpileClickDelta is the same counted producer for a MAKENUKE/MAKEANTI toy.
 // The Alt batch of twenty is deliberately NOT applied here: the divergence in
 // DESIGN_INTERFACE_HUD_INPUT §5 scopes itself out of the stockpile toys, so a
@@ -1106,10 +1118,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		b.serviceUnitInfoKeyboard(in)
 		tokenClaimed = in.PendingTokens() < tokensBeforeChild
 		b.palettePointerOwned = unitInfoAtFrameStart && !unitInfoOpen()
+		if !unitInfoAtFrameStart && !tokenClaimed {
+			tokenClaimed = b.serviceZeroDragKey(in)
+		}
 		if b.hud != nil && !unitInfoAtFrameStart {
-			result, owned := b.hud.servicePaletteFrame(b, in, true)
+			result, owned := b.hud.servicePaletteFrame(b, in, !tokenClaimed)
 			b.palettePointerOwned = owned
-			tokenClaimed = result.ConsumedTokens > 0
+			tokenClaimed = tokenClaimed || result.ConsumedTokens > 0
 		}
 		if !tokenClaimed && talkOpenToken(in) && b.openTalk(in, cl) {
 			talkOwned = true

@@ -132,11 +132,14 @@ func (b *battleSession) DispatchFactoryBuildDelta(product string, count int) err
 		return fmt.Errorf("nanolathe: factory build not dispatched: no committed frame")
 	}
 	builder := f.CommandPage.Builder
-	if v, found := snapshotUnitByHandle(f, builder); !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
+	// Counted products come from the selected unit's named GUI gadget;
+	// the actor's Builder flag is not a gate [07 R-P0-11 §1]. This also
+	// admits a building's authored mobile upgrade without changing its FBI.
+	if v, found := snapshotUnitByHandle(f, builder); !found || b.sess == nil || v.Owner != b.sess.LocalOwner {
 		builder = 0
 	}
 	if builder == 0 {
-		return fmt.Errorf("nanolathe: factory build not dispatched: the committed command page names no builder the local player owns")
+		return fmt.Errorf("nanolathe: factory build not dispatched: the committed command page names no unit the local player owns")
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanFactoryBuild, FactoryBuild: session.HumanFactoryBuildCommand{
 		Builder: builder, Product: product, Count: count,

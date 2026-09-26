@@ -18,10 +18,11 @@ historical Gold engine parity.
 
 | System | Verified behavior |
 |---|---|
-| Area shields | Both generators; building coverage, range and alliances; ordinary 75% absorption, non-stacking, hit-triggered energy use, shortage, removal and active-hit save/load. |
+| Area shields | Both generators; building coverage, range and alliances; ordinary 75% absorption, non-stacking, hit-triggered energy use, shortage, Prophet disruption, removal and active-hit save/load. |
 | Resource pairing and charging | Nine resource families; authored income amounts, range, completion, directional allies, overlap, removal and save/load. |
 | Weapon charging | Sentinel firing cadence doubles with a charging field, does not stack with a second field, and returns to baseline after the last field is removed. |
-| Building upgrade | Actual fusion upgrade builds as an empty-footprint mobile product and attaches to its parent through normal callbacks. |
+| Building upgrades | Fusion upgrade attachment; Aegis's actual menu button builds and retains its upgrade, extending coverage beyond the base radius. |
+| Factory upgrade | Advanced vehicle plant retains its upgrade; later Bulldogs gain the third barrel and faster firing, older Bulldogs stay unchanged, and resurrection away from the marker loses the benefit. |
 | Teleporter | A receiving gate links by ground attack and transfers an eligible owned unit through the ordinary attachment lifecycle. |
 | Surface transport | Automatic loading and unloading, exact mixed-size capacity, excess rejection and ownership filtering. |
 | Commander research | Both factions: research eligibility, weapon activation, kinetic armor, redundant sources and removal. |
@@ -29,7 +30,8 @@ historical Gold engine parity.
 | Large explosion art | Every root of the three oversized banks decodes; bounded caches support Classic and Modern; a 64-frame explosion exercises ordinary event creation through retirement. |
 
 Engine corrections preserve requested-feature validation, admit researched
-empty mobile footprints, and load effect frames on demand. They do not add
+empty mobile footprints, allow authored counted-product buttons on non-builder
+units, and load effect frames on demand. They do not add
 an independent aura, income multiplier or upgrade subsystem. Existing scripts
 and the central gameplay rules remain the source of the behavior.
 
@@ -43,8 +45,8 @@ Gold observation is needed; no replacement rate has been guessed.
 
 Some release prose conflicts with authored content, including fusion bonus
 amounts and allied-source gate linking. Nanolathe executes the shipped scripts.
-Four dead upgrade references and Aegis upgrade-menu reachability remain
-documented content/evidence issues. The representative tests do not certify
+Four dead upgrade references and resurrection beside a factory-upgrade marker
+remain documented content/evidence issues. The representative tests do not certify
 every parent/product pair, campaign, multiplayer feature or historical patch
 behavior.
 

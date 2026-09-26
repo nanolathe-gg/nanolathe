@@ -640,6 +640,15 @@ which `battleSession.routeDigit` drives — the group arm takes the digit itself
 and `NextPageKey`/`PrevPageKey` are the page cycle; `RetailBuildButtonsPerPage = 6` is the authored full-page size, and
 no runtime path may infer a different grid `[07 R-HUD-03 §6]`.
 
+The authored GUI's named mobile-product buttons enqueue counted production
+for the selected owned unit without requiring its definition's `Builder`
+flag. `paletteContext` retains that actor and `DispatchFactoryBuildDelta`
+checks the committed actor's ownership; site-placement admission remains
+separate `[07 R-P0-11 §1]`. The synthetic click contract covers both flag
+values, and the asset-backed Aegis case follows its real button through
+completed construction and extended shield coverage. No content-profile
+exception or rewritten unit definition is needed.
+
 **The command latch** (`commands.go`). `ParseButtonLatch` is the button parse
 chain in its corrected order — MOVE, STOP, ATTACK, BLAST, DEFEND, REPAIR,
 PATROL, RECLAIM, CAPTURE, UNLOAD, LOAD — matched case-insensitively by
@@ -2863,16 +2872,19 @@ open options window drains nothing.
 
 ### 3.13 Optional community selection controls
 
-**Established host policy from the MIT patch source.** These consumers are
+**Community host policy from the MIT patch source, with a documented Zero
+scheme below.** These consumers are
 presentation preferences and never depend on `gameplay.Mode` or the renderer.
-`presentation.communitySelection` enables Ctrl+B/F/S; the independent
+`presentation.communitySelection` selects Retail (0), Community (1), or
+Zero (2) input; the independent
 `presentation.doubleClickSelection` enables same-type double-click selection.
-Both default to zero and normalize as low-bit booleans. With either switch off,
+Both default to zero; selection values outside 0–2 normalize to zero and the
+double-click switch remains a low-bit boolean. With either option off,
 the existing retail keyboard and pointer paths are unchanged. Evidence is the
 [community patch engine behavior](../research/extensions/community-patch-engine.md)
 §4.2 input-and-command surface and its pinned `ExternQuickKey.cpp` source.
 
-With `communitySelection` enabled, unshifted Ctrl+B and Ctrl+F replace the
+With either non-retail selection scheme, unshifted Ctrl+B and Ctrl+F replace the
 selection with the next admitted own mobile builder or factory. Nanolathe first
 applies its shared host boundary of a completed selectable own unit. Within
 that boundary, a factory is idle unless its primary order is `BuildingBuild`;
@@ -2890,14 +2902,46 @@ or in the patch's commander/decoy class (`showplayername` and `hidedamage` both
 set), split by nonzero BMCode for mobile builders and zero BMCode for factories.
 Shift+Ctrl+B/F retain the retail additive category shortcuts.
 
-Unshifted Ctrl+S replaces the selection with completed selectable own units
-inside the current battle viewport whose definition belongs to `CTRL_W` and
+In the Community scheme, unshifted Ctrl+S replaces the selection with completed
+selectable own units inside the current battle viewport whose definition belongs to `CTRL_W` and
 has its compiled `canfly` flag clear. The pinned source performs that flag test
 and contains no `NOTAIR` or `NAIR` lookup; its release notes' claim that those
 categories participate is therefore not implemented by that revision. The host
 does not assign those category names a guessed capability meaning. The action
 also discards prepared placement. Shift+Ctrl+S retains retail's on-screen
 selection.
+
+**Zero host scheme.** The author's [controls page](https://zero.tauniverse.com/controls/)
+documents idle builder/factory cycling, on-screen armed selection and held
+W/B/Y drag filters. Scheme 2 reuses the above B/F cycles and common completion,
+ownership and selection gates. Ctrl+S selects on-screen definitions with
+`CanAttack`; Ctrl+Shift+S keeps the ordinary on-screen selection. A selection
+rectangle in the world view or megamap samples held keys at release: W admits
+`CanAttack` definitions with nonzero `BMCode`; B admits the existing builder-cycle mask; Y admits the
+factory-cycle mask. If several are held, W precedes B precedes Y. Shift keeps
+the existing toggle semantics. While a normal selection rectangle is active,
+the host consumes a leading W/B/Y text token without Ctrl/Alt before palette
+shortcuts, preserving held-key state and Shift; Ctrl/Alt and other tokens keep their
+ordinary route. This prevents a build quickkey from replacing the drag.
+Outside an active rectangle, click selection and ordinary shortcuts are unchanged.
+These capability predicates, simultaneous-key precedence and common gates are
+Nanolathe host input policy implementing the documented categories, not a
+claim about the historical DLL's undocumented edge cases. In particular Zero's
+authored `CTRL_W` means water units and must not supply its armed filter.
+The selector uses the existing options control (`NCYCLE`) with three stages.
+
+`presentation.factoryHundredBatch` is a separate host input preference,
+default off and normalized as a low-bit boolean. When enabled, Ctrl+Shift on a
+factory product adds or subtracts 100 through the existing signed command
+producer. Alt still takes precedence with its existing batch of 20; other
+clicks retain 1 or Shift's 5. Stockpile buttons retain their separate counts.
+This factory-only scope and Alt precedence are explicit Nanolathe host policy;
+the Zero controls documentation establishes the hundred-unit gesture. The
+options UI exposes this preference beside selection. The optional Zero preset
+offers scheme 2 and the hundred-unit batch; Keep mine changes neither. No
+input consumer tests a content-profile name or gameplay mode. Tests preserve
+Retail/Community meanings, Zero water-versus-armed membership, held filters,
+modifier precedence, signed counts, persistence and preset refusal.
 
 With `doubleClickSelection` enabled, a platform-classified left or right double-click
 strictly inside the battle viewport and over an own unit replaces the selection
@@ -3397,7 +3441,8 @@ title gate and the retail default.
 * **Alt batches factory products by twenty.** This user-requested build-menu
   extension adds twenty on Alt-left-click and subtracts twenty on
   Alt-right-click. Alt takes precedence over Shift; Shift alone retains five
-  and no modifier retains one. The shared product callback uses the held
+  and no modifier retains one. The optional Ctrl+Shift hundred-unit preference
+  (§3.13) is also subordinate to Alt. The shared product callback uses the held
   modifiers at activation, including a product quickkey. Counts use the existing
   signed queue command, so addition coalesces and subtraction consumes matching
   queued products normally. Mobile building placement keeps its existing

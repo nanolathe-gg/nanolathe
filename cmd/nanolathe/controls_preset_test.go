@@ -23,8 +23,12 @@ func presetTestShell(t *testing.T) *gameShell {
 // preferences ProTA.ini pins, each written as its own stored value.
 func TestCommunityControlsPresetContents(t *testing.T) {
 	g := presetTestShell(t)
+	g.presentation.FactoryHundredBatch = 1
 	g.applyControlsPreset(controlsPresetCommunity)
 	p := g.presentation
+	if p.FactoryHundredBatch != 0 {
+		t.Fatal("Community preset retained the hundred-batch preference")
+	}
 	for name, value := range map[string]int{
 		"communitySelection": p.CommunitySelection, "doubleClickSelection": p.DoubleClickSelection,
 		"queuedOrderDrag": p.QueuedOrderDrag, "communityCounters": p.CommunityCounters,
@@ -69,7 +73,7 @@ func TestRetailControlsPresetKeepsSkirmishRows(t *testing.T) {
 	g.applyControlsPreset(controlsPresetCommunity)
 	g.applyControlsPreset(controlsPresetRetail)
 	p := g.presentation
-	if p.CommunitySelection != 0 || p.QueuedOrderDrag != 0 || p.GroupNumbers != 0 || g.switchAlt || g.clockVisible {
+	if p.CommunitySelection != 0 || p.FactoryHundredBatch != 0 || p.QueuedOrderDrag != 0 || p.GroupNumbers != 0 || g.switchAlt || g.clockVisible {
 		t.Error("the retail preset left a Community option on")
 	}
 	if a := g.audioPrefs; a.SoundMode != settings.DefaultSoundMode || a.MixingBuffers != settings.DefaultMixingBuffers || a.CDMode != settings.DefaultCDMode {
@@ -148,6 +152,9 @@ func TestZeroControlsPresetContents(t *testing.T) {
 	g.presentation.MegamapAntiNukeMinimum = 456
 	g.applyControlsPreset(controlsPresetZero)
 	p := g.presentation
+	if p.CommunitySelection != 2 || p.FactoryHundredBatch != 1 {
+		t.Fatal("Zero selection and independent hundred batch were not offered")
+	}
 	if p.PlayerDotColors != [10]int{227, 212, 80, 235, 198, 219, 208, 93, 36, 67} {
 		t.Fatalf("Zero dot colours = %v", p.PlayerDotColors)
 	}
@@ -168,6 +175,19 @@ func TestZeroControlsPresetContents(t *testing.T) {
 	rows, changes := g.controlsOfferRows(controlsPresetZero)
 	if changes != 0 || !slices.Contains(rows, "Dot colours: TA Zero") || !slices.Contains(rows, "Megamap sonar minimum: 500") || !slices.Contains(rows, "Megamap anti-nuke minimum: 512") {
 		t.Fatalf("Zero offer rows=%v, changes=%d", rows, changes)
+	}
+}
+
+func TestZeroControlsOfferKeepMine(t *testing.T) {
+	g := presetTestShell(t)
+	g.presentation.CommunitySelection = 1
+	g.presentation.FactoryHundredBatch = 0
+	before := g.presentation
+	controlsOfferUI = &controlsOfferDialog{preset: controlsPresetZero, key: "profile:zero"}
+	t.Cleanup(g.releaseControlsOffer)
+	g.answerControlsOffer(false)
+	if g.presentation != before || !settings.ControlsWereOffered(g.controlsOffered, "profile:zero") {
+		t.Fatal("Keep mine changed preferences or failed to remember refusal")
 	}
 }
 

@@ -351,13 +351,17 @@ func (b *battleSession) selectionBand(in ui.BattleInputState) client.SelectionBa
 // the carrier clause through the carrier definition's airbase mirror — so the
 // two are composed rather than the predicate being written twice. Both inputs
 // are frame order, which is pool-slot order [I1], so the result stays ascending.
-func (b *battleSession) eligibleHandlesInBand(f *frame.Frame, band client.SelectionBand) []pool.Handle {
+func (b *battleSession) eligibleHandlesInBand(f *frame.Frame, band client.SelectionBand, filters ...func(frame.UnitView) bool) []pool.Handle {
 	if b == nil || f == nil {
 		return nil
 	}
 	eligible := make(map[pool.Handle]struct{}, len(f.Units))
+	var keep func(frame.UnitView) bool
+	if len(filters) != 0 {
+		keep = filters[0]
+	}
 	for i := range f.Units {
-		if v := f.Units[i]; b.ownSelectableUnit(f, v) {
+		if v := f.Units[i]; b.ownSelectableUnit(f, v) && (keep == nil || keep(v)) {
 			eligible[v.Slot] = struct{}{}
 		}
 	}

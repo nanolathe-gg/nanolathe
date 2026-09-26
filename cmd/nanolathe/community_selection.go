@@ -18,7 +18,11 @@ const (
 )
 
 func (b *battleSession) communitySelectionEnabled() bool {
-	return b != nil && b.shell != nil && b.shell.presentation.CommunitySelection&1 != 0
+	return b != nil && b.shell != nil && (b.shell.presentation.CommunitySelection == 1 || b.shell.presentation.CommunitySelection == 2)
+}
+
+func (b *battleSession) zeroSelectionEnabled() bool {
+	return b != nil && b.shell != nil && b.shell.presentation.CommunitySelection == 2
 }
 
 func (b *battleSession) doubleClickSelectionEnabled() bool {
@@ -168,10 +172,72 @@ func (b *battleSession) communityMobileWeaponMask() content.CategoryMask {
 
 func (b *battleSession) selectCommunityOnScreenWeapons() {
 	mask := b.communityMobileWeaponMask()
+	if b.zeroSelectionEnabled() {
+		mask = b.zeroArmedMask(false)
+	}
 	b.commitSelection(b.ownSelectableHandles(func(v frame.UnitView) bool {
 		return b.inCategory(v, mask) && b.onScreenUnit(v)
 	}), false)
 	b.disarmPlacement()
+}
+
+// Zero's CTRL_W means water units. Its documented armed selection instead
+// uses these host capability predicates (DESIGN_INTERFACE_HUD_INPUT §3.13).
+func (b *battleSession) zeroArmedMask(mobileOnly bool) content.CategoryMask {
+	var mask content.CategoryMask
+	if b == nil || b.cat == nil {
+		return mask
+	}
+	for _, def := range b.cat.UnitRecords() {
+		if def != nil && def.CanAttack && (!mobileOnly || def.BMCode != 0) {
+			mask = mask.Or(def.UnitMask)
+		}
+	}
+	return mask
+}
+
+// zeroDragFilter samples held keys at rectangle release. It filters only
+// the candidates the ordinary selection walk admits, so Shift keeps its
+// existing toggle semantics. Clicks never call it (§3.13 host policy).
+func (b *battleSession) zeroDragFilter(kbd *input.KeyboardState) func(frame.UnitView) bool {
+	if !b.zeroSelectionEnabled() || kbd == nil {
+		return nil
+	}
+	var mask content.CategoryMask
+	switch {
+	case kbd.KeyHeld(input.KeyW):
+		mask = b.zeroArmedMask(true)
+	case kbd.KeyHeld(input.KeyB):
+		mask = b.communityCycleMask(communityCycleBuilder)
+	case kbd.KeyHeld(input.KeyY):
+		mask = b.communityCycleMask(communityCycleFactory)
+	default:
+		return nil
+	}
+	return func(v frame.UnitView) bool { return b.inCategory(v, mask) }
+}
+
+// The active Zero rectangle owns its filter keys before palette quickkeys.
+// Consume only the leading plain text event, leaving its held state and the
+// rest of the queue intact (DESIGN_INTERFACE_HUD_INPUT §3.13 host policy).
+func (b *battleSession) serviceZeroDragKey(in *input.State) bool {
+	if !b.zeroSelectionEnabled() || in == nil || in.Kbd != nil && in.Kbd.KeyHeld(input.KeyAlt) {
+		return false
+	}
+	state := b.battleState().Input
+	if !b.megamap.boxActive && !(state.DragActive && state.Latch == input.LatchNormal) {
+		return false
+	}
+	tokens := in.PeekTokens()
+	if len(tokens) == 0 || tokens[0].Kind != input.TokenText || tokens[0].Ctrl {
+		return false
+	}
+	switch tokens[0].Rune {
+	case 'w', 'W', 'b', 'B', 'y', 'Y':
+		in.DiscardTokens(1)
+		return true
+	}
+	return false
 }
 
 func (b *battleSession) selectedDefinitionMask(f *frame.Frame) content.CategoryMask {

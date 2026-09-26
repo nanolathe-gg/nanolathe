@@ -50,7 +50,7 @@ func (h *retailBattleHUD) paletteContext(b *battleSession) (paletteActivationCon
 	ctx := paletteActivationContext{frame: f, window: w, page: page, paged: commandPageIsPaged(f), catalog: b.cat}
 	if f.CommandPage.Builder != 0 && f.CommandPage.PageCount != 0 && b.sess != nil && b.cat != nil {
 		if view, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && view.Owner == b.sess.LocalOwner {
-			if def, found := b.cat.Unit(view.DefName); found && def != nil && def.Builder {
+			if def, found := b.cat.Unit(view.DefName); found && def != nil {
 				ctx.selected = def
 			}
 		}
@@ -171,6 +171,7 @@ func (h *retailBattleHUD) servicePaletteFrame(b *battleSession, in *input.State,
 		modifiers := input.Modifiers{Alt: frame.AltHeld}
 		if in.Kbd != nil {
 			modifiers.Shift = in.Kbd.HasShift()
+			modifiers.Ctrl = in.Kbd.KeyHeld(input.KeyCtrl)
 		}
 		h.activatePaletteGadget(b, ctx, result.FiredIndex, result.FiredButton == 2, modifiers)
 	}
@@ -280,12 +281,18 @@ func (h *retailBattleHUD) activatePaletteGadget(b *battleSession, ctx paletteAct
 	if ctx.selected != nil && b.cat != nil {
 		if product, found := b.cat.Unit(gad.Name); found && product != nil {
 			if !hud.ProductArmsPlacement(product) {
-				delta := factoryBuildDelta(modifiers, rightClick)
+				delta := b.factoryBuildDelta(modifiers, rightClick)
 				b.playUICue(nil, countedBuildCue(delta))
 				if err := h.dispatchFactoryBuild(b, product.CanonicalKey, delta); err != nil {
 					h.dispatchErr = err
 				}
 				return true
+			}
+			// A counted product needs only the selected unit's authored GUI,
+			// not its Builder flag [07 R-P0-11 §1]. Mobile site placement keeps
+			// its separate builder admission below.
+			if !ctx.selected.Builder {
+				return false
 			}
 			if rightClick {
 				return true

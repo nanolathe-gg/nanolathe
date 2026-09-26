@@ -264,16 +264,19 @@ mod:
   and requires Community 3.9 or Modern. This selects the already implemented
   `tazero` feature table through the existing gameplay composition; it does
   not introduce another rule set or claim historical Alpha 5 parity.
-  `TAZero.ini` in Alpha 5 is the preference source
+  `TAZero.ini` in Alpha 5 and the author's controls page supply the preferences
   ([TA Zero engine](../research/extensions/ta-zero-engine.md#documented-engine-level-behavior)).
   The preset enables double-click selection, group digits, the megamap,
   wheel zoom, wheel camera movement and under-attack flashing; disables
   megamap double-click movement; sets radar, sonar, sonar-jammer and
   anti-nuke minimums to 0, 500, 0 and 512 respectively; and uses dot colours
   `227, 212, 80, 235, 198, 219, 208, 93, 36, 67`. It chooses 3D sound,
-  128 voices, random music and ten displayed skirmish rows. All other rows
-  are unchanged, including options whose historical Zero behavior is not
-  established. It follows the same one-time Apply/Keep mine offer. Tests
+  128 voices, random music and ten displayed skirmish rows. It offers the Zero
+  selection scheme and Ctrl+Shift factory batches of 100, with the host
+  boundaries in [DESIGN_INTERFACE_HUD_INPUT §3.13](DESIGN_INTERFACE_HUD_INPUT.md#313-optional-community-selection-controls).
+  Applying either the Retail or Community preset disables the hundred-unit
+  batch. All other Zero rows are unchanged, including options whose historical
+  behavior is not established. It follows the same one-time Apply/Keep mine offer. Tests
   lock the independent thresholds, palette, unchanged preferences and
   persisted colour-table identity.
 

@@ -565,10 +565,13 @@ type Presentation struct {
 	// ExpandedSidebar uses spare modern UI height for more authored controls.
 	// This is a Nanolathe presentation preference (interface design §3.3).
 	ExpandedSidebar int `json:"expandedSidebar"`
-	// CommunitySelection enables the community patch's Ctrl+B/F idle-unit
-	// cycles and Ctrl+S on-screen mobile-weapon selection. It is host input
+	// CommunitySelection chooses Retail (0), Community (1), or Zero (2)
+	// selection controls (DESIGN_INTERFACE_HUD_INPUT §3.13). It is host input
 	// policy, independent of gameplay and renderer selection.
 	CommunitySelection int `json:"communitySelection"`
+	// FactoryHundredBatch enables Ctrl+Shift batches of 100 factory products.
+	// Alt keeps its batch of 20, and stockpile buttons keep their own counts.
+	FactoryHundredBatch int `json:"factoryHundredBatch"`
 	// DoubleClickSelection enables the community patch's on-screen same-type
 	// selection for a native left- or right-double-click record.
 	DoubleClickSelection int `json:"doubleClickSelection"`
@@ -675,7 +678,10 @@ func (p *Presentation) Normalize() {
 	if p.ExpandedSidebar < 0 {
 		p.ExpandedSidebar = DefaultPresentation().ExpandedSidebar
 	}
-	for _, value := range []*int{&p.CommunitySelection, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe, &p.VictoryCue, &p.AlliedDotSwatches} {
+	if p.CommunitySelection < 0 || p.CommunitySelection > 2 {
+		p.CommunitySelection = 0
+	}
+	for _, value := range []*int{&p.FactoryHundredBatch, &p.DoubleClickSelection, &p.CommunityCounters, &p.ReloadBars, &p.VeteranLabels, &p.GroupNumbers, &p.AlliedResources, &p.WeatherReport, &p.BuildRotationOverlay, &p.QueuedOrderDrag, &p.TeamColorNanolathe, &p.VictoryCue, &p.AlliedDotSwatches} {
 		if *value < 0 {
 			*value = 0
 		} else {

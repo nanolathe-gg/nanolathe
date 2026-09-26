@@ -56,13 +56,16 @@ func builderOptionsPage(window *gui.Window) error {
 	label.Link = ""
 	label.Rect.X, label.Rect.W = button.Rect.X, button.Rect.W
 	y := label.Rect.Y
+	// One pixel between buttons leaves room for every host control above
+	// Restore Defaults in the shorter in-battle column.
+	pitch := button.Rect.H + 1
 	stances := [3]string{"Hold", "Man.", "Roam"}
 	for group, title := range [2]string{"Guard home", "Patrol work"} {
 		caption := label
 		caption.Name, caption.SourceName, caption.Text = title, title, title
 		caption.Rect.Y = y
 		kept = append(kept, caption)
-		y += caption.Rect.H + 4
+		y += caption.Rect.H
 		for i, name := range builderOptionNames[group] {
 			control := button
 			control.Name, control.SourceName, control.Stages = name, name, 3
@@ -73,28 +76,29 @@ func builderOptionsPage(window *gui.Window) error {
 			control.Text = fmt.Sprintf("%s: %s|%s: %s|%s: %s", stances[i], labels[0], stances[i], labels[1], stances[i], labels[2])
 			control.Rect.Y = y
 			kept = append(kept, control)
-			y += 22
+			y += pitch
 		}
-		// The rows are packed so the page, SwitchAlt row included, clears
-		// Restore Defaults in the shorter in-battle column.
-		y += 6
 	}
-	for _, row := range []struct{ name, text string }{
-		{"NCYCLE", "Idle keys: Off|Idle keys: On"},
-		{"NDOUBLE", "2-click: Off|2-click: On"},
+	for _, row := range []struct {
+		name, text string
+		stages     uint8
+	}{
+		{"NCYCLE", "Select: Retail|Select: Comm.|Select: Zero", 3},
+		{"NDOUBLE", "2-click: Off|2-click: On", 2},
+		{"NHUNDRED", "100 batch: Off|100 batch: On", 2},
 		// The persisted SwitchAlt mux [07 R-CAM-01 §4]: plain digits pick
 		// build pages (retail's default) or recall groups. `+switchalt`
 		// changes the same value from the message line.
-		{"NSWITCHALT", "Digits: Pages|Digits: Groups"},
+		{"NSWITCHALT", "Digits: Pages|Digits: Groups", 2},
 		// The overview Tab and the wheel open: today's smooth zoom, or the
 		// optional megamap (DESIGN_INTERFACE_HUD_INPUT §3.15).
-		{"NOVERVIEW", "Tab: Options|Tab: Megamap"},
+		{"NOVERVIEW", "Tab: Options|Tab: Megamap", 2},
 	} {
 		control := button
-		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, 2
+		control.Name, control.SourceName, control.Text, control.Stages = row.name, row.name, row.text, row.stages
 		control.Rect.Y = y
 		kept = append(kept, control)
-		y += 22
+		y += pitch
 	}
 	window.Gadgets = kept
 	return nil
@@ -106,6 +110,7 @@ func (g *gameShell) syncBuilderOptions() {
 	}
 	optionsPanel.SetStageAt(optionsPanel.Index("NCYCLE"), g.presentation.CommunitySelection)
 	optionsPanel.SetStageAt(optionsPanel.Index("NDOUBLE"), g.presentation.DoubleClickSelection)
+	optionsPanel.SetStageAt(optionsPanel.Index("NHUNDRED"), g.presentation.FactoryHundredBatch)
 	optionsPanel.SetStageAt(optionsPanel.Index("NSWITCHALT"), boolInt(g.switchAlt))
 	optionsPanel.SetStageAt(optionsPanel.Index("NOVERVIEW"), boolInt(g.presentation.Overview == settings.OverviewMegamap))
 	for group, names := range builderOptionNames {
@@ -132,13 +137,19 @@ func (g *gameShell) activateBuilderOption(name string) bool {
 		g.syncBuilderOptions()
 		return true
 	}
-	if name == "NCYCLE" || name == "NDOUBLE" {
+	if name == "NCYCLE" || name == "NDOUBLE" || name == "NHUNDRED" {
 		p := g.presentation
 		value := &p.CommunitySelection
-		if name == "NDOUBLE" {
+		stages := 3
+		switch name {
+		case "NDOUBLE":
 			value = &p.DoubleClickSelection
+			stages = 2
+		case "NHUNDRED":
+			value = &p.FactoryHundredBatch
+			stages = 2
 		}
-		*value = g.retailOptionsStage(name, 2, *value)
+		*value = g.retailOptionsStage(name, stages, *value)
 		g.setPresentation(p)
 		g.syncBuilderOptions()
 		return true
@@ -165,6 +176,7 @@ func (g *gameShell) activateBuilderOption(name string) bool {
 func (g *gameShell) setSelectionPreferences(p settings.Presentation) {
 	next := g.presentation
 	next.CommunitySelection, next.DoubleClickSelection = p.CommunitySelection, p.DoubleClickSelection
+	next.FactoryHundredBatch = p.FactoryHundredBatch
 	next.Overview = p.Overview
 	g.setPresentation(next)
 }

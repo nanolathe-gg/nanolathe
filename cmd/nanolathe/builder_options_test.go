@@ -16,6 +16,9 @@ func TestBuilderOptionsPageTransaction(t *testing.T) {
 	g.openMenu(modeMenuSingle)
 	g.activateGadget("Options")
 	g.activateRetailOptionsGadget("BUILDERS")
+	if retailOptionsCue("nhundred") != "Options" {
+		t.Fatal("hundred-batch control lost the options cue")
+	}
 	if optionsState.page != "builders" {
 		t.Fatal("builder category did not open")
 	}
@@ -34,6 +37,14 @@ func TestBuilderOptionsPageTransaction(t *testing.T) {
 		t.Fatal("the SwitchAlt control is missing or does not show the retail default")
 	}
 	g.activateRetailOptionsGadget("NCYCLE")
+	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "builder-options-community.png"))
+	}
+	g.activateRetailOptionsGadget("NCYCLE")
+	g.activateRetailOptionsGadget("NHUNDRED")
+	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
+		writeShellShot(t, cl, filepath.Join(dir, "builder-options-zero.png"))
+	}
 	g.activateRetailOptionsGadget("NDOUBLE")
 	g.activateRetailOptionsGadget("BGHOLD")
 	g.activateRetailOptionsGadget("BPROAM")
@@ -41,19 +52,24 @@ func TestBuilderOptionsPageTransaction(t *testing.T) {
 	if g.builderOptions.Guard[0] != 2 || g.builderOptions.Patrol[2] != 2 || !g.switchAlt {
 		t.Fatal("controls did not advance once")
 	}
+	if g.presentation.CommunitySelection != 2 || g.presentation.FactoryHundredBatch != 1 {
+		t.Fatal("Zero selection or hundred-batch control did not advance")
+	}
 	g.activateRetailOptionsGadget("UNDO")
-	if g.builderOptions != settings.DefaultBuilderOptions() || g.presentation.CommunitySelection != 0 || g.presentation.DoubleClickSelection != 0 || g.switchAlt {
-		t.Fatal("undo did not restore the seven values")
+	if g.builderOptions != settings.DefaultBuilderOptions() || g.presentation.CommunitySelection != 0 || g.presentation.FactoryHundredBatch != 0 || g.presentation.DoubleClickSelection != 0 || g.switchAlt {
+		t.Fatal("undo did not restore the saved preferences")
 	}
 	g.activateRetailOptionsGadget("BGHOLD")
 	g.activateRetailOptionsGadget("NCYCLE")
+	g.activateRetailOptionsGadget("NCYCLE")
+	g.activateRetailOptionsGadget("NHUNDRED")
 	g.activateRetailOptionsGadget("NSWITCHALT")
 	g.activateRetailOptionsGadget("PREV")
 	saved, err := settings.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.BuilderOptions.Guard[0] != 2 || saved.Presentation.CommunitySelection != 1 || saved.SwitchAlt != 1 {
+	if saved.BuilderOptions.Guard[0] != 2 || saved.Presentation.CommunitySelection != 2 || saved.Presentation.FactoryHundredBatch != 1 || saved.SwitchAlt != 1 {
 		t.Fatal("OK did not persist builder preferences")
 	}
 	g.activateGadget("Options")
@@ -62,17 +78,22 @@ func TestBuilderOptionsPageTransaction(t *testing.T) {
 		t.Fatal("the SwitchAlt control does not show the saved value")
 	}
 	g.activateRetailOptionsGadget("RESTORE")
-	if g.switchAlt {
+	if g.switchAlt || g.presentation.CommunitySelection != 0 || g.presentation.FactoryHundredBatch != 0 {
 		t.Fatal("Restore Defaults did not restore the retail digit mux")
 	}
 	g.activateRetailOptionsGadget("CANCEL")
-	if g.builderOptions.Guard[0] != 2 || g.presentation.CommunitySelection != 1 || !g.switchAlt {
+	if g.builderOptions.Guard[0] != 2 || g.presentation.CommunitySelection != 2 || g.presentation.FactoryHundredBatch != 1 || !g.switchAlt {
 		t.Fatal("cancel did not restore the saved preference")
 	}
 	if err := g.openRetailOptionsScreen(true); err != nil {
 		t.Fatal(err)
 	}
 	g.activateRetailOptionsGadget("BUILDERS")
+	last := optionsPanel.Window.Gadgets[optionsPanel.Index("NOVERVIEW")].Rect
+	restore := optionsPanel.Window.Gadgets[optionsPanel.Index("RESTORE")].Rect
+	if last.Y+last.H >= restore.Y {
+		t.Fatal("Orders controls overlap Restore Defaults")
+	}
 	if dir := os.Getenv("NANOLATHE_OPTIONS_SHOT"); dir != "" {
 		writeShellShot(t, cl, filepath.Join(dir, "builder-options-battle.png"))
 	}

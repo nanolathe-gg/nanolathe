@@ -142,11 +142,18 @@ radii with their plus-four score. The self-scan and recipient-scan weights
 are distinct; merely observing a provider's own armor cannot determine all
 recipient states.
 
-**Unknown — untested branches.** The present real-session test does not
-establish the end-to-end disruption outcome with those mobile units,
-unfinished upgrades, or the marker values with no matching compiled unit.
-The coverage arithmetic above is authored evidence; completing these cases
-requires corresponding ordinary lifecycle scenarios. Commander kinetic
+**Established — bounded disruption acceptance.**
+`TestEscalationShieldDisruption` places an enemy Prophet (`ARMCRAWL`)
+within the authored short radius of an Aegis and its extractor. With one
+provider the ordinary scans clear both armor states and a nominal 100 hit
+deals 100 to the extractor. Two completed friendly providers outweigh that
+one disruptor and restore 25-damage intake. Removing the second provider
+disables protection again; removing the Prophet restores it. No script
+variables or detector results are injected.
+
+**Unknown — untested branches.** Other disruptor types, unfinished upgrades,
+and marker values with no matching compiled unit still require corresponding
+ordinary lifecycle scenarios. Commander kinetic
 shields and other recipients' upgrade armor are separate script branches
 and are not covered by this contract.
 
@@ -223,6 +230,16 @@ shield implementation. Its checks cover:
 - Active-hit save/load and continued callback execution without VM fallback
   diagnostics in the principal inspected programs.
 
+**Established — ordinary Aegis upgrade acceptance.**
+`TestEscalationAegisUpgradeFromAuthoredMenu` in `cmd/nanolathe` follows the
+real `ARMSHGEN_UPG` gadget through the human command boundary, funded ordinary
+production, completed retained cargo and closed build stance. An extractor
+500 world units from the parent starts unprotected and becomes armored after
+the completed upgrade's detector scan. The original parent remains
+`Builder=0`; the required correction is the ordinary named-product HUD path
+described in [Escalation engine package](taesc-engine.md), not an authored
+definition rewrite or a shield-specific engine mechanic.
+
 **Established — existing engine sites.** `session/bindQueryPorts` supplies
 the target-model-height and position readers; `session/bindScriptPorts`
 supplies the extension queries; `units` binds activation and armor writes;
@@ -252,6 +269,31 @@ configuration multiplies self-heal health contributions by three, but
 multiplying a zero caller quantum still gives zero. The licensed recorder
 source contains a completion-only healing hook whose registration is
 commented out; it does not close the active caller contract.
+
+**Established — licensed history narrows, but does not close, the gap.** At
+the pinned MIT TADR revision, the source history records these distinct changes:
+
+- [Recorder completion guard, 2014-12-23](https://github.com/tanvanman/TADR/commit/b8c0acc09ba4631b7e39ceb6ebc1f706e2d07251):
+  `UnitActions_DontHealTimeNotBuilt` only prevents incomplete units from
+  entering passive healing. Its registration was
+  [disabled on 2015-05-31](https://github.com/tanvanman/TADR/commit/3e92d8eb9eeb1b46e2698c43afeccf96d26164c0).
+  Neither version supplies a replacement timer or work amount.
+- [Repair accumulator, 2026-08-01](https://github.com/tanvanman/TADR/commit/f183cb6be7869f3423dc6b2baa4dd50f57d4b9fc)
+  and [rate multipliers, 2026-08-18](https://github.com/tanvanman/TADR/commit/f9733364751adbda550b2b89c2a3621946ccb004):
+  these change the shared contribution helper, including self-repair when its
+  input is positive. They leave the passive caller outside that source contract.
+- [Maintainer report in PR 15](https://github.com/tanvanman/TADR/pull/15)
+  reports 581 health over 16,457 ticks for a three-times `corkrog` sample
+  and discusses power-of-two intervals before the fix. It does not identify a
+  Gold 10.2.0 executable, the required caller expression or all authored inputs.
+  It cannot establish a modulo timer, bitmask timer, fractional accumulation
+  at the call site, or a minimum award for `HealTime=1`.
+
+The retail caller was separately rechecked: its unsigned HealTime product is
+integer-divided before conversion to the repair helper's work type. Thus the
+zero from `HealQuantum(1)` is not an accidental floating-point truncation in
+Nanolathe. Multiplying that zero by the sourced current helper's self-repair
+rate does not repair the historical-contract gap.
 
 **Unknown — missing historical caller contract.** The historical healing
 summary in [Escalation engine package](taesc-engine.md) records changed

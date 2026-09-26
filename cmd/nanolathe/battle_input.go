@@ -464,7 +464,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			if !ok {
 				return
 			}
-			handles := b.eligibleHandlesInBand(f, band)
+			handles := b.eligibleHandlesInBand(f, band, b.zeroDragFilter(in.Kbd))
 			kind := session.HumanSelectionReplace
 			if additive {
 				kind = session.HumanSelectionToggle

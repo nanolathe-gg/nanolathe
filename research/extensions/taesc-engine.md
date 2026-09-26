@@ -246,6 +246,10 @@ renames are excluded:
   the fixed eight-frame cadence retail pairs with it
   ([04 R-SPEC-01 §4](../retail-executable-spec/04-units-orders-scripts-and-movement.md)),
   and floors the heal amount at one instead of capping it at one.
+  **Unknown — complete caller contract.** This retained historical summary
+  does not specify a complete tick predicate or work-input expression.
+  Current licensed helper source does not settle either; see
+  [the passive-healing evidence boundary](escalation-shields.md#unresolved-passive-generator-healing).
 - **Spawn classification.** A per-unit spawn class byte is derived from the
   unit's height against the global water level, and the occupancy/SFX
   classifier's boundary case below the waterline was adjusted.
@@ -406,13 +410,13 @@ largest tier, plus the per-unit `VeterancyAccuracyBuffRate`.
 engine extension.** Four authored pieces make one upgrade; all four are
 retail content wiring:
 
-1. The parent building holds a build list. Twelve of the thirteen parents
+1. The parent building authors a build menu. Twelve of the thirteen parents
 author `Builder=1` with `BMcode=0`; the shield generator authors `Builder=0`.
-2. The upgrade unit enters the parent's build list either through
-`gamedatE/SIDEDATA.tdf` `[CANBUILD]` `<parent>` subsections
-(`canbuildN=<unit>`) or through a `downloadsE` menu record (`UNITMENU=<parent>`,
-`UNITNAME=<unit>`). Only the shield generator uses the download record; the
-other parents use SIDEDATA.
+2. The release authors upgrade names in `gamedatE/SIDEDATA.tdf` `[CANBUILD]`
+`<parent>` subsections (`canbuildN=<unit>`). This includes `ARMSHGEN_UPG`
+under `ARMSHGEN`. Aegis also has a `downloadsE/armshgen_upg.tdf` record whose
+comment describes AI use and whose `MENU` and `BUTTON` fields are commented
+out. This corrects the earlier claim that its only wiring was the download.
 3. The parent's per-unit build-menu layout (`guiE/<UNIT><page>.gui`) names its
 build slots after the units they hold — ordinary builders list their products
 this way — and every upgrade parent has exactly one named gadget, its upgrade
@@ -445,9 +449,9 @@ thirteen buildings above and nothing else in the package. No shipped binary
 contains the plain key name (the executable has only the indexed
 `canbuild0..N`/`CANBUILD` forms used by the SIDEDATA reader), and the retail
 key table maps the "is a builder" flag to `builder`, not `canbuild`. The two
-paths above are sufficient without it: twelve parents author `Builder=1`, and
-the one without it uses the download record. It is therefore recorded as an
-authored marker with no established effect, like `Sccale`.
+paths above and the named-gadget dispatch below are sufficient without it.
+It is therefore recorded as an authored marker with no established effect,
+like `Sccale`; it is not an alias for `Builder`.
 
 **Established — the upgrade button appears on the parent's own menu.** The
 release notes place the upgrade picture on the upgradeable building's build
@@ -459,11 +463,18 @@ GUI windows ([07 R-HUD-03 §6](../retail-executable-spec/07-interface-input-came
 [02 R-CAT-01 §5](../retail-executable-spec/02-content-vfs-formats-and-data-loading.md)),
 while the download-menu compile can also append items to it
 ([02 R-CAT-01 §8](../retail-executable-spec/02-content-vfs-formats-and-data-loading.md)).
-The per-unit GUI names a build slot after the upgrade unit, so the twelve
-`Builder=1` parents show it; the shield generator authors `Builder=0` and is
-wired only through a download record, whose reach depends on a build-list head
-that the contract allocates for `builder`-flagged definitions — whether the
-Aegis upgrade is reachable is **Unknown**.
+The selected unit's authored GUI can also name a counted product directly:
+the retail click producer resolves the gadget name, without requiring the
+actor's `Builder` flag or compiled build-list membership
+([07 R-P0-11 §1](../retail-executable-spec/07-interface-input-camera-and-front-end.md)).
+Gold's `guiE/armshgen1.gui` names `ARMSHGEN_UPG`. Nanolathe previously added
+an extra Builder-flag gate in both its palette and host dispatcher. Removing
+that gate lets the actual Aegis button construct and retain its upgrade through
+ordinary callbacks; an extractor 500 world units away becomes protected by
+the upgrade's 570 radius. `TestEscalationAegisUpgradeFromAuthoredMenu` verifies
+that sequence with the original `Builder=0` definition. The separate mobile
+site-placement capability is unchanged. This closes current-host reachability;
+it does not assert historical patched-engine parity for every menu detail.
 
 **Supported inference — `canrepair` and `canland` have no reader.** Both names
 appear in no shipped binary, and the retail unit loader matches authored key
@@ -622,7 +633,8 @@ queries.
 
 - [Authored shields](escalation-shields.md) settles representative coverage,
   armor, energy shortage, overlap, removal and save continuation for Aegis and
-  Corona. Generator passive healing remains a confirmed missing capability:
+  Corona, plus actual Prophet disruption and ordinary Aegis upgrade coverage.
+  Generator passive healing remains a confirmed missing capability:
   the exact historical caller quantum and cadence need licensed source or
   bounded manual observations before implementation.
 - [Resource adjacency and charging](escalation-adjacency.md) settles nine
@@ -632,9 +644,10 @@ queries.
   cadence with one and two fields and removal. Other weapons and upgrades
   retain their own evidence requirements.
 - [Upgrade, gate and transport scripts](escalation-script-systems.md) cover a
-  real fusion upgrade through ordinary factory production, receiver linking
+  real fusion upgrade through ordinary factory production, the advanced
+  vehicle plant's upgrade with old/new/resurrected Bulldogs, receiver linking
   by ground attack and a full mixed-size automatic transport. Allied-source
-  wording conflicts and broader upgrade propagation remain separately scoped.
+  wording conflicts and other upgrade pairs remain separately scoped.
 - [Commander and aircraft scripts](escalation-commander-aircraft.md) cover
   both commanders' research filtering, weapon release, kinetic armor and
   removal, plus Atlas stack recovery and off-map cargo/save continuation.
@@ -671,11 +684,6 @@ that every case below has passed:
 
 ## Unknown
 
-- **Unknown — the Aegis upgrade's reachability.** The shield generator authors
-  `Builder=0` and its upgrade is wired only through a download record; the
-  build-list head the record appends to is allocated for `builder`-flagged
-  definitions, so whether the upgrade reaches the menu is not established.
-  A bounded in-game observation would settle it.
 - **Unknown — the repair-rate exploit fix.** The release notes document it, but
   no shipped DLL string, definition key or configuration key describes it and
   no matching arithmetic was isolated; a matching licensed historical source

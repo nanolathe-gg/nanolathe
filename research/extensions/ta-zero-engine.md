@@ -10,8 +10,10 @@ rules stay owned by
 build menus are owned by [Extended build menus](build-menus.md).
 
 **Established — artifact identity.** The inspected release is TA Zero Alpha 5
-(24 December 2024) installed over TA Zero Base (13 December 2019), identified
-by the bundled `TA Zero Readme.txt`. Inspected files and SHA-256:
+(24 December 2024) installed over TA Zero Base. The official download listing
+dates Base 14 December 2019; earlier local inventory called it 13 December.
+The file hashes below identify the inspected package independently of that
+date difference. The bundled `TA Zero Readme.txt` identifies Alpha 5. Inspected files and SHA-256:
 
 | File | SHA-256 | Role |
 |---|---|---|
@@ -435,13 +437,11 @@ damage charts including AI variants, and revised factory opening/closing
 animations. It documents plasma-shield recharge changes for Core Titan and
 Thor and shield-energy changes for the GoK commander's VSOC ability. These
 are concrete callback-order, timing, targeting, effects and resource
-acceptance cases even though the opcode census is retail. **Unknown — full
-ability contracts:** that change list does not establish every shield's
-damage interception, recharge scheduling, indicator visibility or save
-state. The shipped authored scripts and weapon definitions, followed by
-bounded manual comparisons where needed, must settle those per-unit
-contracts before depending on them. No generic shield formula follows from
-the word "shield" or from the later `tazero` engine name.
+acceptance cases even though the opcode census is retail. The authored
+source and compiled-script audit below now settles the listed callback
+contracts. It does not establish every historical projectile collision or
+rendering edge case. No generic shield formula follows from the word
+"shield" or from the later `tazero` engine name.
 
 **Established — AI and music are independently authored.** `ZI` supplies
 Acid, AirBattle, Default, Hover, Metal, SeaBattle, Urban and WaterWrld
@@ -505,9 +505,11 @@ Hailstorm and 0 for Tempest; FireRain also authors `FireStarter=100` and
 Tempest `Paralyzer=1`. Weather cannot be replaced by a generic decorative
 overlay while claiming these authored contracts. This records content, not
 proof that all historical engine branches match the current community patch's
-map-weapon behavior. The earlier Base/Alpha 5 effect-loader limitations in
-[Mod engine-package compatibility](mod-engine-compatibility.md) still apply
-to weather resources supplied by Alpha 5 rather than this map archive.
+map-weapon behavior. The weather graphics come from Alpha 5 rather than this map archive.
+The earlier loader audit is recorded in
+[Mod engine-package compatibility](mod-engine-compatibility.md); the later
+bounded frame-cache acceptance is recorded in
+[TA_ZERO_SUPPORT](../../docs/TA_ZERO_SUPPORT.md).
 
 **Established — map-specific feature presentation and economy.** The pack
 authors animated vents, lava, sparks, forges and power-core art, separately
@@ -515,8 +517,9 @@ named shadow sequences with `ShadTrans=1`, permanent metal deposits with
 `Metal=254`, and geothermal markers. Metallurgy/Power Core use definitions
 in the `Invisible` category with their own named GAF sequences; the readme
 documents these as invisible deposits/vents rather than a substitute stock
-feature. Crystal Gorge's `TAZ_Gorge_Crystal43` has death and reclamation
-successors `TAZ_Gorge_Crystal42` then `TAZ_Gorge_Crystal41`, with distinct
+feature. Crystal Gorge actually places `TAZ_Gorge_pCrystal43`, whose death
+and reclamation successors are `TAZ_Gorge_pCrystal42` then
+`TAZ_Gorge_pCrystal41`, with distinct
 art, height and resource values. The final stage is nonblocking. Sources:
 the pack's `TAZ_Metallurgy_Invisible.tdf`, `TAZ_Gorge_Crystals.tdf` and
 corresponding GAFs. The 1f readme additionally documents revised start positions and
@@ -538,13 +541,16 @@ The pack's own feature sprite/shadow names and death/reclamation successors
 also resolved to its own GAF entries/feature definitions. No donor files or
 increased decoder limits were used. This is parse and reference evidence,
 not full catalog/session admission, correct feature placement, a weather
-simulation comparison or visual validation. The precise runtime/visual cases
-remain to be exercised with those real resources.
+simulation comparison or visual validation. At that stage the runtime/visual cases had not been exercised. The later
+world acceptance below closes the stated runtime cases, with its explicit
+visual and historical-engine limits.
 
 ### Package acceptance cases
 
 These requirements are based on the established authored/documented surfaces
-above; no claim is made here that the cases have passed in Nanolathe:
+above. The bounded checks in the later audit sections and
+[TA_ZERO_SUPPORT](../../docs/TA_ZERO_SUPPORT.md) record which portions pass;
+the list itself is not a completeness certificate:
 
 - Mount original data, Base, Alpha 5 and the identified Map Pack 1f in the
   declared order. Preserve `Z*` winners and the shared feature/palette
@@ -574,8 +580,386 @@ above; no claim is made here that the cases have passed in Nanolathe:
   evidence; neither is proven by starting a skirmish or recognizing the
   filename extension.
 
+## Current release and source completeness audit
+
+**Established — public release scope, checked 26 September 2026 UTC.** The
+[official downloads listing](https://zero.tauniverse.com/ta-zero/) still
+identifies Alpha 5 and Map Pack 1f, both dated 24 December 2024, as current.
+The [release announcement](https://zero.tauniverse.com/2024/12/24/ta-zero-alpha-5-and-map-pack-1f/)
+and bundled readmes agree. This check used indexed official pages because
+direct page requests were refused; it is not a fresh archive download or a
+claim about unpublished versions. The hashes above and in the map section
+identify the local corpus actually tested.
+
+**Established — bounded source correspondence.** The inspected MIT TADR
+history has an explicit Zero profile starting at commit
+`dbc88b02bc6516bead45346e458aa202cbebab03` (27 July 2026), also the first
+[`tdraw-tazero.zip` release](https://github.com/tanvanman/TADR/releases/tag/v2026.7.27)
+found in its published release list. None of the Base renderer/recorder or the
+two optional renderer replacements matches a reachable Git blob in the
+inspected history through `dcff5ddeb6bd1030e3f452c0f16e5f005850f62f`.
+This rules out claiming an exact source match from that repository search;
+it does not prove no historical source exists. Nanolathe's current `tazero`
+feature-table values agree with the pinned configuration. They remain a
+separate target from Alpha 5's patched executable and Base's older DLLs.
+A source-to-binary manifest or reproducible matching licensed source build
+would settle that correspondence. No patch disassembly was used in this audit.
+
+**Established — complete parser/key census, bounded runtime coverage.** The
+identified combined package over the reference retail install compiled with
+zero donor substitutions: 269 unit definitions, 195 weapons, 4,737 features
+(including shared/base content), 22 movement classes, 154 sound categories,
+78 build menus, 1,047 placements, eight AI profiles and 290 maps (275 base
+maps plus 15 from this pack). Every unit passed admission and every compiled
+unit script loaded; the opcode and extended-port census above is unchanged.
+These totals describe this mount composition, not hard-coded engine limits.
+The inventory tool's tolerant mode supplied no replacements in this run.
+
+The FBI keys outside the typed reader are already scoped in [FBI](../formats/fbi.md):
+`TEDClass`, `UnitNumber`, `Designation`, `SteeringMode`, and unprefixed
+`BadTargetCategory` do not establish missing simulation readers. Feature
+`Permanent`, `Category` and `World` similarly do not override the established
+[feature keys](../formats/tdf.md). `SoundLava` remains unresolved, rather than
+being assigned an invented sound event.
+
+**Established — unresolved authored references.** `GoKT1AirPad` names
+`SoundCategory=GoKPlatform1`, which is absent from this package's sound table.
+The existing retail name/decimal fallback selects category ordinal zero for
+this nonnumeric miss ([02 "Cross-reference failure policy"]); do not invent
+an alias or claim the author's intended voice. The two previously identified
+missing model textures remain `armcolormeta4_1` and `goksphere2_5`.
+The AI profiles contain unmatched `GOKT1GUNHSIP` and `GOKT2CONTANK_AI` tokens;
+neither names a unit nor a category. Exact-name/category matching leaves
+them inactive. No unit has the documented `CTRL_J` category. Corrected author
+content or an author statement is needed before supplying any substitute.
+
+## Authored combat abilities and callback contracts
+
+**Established — authored Alpha 5 behavior.** Evidence is the identified
+`TAZ31.gp3`'s `Scripts/*.bos` and `.cob`, `ZUnits/*.fbi` and
+`ZWeapon/*.tdf`, plus its readme (SHA-256
+`ddb03b3934e68bf7cc7513473aeab89547d8295bff02f5760b7dbbbf515a4113`).
+The source scripts are authored content, not engine-patch source. Runtime
+checks execute the released compiled scripts; a source literal is not assumed
+to survive compilation unchanged. Nanolathe callback/damage checks below
+establish bounded implementation acceptance, not a historical-engine trace.
+
+### Core plasma and adaptive armour
+
+All thirteen plasma-shield definitions enable the ordinary `ARMORED` port
+and use their authored `DamageModifier`. Ordinary health damage is applied
+before deferred `HitByWeapon` consumes the ready shield, displays its directed
+impact piece for 100 ms, and begins its recharge counter. A hit while unready
+does not restart that basic counter. No shield-hit script explicitly charges
+energy. Control starts after construction finishes. Ordinary recharge visits
+occur on alternate 100 ms control iterations; the counter is tested before
+it is decremented, so reaching zero does not rearm until the next visit.
+
+| Definitions | Modifier | Restart counter / special boundary |
+|---|---:|---|
+| `CoreCommander` | 0.5 | 20; every control iteration subtracts 1 while position changes, 2 while stationary |
+| `CoreT2BTank`, `CoreT2HDTurret`, `CoreT2LasKbot` | 0.5 | 5 |
+| `CoreT2GF`, `CoreT2GF_AI` | 0.5 | 5; opening disables shield/recharge, closing restores them through the authored timed stages |
+| `CoreT2Gunship` | 0.5 | 5; highest movement-rate callback disables shield until a slower tier permits recharge |
+| `CoreT2Mex`, `CoreT2PGen`, `CoreT2PGen_AI` | 0.5 | 10; a shielded extractor hit returns before its separate extraction-shutdown branch |
+| `CoreT2Radar` | 0.5 | 10; active radar disables shield, deactivation immediately arms it |
+| `CoreT2Shield`, `CoreT2Shield2` | 0 | 4; activation waits for the yard to close |
+
+Patron and Bastion are large 20×20 and 31×31 definitions. Their scripts do
+not assign armour to neighbours. Impact opens the yard, hides shield rings
+and drops armour. Reactivation requests yard closure, repeatedly requests
+ordinary clearance and sleeps 200 ms while the yard stays open; only closure
+restores armour and the rings. Manual activation has two 500 ms stages.
+Deactivation holds the disabled state. Their authored active energy use is
+25/50. An ordinary zero-damage hit still invokes the script and collapses
+the shield. A bounded ordinary-projectile check for all four Core/GoK generators seeds
+an authored Marine EMG projectile at an outer occupied yard cell: a closed
+shield consumes it with a hit callback and no health loss; after deactivation
+the same contact point admits it without a callback. This establishes that
+contact boundary, not complete aiming/travel or rendered perimeter geometry.
+A neighbour-wide invulnerability aura is not justified.
+
+Adaptive armour belongs to `CoreT2AAGunship`, `CoreT2AmpTank`,
+`CoreT2AsKbot` and `CoreT2PDTurret`, all with modifier 0.75. A hit starts or
+refreshes a timer (9 for the first three, 4 for the turret). On alternate
+control visits, positive enables armour then decrements; zero disables it
+and becomes −1. The first hit precedes activation. Raider also has a stowed
+posture: it starts armoured with adaptive handling disabled, then its primary
+aim callback leaves that posture and enables adaptation. Its inactivity
+sequence restores stowed armour. Tests enter the correct posture before
+asserting the first 100-damage hit and later 75-damage hits.
+
+### GoK commander reserve and VSOC
+
+The commander starts its completed arrival with 1,000 reserve and a 0.25
+armour modifier. Every fifth 100 ms control iteration clamps negative reserve
+to zero, adds 12 while enabled (another 12 during boost), and caps at 1,000.
+The BOS literal is 12.5, but the released COB operand is 12. At 30 Hz these
+pulses are 15 ticks apart. Charge indicators split at 750 and 500; disabled
+shield rearms at reserve ≥250 and displays the low band on that visit.
+
+The hit callback compares current integer health percentage with its stored
+previous percentage. While ready it spends 36 times that decrease, with a
+minimum of 10; values above 100 become 100 plus half the excess, truncated.
+It updates the previous percentage, shows the directed hit effect, and drops
+armour when reserve ≤0 unless boosted. The control loop also samples health,
+so callback/poll ordering can produce the minimum charge. No hidden engine
+accumulator may replace that script ordering.
+
+`FireTertiary` arms the shield, enables boost, adds 200 reserve clamped to
+200…1,000, sleeps 6,000 ms (180 ticks), then ends boost. Ending boost alone
+does not drop armour; a later hit makes that decision. For twelve uncapped
+boosted recharge pulses the integer gain is 200 + 12×24 = 488. The readme's
+nominal total of 500 must not override the actual program; pulse inclusion
+also depends on alignment and callback order.
+
+`GoK_ComVSOC` is a command-fire, vertical-launch paralyzer: energy per shot
+1,000, range 200, burst 24, burst rate 0.233, reload 30, area 400, edge
+factor 0.25 and weapon timer 0.066, with two-phase/burnblow behavior and
+unit-name damage overrides. It references `GoKComVSOC` sound and
+`ModFX/Weapon_VSOC1` effects. Ordinary root launch pays once and invokes
+`FireTertiary` once; burst clones repeat neither charge nor callback.
+The committed checks cover reserve depletion/rearm, boost expiry, indicator
+state, real root payment and save/restore continuation. A real root and all 24 authored burst impacts
+stun nearby Arm infantry without health damage, repeated root payment or
+repeated ability callbacks. It is one target class,
+not exhaustive target-override or explosion-geometry coverage.
+
+### All GoK void-shield formula families
+
+**Established — authored content.** An exhaustive Alpha 5 script census finds 69
+GoK unit definitions with shield-ready/reserve state: the commander and 68
+others. All names appear in the table below or the extended-generator pair. The
+matched compiled COB was checked for the numeric constants in each shield
+assignment and comparison; this matters because fractional BOS literals truncate
+individually before arithmetic. The following are compiled integer values, not
+nominal percentages inferred from HP.
+
+Ordinary light shields spend max(minimum, coefficient times the change in
+integer health percent), without the heavy-shield reduction. Heavy shields
+additionally replace costs above the listed pivot by pivot plus half the excess,
+truncating toward zero. Every ordinary shield uses the health port and periodic
+preceding-health sample described for the commander, so callback order remains
+relevant. The table lists recharge increment per five-loop pulse, capacity,
+disabled-to-ready threshold, gem upper/middle cutoffs, and authored enabled
+initialization reserve. These reserve assignments do not imply that armour is
+already active immediately upon creation or construction completion:
+construction polling, boot animations, activation and factory state gates still
+run before the enabled state is reached. Except where specified below, pulses
+are each 15 normal drains, negative reserve is floored before replenishment,
+reserve is capped afterward, and an unboosted hit at reserve<=0 drops armour.
+Modifier is the FBI value narrowed by the normal fixed-point loader, so 0.05 is
+not exact one-twentieth in the damage funnel.
+
+| Unit definitions | Modifier | Loss coefficient | Min cost | Heavy pivot | Recharge | Cap | Rearm at | Gem cutoffs | Enabled initialization |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---:|
+| `GoKCommander` | 0.25 | 36 | 10 | 100 | 12+12 | 1000 | 250 | 750,500 | 1000 |
+| `GoKT1AAHover` | 0.25 | 7 | 5 | — | 2 | 100 | 50 | 75,50 | 100 |
+| `GoKT1AATurret`, `GoKT1FAATurret`, `GoKT1Sonar` | 0.25 | 12 | 5 | — | 3 | 150 | 75 | 112,75 | 150 |
+| `GoKT1AF`, `GoKT1AF_AI` | 0.25 | 45 | 5 | — | 9 | 750 | 187 | 562,375 | 750 |
+| `GoKT1ATHover` | 0.25 | 12 | 5 | — | 5 | 200 | 100 | 150,100 | 200 |
+| `GoKT1AirCon`, `GoKT1AirCon_AI` | 0.25 | 4 | 5 | — | 2 | 75 | 50 | 56,37 | 75 |
+| `GoKT1AirPad` | 0.25 | 45 | 5 | — | 12 | 500 | 250 | 375,250 | 500 |
+| `GoKT1AsKbot` | 0.25 | 3 | 5 | — | 2 | 100 | 50 | 75,50 | 100 |
+| `GoKT1Bomber`, `GoKT1Gunship` | 0.25 | 5 | 5 | — | 2 | 75 | 50 | 56,37 | 75 |
+| `GoKT1ConHover`, `GoKT1ConHover_AI`, `GoKT2Fighter` | 0.25 | 7 | 5 | — | 3 | 150 | 75 | 112,75 | 150 |
+| `GoKT1ConSub`, `GoKT1ConSub_AI`, `GoKT1Geo`, `GoKT1Sub` | 0.25 | 27 | 5 | — | 6 | 250 | 125 | 187,125 | 250 |
+| `GoKT1Destroyer` | 0.25 | 54 | 5 | — | 12 | 500 | 250 | 375,250 | 500 |
+| `GoKT1Dropship` | 0.25 | 4 | 5 | — | 3 | 150 | 75 | 112,75 | 150 |
+| `GoKT1ES`, `GoKT1ES_AI` | 0.25 | 6 | 5 | — | 5 | 200 | 100 | 150,100 | 200 |
+| `GoKT1FEHover`, `GoKT1FEHover_AI` | 0.25 | 4 | 5 | — | 3 | 150 | 75 | 112,75 | 100 |
+| `GoKT1FSNode`, `GoKT1SNode` | 0.05 | 10 | 10 | — | 3 | 300 | 75 | 225,150 | 300 |
+| `GoKT1FTLTurret` | 0.25 | 36 | 5 | — | 6 | 250 | 125 | 187,125 | 250 |
+| `GoKT1GF`, `GoKT1GF_AI`, `GoKT1NF`, `GoKT1NF_AI` | 0.25 | 60 | 5 | — | 12 | 1000 | 250 | 750,500 | 1000 |
+| `GoKT1HDTurret` | 0.25 | 18 | 5 | — | 6 | 250 | 125 | 187,125 | 250 |
+| `GoKT1HSKbot` | 0.25 | 9 | 5 | — | 2 | 100 | 50 | 75,50 | 100 |
+| `GoKT1MS`, `GoKT1MS_AI` | 0.25 | 21 | 5 | — | 3 | 150 | 75 | 112,75 | 150 |
+| `GoKT1PGen`, `GoKT1PGen_AI` | 0.25 | 5 | 5 | — | 3 | 150 | 75 | 112,75 | 150 |
+| `GoKT1Radar`, `GoKT1SupHover` | 0.25 | 12 | 5 | — | 6 | 250 | 125 | 187,125 | 250 |
+| `GoKT2AALauncher` | 0.25 | 42 | 5 | — | 7 | 300 | 150 | 225,150 | 300 |
+| `GoKT2AARpod` | 0.25 | 24 | 5 | — | 7 | 300 | 150 | 225,150 | 300 |
+| `GoKT2AATurret` | 0.25 | 27 | 5 | — | 11 | 450 | 225 | 337,225 | 450 |
+| `GoKT2AF`, `GoKT2AF_AI` | 0.25 | 67 | 5 | — | 18 | 1500 | 375 | 1125,750 | 1500 |
+| `GoKT2ATRpod` | 0.25 | 33 | 10 | 100 | 15 | 600 | 300 | 450,300 | 600 |
+| `GoKT2AirCon`, `GoKT2AirCon_AI`, `GoKT2AirJammer` | 0.25 | 15 | 5 | — | 5 | 200 | 100 | 150,100 | 200 |
+| `GoKT2ArtRpod` | 0.25 | 27 | 5 | — | 7 | 300 | 150 | 225,150 | 300 |
+| `GoKT2ArtTurret` | 0.25 | 60 | 5 | — | 7 | 300 | 150 | 225,150 | 300 |
+| `GoKT2ConHover`, `GoKT2ConHover_AI` | 0.25 | 13 | 5 | — | 5 | 200 | 100 | 150,100 | 200 |
+| `GoKT2GF`, `GoKT2GF_AI` | 0.25 | 120 | 5 | — | 25 | 2000 | 500 | 1500,1000 | 2000 |
+| `GoKT2Gunship` | 0.25 | 18 | 10 | 100 | 15 | 600 | 300 | 450,300 | 600 |
+| `GoKT2JumpKbot` | 0.25 | 12 | 5 | — | 2+2 | 200 | 100 | 150,100 | 200 |
+| `GoKT2Mex` | 0.25 | 30 | 5 | — | 12 | 500 | 250 | 375,250 | 500 |
+| `GoKT2PDTurret` | 0.25 | 54 | 10 | 100 | 15 | 600 | 300 | 450,300 | 600 |
+| `GoKT2PGen`, `GoKT2PGen_AI` | 0.25 | 54 | 5 | — | 7 | 300 | 150 | 225,150 | 300 |
+| `GoKT2Radar` | 0.25 | 18 | 5 | — | 12 | 500 | 250 | 375,250 | 500 |
+| `GoKT2Stealth` | 0.25 | 36 | 5 | — | 10 | 400 | 200 | 300,200 | 400 |
+| `GoKT2SupHover` | 0.25 | 21 | 5 | — | 17 | 700 | 350 | 525,350 | 700 |
+| `GoKT3SupRpod` | 0.25 | 150 | 10 | 150 | 37 | 3000 | 750 | 2250,1500 | 3000 |
+
+Special boundaries:
+
+- GoKT1AsKbot (Disciple) adds 15 reserve in FireSecondary; the periodic
+  controller provides the later capacity clamp. The attack callback itself does
+  not cap the gain.
+- GoKT2JumpKbot (Valkyrie) adds 2 each recharge pulse and another 2 unless its
+  motion mode is antigravity hover. That mode is selected when the base piece is
+  more than three world units above queried ground. The ground-height and
+  piece-height reads are therefore part of this ability.
+- GoKT1FEHover and GoKT1FEHover_AI start with 100 reserve although their later
+  capacity is 150. Do not normalize the initializer to capacity.
+- GoKT1Radar and GoKT1Sonar retain a separate disabled state while activated;
+  HitByWeapon blocks only in state 1, not merely any nonzero state. Their
+  deactivate animation eventually returns the state to0, after which the
+  controller may recharge/rearm. The GoK factory scripts (T1GF/T1AF/T1NF and
+  T2GF/T2AF, including each _AI variant) also use state 2 while opened and state 0
+  after closing. This differs from a generic always-on shield.
+- GoKT3SupRpod (Matriarch) begins Create with shield disabled and reserve 0. It
+  waits for construction completion and a lengthy boot animation before starting
+  its control threads and assigning enabled reserve 3000 and armour 1; the earlier
+  matching initializer inside a block comment is not operative. Energize is a
+  later energy-piece animation, not this initialization. It uses a heavy
+  pivot 150, not the commander/Immortal/Radiant/Pillar pivot 100; its restart
+  threshold is 750 of 3000. GoKT1SNode and GoKT1FSNode use modifier 0.05,
+  coefficient 10, minimum 10, and no heavy compression. These are distinct shield
+  formulas.
+- GoKT2Shield (Haven) and GoKT2Shield2 (Sanctuary) are a separate
+  extended-generator family: reserve starts/caps at 40, a blocked ordinary hit
+  costs 2 regardless of its damage, active recharge adds 1 per fifth 100 ms loop,
+  and rearm requires at least 20 plus successful yard closure. DamageModifier=0,
+  EnergyUse40/60, footprint20x20/31x31. The impact keeps armour/perimeter until
+  reserve<=0, when it opens the yard and drops armour/rings. Activation uses a
+  lower reserve>=10 admission check before its yard/animation steps; the later
+  steady controller still requires20 to rearm. Their display thresholds are30
+  and20. Deactivation disables recharge and places the shield in the distinct
+  state 2. Their three gem groups and two ring pieces follow those states. Their
+  small per-impact reserve is not the ordinary HP-percentage shield formula.
+
+This establishes the authored formula census. Runtime representatives cover
+light, heavy, Matriarch, node and extended-generator arithmetic; they do not
+establish every per-unit interaction or historical timing edge case.
+
+
+### Anti-air primary/tertiary handoff
+
+Thirteen scripts put a one-tick sleep in primary aiming before the later
+anti-air/reload wait. Tertiary aiming sets the shared anti-air flag first;
+the resumed primary withholds readiness, tertiary can fire, and its fire
+callback clears the flag so primary can resume. These are the released
+Arm T1 AA hover/turret and T2 AA tank/turret; Core T1 AA ship/tank/turret and
+T2 AA spider/turret; GoK T1 AA hover/turret and T2 AA launcher/ARpod.
+Actual callback tests enqueue primary before tertiary in the same visit and
+check this ordering, then primary resumption.
+
+**Established — authored exception.** `ArmT1FAATurret`, `CoreT1FAATurret`
+and `GoKT1FAATurret` omit that initial sleep in both BOS and COB. The same
+fixture grants both aim callbacks. The readme's blanket fix does not match
+these three released scripts. Preserve the content; do not add a generic
+weapon suppression rule to conceal this discrepancy.
+
+## Authored world and AI acceptance
+
+**Established — authored content and bounded Nanolathe observations.** The
+identified Map Pack 1f feature/TNT data and Alpha 5 definitions/scripts were
+loaded through the production readers. The following contracts now have
+installed-content acceptance in `internal/session/zero_world_retail_test.go`:
+
+- The actually placed `pCrystal43 → pCrystal42 → pCrystal41` chain succeeds
+  through both damage and reclamation. Its successive reclaim pools are
+  60 metal/300 energy, 60/300 and 30/150; the last stage is nonblocking and
+  then disappears. Empty death/reclaim animations make these transitions
+  immediate. The unprefixed crystal chain also exists but is not the TNT's
+  chosen art variant.
+- Both Metallurgy and Power Core place `TAZ_Metallurgy_Metal1`: its 3×3
+  footprint seeds metal byte 254 into every cell; ordinary extraction reads
+  byte plus one. It is indestructible and nonreclaimable. The shared invisible
+  vent admits all three faction T1 geothermal plants under their central 3×3
+  `G` cells inside a 5×5 yard. A vent under an outside corner is insufficient.
+- Actual neutral meteor projectiles apply FireRain's 10 damage and Hailstorm's
+  1 damage without resource debit. Tempest supplies zero paralyze credit and
+  causes no lasting stun. Projectile-only stepping isolates these contacts
+  from self-repair. All four FireRain maps have no flammable placed features
+  in this corpus; the ordinary firestarter-to-feature path is retained rather
+  than adding vegetation or decorative-only weather.
+- All six faction T1 human/AI construction-aircraft variants create the
+  corresponding economy nanoframe through ordinary construction orders.
+  A human construction aircraft loads and unloads ordinary cargo through the
+  human command path; its AI counterpart intentionally lacks that capability.
+- Scramble binds its authored AirBattle manager. All three T1 AI air factories
+  receive Default weight 40 and easy/medium/hard limits 2/4/4; AirBattle gives
+  weight 60 and limits 4/6/6. The committed test exercises easy and hard
+  boundaries; the complete eight-profile sweep also checked medium.
+
+**Established — further bounded probes, not additional permanent tests.**
+All three T1 dropships and all three human T1 construction aircraft loaded and
+unloaded an `ArmT1InfKbot`. All six T2 human/AI construction aircraft and all
+three faction T1 AI ground and air factories raised their first authored
+products without script diagnostics. These are successful production starts,
+not a full tree or long-match AI acceptance. Direct allocation of a factory
+must align its centre to its footprint: the Arm air factory's 6×5 footprint
+needs different x/z parity; a misaligned convenience fixture can collide with
+its own yard and does not prove a content defect.
+
+**Established — definitions beyond the runtime sample.** Human T1 aircraft
+builders author capacity 1/size 3, worker 60/range 150; T2 author capacity
+1/size 4, worker 120/range 150. AI variants keep construction rates but omit
+transport capability, capacity/size and weapons. T1 dropships are capacity
+1/size 3. ArmT2Gunship and CoreT1Gunship author capacity 1/size 2;
+GoKT2AirJammer authors worker 60/range 150 without transport. T2 transport,
+those gunships' transport and AirJammer construction were not separately run.
+The two unresolved ZI tokens above remain inactive rather than receiving
+speculative aliases. Neither this sweep nor the parser census establishes
+historical AI threshold semantics, long-match strength or visual/audio parity.
+
+## Unresolved Zero passive self-repair
+
+**Established — documented requirement and implementation mismatch.** The
+[Alpha 4b announcement](https://zero.tauniverse.com/2017/06/04/ta-zero-alpha-4b/)
+attributes custom self-repair rates to executable changes. The author's
+[version history](https://zero.tauniverse.com/version-history/) excludes
+self-repair during construction. The Alpha 5 readme raises Thor from 1.88 to
+3.75 HP/s; its FBI authors `HealTime=7`. Other definitions author 3, 15, 31,
+63 and 127. The [Core guide](https://zero.tauniverse.com/core-units/) also
+separately documents effective durability repair and energy use for Hex.
+
+Nanolathe still uses the retail eight-tick caller and integer quantum
+`uint16(HealTime)×8/30`. In bounded damaged-unit checks over 240 tick
+opportunities, the value-3 commander, Behemoth, Tyrant, Adamant and both
+shield generators regained zero HP and requested zero energy. Tested value-7,
+15 and 31 definitions each regained 30 HP and requested 30 energy. This
+proves that the documented varying rates are not implemented. It does not
+establish an alternative resource formula or justify altering authored values.
+
+**Unknown — exact historical caller.** The source search through the pinned
+TADR history found no active Zero per-definition healing cadence. A Recorder
+construction guard introduced in commit
+`b8c0acc09ba4631b7e39ceb6ebc1f706e2d07251` has its registration commented
+out at the pin. The current Zero profile disables the separate repair-rate
+module. Neither closes the historical executable contract. The older
+binary-derived inventory above remains subject to its provenance restriction.
+Needed: licensed patch source, precise author documentation, or bounded manual
+observations on the identified executable covering cadence/phase, quantum,
+energy admission/stall, unfinished units and mask boundaries. Keep the retail
+caller and a code TODO until that evidence exists. No passing Zero acceptance
+test presents the mismatched repair behavior as supported compatibility.
+
 ## Unknown
 
+- **Unknown — complete historical gameplay parity.** Passive self-repair is a
+  confirmed mismatch with the unresolved replacement contract above. Shield
+  projectile geometry, exhaustive per-unit combat interactions and historical
+  renderer comparisons are not established by parser or callback checks.
+- **Unknown — factory control-group inheritance timing.** The controls page
+  promises products inherit a factory group; Nanolathe does not copy it.
+  Allocation versus completion, reassignment during construction and clearing
+  need matching source or a bounded manual observation before an existing
+  construction rule seam can implement the behavior.
+- **Unknown — additional host geometry and bindings.** X line/surround
+  placement with wheel spacing and local whiteboard are documented but absent.
+  The historical F4 megamap binding conflicts with the current source's Tab
+  binding and Nanolathe's score panel. Current-source interceptor ring radius
+  also differs from the older scoped ProTA contract. These need their own
+  versioned input/presentation contracts; no silent key/radius substitution
+  follows from selecting Zero.
 - **Unknown — dead-code reachability in other builds.** The new unit-cycling
   block is unreachable in the inspected Alpha 5 files; whether any build
   outside them installs a signature patch that reaches it is not established.

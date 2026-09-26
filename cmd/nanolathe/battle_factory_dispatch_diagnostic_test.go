@@ -65,29 +65,28 @@ func factoryClickFixture(t *testing.T) (*retailBattleHUD, *battleSession, string
 // invents no retail status text of its own — LastDispatchError is the only
 // surface, and it stays empty when the enqueue succeeds.
 //
-// This test used to inject a fabricated error through a factoryDispatch
-// function field on the HUD, whose only writer it was. Removing that field
-// showed why no click can carry one: consumeClickDelta only opens the product
-// rail when the committed page names a builder the local player owns whose
-// definition carries the builder flag, and DispatchFactoryBuildDelta refuses on
-// exactly those two conditions. A click that reaches the dispatcher has already
-// satisfied everything the dispatcher checks, so the refusal branch has no
-// producer reachable from the HUD. The "an error is not swallowed" half is
-// locked below at the level where an error can actually arise.
+// The selected actor and authored product page admit counted production
+// independently of the actor's Builder flag [07 R-P0-11 §1]. The diagnostic
+// refusal is checked separately below, at the dispatch boundary.
 func TestFactoryProductClickDispatchesAndSynthesizesNoStatusText(t *testing.T) {
-	battleHUD, b, _ := factoryClickFixture(t)
-	if !hudConsumeClick(battleHUD, b, 10, 10) {
-		t.Fatal("factory product click was not consumed")
-	}
-	if err := battleHUD.LastDispatchError(); err != nil {
-		t.Fatalf("HUD retained a dispatch diagnostic after a successful enqueue: %v", err)
-	}
-	pending := b.sess.PendingHumanCommands()
-	if len(pending) != 1 || pending[0].Kind != session.HumanFactoryBuild {
-		t.Fatalf("click enqueued %#v, want one HumanFactoryBuild command", pending)
-	}
-	if pending[0].FactoryBuild.Builder != 1 {
-		t.Fatalf("enqueued command names builder %v, want the committed page's builder", pending[0].FactoryBuild.Builder)
+	for _, builder := range []bool{true, false} {
+		t.Run(map[bool]string{true: "builder", false: "non-builder"}[builder], func(t *testing.T) {
+			battleHUD, b, _ := factoryClickFixture(t)
+			b.cat.Units["armlab"].Builder = builder
+			if !hudConsumeClick(battleHUD, b, 10, 10) {
+				t.Fatal("factory product click was not consumed")
+			}
+			if err := battleHUD.LastDispatchError(); err != nil {
+				t.Fatalf("HUD retained a dispatch diagnostic after a successful enqueue: %v", err)
+			}
+			pending := b.sess.PendingHumanCommands()
+			if len(pending) != 1 || pending[0].Kind != session.HumanFactoryBuild {
+				t.Fatalf("click enqueued %#v, want one HumanFactoryBuild command", pending)
+			}
+			if pending[0].FactoryBuild.Builder != 1 {
+				t.Fatalf("enqueued command names builder %v, want the committed page's builder", pending[0].FactoryBuild.Builder)
+			}
+		})
 	}
 }
 

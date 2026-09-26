@@ -120,8 +120,8 @@ func TestCommunitySelectionPreferencesNormalizeAndDefaultOff(t *testing.T) {
 	}
 	p.CommunitySelection = 2
 	p.Normalize()
-	if p.CommunitySelection != 0 {
-		t.Fatalf("low-bit normalization of 2 = %d, want 0", p.CommunitySelection)
+	if p.CommunitySelection != 2 {
+		t.Fatalf("Zero scheme normalized to %d, want 2", p.CommunitySelection)
 	}
 	b := &battleSession{shell: &gameShell{presentation: settings.DefaultPresentation()}}
 	if b.communitySelectionEnabled() || b.doubleClickSelectionEnabled() {

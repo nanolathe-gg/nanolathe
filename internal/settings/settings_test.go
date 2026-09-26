@@ -106,6 +106,30 @@ func TestLegacyTeamNanosprayPreferenceIsDropped(t *testing.T) {
 	}
 }
 
+func TestSelectionAndFactoryBatchPreferencesRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		scheme, batch, wantScheme, wantBatch int
+	}{
+		{0, 0, 0, 0}, {1, 1, 1, 1}, {2, 1, 2, 1},
+		{-1, -1, 0, 0}, {3, 3, 0, 1}, {4, 2, 0, 0},
+	} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		s := Defaults()
+		s.Presentation.CommunitySelection = tc.scheme
+		s.Presentation.FactoryHundredBatch = tc.batch
+		if err := s.SaveTo(path); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadFrom(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := loaded.Presentation; p.CommunitySelection != tc.wantScheme || p.FactoryHundredBatch != tc.wantBatch {
+			t.Fatalf("stored scheme/batch %d/%d = %d/%d, want %d/%d", tc.scheme, tc.batch, p.CommunitySelection, p.FactoryHundredBatch, tc.wantScheme, tc.wantBatch)
+		}
+	}
+}
+
 // TestDefaultsMatchRetail locks the missing-value block the startup reader
 // installs [02 "Settings"][07 §10].
 func TestDefaultsMatchRetail(t *testing.T) {

@@ -405,10 +405,10 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 // The work itself is the SHARED REPAIR HELPER, called with this unit as both
 // the builder and the target: the unit bills itself and heals itself. The
 // quantum is construction.HealQuantum, and the helper's two terms are each
-// clamped to exactly one whenever positive, so the observable effect for every
-// definition that authors the word is one health point and one energy unit per
-// eight ticks — a hundred and twenty-five hit points and a hundred and
-// twenty-five energy per minute [05 R-WORK-01 §3].
+// clamped to exactly one whenever positive. HealTime values 1..3 form a zero
+// quantum and produce no healing or charge. When both terms are positive,
+// the result is one health point and one energy unit per eight ticks — 225
+// of each per minute at 30 Hz [05 R-WORK-01 §3].
 //
 // It DOES cost resources. The energy goes through the ordinary one-resource
 // admission against the unit's own buckets, so a player whose energy carry has
@@ -421,6 +421,11 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 //
 // It draws no random number [05 R-WORK-01 §3, "repair's randomness"].
 func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
+	// TODO(question): Zero Alpha 5 documents definition-specific self-repair
+	// rates and no repair during construction. Its released definitions do not
+	// match this retail caller. Keep the baseline until licensed patch source
+	// or bounded manual evidence settles cadence, work and resource gates.
+	// [research/extensions/ta-zero-engine.md "Unresolved Zero passive self-repair"]
 	// TODO(question): Gold 10.2.0 shield generators author HealTime=1,
 	// yielding zero work through this retail caller. Keep the retail cadence
 	// and quantum until licensed historical source or bounded manual evidence

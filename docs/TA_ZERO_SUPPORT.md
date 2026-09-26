@@ -2,14 +2,19 @@
 
 Nanolathe supports TA Zero Alpha 5's three-faction skirmish content with TA
 Zero Base and Map Pack 1f. The target package is the 24 December 2024 Alpha 5
-release over the 13 December 2019 Base. Historical engine parity remains
-incomplete; the boundaries below distinguish content support from legacy
-engine behavior.
+release over the Base download listed as 14 December 2019. The official
+[download listing](https://zero.tauniverse.com/ta-zero/) still names Alpha 5
+and Map Pack 1f as current (checked 26 September 2026 UTC).
+
+**Support is experimental; full gameplay parity remains incomplete.** The source audit
+confirmed a gameplay mismatch in passive self-repair and several missing host
+features. The verified contracts and remaining work below distinguish usable
+content from the behavior of Zero's historical engine.
 
 ## Install and select
 
 Obtain Base, Alpha 5 and Map Pack 1f from the
-[TA Zero downloads page](https://zero.tauniverse.com/downloads/). Keep the
+[TA Zero downloads page](https://zero.tauniverse.com/ta-zero/). Keep the
 original Total Annihilation installation separate. Expansion archives supply
 additional maps when installed.
 
@@ -83,12 +88,21 @@ Large effect banks, including `ModFX.gaf`, load timing and geometry first, then
 decode the requested frames through bounded CPU and GPU caches.
 
 On first selection, the optional **Recommended settings** offer applies only
-settings documented in Alpha 5's `TAZero.ini`: double-click selection, group
-digits, megamap wheel navigation and flashing, separate sensor thresholds,
-Zero's player-dot palette, 3D sound, 128 sound voices, random music and ten
-skirmish rows. **Keep mine** preserves the current settings. Other host options
-stay as chosen; this is not a complete emulation of Zero's historical hotkey
-handler.
+settings documented in Alpha 5's `TAZero.ini` and the author's controls page:
+double-click selection, group digits, megamap navigation and flashing, sensor
+thresholds, player-dot palette, 3D sound, 128 sound voices, random music and
+ten skirmish rows. It also offers the **Zero selection** scheme: Ctrl+B/F
+cycle idle builders/factories, Ctrl+S selects armed units on screen, and
+W/B/Y filter drag selection. The independent **100 batch** option
+enables Ctrl+Shift to add/remove 100 factory products; Alt keeps its existing
+batch of 20, and stockpile buttons keep their ordinary counts.
+**Keep mine** preserves the current settings. Existing installations can use
+**Options → Orders**, choose **Select: Zero** and **100 batch: On**, then
+**OK**; an already accepted preset is not silently reapplied.
+Selection predicates and modifier
+precedence are the explicit host policies in
+[the interface design](DESIGN_INTERFACE_HUD_INPUT.md#313-optional-community-selection-controls),
+not a claim of complete historical hotkey equivalence.
 
 The megamap's custom icons are found in Base's `ZIcon/iconcfg.ini`. The `tamus`
 folder supplies music through the existing portable MP3 backend. Physical
@@ -118,13 +132,46 @@ all fifteen map-pack maps and checked that Direct leaves a busy factory
 unchanged. These checks do not establish full-match AI strength
 or a visual comparison against the historical Windows engine.
 
-Remaining compatibility questions are retained in the
-[TA Zero engine reference](../research/extensions/ta-zero-engine.md#unknown):
-historical recorder boundary cases, the legacy AI profile threshold and
-build-point changes, and complete per-unit shield/VSOC behavior need matching
-licensed source or bounded manual evidence. No generic shield mechanic or
-unsettled historical arithmetic is substituted. The authored `SoundLava` key
-has no established reader. Two model texture names remain absent from the
-inspected distribution (`armcolormeta4_1` and `goksphere2_5`); the owning
-[rendering audit](../research/extensions/mod-engine-compatibility.md#authored-rendering-audit)
-distinguishes visible surfaces from script-hidden emitter pieces.
+The follow-up audit uses the released BOS sources, compiled COB programs,
+unit/weapon definitions, all eight AI profiles and the map pack, plus the
+pinned MIT TADR source and its history. The entire combined catalog compiles
+without donor substitutions, and all 269 compiled unit scripts load. This is
+parser coverage; the following runtime checks are deliberately narrower.
+
+| Surface | Evidence and acceptance boundary |
+|---|---|
+| Core plasma shields | All 13 definitions: ordinary damage, impact callback, recharge and relevant activation/movement/factory states. Bounded closed/open perimeter projectile contact for both generators. |
+| Adaptive armour | All four definitions: first versus adapted hit, expiry and Raider's stowed posture. |
+| GoK void shields | Source census of all 69 shield-bearing definitions; runtime representatives of distinct formula families. Commander VSOC reserve, one root payment across its burst, infantry stun, expiry and save continuation; both extended-generator contact boundaries. |
+| Anti-air handoff | All 16 relevant primary/tertiary scripts; preserves the three floating-turret exceptions actually shipped. |
+| Maps and economy | Weather impact kinds, actual Crystal Gorge successor chain, invisible metal deposits and geothermal admission; all 15 maps previously loaded and ticked. |
+| Aircraft and AI | Authored human/AI transport differences, bounded load/unload and construction, and Scramble's AirBattle profile. This is not a full-match AI-quality certification. |
+| Controls | Optional Zero selection/filter scheme and factory hundred-unit batches; existing pages, icons, palette and sensors remain independently scoped. |
+
+Known remaining gaps:
+
+- **Passive self-repair is incorrect for Zero.** Its custom rates are not the
+  retail eight-tick caller. For example, authored `HealTime=3` currently
+  produces zero healing. Matching licensed patch source or bounded manual
+  observations must settle the exact cadence, energy/stall and construction
+  gates before a replacement is implemented. Enabling the unrelated current
+  Community repair module does not resolve it.
+- **Historical engine equivalence is unproven.** Current TADR's named Zero
+  build postdates Alpha 5. The legacy AI threshold, build-point changes and
+  older recorder boundary cases still lack matching source. Full per-unit
+  projectile interactions and visual comparisons are not established by the
+  callback tests.
+- **Some documented controls remain absent:** X line/surround placement with
+  wheel spacing, local whiteboard and factory-to-product control-group
+  inheritance. Historical megamap key/radius differences remain separately
+  unresolved. Developer shortcuts and screenshot formats are Nanolathe's.
+- **The release has unresolved content references:** two model textures
+  (`armcolormeta4_1`, `goksphere2_5`), the `GoKPlatform1` sound category,
+  AI tokens `GOKT1GUNHSIP` and `GOKT2CONTANK_AI`, and documented Ctrl+J
+  membership. No guessed replacements are supplied. `SoundLava` still has
+  no established engine reader.
+
+The [owning source reference](../research/extensions/ta-zero-engine.md#current-release-and-source-completeness-audit)
+records exact evidence, script/documentation disagreements and what would
+settle each unresolved contract. Networking, historical `.zsv`/replay
+interchange and Windows DLL installation are outside this single-player target.

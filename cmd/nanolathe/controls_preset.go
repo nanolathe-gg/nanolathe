@@ -79,6 +79,12 @@ func minimumRow(label string, zero int, field func(*settings.Presentation) *int)
 	return row
 }
 
+func selectionPresetRow() controlsPresetRow {
+	row := presentationRow("Selection keys", 1, 0, 2, func(p *settings.Presentation) *int { return &p.CommunitySelection })
+	row.names = []string{"Retail", "Community", "Zero"}
+	return row
+}
+
 // controlsPresetRows is the whole content of the presets. The `community`
 // column is ProTA 4.8's recommended settings: the Community host options
 // (DESIGN_COMMUNITY_PATCH §7), the preferences ProTA's `ProTA.ini` pins
@@ -86,10 +92,12 @@ func minimumRow(label string, zero int, field func(*settings.Presentation) *int)
 // §4.1), its draw-engine megamap keys, and the victory cue its renderer
 // always plays. The `retail` column is the retail default of each; a row
 // the retail preset leaves alone says presetUnchanged. Zero assigns only
-// settings documented by Alpha 5 TAZero.ini, retaining other preferences
+// settings documented by Alpha 5 TAZero.ini and the author’s controls page,
+// retaining other preferences
 // (research/extensions/ta-zero-engine.md, "Documented engine-level behavior").
 var controlsPresetRows = []controlsPresetRow{
-	presentationRow("Idle unit keys", 1, 0, presetUnchanged, func(p *settings.Presentation) *int { return &p.CommunitySelection }),
+	selectionPresetRow(),
+	presentationRow("Factory Ctrl+Shift 100", 0, 0, 1, func(p *settings.Presentation) *int { return &p.FactoryHundredBatch }),
 	presentationRow("Double-click select", 1, 0, 1, func(p *settings.Presentation) *int { return &p.DoubleClickSelection }),
 	presentationRow("Order drag", 1, 0, presetUnchanged, func(p *settings.Presentation) *int { return &p.QueuedOrderDrag }),
 	{

@@ -6886,6 +6886,14 @@ plain left-click, +5 for Shift+left-click, -1 for a plain right-click, -5 for
 Shift+right-click. The path is a counted producer that never purges — the
 Shift axis scales the count, not the queue mode.
 
+**Established — actor admission is not the Builder flag.** The counted
+product branch requires the selected-unit state, but neither that branch nor
+the counted-add routine tests the acting definition's `Builder` flag or
+requires the named product to belong to a compiled `CANBUILD` list. A named
+product gadget in the selected unit's authored GUI can therefore feed counted
+production even for a non-builder definition. This does not grant mobile-site
+placement or another build capability to that definition.
+
 The counted-add routine plays the `addbuild`/`subbuild` cue (below), routes
 the stockpile buttons `MAKENUKE`/`MAKEANTI` to the
 `BUILDWEAPON` order descriptor and everything else to `MOBILEBUILD` when the

@@ -1404,6 +1404,14 @@ build-time rejection, shared self-target banking across the two multipliers,
 the other simultaneous target, and Strict/disabled identity. The existing
 healtime tests retain their cadence and no-RNG contract.
 
+Zero's current source profile disables CP-DMG-4. This does not implement its
+historical passive self-repair patch: Alpha 5's authored HealTime values and
+documented rates demonstrably differ from the retail caller, including zero
+work for value 3. The evidence and missing cadence/resource/construction
+contract are owned by [TA Zero, unresolved passive self-repair](../research/extensions/ta-zero-engine.md#unresolved-zero-passive-self-repair).
+Do not change the shared repair helper or enable CP-DMG-4 to conceal that gap;
+neither supplies the missing caller contract.
+
 ### Community structure rotation
 
 **Nanolathe Community and Modern policy (user-authorized September 21, 2026).**

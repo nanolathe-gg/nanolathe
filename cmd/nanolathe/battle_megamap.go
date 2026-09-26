@@ -419,7 +419,7 @@ func (b *battleSession) serviceMegamapPointer(in *input.State, sample input.Samp
 		if b.megamap.pressOwned[0] {
 			consumed = true
 			b.megamap.pressOwned[0] = false
-			b.megamapLeftRelease(cl, lens, mx, my, mods.Shift)
+			b.megamapLeftRelease(cl, lens, mx, my, mods.Shift, in.Kbd)
 		} else {
 			consumed = false
 		}
@@ -449,7 +449,7 @@ func (b *battleSession) serviceMegamapPointer(in *input.State, sample input.Samp
 // pixels on both axes selects; a prepared order goes to the world-click
 // handler; any other release is a click [draw-engine-interface "Input while
 // shown"].
-func (b *battleSession) megamapLeftRelease(cl *client.Client, lens camera.MegamapLens, mx, my int32, shift bool) {
+func (b *battleSession) megamapLeftRelease(cl *client.Client, lens camera.MegamapLens, mx, my int32, shift bool, kbd *input.KeyboardState) {
 	box := b.megamap.boxActive
 	b.megamap.boxActive = false
 	if b.megamap.lastDoubleValid && b.megamap.lastDoubleX == mx && b.megamap.lastDoubleY == my {
@@ -468,7 +468,7 @@ func (b *battleSession) megamapLeftRelease(cl *client.Client, lens camera.Megama
 			h = -h
 		}
 		if w >= megamapMinBox && h >= megamapMinBox {
-			b.megamapBoxSelect(lens, shift)
+			b.megamapBoxSelect(lens, shift, b.zeroDragFilter(kbd))
 			return
 		}
 	}
@@ -672,9 +672,9 @@ func (b *battleSession) megamapDoubleClick(cl *client.Client, mx, my int32) {
 // megamapBoxSelect selects the local player's own completed selectable units
 // whose reference point `(x, z − y/2)` lies strictly inside the converted
 // rectangle. Without Shift the selection is replaced; with Shift each unit in
-// the box is toggled. The game view's drag filters do not apply
-// [draw-engine-interface "Input while shown"].
-func (b *battleSession) megamapBoxSelect(lens camera.MegamapLens, shift bool) {
+// the box is toggled. Retail/Community apply no game-view drag filter;
+// Zero adds its host filter (DESIGN_INTERFACE_HUD_INPUT §3.13).
+func (b *battleSession) megamapBoxSelect(lens camera.MegamapLens, shift bool, keep func(frame.UnitView) bool) {
 	if _, ok := b.currentSnapshot(); !ok {
 		return
 	}
@@ -683,7 +683,7 @@ func (b *battleSession) megamapBoxSelect(lens camera.MegamapLens, shift bool) {
 	handles := b.ownSelectableHandles(func(v frame.UnitView) bool {
 		x := radarMapPixel(v.X)
 		z := radarMapPixel(v.Z) - radarMapPixel(v.Y)/2
-		return x > x0 && x < x1 && z > z0 && z < z1
+		return x > x0 && x < x1 && z > z0 && z < z1 && (keep == nil || keep(v))
 	})
 	kind := session.HumanSelectionReplace
 	if shift {
