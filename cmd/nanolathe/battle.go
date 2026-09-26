@@ -408,7 +408,7 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	// reads objects3d, textures and anims unmapped. That is correct only
 	// while no content profile renames those three, which a test in this
 	// package asserts (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles").
-	cl.SetModelFS(cs.unmappedMount)
+	cl.SetModelFS(cs.unmappedMount, cs.presentation.TeamLogos)
 	cursors, err := client.LoadCursors(cs.fs)
 	if err != nil {
 		return nil, nil, err
@@ -533,7 +533,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	if sess.Features != nil {
 		restoreStart = sess.Features.DefinitionRestoreStart()
 	}
-	b.modelTextures, err = client.NewModelTextureRegistry(cs.unmappedMount, cat, sess.World, restoreStart)
+	b.modelTextures, err = client.NewModelTextureRegistry(cs.unmappedMount, cat, sess.World, restoreStart, cs.presentation.TeamLogos)
 	if err != nil {
 		return nil, fmt.Errorf("nanolathe: battle composition failed: model textures: %w", err)
 	}

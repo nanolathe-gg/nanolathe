@@ -109,7 +109,7 @@ func runDebrisShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
-	cl.SetModelFS(cs.unmappedMount)
+	cl.SetModelFS(cs.unmappedMount, cs.presentation.TeamLogos)
 	applyVisualOptions(cl, loadedSettings().Display)
 	applyCommunityHUDOptions(cl, loadedSettings().Presentation)
 	// Every Enhanced switch on: the point of the capture is the lighting pass.

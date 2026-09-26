@@ -35,6 +35,9 @@ type GAFFrameRef struct {
 // palette index zero. Pixels always keeps the raw decoded bytes — the
 // color-key match is recorded in Transparent, never overwritten in Pixels.
 type GAFFrame struct {
+	// Transient is a host cache-lifetime hint for on-demand rasters. It is not
+	// authored or serialized, and never changes pixel/dispatch semantics.
+	Transient        bool
 	Width, Height    uint16
 	XOffset, YOffset int16
 	// ColorKey is frame header byte +8. On the raw path (Compressed==0), the

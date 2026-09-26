@@ -108,7 +108,7 @@ func TestDotColoursRowRoundTrip(t *testing.T) {
 		t.Fatal("no Dot colours row")
 	}
 	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
-	for _, preset := range []string{controlsPresetCommunity, controlsPresetRetail} {
+	for _, preset := range []string{controlsPresetCommunity, controlsPresetRetail, controlsPresetZero} {
 		g := presetTestShell(t)
 		g.applyControlsPreset(preset)
 		stored := settings.Defaults()
@@ -133,6 +133,41 @@ func TestDotColoursRowRoundTrip(t *testing.T) {
 	rows, _ := g.controlsOfferRows(controlsPresetCommunity)
 	if !slices.Contains(rows, "Dot colours: ProTA (now Custom)") {
 		t.Fatalf("offer rows %q", rows)
+	}
+}
+
+// Zero's Alpha 5 INI differs from ProTA's in the dot palette and independent
+// range thresholds. Applying the recommendation must leave undocumented
+// preferences alone (research/extensions/ta-zero-engine.md).
+func TestZeroControlsPresetContents(t *testing.T) {
+	g := presetTestShell(t)
+	g.applyControlsPreset(controlsPresetCommunity)
+	g.presentation.MegamapRadarMinimum = 123
+	g.presentation.MegamapSonarMinimum = 234
+	g.presentation.MegamapSonarJamMinimum = 345
+	g.presentation.MegamapAntiNukeMinimum = 456
+	g.applyControlsPreset(controlsPresetZero)
+	p := g.presentation
+	if p.PlayerDotColors != [10]int{227, 212, 80, 235, 198, 219, 208, 93, 36, 67} {
+		t.Fatalf("Zero dot colours = %v", p.PlayerDotColors)
+	}
+	if p.MegamapRadarMinimum != 0 || p.MegamapSonarMinimum != 500 || p.MegamapSonarJamMinimum != 0 || p.MegamapAntiNukeMinimum != 512 {
+		t.Fatal("Zero's independent sensor thresholds were not applied")
+	}
+	if p.Overview != settings.OverviewMegamap || p.MegamapWheel != 1 || p.MegamapWheelMove != 1 || p.MegamapDoubleClickMove != 0 || p.MegamapFlash != 1 || p.DoubleClickSelection != 1 || !g.switchAlt {
+		t.Fatal("Zero's documented selection and megamap settings were not applied")
+	}
+	if g.audioPrefs.SoundMode != settings.SoundMode3D || g.audioPrefs.MixingBuffers != 128 || g.audioPrefs.CDMode != 2 || g.setup.NumPlayers != 10 {
+		t.Fatal("Zero's documented audio and skirmish settings were not applied")
+	}
+	// Zero's recommendation does not undo the player's independently chosen
+	// options merely because its older package did not document them.
+	if p.VeteranLabels != 1 || p.WeatherReport != 1 || p.VictoryCue != 1 || p.QueuedOrderDrag != 1 || !g.clockVisible {
+		t.Fatal("Zero changed a preference outside its documented recommendation")
+	}
+	rows, changes := g.controlsOfferRows(controlsPresetZero)
+	if changes != 0 || !slices.Contains(rows, "Dot colours: TA Zero") || !slices.Contains(rows, "Megamap sonar minimum: 500") || !slices.Contains(rows, "Megamap anti-nuke minimum: 512") {
+		t.Fatalf("Zero offer rows=%v, changes=%d", rows, changes)
 	}
 }
 

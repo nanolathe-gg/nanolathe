@@ -1,6 +1,14 @@
 {
   "gameplay": {"table": "tazero"},
   "name": "zero",
+  "controls": "zero",
+  "minimumGameplay": "community-3.9",
+  "presentation": {
+    "main_menu_background": "bitmaps/FrontendZ.pcx",
+    "single_player_background": "bitmaps/SingleZbg.pcx",
+    "loading_background": "bitmaps/LoadGameZbg.pcx",
+    "team_logos": "textures/LogoZ.gaf"
+  },
   "detect": [
     "ZBuildMenu",
     "ZGameDat",
@@ -15,6 +23,7 @@
     "download": "ZBuildMenu",
     "gamedata": "ZGameDat",
     "guis": "ZGui",
+    "music": "tamus",
     "unitpics": "ZUnitPic",
     "units": "ZUnits",
     "weapons": "ZWeapon"

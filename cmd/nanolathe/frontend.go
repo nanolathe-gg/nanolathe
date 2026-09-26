@@ -118,13 +118,14 @@ type gameShell struct {
 	// with the battle controller, without borrowing simulation time [07 R-WGT-01 §1].
 	widgetMillis clock.MillisSource
 
-	maps         []string
-	mapLabels    []string
-	mapIdx       int
-	mapReturn    shellMode
-	mapData      map[string]*retailMapData
-	setup        session.SkirmishConfig
-	selectedSlot int
+	maps          []string
+	mapLabels     []string
+	mapIdx        int
+	mapReturn     shellMode
+	mapData       map[string]*retailMapData
+	setup         session.SkirmishConfig
+	selectedSlot  int
+	skirmishSides int // authored SIDE count, bound once when the shell is constructed
 	// retailControllers preserves the numeric Controller field that TotalA.exe
 	// puts in each Player%d row: 0=open, 1=human, 2=computer. The session
 	// package has a separate compatibility representation, so the conversion
@@ -325,6 +326,14 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	if err != nil {
 		return nil, err
 	}
+	sides, err := content.CompileSides(cs.fs)
+	if err != nil {
+		return nil, retailFrontendAssetError(cs, "frontend factions", "gamedata/sidedata.tdf", "authored side definitions", err)
+	}
+	if len(sides) == 0 || len(sides) > 255 {
+		return nil, retailFrontendAssetError(cs, "frontend factions", "gamedata/sidedata.tdf", "1 to 255 authored sides for the button stage byte", fmt.Errorf("side count %d", len(sides)))
+	}
+	shell.skirmishSides = len(sides)
 	shell.maps = maps
 	shell.mapLabels = make([]string, len(maps))
 	copy(shell.mapLabels, maps)
@@ -508,7 +517,7 @@ func buildWindowedShell(opts Options, cs *contentSet, cl *client.Client) (*gameS
 // software cursor. Start-up and a content reload both come through here, so
 // the two cannot drift apart.
 func bindShellContent(shell *gameShell, cl *client.Client) error {
-	cl.SetModelFS(shell.cs.unmappedMount)
+	cl.SetModelFS(shell.cs.unmappedMount, shell.cs.presentation.TeamLogos)
 	cl.SetCamera(shell.cam)
 	// The preferences were read before the client existed, so the three
 	// display-option bits reach it here [07 R-FE-01 §6].
@@ -532,6 +541,15 @@ func bindShellContent(shell *gameShell, cl *client.Client) error {
 	cl.SetCursors(cursors)
 	cl.SetUIStage(gameShellUIStage{shell: shell})
 	return nil
+}
+
+// presentationResource selects an explicit content-profile resource without
+// probing for substitutes; an omitted path retains the retail load contract.
+func presentationResource(authored, retail string) string {
+	if authored == "" {
+		return retail
+	}
+	return authored
 }
 
 func loadMenuAssets(cs *contentSet) *menuAssets {
@@ -568,8 +586,8 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 		gafName  string
 		expected string
 	}{
-		{modeMenuMain, "guis/mainmenu.gui", "bitmaps/frontendx.pcx", "anims/mainmenu.gaf", "MAINMENU authored GUI and background"},
-		{modeMenuSingle, "guis/single.gui", "bitmaps/singlebg.pcx", "anims/single.gaf", "SINGLE authored GUI and background"},
+		{modeMenuMain, "guis/mainmenu.gui", presentationResource(cs.presentation.MainMenuBackground, "bitmaps/frontendx.pcx"), "anims/mainmenu.gaf", "MAINMENU authored GUI and background"},
+		{modeMenuSingle, "guis/single.gui", presentationResource(cs.presentation.SinglePlayerBackground, "bitmaps/singlebg.pcx"), "anims/single.gaf", "SINGLE authored GUI and background"},
 		{modeMenuMission, "guis/newgame.gui", "bitmaps/newcampaign4x.pcx", "anims/newgame.gaf", "NEWGAME authored GUI and background"},
 		{modeMenuMap, "guis/selmap.gui", "bitmaps/dselectmap2.pcx", "", "SELMAP authored GUI and background"},
 		{modeMenuSkirmish, "guis/skirmish.gui", "bitmaps/skirmsetup4x.pcx", "anims/skirmish.gaf", "SKIRMISH authored GUI and background"},
@@ -608,7 +626,7 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 		dst     **formats.PCX
 		expect  string
 	}{
-		{"bitmaps/loadgame2bg.pcx", &a.loading, "the authored loading background"},
+		{presentationResource(cs.presentation.LoadingBackground, "bitmaps/loadgame2bg.pcx"), &a.loading, "the authored loading background"},
 		{"bitmaps/newcampaign4.pcx", &a.missionCampaign, "the authored campaign background"},
 		{"bitmaps/newcampaign4x.pcx", &a.missionSmall, "the authored compressed campaign background"},
 		{"bitmaps/playanygame4.pcx", &a.missionAny, "the authored Play Any background"},
@@ -628,7 +646,7 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	if g, err := formats.LoadGAFFile(cs.fs, "anims/commongui.gaf"); err == nil {
 		a.common = g
 	}
-	if g, err := formats.LoadGAFFile(cs.fs, "textures/logos.gaf"); err == nil {
+	if g, err := formats.LoadGAFFile(cs.fs, presentationResource(cs.presentation.TeamLogos, "textures/logos.gaf")); err == nil {
 		a.logos = g
 	}
 	// The frontend installs hattfont12 as primary GAF font slot 0 and

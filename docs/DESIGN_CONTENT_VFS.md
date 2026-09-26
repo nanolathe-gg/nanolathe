@@ -810,6 +810,24 @@ automatic weapon guide during building placement. It does not disable explicit
 Shift + `+showranges` guides. These fields reach presentation only, never a tick
 or the catalog hash. See DESIGN_GPU_RENDERER §20 for the display contract.
 
+*TA Zero presentation resources.* The `zero` profile additionally maps
+`music` to the Base package's `tamus` directory. The existing audio enumerator
+keeps physical tracks 2–17 and excludes the bonus intro, with logical paths
+still under `music`. Its optional `presentation` fields
+`main_menu_background`, `single_player_background`, `loading_background`
+and `team_logos` select `bitmaps/FrontendZ.pcx`, `bitmaps/SingleZbg.pcx`,
+`bitmaps/LoadGameZbg.pcx` and `textures/LogoZ.gaf`. Empty fields retain the
+retail paths. These are resource selections at composition, not gameplay
+or new VFS alias rules; the directory layout's first-segment contract is
+unchanged. Frontend, battle HUD, model registry, standalone captures and
+films receive the same selected team bank. Original LOGOS is excluded from
+the primary texture index when another bank replaces it, so an old duplicate
+cannot override the replacement. Other texture banks keep their existing
+primary-before-logo precedence and ten-frame animations remain animations.
+Evidence is the Alpha 5 authored archive and Base soundtrack readme
+([TA Zero engine](../research/extensions/ta-zero-engine.md#authored-package-factions-and-single-player-coverage));
+setup and compatibility boundaries are in [TA_ZERO_SUPPORT](TA_ZERO_SUPPORT.md).
+
 *Boundaries.* The layout rewrites the **first** segment only, matched
 case-insensitively like every other lookup (C7); a later segment of the same
 name is untouched. It is a read view: mounting, provider precedence,

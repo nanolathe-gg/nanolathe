@@ -75,10 +75,11 @@ type scenePage struct {
 // by pointer and never ranged in a way that reaches output, so they introduce no
 // ordering [I1].
 type sceneAtlas struct {
-	pages  []*scenePage
-	frames map[*formats.GAFFrame]sceneEntry
-	pcx    map[*formats.PCX]sceneEntry
-	fonts  map[*formats.FNT]*fntAtlas
+	transient transientFrames
+	pages     []*scenePage
+	frames    map[*formats.GAFFrame]sceneEntry
+	pcx       map[*formats.PCX]sceneEntry
+	fonts     map[*formats.FNT]*fntAtlas
 
 	uploadBuf []byte
 	padBuf    []byte
@@ -87,7 +88,17 @@ type sceneAtlas struct {
 // pageImage returns the texture backing an entry's page, or nil for an entry
 // that was never placed.
 func (a *sceneAtlas) pageImage(e sceneEntry) *ebiten.Image {
-	if !e.ok || e.page < 0 || int(e.page) >= len(a.pages) {
+	if !e.ok {
+		return nil
+	}
+	if e.page >= transientPageBase {
+		i := int(e.page - transientPageBase)
+		if i < len(a.transient.slots) {
+			return a.transient.slots[i].image
+		}
+		return nil
+	}
+	if e.page < 0 || int(e.page) >= len(a.pages) {
 		return nil
 	}
 	return a.pages[e.page].img
@@ -213,6 +224,9 @@ func (a *sceneAtlas) scratch(n int) []byte {
 func (r *Renderer) sceneFrameFor(f *formats.GAFFrame) sceneEntry {
 	if f == nil {
 		return sceneEntry{}
+	}
+	if f.Transient {
+		return r.transientFrameFor(f)
 	}
 	if e, ok := r.scene.frames[f]; ok {
 		return e

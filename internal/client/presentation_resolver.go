@@ -238,8 +238,18 @@ func (c *Client) resolveProjectileGAF(req render.ProjectileGAFRequest) (*formats
 // is by construction one of those.
 const defaultEffectBank = "fx"
 
-// EffectBank resolves one animation bank by authored name, loading
-// `anims/<name>.gaf` on the first miss and retaining it for this client
+func effectBankKey(name string) string {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "" {
+		key = defaultEffectBank
+	}
+	return key
+}
+
+// EffectBank resolves immutable entry timing and root geometry by name, loading
+// `anims/<name>.gaf` on the first miss and retaining metadata for this client.
+// Frame fields are pixel-free placeholders; effectFrame materializes a selected
+// root through bounded caches (DESIGN_PRESENTATION_CLIENT "On-demand effect art")
 // [06 R-WFX-01 §1]. The lookup is case-insensitive, as retail's scan of the
 // loaded banks is. A bank that will not load is memoised as a nil entry so a
 // broken name costs one VFS attempt, not one per frame.
@@ -252,10 +262,7 @@ func (c *Client) EffectBank(name string) *formats.GAF {
 	if c == nil {
 		return nil
 	}
-	key := strings.ToLower(strings.TrimSpace(name))
-	if key == "" {
-		key = defaultEffectBank
-	}
+	key := effectBankKey(name)
 	// The session's effect-timing resolver reaches this from the simulation
 	// goroutine while a recording pass may resolve art (§13.13). A miss loads
 	// under the lock, so each bank still costs one VFS attempt.
@@ -272,8 +279,8 @@ func (c *Client) EffectBank(name string) *formats.GAF {
 	var bank *formats.GAF
 	if c.modelFS != nil {
 		path := "anims/" + key + ".gaf"
-		if loaded, err := formats.LoadGAFFile(c.modelFS, path); err == nil {
-			bank = loaded
+		if loaded, err := c.effectSourceLocked(key); err == nil {
+			bank = effectBankMetadata(loaded)
 		} else {
 			c.recordArtDiagnosticLocked(path, "", err.Error())
 		}
@@ -365,17 +372,7 @@ func (c *Client) effectDrawOptions() EffectDrawOptions {
 // into the entry rather than rejected, because a cursor that has run past the
 // end belongs to a sequence the pool is about to retire.
 func (c *Client) resolveEffectFrame(view frame.EffectView, frameIndex int32) (*formats.GAFFrame, bool) {
-	entry, ok := c.effectEntry(view.AssetID, view.Graphic)
-	if !ok {
-		return nil, false
-	}
-	if frameIndex < 0 {
-		frameIndex = 0
-	}
-	if int(frameIndex) >= len(entry.Frames) {
-		frameIndex = int32(len(entry.Frames) - 1)
-	}
-	return entry.Frames[frameIndex].Frame, entry.Frames[frameIndex].Frame != nil
+	return c.effectFrame(view.AssetID, view.Graphic, frameIndex)
 }
 
 // terrainScreenCoverage identifies pixels that map to the loaded terrain

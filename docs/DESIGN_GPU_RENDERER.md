@@ -135,7 +135,7 @@ and outline colour, shadow shear or `Silhouette`, and the attached children with
 their height deltas `[03 R-REN-03A §4]`.
 
 **Source lifetime.** Immutable-after-load resources are shared by pointer for
-the life of the process: GAF frames and entries, PCX, FNT, the palette tables,
+their bound source lifetime: GAF frames and entries, PCX, FNT, the palette tables,
 the terrain and its detail tiles, a marker atlas. Mutable per-frame buffers are
 **borrowed until `Reset`**: the point arena sub-slices, the fog op slice, a
 surface's bytes, and the trail, marker, wake and scorch mark slices. A consumer
@@ -331,6 +331,31 @@ upload identities and frame scratch. Shared images are released once. Shader
 programs, palette tables, output surfaces, the player's effect selection and
 renderer settings survive. Stable bindings, zoom changes and ordinary frames
 retain their caches.
+
+#### On-demand effect uploads
+
+**Nanolathe host storage policy.** Large effect frames marked `Transient` use
+a separate 256 MiB / 256-image cache, including the duplicated edge border.
+They never enter the permanent scene atlas or the emitter-color memoization
+map. Small effects admitted to the client's bounded durable tier retain their
+ordinary shared-atlas identity. Both paths upload the same palette-index and
+opacity bytes and use the same keyed/tinted/LHT shaders.
+
+Transient uploads are pinned for a complete `Execute`, including preparatory
+passes, scheduler submission and glow/reflection work. On a miss, old uploads
+unused by that execution are evicted first. A simultaneous working set larger
+than the cache allowance remains submission-owned; its excess is deallocated
+after submission. It is never accumulated across an animation's lifetime.
+Page tokens preserve the existing absent-page sentinel, so reflections retain
+source identity as well. One local padded upload buffer avoids growing the
+permanent scene scratch planes to giant-effect dimensions. Recorded CPU frames
+remain immutable if their cache ownership disappears. Source reset releases
+all transient images alongside the existing resource owners.
+
+The renderer's retained-cache bound excludes the current draw list, backend
+queued commands, temporary upload planes and driver overhead. It is not a
+claim about total process/GPU memory. Tests exercise submission pinning,
+eviction across generations and eager/transient device pixel equality.
 
 This is a host resource-lifetime correction, not a retail rendering claim.
 Previously the one process-lived renderer retained each newly loaded terrain and

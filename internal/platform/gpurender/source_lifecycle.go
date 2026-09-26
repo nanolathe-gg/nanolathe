@@ -43,6 +43,9 @@ func (r *Renderer) resetSources(release func(*ebiten.Image)) {
 	for _, img := range r.gafImages {
 		retire(img)
 	}
+	for _, slot := range r.scene.transient.slots {
+		retire(slot.image)
+	}
 	for _, p := range r.scene.pages {
 		if p != nil {
 			retire(p.img)

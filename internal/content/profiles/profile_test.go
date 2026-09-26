@@ -69,7 +69,7 @@ func TestShippedProfilesCarryTheInventoryTables(t *testing.T) {
 			markers: []string{"ZBuildMenu", "ZGameDat", "ZGui", "ZI", "ZUnitPic", "ZUnits", "ZWeapon"},
 			directories: map[string]string{
 				"units": "ZUnits", "weapons": "ZWeapon", "gamedata": "ZGameDat",
-				"guis": "ZGui", "unitpics": "ZUnitPic", "download": "ZBuildMenu", "ai": "ZI",
+				"guis": "ZGui", "unitpics": "ZUnitPic", "download": "ZBuildMenu", "ai": "ZI", "music": "tamus",
 			},
 			limits: profiles.Limits{Units: 16000, Weapons: 16000, TNTBytes: 64 << 20, LOSBytes: 8 << 20, UnitLimit: 1500, SearchEntries: 66650},
 		},
@@ -209,7 +209,7 @@ func TestAuthoredProfileRejectsShapesNoLoaderCouldUse(t *testing.T) {
 }
 
 // The optional recommendations are the fallback for a mod whose metadata
-// names none (docs/DESIGN_MODS_MUTATORS.md §4.3); only ProTA ships them, and
+// names none (docs/DESIGN_MODS_MUTATORS.md §4.3); ProTA and Zero ship them, and
 // an unknown value is refused like any other malformed profile.
 func TestProfileRecommendations(t *testing.T) {
 	for _, name := range profiles.Names() {
@@ -220,6 +220,8 @@ func TestProfileRecommendations(t *testing.T) {
 		wantControls, wantMinimum := "", ""
 		if name == "prota" {
 			wantControls, wantMinimum = "community", "community-3.9"
+		} else if name == "zero" {
+			wantControls, wantMinimum = "zero", "community-3.9"
 		}
 		if profile.Controls != wantControls || profile.MinimumGameplay != wantMinimum {
 			t.Errorf("%s recommends controls %q, minimum %q", name, profile.Controls, profile.MinimumGameplay)

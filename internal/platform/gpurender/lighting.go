@@ -219,7 +219,9 @@ func (r *Renderer) addSpriteLight(sp drawlist.Sprite) {
 	color, ok := l.colors[sp.Frame]
 	if !ok {
 		color = explosionColor(sp.Frame, &r.displayPalette)
-		l.colors[sp.Frame] = color
+		if !sp.Frame.Transient {
+			l.colors[sp.Frame] = color
+		}
 	}
 	peak := max(color[0], color[1], color[2])
 	if peak < 0.015 {

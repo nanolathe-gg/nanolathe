@@ -168,6 +168,54 @@ a per-subject one could never advance.
 producers, not by any draw here; `[03 R-WIND-01]` belongs to
 [DESIGN_WORLD_VISIBILITY](DESIGN_WORLD_VISIBILITY.md).
 
+### On-demand effect art
+
+**Nanolathe host storage policy.** Effect-bank timing and root geometry are
+validated once and retained without pixels. `EffectBank` exposes this metadata
+in its existing entry shape; its frame pointers are geometry placeholders.
+Only `effectFrame` resolves those placeholders to decoded art. It preserves
+first-match lookup, authored holds, one-shot timing, frame clamping, and blast
+extent measurement. Strips use the same resolver. Explicitly supplied eager
+banks remain valid. No simulation metadata or gameplay rule changes.
+
+Encoded banks use a 256 MiB, 256-entry LRU with a matching per-file read cap.
+The source reader validates up to 512 Mi pixels of unique and expanded bank
+geometry, retaining the existing reference, depth, per-frame geometry and RLE
+command limits. A selected root may contain at most 32 Mi unique and expanded
+pixels across its parent canvas and child graph. This admits the audited Escalation roots
+below 24 Mi pixels without allocating every frame of their large banks.
+The eager format-loader defaults remain unchanged.
+
+Decoded transient roots use a 96 MiB / 256-entry LRU. Nearest-doubled variants
+use a separate 256 MiB / 256-entry LRU, charging their retained source keys as
+well as variants. Up to 16 MiB / 256 roots of at most 1 MiB each receive durable
+identities when their child graph is a tree, so ordinary smoke/fire sprites
+keep the shared GPU atlas and its batching. That tier is never evicted before
+source reset, and its ordinary doubled variants are bounded by four times its
+source charge; every other frame carries the transient lifetime hint. These byte budgets count frame headers,
+child slices and owned pixel planes, with aliases charged once per tree.
+Metadata and cache-container bookkeeping are bounded by the accepted reference
+counts separately. Limits are host choices, not retail or mod format rules.
+
+Cache eviction drops ownership, never mutates published frames. Recorded lists
+pin their immutable frames until reset, which clears sprite and emitter backing
+slots; simultaneous recorded work can therefore exceed cache residency. A
+single requested variant larger than its cache budget is caller-owned only.
+Encoded source replacement must match the original digest; a failed reload is
+memoized and reported through art diagnostics. `SetModelFS` retires metadata,
+source, decoded and variant caches together. GPU transient residency and
+submission ownership are described in
+[DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md#on-demand-effect-uploads).
+
+Verification locks eager/on-demand composite equality, alias charging,
+malformed unselected payload rejection, metadata-only timing, unchanged
+clamping, source-change rejection, and immutable results across eviction. The
+opt-in `TestGAFSourceEscalationFrames` walks the three audited banks one root at
+a time. `TestEffectSourceEscalationCacheResidency` checks the same complete
+sequences through the client caches and their source reset. Optional device
+captures replay the largest root canvas through both renderers. These checks
+do not by themselves establish complete in-battle visual acceptance.
+
 ## 2. Packages, files and key types
 
 ### 2.1 `internal/platform/ebitenapp` — the window
@@ -1530,3 +1578,16 @@ Classic applies the loaded ALP table in source-major order after the shadow
 foreign hidden units produce no silhouette. Decloaking changes the next commit
 without invalidating the cached body. Keyed cargo joins the carrier before the
 carrier's single blend; direct live polygons retain their ordinary fill.
+
+## Content-selected team texture bank
+
+Model composition accepts the content profile's optional `team_logos` path.
+An empty path keeps `textures/logos.gaf`. The selected bank's ten-frame entries
+select the owner's logo colour and never register animation cursors; ordinary
+ten-frame texture banks remain animated. A replacement excludes stock LOGOS
+from ordinary texture lookup as well, so a duplicate stock name cannot mask
+the new team bank. The existing primary texture precedence otherwise remains.
+The registry and standalone preview use the same option, with frame selection
+unchanged in both renderers. This is load-time presentation, independent of
+Modern/Community/Strict gameplay. The Alpha 5 resource evidence and explicit
+limits are in [TA Zero engine](../research/extensions/ta-zero-engine.md#authored-package-factions-and-single-player-coverage).

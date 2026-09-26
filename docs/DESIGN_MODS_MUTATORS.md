@@ -209,7 +209,8 @@ mod:
   ([draw engine interface](../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap))
   and the victory cue its renderer always plays
   ([ProTA engine](../research/extensions/prota-engine.md#victory-cue-on-multiplayer-and-skirmish-wins)).
-  `retail` writes each row's retail default. The rows are defined once, in
+  `retail` writes each row's retail default. `zero` offers the documented
+  Alpha 5 INI preferences listed below. The rows are defined once, in
   `controlsPresetRows` (`cmd/nanolathe/controls_preset.go`):
 
   | Setting | Where the player changes it | `community` | `retail` |
@@ -226,7 +227,7 @@ mod:
   | `presentation.overview` | settings file | 1 (Megamap) | 0 (Zoom) |
   | `presentation.megamapWheel`, `megamapWheelMove`, `megamapFlash` | settings file | 1 each | unchanged |
   | `presentation.megamapDoubleClickMove` | settings file | 0 | unchanged |
-  | `presentation.megamapRadarMinimum`, `megamapSonarMinimum`, `megamapSonarJamMinimum`, `megamapAntiNukeMinimum` (one row) | settings file | 0 each | unchanged |
+  | `presentation.megamapRadarMinimum`, `megamapSonarMinimum`, `megamapSonarJamMinimum`, `megamapAntiNukeMinimum` (four rows) | settings file | 0 each | unchanged |
   | `presentation.playerDotColors` (one row, *Dot colours*) | settings file | ProTA: 227, 249, 18, 250, 67, 149, 208, 117, 210, 34 | Default: 227, 212, 80, 235, 108, 219, 208, 93, 130, 67 |
   | `presentation.alliedDotSwatches` (allied resource rows' player-colour squares) | settings file | 1 | 0 |
   | `presentation.victoryCue` | Options → HUD | 1 | 0 |
@@ -244,10 +245,9 @@ mod:
   the retail preset never removes rows. The megamap rows are the optional
   overview of [DESIGN_INTERFACE_HUD_INPUT §3.15](DESIGN_INTERFACE_HUD_INPUT.md#315-optional-megamap);
   the retail preset returns the overview to Zoom and leaves the megamap's own
-  preferences as the player set them. The four ring minimums are one row
-  because ProTA sets them alike, and the ten dot colours are one row naming
-  the draw engine's defaults or ProTA's table; a table matching neither, or
-  unequal minimums, read *Custom* in the offer. The dot colours are read by
+  preferences as the player set them. The four ring minimums have separate rows, because Zero authors different
+  thresholds. The ten dot colours remain one row naming the draw engine's
+  defaults, ProTA's table or Zero's table; any other table reads *Custom*. The dot colours are read by
   the megamap's icons and, with `alliedDotSwatches` on, by the allied
   resource rows' squares (the draw engine's own two readers in Nanolathe): the
   table is not read by the retail minimap's contacts, so ProTA's minimap dots
@@ -257,6 +257,24 @@ mod:
   [DESIGN_INTERFACE_HUD_INPUT §3.16](DESIGN_INTERFACE_HUD_INPUT.md#316-optional-victory-cue).
   The unit limit is not in the preset, because the Community feature table
   already sets it (§8.3).
+
+  **TA Zero recommendation.** The `zero` profile names `controls: "zero"`
+  and the Community 3.9 minimum, so a library install offers its own settings
+  and requires Community 3.9 or Modern. This selects the already implemented
+  `tazero` feature table through the existing gameplay composition; it does
+  not introduce another rule set or claim historical Alpha 5 parity.
+  `TAZero.ini` in Alpha 5 is the preference source
+  ([TA Zero engine](../research/extensions/ta-zero-engine.md#documented-engine-level-behavior)).
+  The preset enables double-click selection, group digits, the megamap,
+  wheel zoom, wheel camera movement and under-attack flashing; disables
+  megamap double-click movement; sets radar, sonar, sonar-jammer and
+  anti-nuke minimums to 0, 500, 0 and 512 respectively; and uses dot colours
+  `227, 212, 80, 235, 198, 219, 208, 93, 36, 67`. It chooses 3D sound,
+  128 voices, random music and ten displayed skirmish rows. All other rows
+  are unchanged, including options whose historical Zero behavior is not
+  established. It follows the same one-time Apply/Keep mine offer. Tests
+  lock the independent thresholds, palette, unchanged preferences and
+  persisted colour-table identity.
 
   A preset is **offered, never forced**, and each mod's offer is made once.
   When the player switches to a mod that names a preset (or whose content

@@ -830,7 +830,9 @@ func (l *List) Reset() {
 	l.classicImageNext = 0
 	l.order = l.order[:0]
 	l.terrain = l.terrain[:0]
+	clear(l.sprite)
 	l.sprite = l.sprite[:0]
+	clear(l.lightSources)
 	l.lightSources = l.lightSources[:0]
 	l.glyphs = l.glyphs[:0]
 	l.fill = l.fill[:0]

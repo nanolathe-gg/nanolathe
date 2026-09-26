@@ -140,7 +140,7 @@ func (g *filmGame) startScene(opts Options, cs *contentSet, scene film.Scene) er
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
-	cl.SetModelFS(cs.unmappedMount)
+	cl.SetModelFS(cs.unmappedMount, cs.presentation.TeamLogos)
 	// A film states its own look rather than inheriting the operator's saved
 	// display preferences: two captures of the same script must match.
 	cl.SetAntiAlias(true)

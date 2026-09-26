@@ -94,6 +94,7 @@ type modelTextureKey struct {
 // of Client: a renderer replacement, an off-screen unit, or no renderer at
 // all cannot change which players phase 7 advances [03 R-CRD-005 §1].
 type ModelTextureRegistry struct {
+	teamLogos  string
 	fs         *vfs.FS
 	primary    map[string]texRef
 	logos      map[string]texRef
@@ -158,8 +159,12 @@ func resolveTextureRef(side, defaults map[string]texRef, name string) (texRef, b
 // restore reset: ordinary terrain entries and links bind before the saved
 // suffix and its own link pass. Future Service admissions use precompiled
 // geometry and never read the VFS from a simulation tick [03 R-CRD-005 §1].
-func NewModelTextureRegistry(fs *vfs.FS, cat *content.Catalog, terrain *world.Terrain, restoreStart int) (*ModelTextureRegistry, error) {
-	r := newModelTextureRegistry(fs, false)
+// An optional team-logotype bank comes from the content profile; omitting it
+// uses retail LOGOS. Its ten-frame entries select player colours, never the
+// animation clock (research/extensions/ta-zero-engine.md, "Authored package,
+// factions and single-player coverage").
+func NewModelTextureRegistry(fs *vfs.FS, cat *content.Catalog, terrain *world.Terrain, restoreStart int, teamLogos ...string) (*ModelTextureRegistry, error) {
+	r := newModelTextureRegistry(fs, false, teamLogos...)
 	if cat == nil {
 		return r, nil
 	}
@@ -256,7 +261,7 @@ func (r *ModelTextureRegistry) bindProjectileModels(cat *content.Catalog) error 
 	return nil
 }
 
-func newModelTextureRegistry(fs *vfs.FS, standalone bool) *ModelTextureRegistry {
+func newModelTextureRegistry(fs *vfs.FS, standalone bool, teamLogos ...string) *ModelTextureRegistry {
 	r := &ModelTextureRegistry{
 		fs: fs, primary: map[string]texRef{}, logos: map[string]texRef{},
 		loads: map[modelTextureLoadKey]*unitModel{}, byCompiled: map[*compiledmodel.Model]modelTextureLoadKey{},
@@ -264,6 +269,10 @@ func newModelTextureRegistry(fs *vfs.FS, standalone bool) *ModelTextureRegistry 
 		featurePrepared: map[string]*unitModel{}, featureDefs: map[string]*content.FeatureDef{},
 		hullByName: map[string]*compiledmodel.Model{},
 		bindings:   map[modelTexturePrimitiveKey]*modelTextureCursor{}, standalone: standalone,
+	}
+	r.teamLogos = "textures/logos.gaf"
+	if len(teamLogos) > 0 && teamLogos[0] != "" {
+		r.teamLogos = strings.ToLower(strings.ReplaceAll(teamLogos[0], `\`, "/"))
 	}
 	r.buildTextureIndex()
 	return r
@@ -691,11 +700,11 @@ func (c *Client) StepPhase7() {
 // buildTextureIndex enumerates textures/*.gaf and indexes entries by name.
 // Team textures are the 10-frame entries (LOGOS.GAF): frame n is player n's
 // colored copy [fmt 3do].
-func (c *Client) buildTextureIndex() {
+func (c *Client) buildTextureIndex(teamLogos ...string) {
 	if c == nil {
 		return
 	}
-	r := newModelTextureRegistry(c.modelFS, true)
+	r := newModelTextureRegistry(c.modelFS, true, teamLogos...)
 	c.texIndex, c.logoIndex = r.primary, r.logos
 	c.texGen++
 }
@@ -711,6 +720,12 @@ func (r *ModelTextureRegistry) buildTextureIndex() {
 		if !strings.HasPrefix(p, "textures/") || !strings.HasSuffix(p, ".gaf") {
 			continue
 		}
+		// Selecting a replacement logo bank removes the retail bank from the
+		// primary texture namespace too; otherwise its duplicate names would
+		// outrank the selected team's frames through side-before-default lookup.
+		if p == "textures/logos.gaf" && p != r.teamLogos {
+			continue
+		}
 		if seen[p] {
 			continue
 		}
@@ -719,7 +734,7 @@ func (r *ModelTextureRegistry) buildTextureIndex() {
 		if err != nil {
 			continue
 		}
-		isLogos := p == "textures/logos.gaf"
+		isLogos := p == r.teamLogos
 		for i := range g.Entries {
 			entry := &g.Entries[i]
 			if len(entry.Frames) == 0 || entry.Frames[0].Frame == nil {

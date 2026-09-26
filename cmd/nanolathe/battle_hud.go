@@ -294,7 +294,11 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	common := loadGAFOptional(fs, "anims/commongui.gaf", "commongui.gaf")
 	oldMain := loadGAFOptional(fs, "anims/oldmain.gaf", "oldmain.gaf")
 	share := loadGAFOptional(fs, "anims/share.gaf", "share.gaf")
-	logos := loadGAFOptional(fs, "textures/logos.gaf", "textures/logos.gaf")
+	logoPath := "textures/logos.gaf"
+	if windowContext.content != nil {
+		logoPath = presentationResource(windowContext.content.presentation.TeamLogos, logoPath)
+	}
+	logos := loadGAFOptional(fs, logoPath, logoPath)
 	// The ESC options path is fixed to ARMOPT for every side; there is no
 	// COROPT branch in the retail opener [07 §11]. Its support GAF is likewise
 	// the ARMOPT root, and must never be selected from the local side prefix.

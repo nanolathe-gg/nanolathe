@@ -80,6 +80,7 @@ func (c *Client) DebugSnapshot() map[string]any {
 		"feature_frames":            len(c.featureFrames),
 		"detail_frames":             len(c.detailFrames),
 		"effect_banks":              len(c.effectBanks),
+		"effect_storage":            c.effectCacheSnapshot(),
 		"art_diagnostics":           append([]ArtDiagnostic(nil), c.artDiagnostics...),
 		"art_diagnostics_truncated": c.artDiagnosticsTruncated,
 		"recorded_effect_stats":     c.effectStats,

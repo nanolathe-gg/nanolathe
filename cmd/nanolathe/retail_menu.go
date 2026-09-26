@@ -630,6 +630,15 @@ func (g *gameShell) updateHoverHelp(x, y int32) {
 	p.SetText("HELPTEXT", help)
 }
 
+// skirmishSideCount follows the authored catalog order. A shell assembled
+// without content retains the retail two-side control contract.
+func (g *gameShell) skirmishSideCount() int {
+	if g != nil && g.skirmishSides > 0 {
+		return g.skirmishSides
+	}
+	return 2
+}
+
 // installSkirmishDynamicGadgets supplies authored lobby row values to the
 // canonical UI runtime builder. The builder owns gadget construction and
 // geometry; this composition root retains only skirmish configuration.
@@ -652,7 +661,7 @@ func (g *gameShell) installSkirmishDynamicGadgets(window *gui.Window) {
 	}
 	slots := make([]ui.SkirmishSlot, n)
 	for i := range slots {
-		slots[i] = ui.SkirmishSlot{Side: g.setup.Players[i].Side, Color: g.setup.Players[i].Color}
+		slots[i] = ui.SkirmishSlot{Side: g.setup.Players[i].Side, Color: g.setup.Players[i].Color, SideStages: uint8(g.skirmishSideCount())}
 	}
 	ui.InstallSkirmishDynamicGadgets(window, slots)
 }

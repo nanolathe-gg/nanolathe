@@ -172,25 +172,8 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 	if v.Entry == "" {
 		return false
 	}
-	entry, ok := c.effectEntry(v.Bank, v.Entry)
+	art, ok := c.effectFrame(v.Bank, v.Entry, v.Frame)
 	if !ok {
-		return false
-	}
-	// The cursor is the sub-record's own animation frame. Retail's cursor
-	// cannot leave its entry — the flame families take it modulo the frame
-	// count and the puff retires at a last frame drawn from that count — so an
-	// out-of-range value here belongs to a container built before its frame
-	// count was known, and is clamped rather than dropped, exactly as the
-	// effect pool's cursor is.
-	index := v.Frame
-	if index < 0 {
-		index = 0
-	}
-	if int(index) >= len(entry.Frames) {
-		index = int32(len(entry.Frames) - 1)
-	}
-	art := entry.Frames[index].Frame
-	if art == nil {
 		return false
 	}
 	sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)

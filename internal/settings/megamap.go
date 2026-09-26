@@ -21,6 +21,11 @@ var DefaultPlayerDotColors = [10]int{227, 212, 80, 235, 108, 219, 208, 93, 130, 
 // ([draw-engine-interface](../../research/extensions/draw-engine-interface.md#prota-48-shipped-megamap)).
 var ProTAPlayerDotColors = [10]int{227, 249, 18, 250, 67, 149, 208, 117, 210, 34}
 
+// ZeroPlayerDotColors preserves Alpha 5's two authored overrides and the
+// shared defaults for the remaining players (research/extensions/ta-zero-engine.md,
+// "Authored package, factions and single-player coverage").
+var ZeroPlayerDotColors = [10]int{227, 212, 80, 235, 198, 219, 208, 93, 36, 67}
+
 // MegamapColorDefault is the `Megamap*Color` value that keeps a ring's
 // research default: the draw engine's integer reader returns -1 for an absent
 // key and keeps the default only then.

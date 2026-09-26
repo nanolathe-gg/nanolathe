@@ -43,6 +43,7 @@ const RetailName = "retail"
 const (
 	ControlsCommunity = "community"
 	ControlsRetail    = "retail"
+	ControlsZero      = "zero"
 )
 
 // Limits records the table sizes and read caps a content set needs. The
@@ -67,8 +68,14 @@ type Limits struct {
 // Presentation carries optional mod-authored UI defaults, never simulation rules.
 // Omitted placement_weapon_ranges keeps the Modern placement guide enabled.
 type Presentation struct {
-	ShowRanges            bool  `json:"show_ranges"`
-	PlacementWeaponRanges *bool `json:"placement_weapon_ranges,omitempty"`
+	// These logical resource paths are host presentation inputs. Empty fields
+	// retain the retail assets; they never change the catalog or a rule set.
+	MainMenuBackground     string `json:"main_menu_background,omitempty"`
+	SinglePlayerBackground string `json:"single_player_background,omitempty"`
+	LoadingBackground      string `json:"loading_background,omitempty"`
+	TeamLogos              string `json:"team_logos,omitempty"`
+	ShowRanges             bool   `json:"show_ranges"`
+	PlacementWeaponRanges  *bool  `json:"placement_weapon_ranges,omitempty"`
 }
 
 // Profile is one content set's load-time description.
@@ -133,9 +140,9 @@ func parse(data []byte, origin string) (Profile, error) {
 		return Profile{}, fmt.Errorf("nanolathe: content profile has no name: logical path %s, providers searched [%s], expected a named content profile", origin, origin)
 	}
 	switch profile.Controls {
-	case "", ControlsCommunity, ControlsRetail:
+	case "", ControlsCommunity, ControlsRetail, ControlsZero:
 	default:
-		return Profile{}, fmt.Errorf("nanolathe: content profile controls preset %q is unknown: logical path %s, providers searched [%s], expected %s, %s or omitted", profile.Controls, origin, origin, ControlsCommunity, ControlsRetail)
+		return Profile{}, fmt.Errorf("nanolathe: content profile controls preset %q is unknown: logical path %s, providers searched [%s], expected %s, %s, %s or omitted", profile.Controls, origin, origin, ControlsCommunity, ControlsRetail, ControlsZero)
 	}
 	switch gameplay.Mode(profile.MinimumGameplay) {
 	case "", gameplay.Strict31, gameplay.Community39, gameplay.Modern:

@@ -105,8 +105,12 @@ func (f *Frontend) Navigate(name string) (Mode, bool) {
 // builder. It is deliberately separate from session configuration so building
 // a lobby cannot mutate authoritative simulation state.
 type SkirmishSlot struct {
-	Side  int
-	Color int
+	// SideStages is the authored button's normal-frame count; zero retains
+	// retail's two stages for detached callers. It can include non-faction
+	// art such as Zero's WATCH frame (DESIGN_INTERFACE_HUD_INPUT §3.1).
+	SideStages uint8
+	Side       int
+	Color      int
 }
 
 const dynamicSkirmishSource = "RETAIL_DYNAMIC_SKIRMISH"
@@ -136,6 +140,9 @@ func InstallSkirmishDynamicGadgets(window *gui.Window, slots []SkirmishSlot) {
 		suffix := strconv.Itoa(i)
 		side := dynamicButton("Side"+suffix, 163, rowY, 45, 20, "SIDEx", slot.Side)
 		side.Stages = 2
+		if slot.SideStages > 0 {
+			side.Stages = slot.SideStages
+		}
 		window.Gadgets = append(window.Gadgets,
 			dynamicButton("Player"+suffix, 45, rowY, 112, 20, "skirmname", 0),
 			side,

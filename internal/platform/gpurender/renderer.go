@@ -294,6 +294,8 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	if r.surfaces[0] == nil {
 		return nil
 	}
+	r.scene.transient.clock++
+	defer r.scene.transient.trim(transientFrameBytes, 0, false, func(img *ebiten.Image) { img.Deallocate() })
 	r.modelStats = ModelStats{}
 	r.submissionFrame++
 	defer func() {

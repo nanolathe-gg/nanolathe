@@ -24,7 +24,7 @@ func runModelShot(opts Options, cs *contentSet) error {
 	if cs == nil || cs.fs == nil {
 		return fmt.Errorf("nanolathe: shot model: retail VFS is unavailable")
 	}
-	r, err := client.NewModelPreviewRenderer(cs.unmappedMount)
+	r, err := client.NewModelPreviewRenderer(cs.unmappedMount, cs.presentation.TeamLogos)
 	if err != nil {
 		return err
 	}

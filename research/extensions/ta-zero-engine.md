@@ -415,6 +415,19 @@ Nanolathe loader/resource audit, including limitations of successful catalog
 compilation, is owned by
 [Mod engine-package compatibility](mod-engine-compatibility.md).
 
+**Established — authored frontend and team-colour details, rechecked against
+Alpha 5 on 26 September 2026.** `Textures/LogoZ.gaf` contains the ten-frame
+`32xlogos` entry and ten-frame Arm/Core/GoK colour-texture entries. It is a
+team bank, not the main-menu title. The three renamed PCX backgrounds above
+also exist with the same basenames under `Bitmaps-French`, `Bitmaps-German`,
+`Bitmaps-Italian` and `Bitmaps-Spanish`. `Anims/skirmish.gaf`'s `SIDEx` entry
+has six frames: GoK, Arm, Core, Watch, pressed, disabled. Only the first three
+correspond to the authored faction list; Watch is not a fourth faction.
+Selecting a side from a fixed two-stage retail UI prevents choosing Core.
+These observations establish resources and ordering; they do not establish
+legacy observer/session behavior. The shipping Nanolathe UI consumes the
+faction count and the profile's explicit resource paths at composition.
+
 **Established — authored behavior reaches beyond new engine keys.** The Alpha
 5 readme documents a one-tick wait in anti-air primary aim scripts so the
 third weapon can select anti-air mode, 33 ms script sleeps, adjusted weapon

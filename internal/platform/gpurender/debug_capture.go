@@ -65,6 +65,12 @@ func (r *Renderer) DebugSnapshot() map[string]any {
 			add("scene_page", p.w, p.h)
 		}
 	}
+	for _, slot := range r.scene.transient.slots {
+		if slot.image != nil {
+			b := slot.image.Bounds()
+			add("transient_effect", b.Dx(), b.Dy())
+		}
+	}
 	for _, pg := range r.modelDirect.pages {
 		if pg.key != nil {
 			add("model_key_plane", modelDirectAtlasW, modelDirectAtlasH)
@@ -78,20 +84,22 @@ func (r *Renderer) DebugSnapshot() map[string]any {
 		}
 	}
 	return map[string]any{"width": r.w,
-		"height":                r.h,
-		"frame_device_draws":    r.frameDraws,
-		"model_stats":           r.ModelStats(),
-		"submission_frame":      r.submissionFrame,
-		"peak_submission_frame": r.peakSubmissionFrame,
-		"peak_submission_stats": r.peakSubmissionStats,
-		"storage":               storage,
-		"images":                images,
-		"gaf_image_count":       len(r.gafImages),
-		"terrain_atlas_count":   len(r.tileAtlases),
-		"scene_frame_count":     len(r.scene.frames),
-		"scene_page_count":      len(r.scene.pages),
-		"model_lane_regions":    len(r.modelDirect.regions),
-		"note":                  "Arena idle offsets are reset after Execute and can rewind on growth; they are not last-frame peaks. RGBA estimates cover listed logical images only, exclude Ebitengine backing textures/driver overhead and unlisted texture caches. Outline raw-versus-clipped spans and obsolete reference retention are unavailable without new instrumentation."}
+		"height":                 r.h,
+		"frame_device_draws":     r.frameDraws,
+		"model_stats":            r.ModelStats(),
+		"submission_frame":       r.submissionFrame,
+		"peak_submission_frame":  r.peakSubmissionFrame,
+		"peak_submission_stats":  r.peakSubmissionStats,
+		"storage":                storage,
+		"images":                 images,
+		"gaf_image_count":        len(r.gafImages),
+		"terrain_atlas_count":    len(r.tileAtlases),
+		"scene_frame_count":      len(r.scene.frames),
+		"scene_page_count":       len(r.scene.pages),
+		"transient_effect_count": len(r.scene.transient.index),
+		"transient_effect_bytes": r.scene.transient.bytes,
+		"model_lane_regions":     len(r.modelDirect.regions),
+		"note":                   "Arena idle offsets are reset after Execute and can rewind on growth; they are not last-frame peaks. RGBA estimates cover listed logical images only, exclude Ebitengine backing textures/driver overhead and unlisted texture caches. Outline raw-versus-clipped spans and obsolete reference retention are unavailable without new instrumentation."}
 }
 
 // DebugLastFrame returns the existing offscreen composition without executing.

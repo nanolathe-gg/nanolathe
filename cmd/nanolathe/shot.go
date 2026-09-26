@@ -141,7 +141,7 @@ func runShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
-	cl.SetModelFS(cs.unmappedMount)
+	cl.SetModelFS(cs.unmappedMount, cs.presentation.TeamLogos)
 	// A capture reads the same stored display block the windowed shell
 	// installs, so `Anti_Alias` and `Shading` come from the settings file
 	// (NANOLATHE_SETTINGS selects it) rather than from the client's built-in

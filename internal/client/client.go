@@ -400,9 +400,9 @@ type Client struct {
 	projectileGAFErr    error
 	projectileGAFLoaded bool
 
-	// effectBanks is the shared animation-bank cache the explosion-art
+	// effectBanks is the shared animation metadata cache the explosion-art
 	// resolver reads: a weapon names its bank by key (`explosiongaf`), and the
-	// bank is loaded from `anims/<name>.gaf` on the first miss and retained
+	// metadata is loaded from `anims/<name>.gaf` on the first miss and retained
 	// [06 R-WFX-01 §1]. Keys are lower-cased, which is this build's form of
 	// retail's case-insensitive scan of the loaded banks. A bank that fails to
 	// load is memoised as a nil entry — retail treats that as a fatal fault
@@ -417,6 +417,7 @@ type Client struct {
 	// none, and no second goroutine either.
 	artMu                   *sync.Mutex
 	effectBanks             map[string]*formats.GAF
+	effectArt               *effectArtCache
 	artDiagnostics          []ArtDiagnostic
 	artDiagnosticsTruncated bool
 	effectStats             EffectDrawStats
@@ -957,7 +958,7 @@ func (c *Client) StepCursorScaledDelta(delta int32) {
 
 // SetModelFS installs the VFS for lazy 3DO/texture loads and builds the
 // texture-name index. Presentation state only.
-func (c *Client) SetModelFS(fs *vfs.FS) {
+func (c *Client) SetModelFS(fs *vfs.FS, teamLogos ...string) {
 	if c != nil {
 		c.pausedWorldRevision++
 	}
@@ -990,6 +991,8 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 		mu.Lock()
 	}
 	c.effectBanks = nil
+	c.effectArt = nil
+	c.doubledFrames = nil
 	c.artDiagnostics = nil
 	c.artDiagnosticsTruncated = false
 	if mu := c.artMu; mu != nil {
@@ -1004,7 +1007,7 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 		c.fogGray[i] = nil
 		c.fogBlack[i] = nil
 	}
-	c.buildTextureIndex()
+	c.buildTextureIndex(teamLogos...)
 }
 
 // SetModelTextureRegistry attaches immutable battle model metadata. The

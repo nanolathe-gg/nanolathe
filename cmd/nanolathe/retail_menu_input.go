@@ -430,7 +430,7 @@ func (g *gameShell) activateDynamicSkirmishGadget(name string) {
 	case "Player":
 		g.cycleRetailController(index)
 	case "Side":
-		p.Side = cycleInt(p.Side, 0, 1, 1)
+		p.Side = cycleInt(p.Side, 0, g.skirmishSideCount()-1, 1)
 	case "Allies":
 		p.AllyGroup = cycleInt(p.AllyGroup, 0, 5, 1)
 	case "Metal":

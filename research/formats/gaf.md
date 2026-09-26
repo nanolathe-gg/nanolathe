@@ -243,6 +243,32 @@ simulation-only success. The pixel-geometry budget remains an acceptance bound
 for the metadata reader even though it has no pixel allocation, keeping the
 two readers on one corrupt-content policy.
 
+## Nanolathe on-demand source
+
+**Established (Nanolathe host storage policy).** `GAFSource` retains encoded
+bytes and the same fully validated metadata graph as the eager reader. Its
+explicit whole-bank limits bound unique geometry, reference count, depth,
+expanded traversal and RLE command work even for frames never requested. The
+byte-slice constructor copies its input; the VFS constructor takes ownership
+of a bounded private read. Metadata is borrowed and immutable. A digest binds
+later source-cache reloads to the bytes whose timing was first accepted.
+
+`Frame` first bounds the unique and expanded geometry reachable from one
+selected root, then runs the existing materializer with a fresh alias cache. Ordered children,
+raw/RLE dispatch, alternate selectors, origins, plain compatibility rasters
+and direct-storage views retain the eager reader's contracts. Returned trees
+are immutable and remain valid after the source or a cache entry is retired.
+The source retains no decoded tree. Its `Transient` frame hint is host-only,
+propagates to children and doubled variants, and is never serialized.
+`GAFFrameBytes` accounts frame headers, child-reference capacity and owned
+pixel-plane capacity once per shared node for host cache accounting.
+
+The ordinary `LoadGAF` and `LoadGAFMetadata` defaults are unchanged. Effect
+presentation selects its separate source and root budgets in
+[DESIGN_PRESENTATION_CLIENT](../../docs/DESIGN_PRESENTATION_CLIENT.md#on-demand-effect-art).
+This changes storage, not the authored image or playback cadence, and does not
+establish supported nested layouts or any still-unknown consumer operation.
+
 ## Nanolathe direct-raster view
 
 **Established (Nanolathe host-boundary policy).** `GAFFrame.DirectRaster`

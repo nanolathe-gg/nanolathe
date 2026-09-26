@@ -825,6 +825,32 @@ whether any shipped route services the mobile anti-nukes (`ARMSCAB`,
 `CORMABM`, which reach neither task), and whether the Core east/west
 shipyards consume the differently named CANBUILD lists.
 
+### 2.9 TA Zero Alpha 5 package acceptance boundary
+
+`internal/session/zero_package_retail_test.go` opts into Base, Alpha 5 and
+Map Pack 1f through `NANOLATHE_MOD_ROOTS_ZERO`, after the ordinary retail
+root. It shares one catalog, preserves GOK/ARM/CORE order and commander
+identity, and checks script-bound human/Classic AI entries, explicitly ordered
+commander combat, factory nanoframes and their construction progress after
+Nanolathe save restoration. An Arm factory's Direct command selects two
+repeatable buildpad poses and retains the saved idle pose. The three factions'
+actual AI factory scripts consume the bound unit-range and alliance ports;
+the established current-source port contract remains independently tested.
+Four map sessions check FireRain, Hailstorm and both Tempest parameter sets,
+including the authored ten-start schemas despite two/four-player filename
+prefixes. Duration and hit spacing use the existing meteor conversions
+[06 §6.5]; no weather arithmetic or script engine rule is added.
+
+These are package integration checks in Modern with the `tazero` Community
+feature table. They do not establish historical DLL equivalence, shield/VSOC
+mechanics, campaign conversion, legacy `.zsv` interoperability, or long-match
+AI quality. Tests skip without explicit mod roots. A separately run bounded
+probe covered all fifteen map-pack entries and the busy-factory Direct case;
+that observation is not a full gameplay parity claim. The evidence and further
+acceptance cases remain in
+[TA Zero engine](../research/extensions/ta-zero-engine.md#package-acceptance-cases)
+and user setup in [TA_ZERO_SUPPORT](TA_ZERO_SUPPORT.md).
+
 ## 3. Contracts
 
 Three numbered sets meet here, and each keeps the numbering its comments use.

@@ -35,6 +35,7 @@ func (f *GAFFrame) Doubled() *GAFFrame {
 		return nil
 	}
 	out := &GAFFrame{
+		Transient:        f.Transient,
 		Width:            f.Width * 2,
 		Height:           f.Height * 2,
 		XOffset:          f.XOffset * 2,

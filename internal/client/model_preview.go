@@ -88,7 +88,7 @@ type ModelPreviewRenderer struct {
 
 // NewModelPreviewRenderer loads the retail palette tables and binds the
 // production model texture index to fs.
-func NewModelPreviewRenderer(fs *vfs.FS) (*ModelPreviewRenderer, error) {
+func NewModelPreviewRenderer(fs *vfs.FS, teamLogos ...string) (*ModelPreviewRenderer, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("nanolathe: creating model preview: logical path palettes/palette.pal, providers searched [], expected mounted retail VFS")
 	}
@@ -101,7 +101,7 @@ func NewModelPreviewRenderer(fs *vfs.FS) (*ModelPreviewRenderer, error) {
 		return nil, fmt.Errorf("nanolathe: creating model preview: %w", err)
 	}
 	c.SetPalette(tables)
-	c.SetModelFS(fs)
+	c.SetModelFS(fs, teamLogos...)
 	return &ModelPreviewRenderer{client: c, palette: tables}, nil
 }
 

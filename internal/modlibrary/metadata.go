@@ -50,7 +50,7 @@ type Metadata struct {
 	Homepage        string   `json:"homepage,omitempty"`
 	ContentProfile  string   `json:"contentProfile,omitempty"`
 	MinimumGameplay string   `json:"minimumGameplay,omitempty"` // a reserved gameplay word or ""
-	Controls        string   `json:"controls,omitempty"`        // "community", "retail" or ""
+	Controls        string   `json:"controls,omitempty"`        // "community", "retail", "zero" or ""
 	Requires        []string `json:"requires,omitempty"`        // logical paths the BASE install must resolve
 }
 
@@ -124,9 +124,9 @@ func (m Metadata) Validate() error {
 			fmt.Sprintf("one of %s, %s, %s or omitted", gameplay.Strict31, gameplay.Community39, gameplay.Modern))
 	}
 	switch m.Controls {
-	case "", controlsCommunity, controlsRetail:
+	case "", controlsCommunity, controlsRetail, contentprofiles.ControlsZero:
 	default:
-		return fail(fmt.Sprintf("mod controls preset %q is unknown", m.Controls), "community, retail or omitted")
+		return fail(fmt.Sprintf("mod controls preset %q is unknown", m.Controls), "community, retail, zero or omitted")
 	}
 	if m.ContentProfile != "" && strings.TrimSpace(m.ContentProfile) != m.ContentProfile {
 		return fail("mod contentProfile has surrounding space", "a shipped profile name or a profile path relative to the mod root")

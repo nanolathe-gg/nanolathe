@@ -31,7 +31,7 @@ func runHeadless(opts Options, cs *contentSet, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if _, err := installHeadlessModelTextureRegistry(authoritative.Session, cs.unmappedMount); err != nil {
+	if _, err := installHeadlessModelTextureRegistry(authoritative.Session, cs.unmappedMount, cs.presentation.TeamLogos); err != nil {
 		return err
 	}
 	if authoritative.Session.Features != nil {
@@ -52,7 +52,7 @@ func runHeadless(opts Options, cs *contentSet, out io.Writer) error {
 // no Client; the registry advances presentation metadata while RunSession owns
 // the authoritative tick loop [03 R-CRD-005 §1]. An unexpected named-model
 // failure rejects composition before the tick loop starts.
-func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS) (*client.ModelTextureRegistry, error) {
+func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS, teamLogos ...string) (*client.ModelTextureRegistry, error) {
 	if sess == nil {
 		return nil, fmt.Errorf("nanolathe: headless session load failed: no session")
 	}
@@ -63,7 +63,7 @@ func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS) (*cl
 	if sess.Features != nil {
 		restoreStart = sess.Features.DefinitionRestoreStart()
 	}
-	registry, err := client.NewModelTextureRegistry(fs, sess.Catalog, sess.World, restoreStart)
+	registry, err := client.NewModelTextureRegistry(fs, sess.Catalog, sess.World, restoreStart, teamLogos...)
 	if err != nil {
 		return nil, fmt.Errorf("nanolathe: headless session load failed: model textures: %w", err)
 	}

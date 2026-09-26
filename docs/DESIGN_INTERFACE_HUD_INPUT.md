@@ -3811,3 +3811,25 @@ the key cancels. The command revalidates local ownership and the published
 instance, then calls the construction service's feature-gated `KickoutMove`.
 Strict and a disabled CP-CON-1 feature therefore cannot reach the rewrite. Both
 gestures are sourced extension input [community patch engine behavior §5.11].
+
+## TA Zero content presentation
+
+The skirmish side selector uses the compiled `SIDEDATA.TDF` faction count
+and order for both cycling and normal button stages. Retail remains Arm/Core;
+Zero is GoK/Arm/Core. Extra art frames are not playable factions: Zero's
+`SIDEx` also contains Watch, pressed and disabled images. Button raster rules
+remain unchanged. The shell reads the count at composition, never during a
+simulation tick. The profile-selected frontend PCX paths and logo GAF are
+load-time presentation choices described in
+[DESIGN_CONTENT_VFS §5](DESIGN_CONTENT_VFS.md#5-divergences).
+
+The Zero recommendation is an optional host preset, with independent sensor
+thresholds and its authored player palette, owned by
+[DESIGN_MODS_MUTATORS §4.3](DESIGN_MODS_MUTATORS.md#43-selection-and-precedence).
+The existing side definitions continue to supply each faction's command HUD,
+font, colours and build pages. No Arm/Core index assumption replaces them.
+
+Synthetic checks cover faction cycling, retail defaults and replacement team
+banks. Installed-content checks cover Zero's backgrounds, all three side
+buttons and HUDs, construction from authored menus, and team-colour model
+captures. Their compatibility boundary is [TA_ZERO_SUPPORT](TA_ZERO_SUPPORT.md).

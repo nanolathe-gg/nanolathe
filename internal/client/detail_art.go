@@ -160,6 +160,9 @@ func (c *Client) viewFrame(f *formats.GAFFrame) *formats.GAFFrame {
 	if detail != nil {
 		return detail
 	}
+	if f.Transient {
+		return c.transientVariant(f)
+	}
 	return cachedVariant(&c.doubledFrames, f, func() *formats.GAFFrame { return f.Doubled() })
 }
 
