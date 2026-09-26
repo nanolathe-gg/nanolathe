@@ -14,7 +14,9 @@ by this content are owned by [Extended script ports](script-ports.md).
 coverage without stacking, hit-triggered generator energy use, and slow
 generator self-healing. The independently described control and data flow
 below comes from authored COB, FBI and 3DO entries, inspected on 2026-09-25.
-No patch executable or DLL was analyzed for this contract. The mount is the
+The coverage investigation used those authored assets. The later, explicitly
+authorized [passive-healing investigation](#passive-generator-healing) also
+examined the shipped executable and installed DLL helper. The mount is the
 original retail assets followed by Gold 10.2.0's Step 2 directory, using the
 Escalation content profile.
 
@@ -249,61 +251,92 @@ paths need no additional shield port or engine-owned coverage service for
 the scenarios above. Strict 3.1 intentionally disables the extension port
 table and is not an Escalation shield compatibility mode.
 
-## Unresolved passive generator healing
+## Passive generator healing
 
-**Established — authored requirement and failing observation.** Aegis and
-Corona both author `HealTime=1`; the readme documents slow healing after
-damage. In Nanolathe, `session.stepHealTimeSelfRepair` supplies
-`construction.HealQuantum(1)`, whose retail arithmetic yields zero. A
-normally shielded Aegis hit for 100 lost 25 health and remained at 6385
-during subsequent ticks. The enabled current-source repair helper charged
-its minimum energy but delivered no health from the zero quantum. This is
-a confirmed missing documented capability, not proof of the correct
-replacement arithmetic.
+**Established — specifically authorized investigation.** On 2026-09-25 the
+user explicitly requested code inspection or decompilation to settle shield
+healing. This authorizes a narrow exception to the usual third-party binary
+analysis restriction for this contract. Raw analysis remains outside the
+repository. The inspected Gold executable and DLL are the exact artifacts
+identified in [Escalation engine package](taesc-engine.md); this does not
+establish another release's behavior or retail behavior.
 
-**Established — current-source helper boundary.** TADR's
-`RepairRateFix.cpp` replaces the repair contribution helper and deliberately
-checks energy before returning successfully for nonpositive work. It does
-not supply the passive caller's scheduling or work quantum. Its Escalation
-configuration multiplies self-heal health contributions by three, but
-multiplying a zero caller quantum still gives zero. The licensed recorder
-source contains a completion-only healing hook whose registration is
-commented out; it does not close the active caller contract.
+**Established — executable caller.** Read the authored HealTime as a signed
+16-bit value, `h`. Skip zero, and skip a unit whose sign-extended health,
+compared unsigned, is at least its definition's maximum. The stored remaining
+construction fraction must have the all-zero bit pattern. A tick is eligible
+exactly when `(uint8(tick) & uint8(h)) == 0`. This is a mask, not a modulus
+period: values 1 and 2 each admit half the ticks but in different patterns;
+3 admits one tick in four; 256 admits every tick. Eligible calls supply
+`trunc(32 × h / 30)` integer work, converted to single precision, with the
+unit as both repairer and recipient. The reduction was checked over all
+65,536 representable HealTime values. No recent-hit delay, activation test,
+shield-state test or random draw occurs in this caller.
 
-**Established — licensed history narrows, but does not close, the gap.** At
-the pinned MIT TADR revision, the source history records these distinct changes:
+For both shipped shield generators `h=1`, so completed, damaged generators
+supply one work unit on each even tick. The original Nanolathe caller instead
+supplied zero every eighth tick. The resulting health and energy still belong
+to the active repair helper; inspecting the executable alone cannot settle a
+helper replaced by the shipped DLL.
 
-- [Recorder completion guard, 2014-12-23](https://github.com/tanvanman/TADR/commit/b8c0acc09ba4631b7e39ceb6ebc1f706e2d07251):
-  `UnitActions_DontHealTimeNotBuilt` only prevents incomplete units from
-  entering passive healing. Its registration was
-  [disabled on 2015-05-31](https://github.com/tanvanman/TADR/commit/3e92d8eb9eeb1b46e2698c43afeccf96d26164c0).
-  Neither version supplies a replacement timer or work amount.
-- [Repair accumulator, 2026-08-01](https://github.com/tanvanman/TADR/commit/f183cb6be7869f3423dc6b2baa4dd50f57d4b9fc)
-  and [rate multipliers, 2026-08-18](https://github.com/tanvanman/TADR/commit/f9733364751adbda550b2b89c2a3621946ccb004):
-  these change the shared contribution helper, including self-repair when its
-  input is positive. They leave the passive caller outside that source contract.
-- [Maintainer report in PR 15](https://github.com/tanvanman/TADR/pull/15)
-  reports 581 health over 16,457 ticks for a three-times `corkrog` sample
-  and discusses power-of-two intervals before the fix. It does not identify a
-  Gold 10.2.0 executable, the required caller expression or all authored inputs.
-  It cannot establish a modulo timer, bitmask timer, fractional accumulation
-  at the call site, or a minimum award for `HealTime=1`.
+**Established — shipped DLL contribution.** Normal DLL initialization
+installs its repair replacement without a healing preference gate. It matches
+the two-bank fractional-contribution algorithm in
+[CP-DMG-4](community-patch-engine.md), with **one-times** active and passive
+health contributions. The DLL does not distinguish those two callers and has
+no health multiplier. The later MIT source commit
+[f973336](https://github.com/tanvanman/TADR/commit/f9733364751adbda550b2b89c2a3621946ccb004)
+adds caller classification and multipliers; the current-source three-times
+Escalation defaults are not the Gold 10.2.0 DLL's behavior.
 
-The retail caller was separately rechecked: its unsigned HealTime product is
-integer-divided before conversion to the repair helper's work type. Thus the
-zero from `HealQuantum(1)` is not an accidental floating-point truncation in
-Nanolathe. Multiplying that zero by the sourced current helper's self-repair
-rate does not repair the historical-contract gap.
+For positive definition build time `B`, maximum health `H`, caller work `q`
+and authored energy cost `E`, energy is
+`max(1, trunc(1 + (E × q − 1) / B))` with the established working-precision
+arithmetic. Resource admission precedes all bank activity. Nonpositive work
+returns successfully after admission without changing health or a bank.
+Positive work contributes the signed-64 numerator `H × q`; divide by `B`
+toward zero, add the remainder to the target-tagged bank, and carry one health
+point if the bank reaches `B`. An award above 65535 is capped before the
+ordinary raw healing packet. A refused energy visit neither advances nor
+consumes the bank. Full-health and nonpositive-build-time guards precede the
+energy calculation. There is no minimum health award for every funded visit:
+sub-point work is retained until sufficient credit accumulates.
 
-**Unknown — missing historical caller contract.** The historical healing
-summary in [Escalation engine package](taesc-engine.md) records changed
-cadence, completion gating and minimum-heal behavior from earlier analysis.
-It does not provide an independently supported complete formula for the
-work passed by a `HealTime=1` unit, or a settled current-source host-image
-boundary. Needed evidence is appropriately licensed historical source,
-maintainer documentation of the passive caller, or a bounded manual Gold
-observation recording healed health and energy against time for several
-HealTime/build-time/max-health combinations. No new cadence, quantum,
-combat-delay gate or minimum health award is inferred here. The dependent
-engine site is `session.stepHealTimeSelfRepair`; this gap must remain
-reported until its input contract is established.
+Each repairer has two ordered target-tagged banks, with the same allocation,
+replacement, slot-reuse and fallback behavior as CP-DMG-4. Changing the unit
+array base replaces the bank table; death itself does not clear fractions.
+The shipped implementation corresponds to the bounded repair algorithm added
+in MIT source commit
+[f183cb6](https://github.com/tanvanman/TADR/commit/f183cb6be7869f3423dc6b2baa4dd50f57d4b9fc).
+This source match is established for the inspected repair path, not for the
+whole DLL. The unhooked executable's minimum-one helper does not describe
+normal Gold play because the DLL replaces it.
+
+**Established — host configuration.** The Escalation content profile selects
+the sourced bitmask caller and overrides both repair multipliers to one.
+The separate current-source `escalation` table retains its sourced three-times
+defaults. Strict 3.1 ignores the profile's gameplay features and retains the
+retail unsigned quantum and eight-tick cadence. Zero's corresponding caller
+is a separate contract; no repair-helper change is inferred for that package.
+
+**Established — investigation correction.** Prior Nanolathe observations
+correctly found no healing from the retail zero-work caller, but the older
+package summary missed the signed work scaling and incorrectly described
+HealTime as a period. The present direct caller and installed-hook checks
+settle those missing inputs. Earlier completion-only recorder source and
+maintainer measurements remain version-scoped supporting history, not the
+source of this formula. No shield-specific aura, combat cooldown or invented
+minimum award is added.
+
+**Established — bounded host acceptance, 2026-09-26.**
+`TestEscalationShieldHealing` completes both authored generators, waits for
+their ordinary shield startup, and delivers normal damage. Over 240 funded
+ticks (120 eligible visits), Aegis restores four health from authored maximum
+6410 and build time 164160; Corona restores three from maximum 6480 and build
+time 207360. An additional hit with empty stock establishes unpaid energy
+through the actual hit callback. Healing stops while that carry blocks
+admission and resumes after energy is replenished. The fast caller and session
+tests additionally lock signed conversion, mask patterns, positive-zero
+completion, resource rejection before fractional accumulation, full-health
+admission, unchanged RNG counts and Strict bypass. These checks exercise the
+identified assets and implemented contract, not an automated historical game.

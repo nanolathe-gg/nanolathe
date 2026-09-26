@@ -70,6 +70,7 @@ func (s *Session) projectCommunity() {
 		s.Build.Community = community.Features{
 			ConstructionKickout: f.ConstructionKickout, StructureRotation: f.StructureRotation,
 			ResurrectionFinalization: f.ResurrectionFinalization, RepairRate: f.RepairRate,
+			HealTimeBitmask: f.HealTimeBitmask,
 		}
 		s.Build.PrepareRepairBanks(s.Units)
 		if s.Build.OrderBinding != nil {
@@ -101,7 +102,8 @@ func (s *Session) aiCommunity() community.Features {
 	f := s.Community
 	return community.Features{
 		AIStockpileProducts: f.AIStockpileProducts, AIApplianceEnergy: f.AIApplianceEnergy,
-		AIBuilderStopThreshold: f.AIBuilderStopThreshold,
+		AIBuilderStopThreshold:  f.AIBuilderStopThreshold,
+		AIBuilderPlacementLimit: f.AIBuilderPlacementLimit,
 	}
 }
 

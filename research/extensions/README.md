@@ -18,12 +18,12 @@ stable named heading and keeps its unresolved questions beside it.
 | [Non-retail weapon target keys](weapon-target-keys.md) | `nottoair`, `nottounderwater` and `surfacefire` as authored and described by TA: Escalation Gold 10.2.0, and `toaironly` as authored by ProTA 4.8; TA Zero Alpha 5 uses none. Documented intent, authored census and the inspected Escalation parser/acquisition evidence — the Gold-era admission predicate and `toaironly` remain unknown; the current community-patch line's predicates are settled from source in the document's final section. |
 | [ProTA 4.8 engine package](prota-engine.md) | Historical engine package versus current source profile; renamed authored directories, twelve-slot interface, palette overrides, campaigns/AI/music requirements and the retail script-port/opcode census. |
 | [TA: Escalation Gold 10.2.0 engine package](taesc-engine.md) | The patched-executable + engine-DLL package: documented engine changes, the executable patch inventory, the extension-key registry (veterancy, preview pieces, rotations) with the authored key census, and the recorder-provided script-port surface. |
-| [Escalation shields](escalation-shields.md) | Gold 10.2.0 authored coverage, armor, hit-triggered energy and save continuation; the passive-healing caller remains unknown. |
+| [Escalation shields](escalation-shields.md) | Gold 10.2.0 authored coverage, armor, hit-triggered energy and save continuation; specifically authorized analysis settles the historical passive caller and installed fractional repair helper. |
 | [Escalation resource adjacency](escalation-adjacency.md) | Gold 10.2.0 authored pairing and charging scores, per-family income, range, timing and persistence, including conflicts with readme amounts. |
 | [Escalation weapon charging](escalation-weapon-charging.md) | Gold 10.2.0 Sentinel detection and firing cadence with one or two charging fields, including removal; other weapon families remain separately scoped. |
 | [Escalation commander and aircraft scripts](escalation-commander-aircraft.md) | Gold 10.2.0 commander research, kinetic armor, Atlas stack/off-map penalties and cargo persistence; representative authored-program acceptance. |
 | [Escalation script systems](escalation-script-systems.md) | Gold 10.2.0 fusion upgrade, factory upgrade propagation to old/new/resurrected Bulldogs, receiving gate and full mixed-size automatic surface transport; authored contracts and bounded host acceptance. |
-| [TA Zero Alpha 5 engine package](ta-zero-engine.md) | Alpha 5/Base/Map Pack 1f identities, current-source boundary, complete key/script census, authored shield/VSOC and anti-air contracts, world/AI acceptance, documented controls and unresolved passive self-repair. |
+| [TA Zero Alpha 5 engine package](ta-zero-engine.md) | Alpha 5/Base/Map Pack 1f identities, current-source boundary, complete key/script census, authored shield/VSOC and anti-air contracts, world/AI acceptance, historical repair and AI contracts, shipped controls, recorder version boundaries and remaining target-point work. |
 | [TA Demo Recorder session DLLs](ta-demo-recorder.md) | Historical command/version boundaries plus current-source script integration: callback arguments, immediate/deferred starts, optional 64 slots, map-script scheduling and persistence limits. |
 | [Extended script ports](script-ports.md) | Pinned current-recorder getter/setter dispatch through port 400: arguments, locality/playback gates, stateful commands, spawning/search arithmetic, definition edits, effects and map commands. The older packages' authored eight-port subset remains separately scoped; port `75` is controller locality, not visibility. |
 | [Community patch engine behavior](community-patch-engine.md) | The TADR `tdraw.dll` line (MIT source, pinned commit `dcff5dd`, seven build profiles): compatibility target definition, profile matrix, configuration surface, behavior contracts for limits, simulation fixes, weapon/unit keys, construction (including click snap), environment, spawns, and session protocol, verified claim by claim against the source on 2026-09-21; recorder distribution 2026.9.9, draw DLL self-version 2026.8.6. |
@@ -49,8 +49,16 @@ Documentation establishes what a release documents; content establishes what
 it authors; source establishes what the inspected implementation does. None
 by itself establishes behavior outside that scope, or retail behavior.
 
-Do not disassemble or decompile third-party patches. Extension investigation
-uses the sources above and bounded manual observations; the retail static
+Do not disassemble or decompile third-party patches without an explicit user
+exception. The 2026-09-25 request to inspect code or decompile the mod to settle
+Escalation shield healing authorizes that bounded contract only; its raw
+analysis stays in the private analysis tree and its independently worded
+findings are in [Escalation shields](escalation-shields.md#passive-generator-healing).
+The 26 September 2026 UTC request to research source or decompile TA Zero
+also authorizes its remaining package gaps, with raw details kept privately
+and independently worded contracts in [TA Zero](ta-zero-engine.md). These
+exceptions do not authorize binary analysis of unrelated patches.
+Other extension investigation uses the sources above and bounded manual observations; the retail static
 analysis workflow does not extend to patch binaries. Several documents retain
 behavior decoded from shipped patch binaries under earlier practice, marked
 with an **Evidence provenance** note: that material is clean-worded background,

@@ -54,6 +54,8 @@ type Overrides struct {
 	AttackSingleSlotTake     *bool `json:"attackSingleSlotTake,omitempty"`
 	MapFeatureOwnerEleven    *bool `json:"mapFeatureOwnerEleven,omitempty"`
 	ResurrectionTextFix      *bool `json:"resurrectionTextFix,omitempty"`
+	HealTimeBitmask          *bool `json:"healTimeBitmask,omitempty"`
+	AIBuilderPlacementLimit  *int  `json:"aiBuilderPlacementLimit,omitempty"`
 
 	RepairRate                *RepairRateOverrides `json:"repairRate,omitempty"`
 	OffMapAircraftMarginTiles *int                 `json:"offMapAircraftMarginTiles,omitempty"`
@@ -155,6 +157,8 @@ func apply(base Features, o Overrides, logicalPath string) (Features, error) {
 	applyBool(&base.AttackSingleSlotTake, o.AttackSingleSlotTake)
 	applyBool(&base.MapFeatureOwnerEleven, o.MapFeatureOwnerEleven)
 	applyBool(&base.ResurrectionTextFix, o.ResurrectionTextFix)
+	applyBool(&base.HealTimeBitmask, o.HealTimeBitmask)
+	applyInt(&base.AIBuilderPlacementLimit, o.AIBuilderPlacementLimit)
 
 	if o.RepairRate != nil {
 		applyBool(&base.RepairRate.Enabled, o.RepairRate.Enabled)
@@ -195,6 +199,7 @@ func validate(f Features) error {
 		name  string
 		value int
 	}{
+		{"aiBuilderPlacementLimit", f.AIBuilderPlacementLimit},
 		{"offMapAircraftMarginTiles", f.OffMapAircraftMarginTiles},
 		{"projectileCapacity", f.ProjectileCapacity},
 		{"explosionCapacity", f.ExplosionCapacity},
@@ -287,6 +292,10 @@ func validateParsedInt(name string, value int) error {
 		if value > int(^uint(0)>>1)/100000 {
 			return fmt.Errorf("overflows backing store size")
 		}
+	case "aiBuilderPlacementLimit":
+		if int64(value) > 1<<31-1 {
+			return fmt.Errorf("exceeds signed AI comparison limit")
+		}
 	case "pathStepAllowance":
 		if int64(value) > 1<<31-1 {
 			return fmt.Errorf("exceeds signed scheduler limit")
@@ -305,6 +314,8 @@ func validateParsedInt(name string, value int) error {
 
 func boolField(o *Overrides, name string) **bool {
 	switch name {
+	case "healTimeBitmask":
+		return &o.HealTimeBitmask
 	case "constructionKickout":
 		return &o.ConstructionKickout
 	case "guardingBuildersHold":
@@ -375,6 +386,8 @@ func boolField(o *Overrides, name string) **bool {
 
 func intField(o *Overrides, name string) **int {
 	switch name {
+	case "aiBuilderPlacementLimit":
+		return &o.AIBuilderPlacementLimit
 	case "offMapAircraftMarginTiles":
 		return &o.OffMapAircraftMarginTiles
 	case "projectileCapacity":

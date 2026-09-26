@@ -2414,10 +2414,11 @@ to product only when both units carry the in-game bit 28 ([R-ORD-01 §12])
 and NEITHER carries bit 14 (the death latch the kill service sets
 beside the cause byte, which the completion transition also sets for an
 `isfeature` product — [R-SPEC-01 §12]); as the last step of that same guarded
-block the builder's experience word copies to the product only when the
+block the builder's control-group value copies to the product only when the
 **product's** owning player record is present and its controller value is
 exactly `1` — the human-controlled seat ([05 R-SHARE-01 §1]) — and is skipped
-for every other controller value [R-P0-09].
+for every other controller value. This does not copy the builder's kill count
+[R-P0-09].
 The full production lifecycle, refund arithmetic, and completion transition
 belong to document 05. The complete GetBuilt state gates, retry timing,
 completion-transition order, and same-tick publication windows are in section
@@ -2731,14 +2732,28 @@ builder's state word to the product's; and then, when the **product's** owning
 player record is present and that record's controller value is exactly `1` —
 the human-controlled seat, as against `2` for the computer player
 ([05 R-SHARE-01 §1], [05 R-ECO-01 §3], [R-SPEC-01 §5]) — the builder's
-experience word also copies. Any other controller value skips the experience
-copy while leaving the standing-bit copy in place. Because a factory product
-is allocated into its builder's own owner slice, product and builder always
-share an owner, so the gate is observable only through the required value.
-The
-state-2 epilogue's own standing-field merge is the initial product-state copy;
-the guarded GetBuilt block is the post-build gate — keep both stages distinct
-rather than treating the product's initial flags as proof that GetBuilt has
+**control-group value** also copies. Any other controller value, or an absent
+player record, skips the group copy while leaving the standing-bit copy in
+place. Normal factory allocation gives the product its builder's owner, but
+this predicate reads the product's owner and adds no owner-equality test.
+
+**Established — current group at handoff.** The
+copied value is the same field used by control-group assignment, digit recall,
+and the HUD group label (§3.7). The kill-count readers and death-credit writer
+use a separate field ([06 R-DMG-01 §2]); this handler does not copy kills.
+The group copy uses the builder's value at the completed product's own due
+`GetBuilt` visit, after the rally walk and before the `Park` fallback. It
+overwrites an existing product group, including when the builder's group is
+zero; there is no nonzero-group or range gate. A builder reassigned before that
+visit therefore supplies its new group. Once `GetBuilt` returns complete and
+is removed, later builder reassignments do not propagate. The whole handoff
+requires a product mover and the order's retained builder reference
+([R-FAC-02 §4]); it adds no factory-class test beyond those gates.
+
+The state-2 epilogue's initial standing-field merge copies no control group.
+Neither does the synchronous construction-completion transition. Keep those
+stages distinct from the guarded `GetBuilt` handoff rather than treating the
+product's initial flags or completed fraction as proof that inheritance has
 already run.
 
 **Established fact — same-tick product publication windows [R-P0-09]:** A
@@ -3044,8 +3059,8 @@ the front: a record whose name is `QMove` is resolved as command 2 (move) and
 one named `QPatrol` as command 9 (patrol) against the product with the
 record's goal triple and inserted **queued** on the product, in walk order;
 then the standing-bit copy under the bit-28 / bit-14 guard of §3.8 (with the
-experience word when the product's owner row is present and its controller
-value is `1`); then, if nothing was inserted,
+current control-group value when the product's owner row is present and its
+controller value is `1`); then, if nothing was inserted,
 `Park` is inserted queued. It returns complete (5). A product without a mover
 (a building-class product) gets nothing.
 
@@ -4083,7 +4098,7 @@ i.e. the nanoframe **decays** by `11 / buildcostenergy` of its remaining
 fraction, with the refund arithmetic of doc 05 (the work helper's negative
 arm). A builder standing at its site therefore never sees it decay, however
 its resources stand. **(b)** the standing-bit copy runs only under the
-double bit-28 / bit-14 guard of §3.8 and copies the experience word only when
+double bit-28 / bit-14 guard of §3.8 and copies the control-group value only when
 the product's owning player record is present and its controller value is
 exactly `1` (human).
 

@@ -32,6 +32,8 @@ manual observation unless explicitly authorized by the user. The ProTA selection
 follow-up and the [ProTA 4.8 shipped megamap](#prota-48-shipped-megamap) audit
 below use the user's 22 September 2026 authorization, scoped and recorded in
 [ProTA's evidence statement](prota-engine.md#evidence-scope-and-sources).
+The Zero follow-up uses the explicit 26 September 2026 UTC authorization
+recorded in [Zero’s evidence statement](ta-zero-engine.md#evidence-scope-and-sources).
 
 ## Megamap
 
@@ -44,12 +46,15 @@ configured key, has no step counter and no Page Up/Down handling, and uses
 the wheel only to enter or leave the view; see
 [ProTA 4.8 shipped megamap](#prota-48-shipped-megamap). Those earlier
 observations were never tied to a traced routine, and they are now disproved
-for one of the three builds. The corresponding Escalation `TAESC.dll` and
-Zero `zdraw.dll` behaviour is therefore **Unknown**, not established. The
+for one of the three builds. The corresponding Escalation behavior remains separately scoped. The
+[authorized Zero follow-up](ta-zero-engine.md#shipped-host-controls-and-geometry)
+now verifies toggle-on-release, Tab default and no zoom-level counter in Base,
+Hotfix and Fix10. The
 current source (`MegamapControl.cpp`, pinned `dcff5dd`) also toggles on key
 release. The built-in default key is Tab. TA Zero's controls page documents
 F4 as its megamap key, but the inspected preferences do not set `MegamapKey`,
-so the shipped effective binding there is **Unknown**.
+and the Zero follow-up establishes Tab for a clean advanced-settings registry;
+a user’s saved binding may differ.
 
 **Established — wheel and double-click preferences (names and defaults).**
 `WheelZoom` (default on) lets the wheel enter and leave the view;
@@ -159,7 +164,9 @@ minimap, the second patches the engine's built-in minimap.
 **Evidence scope.** This subsection comes from the 24 September 2026 static
 audit of the identified ProTA 4.8 `tdraw.dll` (`6b46046a…`), done under the
 user's authorization recorded in
-[ProTA's evidence statement](prota-engine.md#evidence-scope-and-sources). A
+[ProTA's evidence statement](prota-engine.md#evidence-scope-and-sources).
+The Zero follow-up uses the explicit 26 September 2026 UTC authorization
+recorded in [Zero’s evidence statement](ta-zero-engine.md#evidence-scope-and-sources). A
 same-day follow-up under the same authorization added the terrain picture,
 the orders sent, build placement, the ring-colour keys, the overlay, the
 projectile gate and the dot-colour readers. Where the DLL calls into the
@@ -706,6 +713,15 @@ so while the view is shown, whiteboard markers and lines inside the game
 view are hidden under it.
 
 ## Whiteboard
+
+**Zero version correction.** The older untraced descriptions below must not
+be applied to Base, Hotfix or Fix10 where they conflict with the
+[shipped Zero contract](ta-zero-engine.md#whiteboard-local-contract-and-corrections).
+That audit establishes left-double-click text editing, middle-down dots,
+right-held movement wiping, lower-bound-only erase clipping, and a local
+outgoing operation serializer. It also records Fix10’s distinct bucket/state
+behavior. Current-source safeguards are separately versioned.
+
 
 **Established — key and modes.** `WhiteboardKey`, default `\`, is a hold key:
 the whiteboard's modes are live only while it is down.

@@ -2367,3 +2367,21 @@ Two formerly open items are established: rally probe validation selects its
 grid using the session's LineOfSight bit `[08 R-AI-01 §7]`; planner state,
 including the wave engagement latch and rally working state, is reconstructed
 on load and is not serialized `[08 R-SAVE-02 §11-A]`.
+
+### Zero Classic construction placement
+
+The Zero Alpha 5 content profile explicitly declares
+`AIBuilderPlacementLimit=127` in the existing Community feature vocabulary.
+`ai.Manager.Community` receives it at composition and rebinding. A positive
+numeric limit overrides the older ProTA placement shortcut; zero preserves
+its existing five/ten selection. Strict projects zero and therefore keeps five.
+Only the first construction pass changes; reposition still starts at five,
+so counts five through 126 may reach both independent passes. The selected
+Modern AI controller does not call this Classic task. No extra state, RNG draw,
+resource mutation or save field is introduced. The feature digest records the
+nonzero parameter. The integer is bounded by the signed32 comparison type.
+
+The source contract is [TA Zero, Classic construction cutoff](../research/extensions/ta-zero-engine.md#historical-classic-ai-construction-cutoff).
+Focused tests lock the 4/5/126/127 boundaries, unchanged reposition, explicit
+numeric precedence and Strict projection. Existing ProTA tests retain its
+five/ten behavior.

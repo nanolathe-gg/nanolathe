@@ -893,6 +893,13 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 	if m.Community.AIBuilderStopThreshold {
 		placementCutoff = 10
 	}
+	// The historical Zero caller raises only placement to 127. Explicit
+	// numeric configuration wins over the older ProTA shortcut; Strict
+	// projects neither [research/extensions/ta-zero-engine.md
+	// "Historical Classic AI construction cutoff"].
+	if m.Community.AIBuilderPlacementLimit > 0 {
+		placementCutoff = int32(m.Community.AIBuilderPlacementLimit)
+	}
 	// The retail task does not rediscover builders from the world when its
 	// vector is empty; the classifier and ordinary group writers are the
 	// admissions to this input [R-P0-04].

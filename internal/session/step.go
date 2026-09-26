@@ -390,7 +390,7 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 // definition that authors the word heals itself, wherever it is and whatever
 // it is doing.
 //
-// The gates, all of them [05 R-WORK-01 §3, "`healtime`, the only consumer"]:
+// The retail gates [05 R-WORK-01 §3, "`healtime`, the only consumer"]:
 //
 //   - the definition's `healtime` is non-zero;
 //   - `(unsigned)health < (unsigned)maxdamage` — the UNSIGNED compare, so a
@@ -421,16 +421,6 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 //
 // It draws no random number [05 R-WORK-01 §3, "repair's randomness"].
 func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
-	// TODO(question): Zero Alpha 5 documents definition-specific self-repair
-	// rates and no repair during construction. Its released definitions do not
-	// match this retail caller. Keep the baseline until licensed patch source
-	// or bounded manual evidence settles cadence, work and resource gates.
-	// [research/extensions/ta-zero-engine.md "Unresolved Zero passive self-repair"]
-	// TODO(question): Gold 10.2.0 shield generators author HealTime=1,
-	// yielding zero work through this retail caller. Keep the retail cadence
-	// and quantum until licensed historical source or bounded manual evidence
-	// settles the extension caller; the repair helper alone does not do so.
-	// [research/extensions/escalation-shields.md "Unresolved passive generator healing"]
 	if s == nil || u == nil || u.Def == nil || s.Build == nil {
 		return
 	}
@@ -442,13 +432,11 @@ func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
 	if uint32(u.Health) >= uint32(u.Def.MaxDamage) {
 		return
 	}
-	if tick&7 != 0 {
-		return
-	}
-	// Builder and target are the same unit. Repair owns the signed entry
-	// compare, the two clamped terms, the one-resource energy admission against
-	// the BUILDER's buckets and the kind-10 heal packet [05 R-WORK-01 §3].
-	s.Build.RepairPassive(u, construction.HealQuantum(u.Def.HealTime))
+	// The bound construction rules own the cadence and quantum. Strict keeps
+	// [05 R-WORK-01 §3]; Escalation and Zero profiles supply their caller
+	// [research/extensions/escalation-shields.md "Passive generator healing"]
+	// [research/extensions/ta-zero-engine.md "Historical passive self-repair caller"].
+	s.Build.StepPassiveRepair(u, tick)
 }
 
 // stepWindGeneratorCallbacks is the wind-generator part of a unit visit's

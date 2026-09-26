@@ -19,6 +19,7 @@ historical Gold engine parity.
 | System | Verified behavior |
 |---|---|
 | Area shields | Both generators; building coverage, range and alliances; ordinary 75% absorption, non-stacking, hit-triggered energy use, shortage, Prophet disruption, removal and active-hit save/load. |
+| Generator self-healing | Gold's signed HealTime mask and work quantum, 1× fractional health contributions, construction admission, energy rejection and recovery. Both authored generators match calculated healing through ordinary session ticks. |
 | Resource pairing and charging | Nine resource families; authored income amounts, range, completion, directional allies, overlap, removal and save/load. |
 | Weapon charging | Sentinel firing cadence doubles with a charging field, does not stack with a second field, and returns to baseline after the last field is removed. |
 | Building upgrades | Fusion upgrade attachment; Aegis's actual menu button builds and retains its upgrade, extending coverage beyond the base radius. |
@@ -36,12 +37,6 @@ an independent aura, income multiplier or upgrade subsystem. Existing scripts
 and the central gameplay rules remain the source of the behavior.
 
 ## Known limits
-
-Shield generator **self-healing is incomplete**. Gold authors `HealTime=1`,
-which produces zero work through the retail passive caller. The historical
-caller arithmetic is not established by the available licensed helper source.
-A matching licensed source revision, maintainer contract or bounded manual
-Gold observation is needed; no replacement rate has been guessed.
 
 Some release prose conflicts with authored content, including fusion bonus
 amounts and allied-source gate linking. Nanolathe executes the shipped scripts.

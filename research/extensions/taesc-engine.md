@@ -50,7 +50,9 @@ recorded here. **Evidence provenance:** the implementation detail below was
 decoded from the shipped binaries — a method the
 [evidence policy](README.md#evidence-policy) does not permit for third-party
 patch binaries. The wording is clean-room and the observations stand as
-recorded, but no new contract may be closed by this method: future gaps must
+recorded. The user's explicit 2026-09-25 shield-healing investigation is a
+bounded exception, documented in [Escalation shields](escalation-shields.md#passive-generator-healing).
+Other future gaps must
 be settled from documentation, authored content, appropriately licensed
 source, or a bounded manual observation.
 
@@ -168,29 +170,17 @@ structures exceeds ten: the batch is stamped with a deadline 900 ticks (thirty
 seconds) ahead and the game shows "Sharing %d structures - transfer will
 complete in %d seconds."; a per-tick callback performs it at the deadline.
 
-**Unknown — repair-rate exploit fix.** The release notes document it
-("abusing low tier cons to fast repair higher tier units is less effective vs.
-higher tier cons"), but no repair-related string, definition key or
-configuration key exists in the shipped DLLs, and no arithmetic comparing two
-unit types' worker or build values could be isolated in the hook bodies.
-A matching licensed historical source revision or a bounded manual comparison
-of repair contributions between retail and this release would settle it.
-
-**Supported inference (from the community patch source) — the fix is in the
-executable's repair helper and makes contribution proportional.** The later
-TADR repair module replaces the repair/HealTime helper at its single entry
-point, is enabled only for the Escalation build, and models the helper it
-replaces as `max(1, ceil(...))` on both the heal and the energy term — a
-proportional contribution with a one-point floor. That is exactly the shape
-the documented exploit fix needs (retail's helper instead clamps every
-positive term **to** exactly one, so retail repair is a flat one health point
-and one energy unit per accepted call whatever the repairer's tier
-([05 "Repair"])); moving to proportional contribution is what makes cheap
-constructors less effective on high-tier targets. The evidence is the MIT
-community patch source's characterization of the function it hooks, not an
-inspection of this package's executable, so the question stays open; see
-[community patch engine behavior](community-patch-engine.md) CP-DMG-4 for the
-full comparison.
+**Established — proportional repair contribution.** The targeted healing
+investigation establishes that the shipped DLL unconditionally replaces the
+shared active/passive repair helper at ordinary initialization. It banks
+fractional health contributions using target maximum health and build time,
+with a multiplier of one for both kinds of repair. This matches the earlier
+MIT source implementation, before its later multiplier addition. Energy is
+admitted before the fraction bank changes. The full arithmetic, source
+version boundary and artifact identity are in
+[passive generator healing](escalation-shields.md#passive-generator-healing).
+This replaces the earlier unresolved repair-helper finding; the release
+note's relative constructor-tier description alone was not sufficient evidence.
 
 **Supported inference — other machinery.** The engine DLL additionally
 contains machinery whose documented description is thinner than the
@@ -241,15 +231,13 @@ renames are excluded:
 - **`+showranges`.** The third weapon's range display tests the third weapon
   slot's "has weapon" flag instead of the first slot's, matching the release
   note about weapon range three on units without a first weapon.
-- **Healing.** Self-repair requires a fully built unit (nanoframes no longer
-  self-heal), uses the definition's `HealTime` as the repair period instead of
-  the fixed eight-frame cadence retail pairs with it
-  ([04 R-SPEC-01 §4](../retail-executable-spec/04-units-orders-scripts-and-movement.md)),
-  and floors the heal amount at one instead of capping it at one.
-  **Unknown — complete caller contract.** This retained historical summary
-  does not specify a complete tick predicate or work-input expression.
-  Current licensed helper source does not settle either; see
-  [the passive-healing evidence boundary](escalation-shields.md#unresolved-passive-generator-healing).
+- **Healing.** Completed, damaged units use the low byte of signed HealTime
+  as a tick mask and pass `trunc(32 × HealTime / 30)` work. This corrects the
+  former description of HealTime as a period. The executable's minimum-one
+  repair helper is replaced during ordinary DLL initialization by the
+  one-times fractional accumulator; the current source's later three-times
+  multipliers are absent. The exact guards, resources and version boundary
+  are owned by [passive generator healing](escalation-shields.md#passive-generator-healing).
 - **Spawn classification.** A per-unit spawn class byte is derived from the
   unit's height against the global water level, and the occupancy/SFX
   classifier's boundary case below the waterline was adjusted.
@@ -548,8 +536,8 @@ metal/geothermal snap is disabled and wreck snap is limited to one cell.
 Allied queued-build display is disabled. These source selections are not a
 backdated description of Gold 10.2.0. In particular the current off-map/splash
 patches do not prove the mechanism of the historical package's scripted
-offscreen/stack penalties, and the current repair multipliers do not settle
-its older repair-exploit fix. Full source contracts and defaults belong to
+offscreen/stack penalties. The historical repair helper instead uses the
+independently verified multiplier of one. Full source contracts and defaults belong to
 [Community patch engine behavior](community-patch-engine.md#31-feature-matrix-at-the-pinned-revision).
 
 ## Authored package, interface and single-player coverage
@@ -634,9 +622,8 @@ queries.
 - [Authored shields](escalation-shields.md) settles representative coverage,
   armor, energy shortage, overlap, removal and save continuation for Aegis and
   Corona, plus actual Prophet disruption and ordinary Aegis upgrade coverage.
-  Generator passive healing remains a confirmed missing capability:
-  the exact historical caller quantum and cadence need licensed source or
-  bounded manual observations before implementation.
+  The targeted healing investigation also establishes the historical caller's
+  mask and quantum, and the shipped DLL's fractional contribution at 1×.
 - [Resource adjacency and charging](escalation-adjacency.md) settles nine
   resource families, actual bonus amounts, range, completion, directional
   alliances, non-stacking and save continuation. Weapon charging is separate.
@@ -684,10 +671,6 @@ that every case below has passed:
 
 ## Unknown
 
-- **Unknown — the repair-rate exploit fix.** The release notes document it, but
-  no shipped DLL string, definition key or configuration key describes it and
-  no matching arithmetic was isolated; a matching licensed historical source
-  or bounded manual retail-versus-Escalation repair comparison would settle it.
 - **Unknown — the snap override key's default.** The key code is configurable
   and the changelog names a default, but the shipped default value could not be
   read from the configuration surface.

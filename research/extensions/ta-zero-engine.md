@@ -63,14 +63,15 @@ replay file. The mapping from that shipped build to a source revision is not
 established. The current MIT source does build a `tazero` profile; its
 separate scope is recorded below.
 
-No executable addresses, offsets, disassembly or decompiler output are
-recorded here. **Evidence provenance:** the implementation detail below was
-decoded from the shipped binaries — a method the
-[evidence policy](README.md#evidence-policy) does not permit for third-party
-patch binaries. The wording is clean-room and the observations stand as
-recorded, but no new contract may be closed by this method: future gaps must
-be settled from documentation, authored content, appropriately licensed
-source, or a bounded manual observation.
+No executable addresses, disassembly, decompiler output, generated names or
+executable structure layouts are recorded here. **Evidence provenance:** the
+user explicitly authorized source research or decompilation of TA Zero on
+26 September 2026 UTC. That authorization is a TA Zero-specific exception to
+the general [extension evidence policy](README.md#evidence-policy). Raw
+analysis and reproducibility records remain in the private analysis corpus;
+this document contains independently written contracts. Rechecked historical
+contracts below identify the actual shipped artifacts. Older inventory claims
+remain scoped to their evidence and are corrected where the new trace differs.
 
 ## Documented engine-level behavior
 
@@ -188,9 +189,9 @@ the plate re-aims each tick from whatever target the slot holds after load.
 
 ## Executable patch inventory
 
-**Established — the earlier binary comparison recorded the following patch
-inventory.** This is the legacy evidence covered by the provenance note, not
-a source-derived completeness guarantee. Only changed code paths are listed;
+**Established — earlier comparison inventory, with corrections below.** This
+inventory is not a completeness guarantee; the new trace corrects specific
+field identities, target arithmetic and host controls in their owning sections. Only changed code paths are listed;
 string, registry, directory, savegame-tag and import renames are described
 above.
 
@@ -212,35 +213,26 @@ above.
   consequences are a **Supported inference**; the code changes are
   established.
 - **Unit behavior.** Self-repair becomes data-driven: the repair period uses
-  the definition's `HealTime` value as a frame mask instead of retail's fixed
+  the low byte of the definition's `HealTime` value as a frame mask instead of retail's fixed
   mask (retail pairs that key with the heal amount at a fixed cadence,
   [04 R-SPEC-01 §4](../retail-executable-spec/04-units-orders-scripts-and-movement.md)),
-  and the damage/health fast path and the damage-smoke/self-repair block gain
+  and the damage/health fast path and self-repair block gain
   the same "not under construction" gate the selection scan already used: the
   unit's build-progress value must be zero, so a nanoframe neither repairs
-  itself, nor emits damage smoke, nor takes the fast health path while it is
-  still building. A per-player AI profile threshold changes from 5 to 127,
-  letting more candidates through the factory/order placement walk for players
-  whose profile value is large; which authored key fills that profile field is
-  **Unknown**. A block that could set a randomized target timer and call an
+  itself nor takes the fast health path while it is
+  still building. The capture-capable construction placement cutoff changes from five to
+  127 completed own builders. This is a live strategic census, not an authored
+  profile key; see the corrected contract below. A block that could set a randomized target timer and call an
   engine routine is bypassed entirely.
 - **Pathfinding budget.** The path-search constructor's cycle budget changes
   from retail's 1333 to 66650 — the value TA Zero's own settings file
   documents — and the optional Fix 10 renderer patches the same constructor, so
   either mechanism can raise it. The per-search movement-class allowance is a
   separate, unchanged value.
-- **Build-point arithmetic.** The routine that resolves a unit's `SweetSpot`
-  script value into a piece-space point — consumed by the factory build-slot
-  aim and exit-point logic and by weapon aiming at that unit — no longer halves
-  the summed bounding extents and negates the vertical term, so the returned
-  point is twice the box centre with the opposite vertical sign while the
-  consumer adds only small offsets. Example: a selected piece whose box centre
-  sits ten units above the unit origin yields +10 in retail and +20 with
-  mirrored sign here, displacing a factory plate's aim threshold and the
-  exit/placement point by a full model height for tall sweet spots.
-  **Supported inference** that this is a defect: nothing compensates for it; a
-  rendered measurement of a factory exit point or a tall unit's aim point would
-  settle it.
+- **Target-point arithmetic.** The `SweetSpot` vertex-box transform changes
+  all three offsets and negates model Z, not vertical Y. The exact signed
+  arithmetic and its live-unit targeting scope are established below. The
+  earlier interpretation as a factory exit-point defect is withdrawn.
 - **Selection.** The selection scan that walks a unit's three build slots now
   tests different flag fields and bits, tests a single parameter bit rather
   than the whole parameter, and, after resolving a slot's unit, consults the
@@ -294,8 +286,9 @@ immediate-constant changes — and reads the executable's globals directly for
 everything else; the optional Fix 10 build patches more (including the
 pathfinding-search constructor and the unit-limit site). Its megamap,
 whiteboard and preference-key handling is recorded in
-[Shared draw-DLL interface](draw-engine-interface.md); this build contributes
-the held megamap view, the eleven zoom steps, icon configuration from
+[Shared draw-DLL interface](draw-engine-interface.md); the earlier held-view and eleven-step description is withdrawn by the
+[shipped host audit](#shipped-host-controls-and-geometry). This build supplies
+icon configuration from
 `ZIcon/iconcfg.ini`, the nine layer toggles, `UnderAttackFlash` and the
 sensor-ring thresholds. Sound mode, mixing buffers, game speed and player
 count are read by the executable itself, so the ten-player skirmish default is
@@ -910,69 +903,340 @@ The two unresolved ZI tokens above remain inactive rather than receiving
 speculative aliases. Neither this sweep nor the parser census establishes
 historical AI threshold semantics, long-match strength or visual/audio parity.
 
-## Unresolved Zero passive self-repair
+## Historical passive self-repair caller
 
-**Established — documented requirement and implementation mismatch.** The
-[Alpha 4b announcement](https://zero.tauniverse.com/2017/06/04/ta-zero-alpha-4b/)
-attributes custom self-repair rates to executable changes. The author's
-[version history](https://zero.tauniverse.com/version-history/) excludes
-self-repair during construction. The Alpha 5 readme raises Thor from 1.88 to
-3.75 HP/s; its FBI authors `HealTime=7`. Other definitions author 3, 15, 31,
-63 and 127. The [Core guide](https://zero.tauniverse.com/core-units/) also
-separately documents effective durability repair and energy use for Hex.
+**Established — Alpha 5 executable behavior.** The identified Alpha 5
+executable's ordinary per-unit update retains the retail player-control gate
+and update position: after water damage and before cloak settlement. It admits
+a passive repair visit only when all of the following hold:
 
-Nanolathe still uses the retail eight-tick caller and integer quantum
-`uint16(HealTime)×8/30`. In bounded damaged-unit checks over 240 tick
-opportunities, the value-3 commander, Behemoth, Tyrant, Adamant and both
-shield generators regained zero HP and requested zero energy. Tested value-7,
-15 and 31 definitions each regained 30 HP and requested 30 energy. This
-proves that the documented varying rates are not implemented. It does not
-establish an alternative resource formula or justify altering authored values.
+1. Read `HealTime` as a signed 16-bit value `h`; it must be nonzero.
+2. Sign-extend the unit's stored 16-bit health, then compare it unsigned with
+   maximum health. It must be below the maximum. Negative stored health fails.
+3. The stored construction fraction must have all bits zero. Negative zero is
+   rejected too; this is stricter than a floating-point equality to zero.
+4. The low eight bits of the global tick and `h` must have no common set bit:
+   `(uint8(tick) & uint8(h)) == 0`.
 
-**Unknown — exact historical caller.** The source search through the pinned
-TADR history found no active Zero per-definition healing cadence. A Recorder
-construction guard introduced in commit
-`b8c0acc09ba4631b7e39ceb6ebc1f706e2d07251` has its registration commented
-out at the pin. The current Zero profile disables the separate repair-rate
-module. Neither closes the historical executable contract. The older
-binary-derived inventory above remains subject to its provenance restriction.
-Needed: licensed patch source, precise author documentation, or bounded manual
-observations on the identified executable covering cadence/phase, quantum,
-energy admission/stall, unfinished units and mask boundaries. Keep the retail
-caller and a code TODO until that evidence exists. No passing Zero acceptance
-test presents the mismatched repair behavior as supported compatibility.
+On admission the caller forms signed integer work `trunc(32 × h / 30)`,
+converts that integer to single precision, and calls the ordinary repair helper
+with the unit as both repairer and target. Exhaustive arithmetic comparison
+across all 65,536 signed-16 inputs verified this independently written formula
+against the shipped caller's integer operations. It is neither a modulo test
+nor a literal interval for arbitrary authored values: `h=5` admits low-byte
+ticks 0, 2, 8, 10, …; `h=256` admits every tick. The released positive masks
+3, 7, 15, 31, 63 and 127 are the regular-period subset.
+
+**Established — contribution and resources.** The helper's complete body is
+byte-identical to the retail helper described by [05 R-WORK-01 §3](../retail-executable-spec/05-economy-construction-players-and-features.md).
+It retains the signed health/max-health entry check, the existing repair-term
+arithmetic, positive-term clamp to one, one-resource energy admission, and
+ordinary healing packet. Thus a normal positive authored definition gains one
+stored HP and requests one energy per admitted visit; a positive energy carry
+refuses both. Full health stops visits, no repair is banked, and no random
+number is drawn. This is distinct from the newer proportional `RepairRate`
+module, which the current Zero source table disables.
+
+| Authored `HealTime` | Work | Regular period in ticks | Stored HP and energy per second at 30 Hz |
+|---|---:|---:|---:|
+| 3 | 3 | 4 | 7.5 |
+| 7 | 7 | 8 | 3.75 |
+| 15 | 16 | 16 | 1.875 |
+| 31 | 33 | 32 | 0.9375 |
+| 63 | 67 | 64 | 0.46875 |
+| 127 | 135 | 128 | 0.234375 |
+
+These rates assume damaged, completed units whose energy admission succeeds.
+Effective durability under armour is a separate damage conversion; it does
+not multiply the energy charge. The author's [Alpha 4b announcement](https://zero.tauniverse.com/2017/06/04/ta-zero-alpha-4b/),
+[version history](https://zero.tauniverse.com/version-history/) and Alpha 5
+Thor change corroborate the construction exclusion and varying rates.
+The former eight-tick Nanolathe caller's value-3 zero-healing result was an
+implementation mismatch, not an unresolved replacement contract.
+
+## Historical Classic AI construction cutoff
+
+**Established — Alpha 5 executable and unchanged census producer.** The
+construction task's placement pass admits capture-capable builders while the
+player's completed build-capable count is **below 127**, replacing retail's
+five. The counter is recomputed during the ordinary strategic refresh: count
+completed own live units whose compiled builder list exists, irrespective of
+whether that list has entries. It is not a profile parameter, unit-type limit,
+factory queue size or an unknown authored key. Its producer and accessor are
+unchanged from retail [08 R-AI-01 §3 and §16](../retail-executable-spec/08-sessions-campaign-ai-network-save-and-replay.md).
+
+Only the placement comparison changes. The second, independent reposition
+pass still admits a capture-capable builder at **five or more**. Counts 5
+through 126 can therefore reach both passes in one invocation. The damage
+throttle, candidate/placement decisions, group order, 90-tick reschedule and
+existing random draws remain those of the retail task. This contract concerns
+the Classic planner; Nanolathe's independently chosen Modern AI is separate.
+
+**Established — implementation.** Zero's profile now explicitly selects 127
+through the existing Community feature vocabulary and planner boundary.
+Focused tests cover 4/5/126/127, the unchanged reposition pass, and Strict's
+zero-feature bypass. ProTA's separate five/ten shortcut and authored ZI files
+retain their contracts.
+
+## Historical SweetSpot target arithmetic
+
+**Established — Alpha 5 executable.** The script query and piece selection
+retain retail's contract [06 R-WPN-04 §1](../retail-executable-spec/06-weapons-projectiles-damage-and-effects.md).
+The chosen piece's own loaded vertices are scanned with both extrema seeded
+at zero. Parent offsets, animation state and unit rotation are not applied.
+For each axis form the wrapping signed-32 sum `s = min + max`, then
+`d = s + 1` when `s < 0`, otherwise `d = s`. Add `dX` and `dY` to the target
+position, and subtract `dZ` from it, with ordinary 32-bit wrapping. This is the
+retail signed-halving correction retained after the division was removed;
+it is not exactly twice the old centre for every odd sum. A negative even
+sum also retains the extra one raw fixed-point unit.
+
+The consumer is the ordinary weapon-slot live-unit target resolver, before
+its existing lead calculation. It is not a factory-only exit transformation.
+Z is the map-plane axis that the model-to-world convention negates; Y remains
+the vertical axis. The old claim of an inverted vertical term is corrected.
+No compensation is added in the unchanged query or resolver. Whether an author
+intended each resulting aim point is outside what the binary establishes.
+
+**Established — implementation gap.** Nanolathe's target resolver still uses
+the retail halved centre. A future implementation must select this arithmetic
+through the existing combat rules and preserve both the cached and uncached
+resolver contracts, Strict's centre, and the odd/negative/empty-piece cases.
+
+
+## Historical recorder ports used by Alpha 5
+
+**Established — shipped Base and matching historical source.** Base's
+`zplayx.dll` identified above reports version 3.9.2.0. Direct inspection and
+MIT TADR revision `03257756f4876f7a6b1b08ec1de5bda669f15ff1` (9 July 2013),
+[`COB_extensions.pas`](https://github.com/tanvanman/TADR/blob/03257756f4876f7a6b1b08ec1de5bda669f15ff1/src/Recorder/plugins/COB_extensions.pas)
+and [`TA_MemoryLocations.pas`](https://github.com/tanvanman/TADR/blob/03257756f4876f7a6b1b08ec1de5bda669f15ff1/src/Recorder/TAMem/TA_MemoryLocations.pas),
+agree on this bounded subset. This is not a claim that this exact revision
+built the whole DLL. Its ordinary plugin registration admits the Alpha 5 host
+signature; neither AI, local-player, network nor playback status gates these
+reads. Both getter forms reach the same dispatcher. No script setter is
+registered by this historical DLL.
+
+- **Port 70:** multiply the selected unsigned 16-bit per-player limit by ten.
+  With the old altered-limit selector clear, select the configured maximum;
+  with it set, select the effective lobby limit. Ignore all arguments. Current
+  TADR instead selects using menu/game state and a separate mission limit.
+- **Port 74:** for valid populated records, return exactly 0 or 1 from the
+  reading owner's directional alliance entry for the target owner. Use the
+  complete unsigned 32-bit argument-one pattern, not its low word. The old
+  lookup accepts zero through configured-maximum × ten, inclusive; its bound
+  need not equal port 70's chosen limit. Zero denotes the sentinel record,
+  not the reading unit. There is no live-unit, visibility or reciprocal gate.
+- **Invalid paths:** out-of-range IDs and rejected/missing owner references
+  have uninitialized historical returns and unchecked subsequent reads.
+  This establishes no safe deterministic fallback. Nanolathe's bounds
+  hardening is retained; reproducing undefined state is not a compatibility
+  requirement. Current TADR's low-word narrowing and initialized fallback
+  must not be attributed to this Base DLL.
+
+The compiled census's 19 port-70 and 13 port-74 consumers is corroborated by
+authored sources. Ten AI factory scripts use both in Create; the three T2
+AirCon scripts use both in Activate. T1 AirCon and dropship scripts use only
+70; similarly worded alliance checks in their comments do not execute. They
+sample positive first-slot IDs at a stride of port70/10. Factories orient
+toward the first sampled non-allied owner; T2 AirCon restricts its nearby
+sampled-unit drop check to non-allied owners. These are not full unit-pool
+searches.
+
+**Established — Nanolathe boundary.** Its ordinary valid-target alliance
+lookup agrees, and its reported limit agrees when the session's selected
+limit equals Base's selected limit. It does not model separate historical
+configured/lobby selector state. Its zero/high-word/invalid-target treatment
+is separately bounded; no exhaustive lobby/campaign/save equivalence follows.
+The exact DLL-wide source revision is still unknown but no longer blocks
+these port contracts. All 33 registered patch sites were also checked: none
+replaces the passive-healing caller or shared repair helper.
+
+## Factory groups and automatic camera cycling
+
+**Established — retail mechanism; corrected implementation.** The previously
+unresolved group handoff is the ordinary completed-product GetBuilt path,
+independently established from retail assignment/recall and kill consumers
+[04 §3.8][04 R-FAC-02 §4]. A mobile product with a retained producer copies
+that producer's current control group at its completed GetBuilt visit, after
+queuing rallies, under the alive/not-dying guard and an occupied human owner
+row. Zero clears a group. Later producer changes do not propagate. Nanolathe
+had copied kills at that point; the field identification is corrected in the
+owning retail contract and implementation. This is a baseline correction in
+all gameplay modes, not a Zero-only rule.
+
+**Supported inference — historical Zero applicability.** The existing
+Alpha 5 difference inventory records no change to that handler, consistent
+with the author's promise. Fresh verification of every installed historical
+DLL hook was blocked by automatic approval review; a matching historical hook
+source or loaded-image observation would close that remaining applicability
+boundary. The retail correction does not depend on it.
+
+**Established — distinct BigBrother mechanisms.** Retail already implements
+automatic camera cycling, with a 90-tick counter and Shift pause
+[04 R-MOV-03 §1][07 R-CAM-01 §12]. The old inventory's unreachable added block
+therefore does not show that the advertised command is inoperative. Existing
+reports identify no caller into that extra block. Its connection to a loaded
+historical runtime remains **Unknown**; do not replace the established retail
+command with a guessed implementation of the unused block.
+
+## Shipped host controls and geometry
+
+**Established — versioned implementation audit.** The following contracts are
+from Base `zdraw.dll` and the optional Alpha 5 replacements identified above.
+Full replacement hashes: Fix10 `4eba5a70eb7862a465d2098bf179ff8164beb58dbf4cb540e60d564322edc6bc`;
+Hotfix `f9d500e13d6bd56f8266c8d24f2e06fdf920351397bec038f4766ad30ec5ad80`.
+The author’s [controls](https://zero.tauniverse.com/controls/) describe intent.
+Current MIT TADR at `dcff5dd` provides comparison source in
+[`tahook.cpp`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/DDraw/tahook.cpp),
+[`whiteboard.cpp`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/DDraw/whiteboard.cpp),
+[`elementhandler.cpp`](https://github.com/tanvanman/TADR/blob/dcff5ddeb6bd1030e3f452c0f16e5f005850f62f/src/DDraw/elementhandler.cpp),
+and the megamap control/ring modules. The binary contracts below take
+precedence over older untraced descriptions of these exact Zero artifacts.
+Base and Hotfix agree in the inspected handlers and calculations; Fix10
+differences are stated explicitly. This is not whole-DLL equivalence.
+
+### Shared host ownership and preferences
+
+**Established — Base and Hotfix.** The window dispatcher gives earlier handlers a chance to consume events. The relevant order is whiteboard, advanced dialog/other host handlers, X placement, then megamap, before the original game procedure. Therefore an event consumed by whiteboard or X never reaches the later megamap handler. X spacing wheel events take precedence over megamap wheel switching. This is not evidence that all mouse messages are consumed: the individual handlers deliberately return unhandled for several messages listed below.
+
+**Established — all three packaged DLLs.** Advanced options load these values from the current user's `Software\TA Patch\Eye` registry key: autoclick `KeyCode` defaults to X; `WhiteboardKey` defaults to backslash; `MegamapKey` defaults to Tab; `OptimizeDT` and `FullRings` default enabled. A saved registry value overrides the default. The Alpha 5 `TAZero.ini` does not supply any of these key overrides. The current source options defaults agree on the keys. No direct hard-coded F4 megamap case was found in the inspected draw handlers; references to F4 in the key-name formatter are not bindings.
+
+**Boundary.** This proves the DLL's clean-registry binding, not a particular user's saved binding or every installer composition. The author page's F4 instruction cannot be silently substituted for Tab. An observed F4 installation needs its actual advanced setting/registry or installer evidence. No Nanolathe Tab-to-F4 change is justified by the inspected package.
+
+### X placement: established shipped contract
+
+The following applies to Base and Hotfix. Fix10 independently retains the same event rules and geometry, compiled differently. It is a host command generator, not a simulation placement rule.
+
+#### State and events
+
+- The handler runs only during battle. Initial spacing is zero and remains a host value until changed; clamp it to 0..10 after each spacing change.
+- Releasing the configured X key clears both line and surround modes and restores the normal build rectangle. Character messages are consumed while X and line mode are active.
+- Holding X with PageUp increments spacing by one; PageDown decrements it by one. Each refreshes an active line or surround preview and is consumed.
+- While X is held, the wheel takes **one** step per message. The implementation compares the **unsigned** high word with 120: values greater than 120 decrement; values at most 120 increment. Thus ordinary +120 increases and −120 decreases, but +240 also decreases and zero increases. This is not proportional wheel accumulation. The message is consumed, even if no preview is active.
+- To start a line, a left-button **press** requires the prepared build order, X held, and screen X greater than 127. Product footprints equal to zero are replaced with one for this line path. Cache the product footprint, hide the normal build rectangle, set start and end to the current game map-pointer position, clear the candidate list, and calculate it.
+- While a line is active, mouse movement updates its end from the game map pointer and rebuilds candidates. The button need not remain down.
+- The next left-button **press** while X is held refreshes the cached product footprints, records the current end, dispatches the already cached candidate list, then sets a new start to the current map pointer and clears the candidates. There is **no recalculation on that press**. Line mode remains active, allowing another segment.
+- Left release does not commit a line. If X is no longer held it clears line mode; an active surround consumes left release. Releasing X abandons the uncommitted preview.
+- When no line is active, mouse movement with X and a prepared build order asks the ordinary unit picker for the hovered unit. A nonzero result generates surround candidates and enables surround mode. No extra owner or unit-category predicate is present in this layer. No unit clears the surround preview and restores the normal build rectangle. Other mouse movement clears surround mode.
+- With surround active, the next left press dispatches its cached list and is consumed; that branch does not recheck the build order or X state. Holding X consumes right press. Right release clears surround mode without a consume return.
+
+The author's drag wording is therefore insufficient to define a release-to-commit gesture. Implementing release commit would be a new host policy, not the traced shipped event contract.
+
+#### Line geometry
+
+Let start be `(sx,sy)`, end `(ex,ey)`, product footprints `(w,h)` in map cells, and spacing `s`. Coordinate units below are world-map pixels; one cell is 16 units. Arithmetic divisions truncate toward zero.
+
+1. Compute `dx=trunc((ex−sx)/16)`, `dy=trunc((ey−sy)/16)`. Save each sign as a minor increment of +16 or −16, then take absolute magnitudes.
+2. X is the major axis only when `abs(dx)>abs(dy)`; ties choose Y.
+3. For X-major, set `n=abs(dx)/(w+s)`, major increment to `sign(dx)*16*(w+s)`, and minor distance `m=abs(dy)`. For Y-major exchange X/Y and use `h+s`.
+4. If `n>=1000`, return without replacing the previous candidates. Otherwise emit `n+1` candidates, beginning at the unsnapped start. Candidate coordinates are narrowed to signed 16-bit values in the shipped implementation.
+5. Initialize error to `2*m−n`. After each emission, while error is nonnegative and `n!=0`, subtract `2*n` and move one minor increment. Then add `2*m` and move one major increment.
+6. `n=0` emits only the start. There is no separate forced end-point insertion.
+
+These are the exact major-axis and rounding rules; merely describing this as a standard line rasterizer would lose the footprint division and comparison order.
+
+#### Surround geometry
+
+Let hovered unit's grid origin be `(gx,gy)`, its footprints `(A,B)`, the product footprints `(w,h)`, and spacing `s`. The product footprints here are read directly; the line path's zero-to-one normalization is absent.
+
+Set `P=(16*(gx−s),16*(gy−s))`, `a=A+2*s`, `b=B+2*s`.
+
+Set `nx=trunc(a/w)+1+extraX`, `ny=trunc(b/h)+1+extraY`. `extraX` is one only if FullRings is enabled, both product footprints are less than 3, and `a%w!=0`; otherwise zero. `extraY` uses `b%h` with the same gates.
+
+Generate these four edge runs, in order:
+
+| Edge | Indices | Candidate centre |
+|---|---|---|
+| Top | `i=0..nx−1` | `(Px+8*w+16*w*i, Py−8*h)` |
+| Right | `i=0..ny−1` | `(Px+16*a+8*w, Py+8*h+16*h*i)` |
+| Bottom | `i=0..nx−1` | `(Px+16*a−8*w−16*w*i, Py+16*b+8*h)` |
+| Left | `i=0..ny−1` | `(Px−8*w, Py+16*b−8*h−16*h*i)` |
+
+This yields `2*nx+2*ny` candidate centres before command-order optimization. Spacing expands the enclosing rectangle; it does **not** add gaps between adjacent products along an edge. There is no merge with nearby units, circular distance test, corner deduplication, or path search. Narrowing is again signed 16-bit.
+
+#### Command order, admission, and historical hazards
+
+**Established.** Both paths share an emitter. If OptimizeDT is enabled and the **cached line product footprints** are 2×2, it runs the line-order optimizer before dispatch. For stored last index `n>2`, scan `i=1..n−2`. Compare the coordinate on the minor axis: if candidate `i` equals `i+2`, swap those whole candidates and skip two additional indices; otherwise, if it equals `i+1`, swap those and skip one additional index. The ordinary loop increment then applies. The first candidate stays first; the final candidate can move. No candidate is invented or relocated by this optimization.
+
+**Established hazard.** Surround generation does not refresh the stored line direction/last-index metadata or cached product footprint. A surround emitted after a previous line can therefore be reordered using that line's metadata. Do not promise unconditional clockwise command order. The constructor initializes the cached product footprint to 2×2 but does not initialize both optimizer metadata values in the inspected path; first-use behavior that depends on these values is not a defined portable algorithm. A safe Nanolathe policy must explicitly define the bounds/state rather than reproduce uninitialized memory. Likewise the historical large-list storage hazards are not permission to copy unsafe storage.
+
+**Established.** Each candidate is fed to the ordinary build-spot validator followed by the ordinary map-click command, with queue/Shift semantics forced on. Pointer X/Y is saved and restored around each candidate. The host generator does not reserve the whole shape or abort the whole batch on one invalid site. The native admission path remains authoritative. The preview also invokes the native validator per candidate; Base uses its existing build-valid flag to choose palette index 234 versus 214. Current source adds preview/rotation/snap work around the old generator; those later additions are not evidence for shipped Zero behavior.
+
+**Unknown boundary.** The exact ordinary-picker eligibility, final site snapping, and edge behavior belong to the called engine routines, not the DLL formulas. The formulas and call order are established; whole-game tests on uneven terrain, edges, or unusual zero-footprint definitions would settle user-visible corner cases. Simultaneous megamap/X input also needs a bounded manual test before promising pointer-update timing across both handlers.
+
+### Whiteboard: local contract and corrections
+
+#### Base and Hotfix
+
+**Established.** The handler is battle-only and does nothing while megamap is shown; in these two DLLs that early return does not clear existing paint/move/editor/held-key state. Backslash press enables the held state unless the local player is a watcher; Ctrl on that press still requests a move toward the last received marker. Backslash release clears held state. These key messages are consumed. No game-area bounds predicate is present on the mouse branches.
+
+Mouse positions become board positions by adding the camera top-left and subtracting screen offsets `(128,32)`. There is no terrain-height correction in this board transform.
+
+| Input while held | Local effect | Consumed by whiteboard? |
+|---|---|---|
+| Left press on nearby text/dot | Grab that marker for movement | Yes |
+| Left press elsewhere | Start freehand painting and remember screen point/camera origin | Yes |
+| Mouse movement while painting | Add a line from previous to current screen point, using the previous captured camera origin for both; then refresh the point/origin | No |
+| Mouse movement with right held, when not painting | Erase around the current transformed point | No |
+| Mouse movement while a marker is grabbed | Queue its move and replace/move its local marker; this executes independently after painting/erase handling | No |
+| Left release | Clear paint and move state | No |
+| Left double-click | Open text creation/editing at the point | Yes |
+| Middle press on empty marker neighbourhood | Create an empty text marker (dot) | No |
+| Right press/release | Own those button messages | Yes |
+| Right double-click | Small-area delete | Yes |
+
+There is no middle-release creation branch and no right-click text-editor branch. The old shared draw-interface prose does not describe these shipped Zero handlers correctly.
+
+Marker hit tests examine text-marker anchors in an inclusive box within five units on each axis. They return the last matching text encountered; there is no ownership/colour filter. Do not describe editing as restricted to the player's own markers. Lines are stored by their first point, not by segment/box intersection for erase.
+
+**Established — text input.** Left double-click copies existing text when found, captures the point and camera origin, and opens the editor. Enter press commits edited or new text and clears the buffer. Escape press clears it without committing; Enter/Escape release closes the editor. Backspace deletes one byte. Accepted characters are space, ASCII 33..90, and ASCII 97..122; the check permits another byte while current length is below 51, so the maximum is 51 bytes. This is not a Unicode text editor. While the editor is open its handled key/character messages are consumed even after the hold key is released.
+
+**Established — erase bug, verified against instructions.** Small deletion requests bounds `(x−10,y−10)..(x+10,y+10)`; wiping requests ±50. Base/Hotfix compute endpoint bucket indices by arithmetic shifting each coordinate right eight bits and masking with 63, exchange bucket endpoints if necessary, and scan the resulting inclusive rectangle of buckets. Within a bucket, the delete predicate checks only `anchorX>=lowerX && anchorY>=lowerY`; it omits both upper bounds. Thus the documented 20×20/100×100 descriptions are intended areas, not exact shipped clipping. Anchors to the right/bottom can also be removed within the buckets traversed. Marker search, in contrast, does apply both inclusive upper bounds.
+
+**Established — local distribution boundary.** These DLLs do have an outgoing operation queue and serializer into the recorder's shared outgoing buffer. The drawing pass processes receive/send work. Local create/edit/move/delete paths both update local state and enqueue operations. The prior claim that no local packet builder exists is incorrect for these identified DLLs. Received text/dot markers update the last-marker coordinates, announce `New marker added: ` followed by text, and add a temporary animated minimap marker. Local creation does not update the remembered received-marker location.
+
+Ctrl+backslash subtracts half the game viewport (screen width minus128, screen height minus64) from that remembered received position, then clamps the desired camera target to map scroll bounds. It requests camera movement rather than rewriting the current camera origin directly. Single-player has no established incoming-ally marker to jump to before receipt. End-to-end peer routing is outside the requested single-player scope and is not claimed here.
+
+#### Fix10 and current-source differences
+
+**Established — Fix10.** It keeps the mouse actions, coordinate transform, no game-area bounds check, 51-byte limit, and missing erase upper bounds. However, showing megamap clears painting, movement and editor state and resamples the physical whiteboard key. A watcher outside replay clears all those states and exits the handler; a replay watcher is admitted. Base/Hotfix instead gate initial key activation as above.
+
+Fix10's store uses endpoint indices `(coordinate arithmetic-shift-right 20) & 399` with 400 buckets per axis. This surprising deletion arithmetic was independently confirmed against instructions; the insertion and query decompilations use the same bucket mapping. It is not `coordinate/20` and not a 400-cell modulo. On ordinary nonnegative map coordinates below1,048,576, it puts all such anchors into one bucket; with the missing upper bounds, erasure can therefore remove every anchor to the right/bottom of the requested lower corner. Do not substitute the current-source data structure for this build and call it parity.
+
+**Established — current MIT source.** At the pinned revision, whiteboard has game-area predicates, state clearing during megamap, the watcher/replay gate, character-entry ownership protection, a 50-byte limit, and erase checks that include exclusive upper bounds. Its renderer/store also has later line-retrieval work. Those are later source contracts, not evidence that Base had these safeguards. The X geometry functions retain the arithmetic above, but the surrounding source handler now adds build rotation, snap/drag and chat-wheel ownership; those are separately versioned features.
+
+**Unknown.** This pass establishes local operations, not whiteboard persistence across map changes/load/save or a replay's complete behavior. A lifecycle trace of all store-reset/serialization callers or a two-map/load observation would settle persistence. A historical source/build map would settle why Fix10 changed its bucket constants. Its byte-level arithmetic itself is established.
+
+### Megamap: shipped binding and rings
+
+**Established — all inspected packaged DLLs.** The configured key consumes press and release; only release toggles. FullScreenMinimap must be enabled and a battle active. The Alpha 5 INI enables it. Wheel backward with WheelZoom enabled opens a hidden megamap; wheel forward with it enabled closes a shown megamap, stops camera-following, and with WheelMoveMegaMap enabled moves the camera toward the pointer first. Wheel events themselves are not consumed by this handler. PageUp/PageDown do not implement a megamap zoom level in this handler; with X held, they belong to placement spacing. Key exit does not perform the wheel camera move. Double-click movement is a separate option; Alpha 5 disables it. Enter/leave use the Options/Previous sound aliases.
+
+**Established — Base/Hotfix radius calculation.** Unit icons must pass the existing image admission/clipping before this ring block. Selected units admitted by the local LOS/alliance helper may draw sensor and interceptor rings. Sensor ranges are unsigned authored values; draw only when strictly greater than their respective effective minima. Radius is integer truncation of `range*bufferWidth/mapWidth`. Radar-jammer drawing uses the **radar** minimum rather than the separately parsed radar-jammer minimum. Sensor/jammer minima default zero; interceptor minimum defaults512, and absent-reader sentinel −1 retains the default. The Alpha 5 INI sets sonar minimum500 and other sensor/jammer minima0, interceptor512.
+
+For each of three weapon slots, the interceptor ring requires the unit's antiweapons capability, that weapon's interceptor capability, and **raw coverage strictly greater than the minimum**. Then radius is `trunc((coverage−512)*bufferWidth/mapWidth)`. Do not subtract before the threshold comparison or use full coverage. There is no extra clamp after subtraction; the default minimum avoids a nonpositive radius, but a user can lower it. Each slot's existing dot indicator chooses solid when zero versus dashed when nonzero. Base/Hotfix pass32 and the current antinuke animation phase to the dotted-circle helper. The meaning and production of that indicator are not re-derived by this renderer audit.
+
+The historical map dimensions are `(TNT width−1)*16` and `(TNT height−4)*16`; the radius denominator is the former. Image width is aligned down to a multiple of four in the drawing path before radius arithmetic. Fix10 independently retains all three coverage subtractions, strict minima, radar-jammer quirk, and historical map width denominator.
+
+**Established — current-source difference.** Current `UnitMinimap` uses full coverage for interceptors and a feature-map-based usable width `(featureMapWidth−2)*16` (with fallback); its height equivalent subtracts8. That does not prove a shipped Zero bug. Nanolathe's existing older ProTA-style coverage subtraction agrees with the inspected shipped Zero arithmetic. The present pass gives no basis for a Zero-specific full-coverage correction.
+
 
 ## Unknown
 
-- **Unknown — complete historical gameplay parity.** Passive self-repair is a
-  confirmed mismatch with the unresolved replacement contract above. Shield
+- **Unknown — complete historical gameplay parity.** The historical passive caller is now established above. Shield
   projectile geometry, exhaustive per-unit combat interactions and historical
   renderer comparisons are not established by parser or callback checks.
-- **Unknown — factory control-group inheritance timing.** The controls page
-  promises products inherit a factory group; Nanolathe does not copy it.
-  Allocation versus completion, reassignment during construction and clearing
-  need matching source or a bounded manual observation before an existing
-  construction rule seam can implement the behavior.
-- **Unknown — additional host geometry and bindings.** X line/surround
-  placement with wheel spacing and local whiteboard are documented but absent.
-  The historical F4 megamap binding conflicts with the current source's Tab
-  binding and Nanolathe's score panel. Current-source interceptor ring radius
-  also differs from the older scoped ProTA contract. These need their own
-  versioned input/presentation contracts; no silent key/radius substitution
-  follows from selecting Zero.
+- **Known implementation work — host controls.** X line/surround and local
+  whiteboard are absent, but their versioned algorithms are established above.
+  Remaining unknowns are the normal picker's edge eligibility, simultaneous
+  megamap pointer timing, whiteboard map/load lifetime and undefined surround
+  optimizer state. These need bounded caller/lifecycle analysis or observations;
+  unsafe historical state needs an explicit safe host policy, not a guess.
 - **Unknown — dead-code reachability in other builds.** The new unit-cycling
   block is unreachable in the inspected Alpha 5 files; whether any build
   outside them installs a signature patch that reaches it is not established.
   A matching historical source revision or bounded manual observation of the
   advertised control would settle its applicability.
-- **Unknown — the AI profile threshold's authoring key.** The changed 5 → 127
-  gate reads a per-player AI profile value; which authored key (or initialiser)
-  fills it is not established. Matching licensed historical source or a
-  bounded manual comparison using authored profile changes would settle it.
-- **Unknown — historical port applicability.** The current recorder source
-  settles port `70` as ten times the relevant per-player unit limit, and `74`
-  as the reading owner's one-directional ally flag for the target owner; see
-  [Extended script ports](script-ports.md#port-table). It does not identify
-  the source revision of Base's `zplayx.dll`. A historical source mapping or a
-  bounded observation of that DLL is needed before assuming every boundary
-  case of the current source applies to Alpha 5 over Base.
+- **Unknown — complete historical recorder build identity.** The used 70/74
+  contracts are now settled above. The exact whole-DLL revision and every
+  historical session-limit combination remain outside that bounded match.

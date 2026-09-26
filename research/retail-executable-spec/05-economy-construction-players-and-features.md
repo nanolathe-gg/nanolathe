@@ -3847,12 +3847,20 @@ construction the get-built order retries (300 ticks at state 0, 30 at state
 1, or waiting on its presentation wake bit at state 2) and proceeds in the
 same dispatch once built.
 
-Standing-order bits are additionally gated: both product and builder must
-carry the mobile/class flag and neither may carry the auto flag before
-standing-move (bits 18-19) and standing-fire (bits 20-21) are copied; the
-experience word copies only for computer-owned builders. If nothing was
-inherited, the product receives the park operation. The get-built node then
-drops itself.
+**Established — corrected field identity and guards.** The product must have
+a mover and retain its producer reference to enter this handoff. Standing move
+and fire fields copy only when both units are alive and neither is dying.
+Within that same guarded block, the producer's current **control group**
+overwrites the product's group when the product's owner row is occupied and
+its controller is exactly human. Zero copies too, clearing a previous group.
+Kill totals do not copy: the earlier “experience” description confused two
+separate fields, as verified against group assignment/recall and kill-count
+consumers [04 §3.8][04 R-FAC-02 §4].
+
+This is the product's completed GetBuilt visit, not its allocation or the
+synchronous completion transition. Producer group changes before the visit
+are observed; later changes do not propagate. If no rally record was inherited,
+the product receives Park. The get-built node then drops itself.
 
 ### Cancel-current and stop interrupts
 

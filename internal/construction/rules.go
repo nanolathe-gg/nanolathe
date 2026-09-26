@@ -16,6 +16,9 @@ import (
 // implementation is therefore a zero-size value or a pointer to one, so
 // dispatch allocates nothing; scratch belongs to the service or request.
 type Rules interface {
+	// PassiveRepairWork owns passive healing's cadence, completion admission
+	// and work amount. The session retains the health and owner admission.
+	PassiveRepairWork(s *Service, target *units.Unit, tick uint32) (int32, bool)
 	// RepairContribution owns an active repair or passive healtime visit.
 	RepairContribution(s *Service, builder, target *units.Unit, worker int32, passive bool) bool
 	// BuildProducts borrows immutable compiled membership. Strict preserves

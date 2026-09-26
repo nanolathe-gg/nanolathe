@@ -759,6 +759,11 @@ normal lifecycle without a missing-handler wait or an extra RNG draw.
 re-enqueued on the product in queue-traversal order; with none, the product
 parks. Standing-order bits copy under the documented gates
 `[05 "Rally inheritance"]`.
+On the product's completed GetBuilt visit, the guarded standing copy also
+overwrites its control group with the producer's current group, including zero,
+when the product's owner row is occupied and human-controlled. Initial
+allocation does not copy a group, later producer changes do not propagate,
+and kill totals never inherit [04 §3.8][04 R-FAC-02 §4].
 
 The allocation-time standing copy belongs only to factory production.
 `successEpilogueMobile` keeps the product's authored fields, and the
@@ -1383,6 +1388,21 @@ keep queued construction and repair intact and preserve Strict RNG/state.
 
 ### Community repair contributions
 
+**Escalation passive caller.** The Gold caller contract is owned by
+[Escalation shields, Passive generator healing](../research/extensions/escalation-shields.md#passive-generator-healing).
+`construction.Rules.PassiveRepairWork` owns completion admission, tick admission
+and the work quantum; `Service.StepPassiveRepair` applies its answer through
+the existing passive repair helper. The session keeps its ordinary owner,
+nonzero-HealTime and unsigned health gates before dispatch. Strict returns the
+retail eight-tick cadence and `HealQuantum`; Community overrides only when
+the resolved `HealTimeBitmask` feature is enabled, and Modern inherits that
+answer. The Escalation content profile enables the historical caller; the
+current-source named table and other profiles keep their existing defaults.
+This uses the central RuleSet and feature resolution, with no new registry,
+per-unit flags, timer state, RNG consumption or save fields. Tests must lock
+the mask pattern, signed word conversion, construction admission, resource
+rejection and Strict bypass.
+
 Community and Modern dispatch repair through `construction.Rules.RepairContribution`.
 The resolved `RepairRate` enables CP-DMG-4 only for its selected table; Strict
 and disabled tables keep the existing repair helper [05 R-WORK-01 §3]. Active
@@ -1404,13 +1424,15 @@ build-time rejection, shared self-target banking across the two multipliers,
 the other simultaneous target, and Strict/disabled identity. The existing
 healtime tests retain their cadence and no-RNG contract.
 
-Zero's current source profile disables CP-DMG-4. This does not implement its
-historical passive self-repair patch: Alpha 5's authored HealTime values and
-documented rates demonstrably differ from the retail caller, including zero
-work for value 3. The evidence and missing cadence/resource/construction
-contract are owned by [TA Zero, unresolved passive self-repair](../research/extensions/ta-zero-engine.md#unresolved-zero-passive-self-repair).
-Do not change the shared repair helper or enable CP-DMG-4 to conceal that gap;
-neither supplies the missing caller contract.
+Zero Alpha 5 uses the same `HealTimeBitmask` caller through the existing
+construction rules while keeping CP-DMG-4 disabled. Its released positive
+masks produce one stored HP and one energy per admitted visit through the
+retail contribution helper. This is a separately configured historical
+package contract, not a change to the current `tazero` source table. Strict
+ignores it. See [TA Zero, historical passive caller](../research/extensions/ta-zero-engine.md#historical-passive-self-repair-caller).
+The Zero profile tests cover Community/Modern selection, Strict bypass,
+construction including negative zero, energy stalls and unchanged RNG;
+optional installed-content tests cover all six released mask families.
 
 ### Community structure rotation
 

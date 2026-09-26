@@ -1,5 +1,5 @@
 {
-  "gameplay": {"table": "escalation"},
+  "gameplay": {"table": "escalation", "healTimeBitmask": true, "repairRate": {"repairMultiplier": 1, "selfHealMultiplier": 1}},
   "name": "escalation",
   "minimumGameplay": "community-3.9",
   "detect": [

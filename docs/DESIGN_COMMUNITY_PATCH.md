@@ -157,6 +157,7 @@ type Features struct {
     AttackSingleSlotTake      bool // Attack_Chase / Suppress take one slot, not two or three
     MapFeatureOwnerEleven     bool // terrain-file features stamped owner 11, drawn without LOS
     ResurrectionTextFix       bool // "Resurrection failed" spelling
+    HealTimeBitmask           bool // historical passive caller: low-byte mask, signed 32*h/30 work
 
     // Parameters: zero means "as retail" for every one of them.
     RepairRate                RepairRate // CP-DMG-4: Enabled, RepairMultiplier, SelfHealMultiplier (1..100)
@@ -194,9 +195,11 @@ override earlier ones field by field; an absent field means "keep":
    ([DESIGN_CONTENT_VFS §5 "Content profiles"](DESIGN_CONTENT_VFS.md)) may
    carry a `gameplay` object naming the build profile its content was
    authored for (`"table": "escalation"`) and overriding individual fields.
-   This is how a content set declares what it needs: Escalation declares the
-   repair multipliers, extended weapon IDs and the 32-tile margin its units
-   are balanced against, exactly as its `tdraw` build compiles them in.
+   This is how a content set declares what it needs. Gold 10.2.0 starts from
+   `escalation`, then selects its historical HealTime caller and overrides
+   both repair multipliers to one. The named current-source table retains
+   its multipliers of three; a table name alone does not identify an older
+   package's engine. See [passive generator healing](../research/extensions/escalation-shields.md#passive-generator-healing).
 3. **The settings file.** `gameplayFeatures` — a JSON object of the same
    shape — is the player's persistent override, written by the options page
    and hand-editable.
@@ -822,3 +825,18 @@ says so.
 | The documented 3.9.01/3.9.02 patch line and `AISearchMapEntries` | [community patch pathfinding](../research/extensions/community-patch-pathfinding.md) |
 | Package identities, key collisions, content-tree layouts | [mod engine-package compatibility](../research/extensions/mod-engine-compatibility.md) |
 | Retail baselines cited per row | `[06 §9.3]`, `[06 §11.2]`, `[06 §4.2]`, `[06 R-DMG-01 §2]`, `[05 "Capture"]`, `[05 R-WORK-01 §3]`, `[05 R-WORK-01 §7]`, `[04 R-COLL-01 §1]`, `[04 R-PATH-01 §10]`, `[04 R-COB-03 §1]`, `[03 R-VIS-01 §5]`, `[08 R-ENTRY-01 §5]`, `[01 §6.1]`, `[01 §7.3]`, `[02 R-KEYS-01]` |
+
+### Historical Zero package configuration
+
+The Zero profile combines current `tazero` table defaults with two explicit
+historical package declarations: `HealTimeBitmask=true` for the passive caller
+and `AIBuilderPlacementLimit=127` for the Classic construction placement pass.
+Both pass through the existing override resolution, digest and owner projection;
+Strict ignores both. The numeric limit is zero in current source tables, so it
+preserves their existing retail/ProTA selection unless a positive value is
+explicitly declared. It is bounded to signed32 and takes precedence over the
+older ProTA boolean shortcut. The owning contracts are
+[construction](DESIGN_ECONOMY_CONSTRUCTION.md#community-repair-contributions)
+and [Classic AI](DESIGN_SESSIONS_AI_SAVE.md#zero-classic-construction-placement).
+These declarations do not claim that the current MIT `tazero` source table
+implements the historical executable patches.

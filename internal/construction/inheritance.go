@@ -1,9 +1,8 @@
-// What a finished product inherits and what interrupts a build: the standing-
-// flag copy of [04 R-FAC-02 §4] §3.8, the rally-record walk, and the cancel-
-// current and stop interrupts of [05 "Cancel-current and stop interrupts"].
+// What a finished product inherits and what interrupts a build: the standing
+// fields and control group of [04 R-FAC-02 §4] §3.8, the rally-record walk,
+// and the cancel-current and stop interrupts of [05 "Cancel-current and stop interrupts"].
 //
-// Moved out of factory.go by CL-5, which split that file by concern; the code
-// is unchanged.
+// Moved out of factory.go by CL-5, which split that file by concern.
 
 package construction
 
@@ -36,10 +35,8 @@ func standingMergeAdmits(builder, product *units.Unit) bool {
 	return builder.Alive && product.Alive && !builder.Dying && !product.Dying
 }
 
-// copyStandingFlags is the recovered initial standing-field merge guard. The
-// class and auto exclusions are distinct from the later rally traversal
-// [R-P0-09]. This is the state-2 epilogue's copy — the initial product-state
-// merge — and is a distinct stage from the post-build gate in
+// copyStandingFlags is the initial standing-field merge. The state-2
+// epilogue's product-state copy is a distinct stage from the post-build gate in
 // inheritStandingFields; the product's initial flags are not proof that
 // `GetBuilt` has run [04 §3.8].
 func copyStandingFlags(builder, product *units.Unit) {
@@ -58,8 +55,8 @@ func (s *Service) copyStandingFlags(builder, product *units.Unit) {
 // seat: `1` is human, `2` a computer player, `3` a remote peer
 // [05 R-SHARE-01 §1].
 //
-// `GetBuilt`'s experience-word gate compares the control byte against 1 — the
-// human seat — so only a human-owned product inherits its builder's experience
+// `GetBuilt`'s control-group gate compares the control byte against 1 — the
+// human seat — so only a human-owned product inherits its builder's group
 // [04 §3.5][04 §3.8]. The neighbouring gates that do read 2 are different sites
 // and are unaffected: the difficulty discount [05 R-ECO-01 §3] and the mobile
 // builder's assistance search [04 R-SPEC-01 §5].
@@ -82,15 +79,12 @@ func (s *Service) ownerPlayerIsHuman(owner uint8) bool {
 // inheritStandingFields is `GetBuilt`'s post-build standing merge, the second
 // of the two stages [04 §3.8] keeps distinct. Under the same alive/death-latch
 // guard as the state-2 copy it moves standing-move bits 18-19 and standing-fire
-// bits 20-21 from builder to product, and the experience word rides the same
+// bits 20-21 from builder to product, and the control group rides the same
 // guarded block under one further gate — the PRODUCT's owner row being occupied
 // and human-controlled [04 §3.5][04 §3.8][04 R-FAC-02 §4].
 //
-// `units.Unit.Kills` is the experience word: it is the field the capture timer's
-// divide-by-five reads and the field the account record saves [05 "Unit
-// capture"][08 R-SAVE-02 §6]. A product and its builder always share an owner,
-// so which of the two the row is read off is not observable; retail reads the
-// product's, and so does this.
+// The group is read at this visit, including zero to clear a prior assignment.
+// Kills are a separate field and do not inherit [04 §3.8].
 func (s *Service) inheritStandingFields(builder, product *units.Unit) {
 	if !standingMergeAdmits(builder, product) {
 		return
@@ -98,7 +92,7 @@ func (s *Service) inheritStandingFields(builder, product *units.Unit) {
 	product.Flags = (product.Flags &^ (StandingMoveMask | StandingFireMask)) |
 		(builder.Flags & (StandingMoveMask | StandingFireMask))
 	if s.ownerPlayerIsHuman(product.Owner) {
-		product.Kills = builder.Kills
+		product.Group = builder.Group
 	}
 }
 
@@ -199,8 +193,8 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 	}
 	// [04 R-FAC-02 §4] fixes the order inside the completion arm: the resolved
 	// rally records are walked and inserted first, THEN the standing-bit copy
-	// under the §3.8 guard (with the experience word for a computer-owned
-	// builder), THEN `Park` if nothing was inserted.
+	// under the §3.8 guard (with the control group for an occupied human-owned
+	// product), THEN `Park` if nothing was inserted.
 	s.inheritStandingFields(factory, product)
 	if inherited == 0 {
 		if parkID != 0 {

@@ -6,10 +6,10 @@ release over the Base download listed as 14 December 2019. The official
 [download listing](https://zero.tauniverse.com/ta-zero/) still names Alpha 5
 and Map Pack 1f as current (checked 26 September 2026 UTC).
 
-**Support is experimental; full gameplay parity remains incomplete.** The source audit
-confirmed a gameplay mismatch in passive self-repair and several missing host
-features. The verified contracts and remaining work below distinguish usable
-content from the behavior of Zero's historical engine.
+**Support is experimental; full gameplay parity remains incomplete.**
+The source and shipped-engine audit corrected passive repair, Classic AI
+construction admission and factory group inheritance. Target-point arithmetic
+and several documented host controls still need implementation.
 
 ## Install and select
 
@@ -61,8 +61,10 @@ heights. GoK, Arm and Core are selectable in that authored order.
 A library installation requires **Community 3.9** or **Modern**. The existing
 Community `tazero` table supplies extension support, including the script
 ports used by AI factories; Modern adds Nanolathe's documented policies.
-That table follows the pinned current community source, whose behavior differs
-from the historical renderer and recorder in Base. It is not a claim that
+That table follows the pinned current community source, with explicit Zero
+profile declarations for its historical passive-repair caller and Classic AI
+placement cutoff. Other behavior differs from the historical renderer and
+recorder in Base. It is not a claim that
 Nanolathe executes or exactly reproduces those Windows patches.
 
 Strict 3.1 continues to disable Community features. A manually mounted stack
@@ -134,7 +136,8 @@ or a visual comparison against the historical Windows engine.
 
 The follow-up audit uses the released BOS sources, compiled COB programs,
 unit/weapon definitions, all eight AI profiles and the map pack, plus the
-pinned MIT TADR source and its history. The entire combined catalog compiles
+pinned MIT TADR source, matching historical port source, and authorized
+inspection of the shipped Alpha 5 executable and Base DLLs. The entire combined catalog compiles
 without donor substitutions, and all 269 compiled unit scripts load. This is
 parser coverage; the following runtime checks are deliberately narrower.
 
@@ -146,25 +149,27 @@ parser coverage; the following runtime checks are deliberately narrower.
 | Anti-air handoff | All 16 relevant primary/tertiary scripts; preserves the three floating-turret exceptions actually shipped. |
 | Maps and economy | Weather impact kinds, actual Crystal Gorge successor chain, invisible metal deposits and geothermal admission; all 15 maps previously loaded and ticked. |
 | Aircraft and AI | Authored human/AI transport differences, bounded load/unload and construction, and Scramble's AirBattle profile. This is not a full-match AI-quality certification. |
-| Controls | Optional Zero selection/filter scheme and factory hundred-unit batches; existing pages, icons, palette and sensors remain independently scoped. |
+| Passive repair | All six released mask families, construction exclusion, energy stalls and Strict bypass; one stored HP and one energy per admitted visit. |
+| Classic AI construction | Capture-capable builders may place below 127 completed builders; the independent reposition pass still starts at five. |
+| Controls | Optional Zero selection/filter scheme, factory hundred-unit batches and baseline completed-product group inheritance; existing pages, icons, palette and sensors remain independently scoped. |
 
 Known remaining gaps:
 
-- **Passive self-repair is incorrect for Zero.** Its custom rates are not the
-  retail eight-tick caller. For example, authored `HealTime=3` currently
-  produces zero healing. Matching licensed patch source or bounded manual
-  observations must settle the exact cadence, energy/stall and construction
-  gates before a replacement is implemented. Enabling the unrelated current
-  Community repair module does not resolve it.
-- **Historical engine equivalence is unproven.** Current TADR's named Zero
-  build postdates Alpha 5. The legacy AI threshold, build-point changes and
-  older recorder boundary cases still lack matching source. Full per-unit
-  projectile interactions and visual comparisons are not established by the
-  callback tests.
+- **Historical target-point arithmetic is known but not implemented.** Zero
+  changes the SweetSpot vertex-box calculation used for weapon aiming;
+  Nanolathe still uses the retail centre. This is a concrete remaining combat
+  difference, not a missing source contract.
 - **Some documented controls remain absent:** X line/surround placement with
-  wheel spacing, local whiteboard and factory-to-product control-group
-  inheritance. Historical megamap key/radius differences remain separately
-  unresolved. Developer shortcuts and screenshot formats are Nanolathe's.
+  wheel spacing and local whiteboard. Their shipped algorithms are now
+  recorded. Base defaults the megamap key to Tab despite older F4 documentation;
+  its interceptor ring subtraction agrees with the existing presentation.
+- **Historical engine equivalence remains bounded.** Ports 70/74 are now
+  traced and corroborated by historical MIT source. Ordinary valid inputs
+  agree, but configured/lobby limit selection and invalid-ID handling differ;
+  Nanolathe retains safe bounds handling. Full per-unit projectile interactions,
+  historical renderer comparisons and every session-limit transition are
+  not established. The extra unused cycling block's runtime caller is still
+  unknown; the ordinary retail BigBrother mechanism is separate.
 - **The release has unresolved content references:** two model textures
   (`armcolormeta4_1`, `goksphere2_5`), the `GoKPlatform1` sound category,
   AI tokens `GOKT1GUNHSIP` and `GOKT2CONTANK_AI`, and documented Ctrl+J

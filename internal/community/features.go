@@ -64,6 +64,12 @@ type Features struct {
 	AttackSingleSlotTake     bool `json:"attackSingleSlotTake,omitempty"`
 	MapFeatureOwnerEleven    bool `json:"mapFeatureOwnerEleven,omitempty"`
 	ResurrectionTextFix      bool `json:"resurrectionTextFix,omitempty"`
+	// Historical executable caller, selected by a content profile separately
+	// from the repair helper's contribution and multiplier configuration.
+	HealTimeBitmask bool `json:"healTimeBitmask,omitempty"`
+	// Zero leaves the reposition threshold unchanged; zero preserves the
+	// existing retail/ProTA placement choice.
+	AIBuilderPlacementLimit int `json:"aiBuilderPlacementLimit,omitempty"`
 
 	RepairRate                RepairRate `json:"repairRate"`
 	OffMapAircraftMarginTiles int        `json:"offMapAircraftMarginTiles"`

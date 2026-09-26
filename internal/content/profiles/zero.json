@@ -1,5 +1,5 @@
 {
-  "gameplay": {"table": "tazero"},
+  "gameplay": {"table": "tazero", "healTimeBitmask": true, "aiBuilderPlacementLimit": 127},
   "name": "zero",
   "controls": "zero",
   "minimumGameplay": "community-3.9",
