@@ -64,6 +64,11 @@ value; an existing saved choice remains in effect until changed. This also
 works with direct `--map`, `--headless`, and `nanolathe-headless`. Campaign
 missions retain their authored unit limits.
 
+Downloaded mods live in `$XDG_DATA_HOME/nanolathe/mods` (default
+`~/.local/share/nanolathe/mods`). Automatically remastered map tiles and feature
+sprites live in `$XDG_CACHE_HOME/nanolathe/upscale/1` (default
+`~/.cache/nanolathe/upscale/1`).
+
 Mods can live in separate directories. Repeat `--root` in load order:
 
 ```sh

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -254,6 +255,30 @@ func TestCacheBankRoundTripReturnsTheComputedBytes(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestDefaultCacheFollowsXDG(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(t.TempDir(), "cache"))
+	cache, err := DefaultCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(os.Getenv("XDG_CACHE_HOME"), "nanolathe", "upscale", cacheFormatVersion); cache.Dir != want {
+		t.Fatalf("DefaultCache directory = %q, want %q", cache.Dir, want)
+	}
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	cache, err = DefaultCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".cache", "nanolathe", "upscale", cacheFormatVersion); cache.Dir != want {
+		t.Fatalf("DefaultCache fallback directory = %q, want %q", cache.Dir, want)
 	}
 }
 

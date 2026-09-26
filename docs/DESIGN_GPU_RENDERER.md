@@ -2373,11 +2373,12 @@ contract.
   client. An entry skipped and an entry the definitions do not name both leave
   nil frame slots, which the client doubles itself (D2). 3DO features and effect
   banks are not remastered.
-* **Cache.** `os.UserCacheDir()/nanolathe/upscale/<format version>/<key>` where
-  the key is a SHA-256 over the algorithm version and every input byte. One file
-  per result with a magic and a version; a file that fails to parse is recomputed
-  and rewritten. The cache is derived retail art and is never committed or
-  shipped.
+* **Cache.** `$XDG_CACHE_HOME/nanolathe/upscale/<format version>/<key>`, defaulting
+  to `~/.cache/nanolathe/upscale/<format version>/<key>` on every platform, in
+  keeping with the settings and mod library layout. The key is a SHA-256 over
+  the algorithm version and every input byte. One file per result has a magic
+  and a version; a file that fails to parse is recomputed and rewritten. The
+  cache is derived retail art and is never committed or shipped.
 * **When.** On the loader goroutine after the session composes, before the
   battle is adopted, for the frontend load and the `--map` direct route; the
   capture route runs it inline and only at `--zoom 2`; a save restore adopts on

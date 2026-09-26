@@ -93,7 +93,7 @@ func buildDetailArt(cs *contentSet, terrain *world.Terrain, progress content.Pro
 	cache, err := upscale.DefaultCache()
 	if err != nil {
 		// Without a cache every load recomputes; that is slow, not fatal.
-		fmt.Fprintf(os.Stderr, "nanolathe: upscale: no result cache: logical path <user cache directory>, providers searched [os.UserCacheDir], expected a cache directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nanolathe: upscale: no result cache: logical path <user cache directory>, providers searched [$XDG_CACHE_HOME, $HOME], expected a cache directory: %v\n", err)
 		cache = &upscale.Cache{}
 	}
 

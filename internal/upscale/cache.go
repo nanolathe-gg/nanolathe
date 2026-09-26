@@ -4,7 +4,7 @@ package upscale
 // seconds per map and a fraction of a second per bank; the result is a pure
 // function of its inputs, so the second load of a map is a file read.
 //
-// The cache holds derived retail art. It lives in the user's cache directory,
+// The cache holds derived retail art. It lives in the XDG cache directory,
 // is never committed and is never shipped.
 
 import (
@@ -43,12 +43,16 @@ const (
 // value is unusable; build one with DefaultCache or set Dir yourself.
 type Cache struct{ Dir string }
 
-// DefaultCache returns the cache under the user's cache directory:
-// <os.UserCacheDir>/nanolathe/upscale/<format version>.
+// DefaultCache uses the same cross-platform XDG layout as settings and mods:
+// $XDG_CACHE_HOME/nanolathe/upscale/<format version>, else ~/.cache/nanolathe/...
 func DefaultCache() (*Cache, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("nanolathe: upscale cache: no user cache directory: %w", err)
+	base := os.Getenv("XDG_CACHE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("nanolathe: upscale cache: no home directory: %w", err)
+		}
+		base = filepath.Join(home, ".cache")
 	}
 	return &Cache{Dir: filepath.Join(base, "nanolathe", "upscale", cacheFormatVersion)}, nil
 }
