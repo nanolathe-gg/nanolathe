@@ -1607,6 +1607,18 @@ GAF text width (active FNT fallback), with integer division; the cached authored
 window stays unchanged so returning to the menu cannot accumulate the shift
 `[07 R-FE-01 §3]`.
 
+While a `MAINMENU` window is in the chain, `menu_sparks.go` runs the background
+shimmer: one hundred single-pixel records that spawn in the top 220 rows over
+indices whose low nibble is 13 or more, step three pixels along one axis per
+frame, turn on a timer, and draw `PALETTE.PAL` index 170 (a dark green). The
+records, draw order, parity rules and CRT recurrence follow `[07 §5]`; the
+field owns a private copy of that recurrence, so the menu consumes no other
+stream. A new `MAINMENU` window starts an empty field, as retail allocates it
+zeroed per window. The sparks are recorded as one-pixel fills on that
+window's layer, after its authored gadgets and before the Nanolathe-owned
+`MODS` button and status line appended to the clone, so those two and any
+window stacked above cover them. Two host choices are recorded in §5.
+
 **C17 — preferences survive the process.** Retail reads its whole preference
 block once at startup, installing a per-value default for anything absent, and
 writes the whole block at its commit points; the per-slot
@@ -3335,6 +3347,17 @@ title gate and the retail default.
   order icon `[07 R-P0-11 §3]`.
 
 ## 5. Divergences
+
+* **Main-menu shimmer cadence and gadget pixels.** Retail runs the shimmer
+  once per front-end frame; the rate of that frame is not traced, and a
+  60 Hz retail capture redraws it at 60 Hz, so Nanolathe steps it 60 times a
+  second of presentation time (`TODO(question)` at `menuSparkRate`). Retail's
+  spawn and move tests read the `MAINMENU` window surface, which also holds
+  the gadget art; Nanolathe composes gadgets through the draw list each frame,
+  so its tests read the window background plus live sparks. The two differ
+  only where a spark reaches a button, and every retail `MAINMENU` button lies
+  below the 220-row spawn band `[07 §5]`. The `MODS` button does lie in that
+  band, so it is drawn above the sparks rather than beneath them.
 
 * **Alt batches factory products by twenty.** This user-requested build-menu
   extension adds twenty on Alt-left-click and subtracts twenty on

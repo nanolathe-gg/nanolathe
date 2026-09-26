@@ -264,6 +264,9 @@ type gameShell struct {
 	// message, focus/press latches, and list thumb capture [07 §3][07 §4].
 	frontend *ui.Frontend
 
+	// menuSparks is the MAINMENU background shimmer [07 §5].
+	menuSparks *menuSparks
+
 	cam    *camera.Camera
 	battle *battleSession
 }
@@ -971,6 +974,7 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 			g.cursorAccum -= float64(n)
 		}
 		g.menuInput(cl)
+		g.stepMenuSparks(delta)
 	}
 }
 

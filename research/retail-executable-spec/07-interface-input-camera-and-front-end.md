@@ -2264,22 +2264,28 @@ stored offset before any other test. This erases the prior frame's spark.
 2. If inactive, attempt to spawn: pick `x = rand() % 640` and
 `y = rand() % 220` (220, not 480 — spawn band is the upper portion of the
 menu), form `off = y*640+x`, and test the dest pixel's low nibble
-`pixel & 0xF`. If `<= 0xC` (≤12) remain inactive; only bright background
-(`>= 0xD`/13) may spawn — dark menu bar areas never sparkle. On success set
-`active=1`, `off`, `life = (rand() low byte)+1` wrapping (0 allowed, dies
-next frame with probability 1/256), `timer = (rand() & 0x1F)+1` (1..32), and
-an initial orthogonal direction `±3` chosen by parity of `life` and the
-spawn position (if `life` odd the choice branches on `y` parity, otherwise on
-`x` parity; exactly one axis is zero). No pixel is drawn in the spawn frame;
-the spark becomes visible on its next active pass.
+`pixel & 0xF`. If `<= 0xC` (≤12) remain inactive (having consumed only the
+two draws); only indices whose low nibble is `>= 0xD` (13) may spawn. The
+test is on the palette *index*, not on brightness: in `PALETTE.PAL` those
+nibbles are the darkest shades of each sixteen-entry ramp, so on
+`FrontendX.pcx` sparks are born over the dark art. On success set
+`active=1`, `off`, then draw `life = (rand() low byte)+1` wrapping (0 allowed,
+dies next frame with probability 1/256), then `timer = (rand() & 0x1F)+1`
+(1..32), and choose an initial orthogonal direction `±3`: an **odd** `life`
+starts vertically (`dy = −3` when `y` is odd, `+3` when even), an **even**
+`life` horizontally (`dx = −3` when `x` is odd, `+3` when even); the other
+step is zero. No pixel is drawn in the spawn frame; the spark becomes
+visible on its next active pass.
 
 3. If active after erase, in this order: advance `x += dx, y += dy` with
 signed 8-bit steps; if `x<0 or >=640 or y<0 or >=480` deactivate; then
 decrement `life` — if already zero deactivate (the particle lives for `life`
 additional frames after spawn); then integrate `off += dx` and if `dy != 0`
 add `dy*640`; test the dest pixel at the new offset `& 0xF >= 0xD` else
-deactivate (sparks that wander onto dark art die); otherwise write palette
-index `0xAA` (170) at `off` as the sparkle. Moving before the life test is
+deactivate (sparks that wander off the qualifying indices die); otherwise
+write palette index `0xAA` (170) at `off` as the sparkle. In `PALETTE.PAL`
+entry 170 is a dark green, which is why the effect reads as faint green
+specks drifting over the dark menu art. Moving before the life test is
 outcome-equivalent to testing first — a record that fails either test is
 deactivated and its `x`/`y` are overwritten at the next spawn — but a
 reimplementation that reproduces the stream should keep retail's order.
@@ -2311,11 +2317,23 @@ it to a CRT-style `rand()` stream (do not consume the simulation RNG), use
 pitch 640, threshold low-nibble `>= 0xD` against the *destination* surface
 as it stands at that moment — both the spawn test and the move test sample
 the dest, not the pristine background backup, so a spark that another record
-has already drawn this pass counts as bright — orthogonal steps `±3` with
-exactly one zero axis, life/timer ranges as above, and must restore the
-background byte before each move. Spawning over dark `MAINMENU` art (low
-nibble `<= 0xC`) must remain suppressed — retail never sparkles over the grey
-menu bar.
+has already drawn this pass counts as a candidate (`0xAA` has low nibble
+10, so it does not) — orthogonal steps `±3` with exactly one zero axis,
+life/timer ranges as above, and must restore the background byte before each
+move. Spawning over indices with low nibble `<= 0xC` must remain suppressed.
+
+(Correction: this section previously called the qualifying pixels "bright
+background" and said sparks never appear over dark menu art. The index test
+itself was right; the reading was inverted — nibbles 13..15 are the dark end
+of each `PALETTE.PAL` ramp. A retail capture of the main menu shows the green
+specks over the dark upper-left art.)
+
+**Supported inference — cadence.** The tick has no throttle of its own and
+the rate of the host-mode-2 pump that drives it is not traced. A retail
+capture at 120 frames per second under a 60 Hz host shows the specks
+redrawn on every second capture frame, that is once per 60 Hz display
+frame. **Unknown:** whether the pump is paced by the display flip or by
+something else; tracing the pump's pacing would settle it.
 
 #### Single-player and campaign
 

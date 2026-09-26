@@ -108,7 +108,20 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 	} else {
 		drawWindowPanel(c, p.Window, page, common, g.guiColor)
 	}
+	// The MAINMENU shimmer sits above the authored gadgets, as it does in
+	// retail's window surface, and below the Nanolathe-owned MODS button and
+	// status line appended after them [07 §5].
+	sparksAt := -1
+	if mode == modeMenuMain {
+		sparksAt = len(p.Window.Gadgets)
+		if asset := g.panelAssets(); asset != nil && asset.window != nil {
+			sparksAt = min(sparksAt, len(asset.window.Gadgets))
+		}
+	}
 	for i, gad := range p.Window.Gadgets {
+		if i == sparksAt {
+			g.menuSparks.draw(c, p, int(r.X), int(r.Y))
+		}
 		if i == 0 || !p.ActiveAt(i) {
 			continue
 		}
@@ -134,6 +147,9 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 			g.drawRetailArt(c, p, i, gad, r)
 			g.drawRetailText(c, p, i, gad, r)
 		}
+	}
+	if sparksAt == len(p.Window.Gadgets) {
+		g.menuSparks.draw(c, p, int(r.X), int(r.Y))
 	}
 }
 
