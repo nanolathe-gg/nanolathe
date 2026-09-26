@@ -17,9 +17,19 @@ notes earlier units consume live stock before later units are tested, so slot
 order changes outcomes. `[06 §5.1]` captures the projectile count at entry so
 clones appended during the pass are not visited this tick.
 
+**Modern AI exception** (user-authorized 2026-09-24). The Modern AI
+computer player may think on a background goroutine (DESIGN_GAMEPLAY_RULES
+"The Modern AI controller"). The simulation thread builds its observation in
+phase 5, hands it over, and joins the think at a fixed reaction deadline,
+applying its commands there — the tick and content the synchronous host
+produces — so no simulation state depends on scheduling. This is the only
+goroutine an authoritative package starts.
+
 **Check.** `grep -rn "range .*map\[" internal/` outside `content` compile-time
 code and presentation caches. Sorting uses `sort.SliceStable` or a comparator
 that is a total order on a canonical key.
+`internal/architecture.TestAuthoritativePackagesStartNoGoroutines` names every
+goroutine an authoritative package may start, with its argument.
 
 ## I2 — Fixed point is the world
 
@@ -162,6 +172,22 @@ that same simulation stream, committing its resulting state only when the
 shot passes the terrain check (DESIGN_WEAPONS_PROJECTILES §2.3.1). This is a
 bounded transaction over the one stream, not a persistent alternate generator.
 Strict 3.1 retains the original draw sites and failure effects.
+
+**Modern AI exception** (user-authorized 2026-09-24: "private random number
+gen is fine, keeping its own state is fine"). The Modern AI computer player
+(`internal/aikit`: a computer player marked Modern, in any gameplay mode since
+the user made it a per-player choice on 2026-09-25; a Classic player binds no
+such controller, so a battle of Classic players is untouched) may vary its
+decisions with one private PCG32 generator per computer player
+(`aikit.Rand`), owned by that player's controller and seeded from the
+battle's simulation seed and the player slot. It never draws from or seeds
+either authoritative stream, so it cannot displace their draws; only that
+player's brain draws from it, inside its think, so a game replays exactly
+from its seed and a background think cannot race the simulation. The
+controller's engine upkeep still takes the retail step's strategic-refresh
+draw from the simulation stream, in the retail position. This is the one
+exception to "no per-entity streams", and it covers AI decisions only
+(DESIGN_SESSIONS_AI_SAVE "Modern AI computer player").
 
 Which stream: gameplay normally uses the simulation stream; meteor geometry
 `[06 §6.5]`, screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and
@@ -307,9 +333,11 @@ staggering", "Modern group-order spreading", "Modern bounded path work",
 release" with its "Modern pocket release", "Modern route straightening" and
 "Modern wedge escape",
 DESIGN_INTERFACE_HUD_INPUT "Modern group destination slots", and
-DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding" and
-"Modern authored build membership", and DESIGN_SESSIONS_AI_SAVE
-"Modern save unit limits" and "Modern wave air targets". Each departure reaches its algorithm through the
+DESIGN_ECONOMY_CONSTRUCTION "Modern factory-exit yielding", "Modern construction-site yielding",
+and "Modern authored build membership", and
+DESIGN_SESSIONS_AI_SAVE "Modern save unit limits" and "Modern wave air
+targets", and DESIGN_UNITS_ORDERS_COB "Modern AI move retention". Each
+departure reaches its algorithm through the
 owning package's rule interface, bound once from the central session mode as
 one named rule set — not through independently configurable flags; new and
 restored queues inherit the same set, and an unbound seam answers as retail.
@@ -358,7 +386,17 @@ cannot serve, and bind it through the same
 `session.RuleSet`; no second registry or capability-selection system. Cached
 implementations hold no state, including through pointers: mutable request or
 session state belongs to its existing owner. Stateful rule objects require an
-explicit lifecycle, switching and save design before implementation. Content
+explicit lifecycle, switching and save design before implementation. The
+Modern AI computer player (user-authorized 2026-09-24) is the one stateful
+think step: its cached planner stays zero size, its controller lives in the
+computer player's manager, and its lifecycle, switching and save behaviour are
+in DESIGN_GAMEPLAY_RULES "The Modern AI controller". No rule set binds it as
+its own step: `mods/aikit` installs it in the session's one slot for it, and
+the session gives it, with full income, to each computer player the lobby
+marks Modern (user-authorized 2026-09-25, a mode-independent exception like
+mutators and Survival: it chooses who decides for a player, never a rule;
+DESIGN_SESSIONS_AI_SAVE "Modern AI computer player" and
+DESIGN_ECONOMY_CONSTRUCTION "Modern AI full income"). Content
 profiles select load-time content layout independently; detecting an install
 or content marker does not select gameplay. Extension research belongs in
 [research/extensions](../research/extensions/README.md), separate from retail

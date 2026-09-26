@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/survival"
 	"io"
+	"maps"
 	"math"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	// import is what registers them, and it sits beside the flag that names
 	// one so the two are read together (docs/DESIGN_GAMEPLAY_RULES.md §8).
 	_ "github.com/nanolathe-gg/nanolathe/mods"
+	aikitmod "github.com/nanolathe-gg/nanolathe/mods/aikit"
 )
 
 // Options is the command-line surface for the retail runtime and its host
@@ -48,6 +50,20 @@ type Options struct {
 	// when the player applies a new set (docs/DESIGN_MODS_MUTATORS.md §6).
 	MutatorArgs map[string]string
 	Mutators    content.Mutators
+	// AIArgs are the --ai key=value parameters, already checked against the
+	// Modern AI brain's keys; AIOverrides is the resolved configuration
+	// every battle request carries: the flag's parameters for every
+	// computer player, or else the saved modernAI block in the window
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player").
+	AIArgs      map[string]string
+	AIOverrides session.AIOverrides
+	// ComputerAI are the --ai-player choices: a computer row's controller,
+	// Classic or Modern, for a battle the command line composes (--map,
+	// --survival, --headless, the captures). The lobby's own rows carry
+	// their choice for a battle started from the screens
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+	// "Per-player selection").
+	ComputerAI []session.ComputerAI
 	// InstallMod installs a local zip or directory into the mod library and
 	// exits (a command-line stand-in for drag-and-drop, §4.5).
 	InstallMod string
@@ -268,6 +284,26 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 		return nil
 	})
+	set.Func("ai-player", "a computer player's AI by lobby row, <row>=<classic|modern> or all=<classic|modern> for every computer row (repeatable; a named row overrides all), for a battle the command line composes, in any gameplay mode: row 2 is the --map skirmish's computer player, rows 2 and 3 a Survival battle's buddies; omitted rows play Classic, and the lobby's rows carry their own choice", func(text string) error {
+		choice, err := session.ParseComputerAI(text)
+		if err != nil {
+			return fmt.Errorf("nanolathe: invalid computer AI: logical path <command line>, providers searched [ai-player], expected <row>=<classic|modern> or all=<classic|modern>: %w", err)
+		}
+		opts.ComputerAI = append(opts.ComputerAI, choice)
+		return nil
+	})
+	set.Func("ai", "Modern AI brain parameters for every computer player, key=value[,key=value...], e.g. style=eco,jitter=0 (repeatable; they act on every Modern AI computer player; omitted uses the saved modernAI block in the window, and none for --shot, --film, --battle-benchmark and --headless; keys: docs/DESIGN_SESSIONS_AI_SAVE.md \"Modern AI computer player\")", func(text string) error {
+		params, err := aikitmod.ValidateParamsText(text)
+		if err != nil {
+			return aiParamsError("--ai "+text, err)
+		}
+		if opts.AIArgs == nil {
+			opts.AIArgs = map[string]string{}
+		}
+		// A later flag's value for a key wins, as a later --mutator's does.
+		maps.Copy(opts.AIArgs, params)
+		return nil
+	})
 	set.StringVar(&opts.InstallMod, "install-mod", "", "install a mod zip or directory into the mod library, then exit")
 	set.Func("gameplay-feature", "community feature override name=value (repeatable; Strict ignores overrides)", func(text string) error {
 		v, err := community.ParseOverride(text)
@@ -333,6 +369,11 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			fmt.Fprintln(out, err)
 			return opts, err
 		}
+	}
+	if len(opts.ComputerAI) != 0 && (opts.Map == "" || opts.Mission != "" || opts.LoadSave != "") {
+		err := fmt.Errorf("nanolathe: invalid computer AI selection: logical path <command line>, providers searched [ai-player], expected --map and no --mission or --load-save")
+		fmt.Fprintln(out, err)
+		return opts, err
 	}
 	if unitLimitSet && (opts.UnitLimit < settings.MinUnitLimit || opts.UnitLimit > settings.MaxUnitLimit) {
 		err := fmt.Errorf("nanolathe: invalid unit limit: logical path <command line>, providers searched [unit-limit], expected %d..%d", settings.MinUnitLimit, settings.MaxUnitLimit)

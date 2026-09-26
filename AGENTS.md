@@ -56,7 +56,7 @@ Load-time content profiles remain separate from gameplay selection. Research
 an extension before proposing its contract; evidence that a patch implements
 a behavior is not authorization to enable that behavior in Nanolathe.
 
-**Mutators are the one mode-independent exception (user-authorized
+**Mutators are a mode-independent exception (user-authorized
 2026-09-23).** A mutator is a global multiplier applied to the per-battle
 catalog clone at battle entry. It applies in every mode, **Strict 3.1
 included**, because it transforms content rather than rules. It adds no seam,
@@ -65,7 +65,7 @@ no RNG and no per-tick state, and it is owned by
 mutators* is the retail baseline, and every fingerprint lock runs with none.
 Anything data cannot express is not a mutator and follows the rules above.
 
-**Survival is the other mode-independent exception (user-authorized
+**Survival is a second mode-independent exception (user-authorized
 2026-09-23).** It is a scenario, not a rule: a skirmish session with a
 commanderless attacker slot and a wave director that creates units through
 the ordinary allocator and gives them ordinary orders. The survivors share
@@ -73,6 +73,25 @@ sight, radar and income as one side. It adds no seam, runs in every mode, and
 exists only in a Survival session, so no other session or fingerprint lock
 changes. Survival battles cannot be saved. It is owned by
 [DESIGN_SURVIVAL](docs/DESIGN_SURVIVAL.md).
+
+**The Modern AI computer player is the third mode-independent exception
+(user-authorized 2026-09-25).** Each computer player is Classic (its rule
+set's own planner) or Modern (the util+tac brain), chosen per player in
+skirmish and Survival in every gameplay mode, Strict 3.1 included, and
+nothing else chooses it: no rule set selects the Modern AI (the `modern-ai`
+set was retired; `--ai-player all=modern` marks every computer player). A
+Modern player plays under the bound set's rules but is paid in full in every
+mode, since its difficulty is its persona
+([Modern AI full income](docs/DESIGN_ECONOMY_CONSTRUCTION.md#modern-ai-full-income));
+a Classic player keeps its set's income. It chooses who decides for a
+player, not a rule. On 2026-09-24 the user approved for it what the retail
+planner may not do — a private random generator per computer player,
+controller state of its own, and thinking on a background goroutine. Strict
+3.1 *with only Classic players* is the retail baseline, and every fingerprint
+lock runs Classic. The policy is owned by
+[DESIGN_SESSIONS_AI_SAVE](docs/DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player);
+its seam, lifecycle and determinism rules by
+[DESIGN_GAMEPLAY_RULES](docs/DESIGN_GAMEPLAY_RULES.md#the-modern-ai-controller).
 
 Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission),
 [Hold Fire](docs/DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire), and
@@ -90,7 +109,8 @@ Current policies: [terrain admission](docs/DESIGN_WEAPONS_PROJECTILES.md#231-mod
 [pocket release](docs/DESIGN_MOVEMENT_PATH.md#modern-pocket-release), and
 [route straightening](docs/DESIGN_MOVEMENT_PATH.md#modern-route-straightening), and
 [wedge escape](docs/DESIGN_MOVEMENT_PATH.md#modern-wedge-escape), and
-[wave air targets](docs/DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets).
+[wave air targets](docs/DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets), and
+[Modern AI move retention](docs/DESIGN_UNITS_ORDERS_COB.md#modern-ai-move-retention).
 See also [INVARIANTS.md I11](docs/INVARIANTS.md#i11--retail-baseline-and-modern-gameplay).
 
 ---
@@ -359,7 +379,11 @@ unrecoverable failure mode.
   exhaustive allowlist is in `docs/INVARIANTS.md` I2.
 - One global simulation RNG (Park-Miller, `16807`, `0x7fffffff`, seed
   `(QPC ^ 0x66e29572)|1`) + one CRT RNG (`*214013+2531011`) — call order is
-  deterministic. Do not add per-entity SplitMix streams.
+  deterministic. Do not add per-entity SplitMix streams. The one exception
+  is the Modern AI controller's private per-player generator, which never
+  draws from or seeds either stream
+  ([INVARIANTS.md I4](docs/INVARIANTS.md#i4--two-rng-streams-call-order-is-behavior),
+  "Modern AI exception").
 - Comments explain *why* and cite the contract by research section. They never
   carry executable addresses.
 

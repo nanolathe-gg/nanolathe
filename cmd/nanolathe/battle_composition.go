@@ -30,11 +30,27 @@ func directMapBattleRequest(opts Options, cs *contentSet, source BattleSeedSourc
 			Pace: pace, NoAir: opts.SurvivalNoAir, NoNaval: opts.SurvivalNoNaval,
 		})
 		cfg.UnitLimit = loadedSettings().UnitLimit
+		if err := applyCommandLineComputerAI(&cfg, opts.ComputerAI); err != nil {
+			return freshBattleRequest{}, err
+		}
 		return skirmishBattleRequest(opts, cs, cfg, headless.ScenarioSurvival, nil, source)
 	}
 	cfg := session.DirectSkirmishConfig(opts.Map)
 	cfg.UnitLimit = loadedSettings().UnitLimit
+	if err := applyCommandLineComputerAI(&cfg, opts.ComputerAI); err != nil {
+		return freshBattleRequest{}, err
+	}
 	return skirmishBattleRequest(opts, cs, cfg, headless.ScenarioDirectOTA, nil, source)
+}
+
+// applyCommandLineComputerAI marks the --ai-player rows of a battle the
+// command line composes. A row that is not a computer player of that battle
+// is refused rather than ignored.
+func applyCommandLineComputerAI(cfg *session.SkirmishConfig, choices []session.ComputerAI) error {
+	if err := cfg.ApplyComputerAI(choices); err != nil {
+		return fmt.Errorf("nanolathe: invalid computer AI selection: logical path <command line>, providers searched [ai-player], expected a computer player's lobby row: %w", err)
+	}
+	return nil
 }
 
 func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishConfig, kind headless.ScenarioKind, progress content.Progress, source BattleSeedSource) (freshBattleRequest, error) {
@@ -60,6 +76,7 @@ func skirmishBattleRequest(opts Options, cs *contentSet, cfg session.SkirmishCon
 		Gameplay:         opts.Gameplay,
 		CommunitySources: communitySources(opts, cs),
 		Mutators:         opts.Mutators,
+		AIOverrides:      opts.AIOverrides,
 		BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
 		Kind:             kind, Map: cfg.MapName, Difficulty: cfg.Difficulty, Skirmish: cfg,
 		LocalOwner: localOwner, Watching: watching,
@@ -81,6 +98,7 @@ func missionBattleRequest(opts Options, cs *contentSet, identity string, difficu
 		Gameplay:         opts.Gameplay,
 		CommunitySources: communitySources(opts, cs),
 		Mutators:         opts.Mutators,
+		AIOverrides:      opts.AIOverrides,
 		BuilderOptions:   sessionBuilderOptions(loadedSettings().BuilderOptions),
 		Kind:             headless.ScenarioCampaign, Mission: identity,
 		CampaignIndex: campaignIndex, CampaignSlot: campaignSlot,

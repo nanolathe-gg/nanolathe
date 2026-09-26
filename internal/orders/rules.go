@@ -60,6 +60,11 @@ type Rules interface {
 	// ProtectWorkOnDamage preserves active construction/manual repair and the
 	// original assignment behind a Modern autonomous response.
 	ProtectWorkOnDamage(u *units.Unit) bool
+	// KeepsMoveOnDamage reports whether the construction throttle's damage
+	// purge [08 R-AI-01 §11] spares a queue whose running record is a move,
+	// which Modern answers yes for a Modern AI player's unit alone. Strict
+	// purges as retail does.
+	KeepsMoveOnDamage(u *units.Unit) bool
 	// AllowAutomaticRepair prevents repeated repair/resume cycles under fire.
 	AllowAutomaticRepair(u *units.Unit, tick uint32) bool
 	// ReactionResult bounds a Modern reaction failure to its own record.
@@ -220,6 +225,10 @@ func (StrictRules) StepDangerResponse(*units.Unit, uint32)         {}
 func (StrictRules) ProtectWorkOnDamage(*units.Unit) bool           { return false }
 func (StrictRules) AllowAutomaticRepair(*units.Unit, uint32) bool  { return true }
 func (StrictRules) BeforeCommand(*Queue)                           {}
+
+// KeepsMoveOnDamage is retail's answer: the purge removes every record
+// without the purge-survivor flag, a running move included [08 R-AI-01 §11].
+func (StrictRules) KeepsMoveOnDamage(*units.Unit) bool { return false }
 
 // ScriptAttackSurfaceFire preserves retail's submersible gate. Parsed
 // surfacefire metadata is inert under Strict 3.1 [02 R-KEYS-01].

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
@@ -519,16 +520,27 @@ func (g *gameShell) resolveRetailColorConflict(slot int) {
 	g.setup.Players[slot].Color = -1
 }
 
-// cycleRetailController is the retail implementation's exact 0→2→(0|1) controller
+// cycleRetailController is the retail implementation's 0→2→(0|1) controller
 // transition. A row with value 0 is Open, 1 is Player, and 2 is Computer.
+//
+// Nanolathe splits the Computer stage in two by the row's AI (a front-end
+// divergence, DESIGN_INTERFACE_HUD_INPUT §2.6 "Computer AI"): a row that
+// becomes Computer starts as the Modern AI, the user's default for a new
+// computer slot; clicking a Modern row makes it Classic; and a Classic row
+// leaves the Computer stage exactly as retail's Computer row does.
 func (g *gameShell) cycleRetailController(slot int) {
 	if slot < 0 || slot >= session.SkirmishMaxPlayers {
 		return
 	}
 	current := g.retailControllers[slot]
+	if current == 2 && g.setup.Players[slot].AI == ai.ControllerModern {
+		g.setup.Players[slot].AI = ai.ControllerClassic
+		return
+	}
 	switch current {
 	case 0:
 		g.retailControllers[slot] = 2
+		g.setup.Players[slot].AI = ai.ControllerModern
 	case 1:
 		g.retailControllers[slot] = 0
 	case 2:

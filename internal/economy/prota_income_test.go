@@ -105,7 +105,7 @@ func TestProTAIncomeLeavesUnitReclaimRetail(t *testing.T) {
 		{2, 1000},
 	} {
 		s := proTAIncomeService(tc.selector)
-		s.CreditUnitReclaimRefund(pool.Handle(4), 0, 1000, 2)
+		s.CreditUnitReclaimRefund(pool.Handle(4), 0, 1000, true)
 		if got := s.UnitBuckets(pool.Handle(4))[Metal].Production; got != tc.want {
 			t.Fatalf("selector %d: unit reclaim refund %v, want retail %v", tc.selector, got, tc.want)
 		}

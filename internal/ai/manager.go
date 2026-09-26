@@ -3,6 +3,7 @@ package ai
 import (
 	"math"
 	"sort"
+	"sync/atomic"
 
 	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
@@ -225,14 +226,219 @@ type Manager struct {
 	// this field at composition and at the phase-1 command boundary, never
 	// inside a tick [I1].
 	Planner Planner `json:"-"`
+	// Controller is this computer player's controller choice: Classic, the
+	// bound rule set's own think step, or Modern, the Modern AI controller in
+	// any rule set. The session sets it at battle entry from the lobby row,
+	// or at a load from the save's record, and projects it onto Planner
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+	// "Per-player selection"). The zero value is Classic. The think step
+	// never reads it.
+	Controller Controller `json:"-"`
 	// The same construction policy used by human admission, bound by Session.
 	ConstructionRules construction.Rules `json:"-"`
+
+	// Ext is the per-player home of a stateful Modern controller (research
+	// prototype, internal/aikit). The cached Planner stays zero size; the
+	// controller it creates lives here, owned by this session's manager, so
+	// two sessions never share decision state. It is not saved: a load
+	// starts the controller again from observation, with only its seed and
+	// generator position carried over (BattleSeed, ResumeGenerator). Retail
+	// never reads it.
+	Ext any `json:"-"`
+	// Shared is the battle's one slot for what a Modern controller derives
+	// from the map alone (BattleShared): every manager of a battle holds the
+	// same slot, so the computer players analyze the map once between them.
+	// Nil (a fixture) makes each controller analyze it alone, with the same
+	// result. Retail never reads it.
+	Shared *BattleShared `json:"-"`
+	// StartPositions are the map's authored start points in world units,
+	// public map knowledge a Modern controller may use to plan scouting.
+	// The retail step never reads them.
+	StartPositions [][2]int32 `json:"-"`
+	// StartOwners is, per StartPositions entry, the player slot the battle
+	// placed there, or -1 for a start nobody took; nil when the assignment
+	// is not public knowledge. With pre-determined starts every player's
+	// lobby shows slot i taking start i, so the session publishes it; under
+	// random starts, on a restored battle and in a campaign it stays nil and
+	// a Modern controller searches the starts. The retail step never reads
+	// it.
+	StartOwners []int8 `json:"-"`
+	// BattleSeed is the battle's simulation seed, from which a Modern
+	// controller seeds its own private generator (internal/aikit Rand), so
+	// its choices vary between games yet replay exactly from the seed. It is
+	// a copy, not a stream: nothing draws from it and the retail step never
+	// reads it. A restored battle takes the seed its save's sidecar recorded,
+	// so a controller rebuilt after a load draws its style again from the
+	// seed the saved game drew it from.
+	BattleSeed uint32 `json:"-"`
+	// ResumeGenerator is where a restored battle's controller generator
+	// continues once the controller's Init has drawn from BattleSeed again:
+	// the generator's position when the game was saved. Nil on a fresh
+	// battle, and for a controller that had not begun when saved. The first
+	// controller built takes it and clears it, so one built after a later
+	// switch starts from the seed like any fresh controller.
+	ResumeGenerator *uint64 `json:"-"`
+	// ControllerParams are the configured parameters of this player's Modern
+	// controller brain, canonical "key=value,key=value" text in key order
+	// (session.CanonicalAIParams): the host's settings resolved for this slot
+	// and difficulty at battle entry, or what a restored battle's save
+	// recorded. Empty is the brain's defaults. Only the Modern AI controller
+	// (mods/aikit) reads it; a Classic player's step carries it dormant
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player").
+	ControllerParams string `json:"-"`
+	// UnitVisible is the owner's ordinary line-of-sight predicate for one
+	// unit, bound by the session. Nil fails closed (nothing is visible).
+	UnitVisible func(viewer uint8, target *units.Unit) bool `json:"-"`
 	// Community is the session's projected copy of the feature-table answers
 	// the think step reads: the three ProTA 4.8 package AI switches
 	// (DESIGN_COMMUNITY_PATCH §4.7). The session writes it beside Planner at
 	// composition and at the command boundary; the zero value, which Strict
 	// 3.1 always projects, is the retail step.
 	Community community.Features `json:"-"`
+	// Survival is what a Survival battle tells its survivors: set by the
+	// session at battle entry on every survivor's manager (the human's and
+	// each computer buddy's; never the attacker's), nil in every other
+	// battle. Only the Modern AI controller reads it, to build a Modern
+	// buddy's survival brain; a Classic buddy's step carries it dormant
+	// (docs/DESIGN_SURVIVAL.md "Computer survivors under the Modern AI").
+	// Survival battles cannot be saved, so nothing restores it.
+	Survival *SurvivalInfo `json:"-"`
+}
+
+// SurvivalInfo is a Survival battle's scenario knowledge for its survivors:
+// the start site, the team and where each member began, which is fixed at
+// battle entry, and the wave warnings the HUD announces, which the wave
+// director appends as it announces them. Every survivor's manager holds the
+// same record.
+//
+// A warning is never changed once published and the list is replaced
+// whole, so a Modern controller thinking on another goroutine may read it
+// (Warnings) while the director publishes the next one; a reader that asks
+// for the warnings announced at or before its observation's tick gets the
+// same answer on either thread, because the director publishes in phase 1,
+// before the controller observes in phase 5 of the same tick.
+type SurvivalInfo struct {
+	// CentreX, CentreZ is the start site, the human's commander placement,
+	// in world units (DESIGN_SURVIVAL §4.2).
+	CentreX, CentreZ int32
+	// Attacker is the attacker's slot.
+	Attacker uint8
+	// Team lists the survivors slot-ascending; Computer marks the computer
+	// buddies among them and Starts is where each one's commander was
+	// placed, in world units, both in Team order.
+	Team     []uint8
+	Computer []bool
+	Starts   [][2]int32
+
+	warnings atomic.Pointer[[]SurvivalWarning]
+}
+
+// SurvivalWarning is one wave as its warning announces it: its number, the
+// tick the warning began and the tick its units begin to arrive, and each
+// entry direction with its theme (DESIGN_SURVIVAL §6.7). It carries nothing
+// the announcement does not tell the human.
+type SurvivalWarning struct {
+	Wave   int32
+	Tick   uint32
+	Arrive uint32
+	Groups []SurvivalApproach
+}
+
+// SurvivalApproach is one direction of a warned wave: the bearing from the
+// start site (0..65535 per circle, x by cosine and z by sine), the entry
+// point on the map edge in world units, and the theme the announcement
+// names — "air", "naval" or "hover"; "ground" for any other group.
+type SurvivalApproach struct {
+	Angle  uint16
+	X, Z   int32
+	Domain string
+}
+
+// PublishWarning appends a warning. The session calls it on the simulation
+// thread; a list a reader already holds is never written.
+func (s *SurvivalInfo) PublishWarning(w SurvivalWarning) {
+	if s == nil {
+		return
+	}
+	var list []SurvivalWarning
+	if old := s.warnings.Load(); old != nil {
+		list = make([]SurvivalWarning, len(*old), len(*old)+1)
+		copy(list, *old)
+	}
+	list = append(list, w)
+	s.warnings.Store(&list)
+}
+
+// Warnings appends to dst every warning published at or before tick, in
+// the order they were announced.
+func (s *SurvivalInfo) Warnings(tick uint32, dst []SurvivalWarning) []SurvivalWarning {
+	if s == nil {
+		return dst
+	}
+	list := s.warnings.Load()
+	if list == nil {
+		return dst
+	}
+	for _, w := range *list {
+		if w.Tick <= tick {
+			dst = append(dst, w)
+		}
+	}
+	return dst
+}
+
+// ComputerSurvivor reports whether player is a computer buddy on the Survival team.
+func (s *SurvivalInfo) ComputerSurvivor(player uint8) bool {
+	if s == nil {
+		return false
+	}
+	for i, p := range s.Team {
+		if p == player {
+			return i < len(s.Computer) && s.Computer[i]
+		}
+	}
+	return false
+}
+
+// StepGates answers the retail step's two dispatch gates for a controller
+// that replaces the decisions but keeps the engine upkeep: eligible reports
+// that upkeep runs at all, decide that this slot is a computer player whose
+// decisions run [08 "Dispatch gates and order sinks"]. A Passive manager (the
+// Survival attacker, docs/DESIGN_SURVIVAL.md §4.1) never decides, exactly as
+// the retail step skips its tasks, so no replacement brain drives it either.
+func (m *Manager) StepGates(econ *economy.Service) (eligible, decide bool) {
+	if m == nil || econ == nil || int(m.Player) >= len(econ.Players) || m.Player == 10 {
+		return false, false
+	}
+	ctrl := econ.Players[m.Player].ControllerState
+	if ctrl != 1 && ctrl != 2 && ctrl != 3 {
+		return false, false
+	}
+	if m.Catalog != nil && m.Strategic.Catalog == nil {
+		m.Strategic.Catalog = m.Catalog
+	} else if m.Strategic.Catalog != nil && m.Catalog == nil {
+		m.Catalog = m.Strategic.Catalog
+	}
+	return true, ctrl == 2 && !m.Passive
+}
+
+// EngineUpkeep is the half of the retail step that is engine maintenance
+// rather than decision: autonomous weapon maintenance, then the strategic
+// refresh whose due also rebuilds this slot's combat target registry and
+// takes its one bound-30 draw [06 §3.1][08 R-AI-01 §16]. A Modern
+// controller runs it after its own decisions, exactly where the retail step
+// does, so weapons and targeting behave the same whichever brain decides.
+// The rally-target refresh is retail decision state and is not run.
+func (m *Manager) EngineUpkeep(tick uint32, w *units.World) {
+	if m == nil {
+		return
+	}
+	if m.WeaponMaintenance != nil {
+		m.WeaponMaintenance(m.Player)
+	}
+	if m.Catalog != nil || m.Strategic.Catalog != nil {
+		m.Strategic.MaybeRefresh(tick, m.simRNG(), m.Player, w)
+	}
 }
 
 // GetPlayer satisfies Selector [PLAN_11 WU-11-4] — Manager.Player 0..9.

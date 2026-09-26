@@ -81,7 +81,10 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 	if b == nil {
 		return
 	}
-	if p == nil || !p.Exists || p.ControllerState != 2 {
+	// A computer player marked FullIncome takes the human's plain credit
+	// (DESIGN_ECONOMY_CONSTRUCTION "Modern AI full income"): no discount and
+	// no package factor.
+	if p == nil || !p.Exists || p.ControllerState != 2 || p.FullIncome {
 		b.Production = float32(float64(b.Production) + contribution)
 		return
 	}
@@ -290,13 +293,15 @@ func creditReclaimedMaterial(s *Service, b *Bucket, contribution float64, discou
 // specialPlayerSlot reports whether a player slot takes the difficulty-scaled
 // production path: the slot's record must exist and its control byte must be 2,
 // the computer-controlled value [05 R-ECO-01 §3][05 R-ECO-01 §11]. An owner
-// outside the ten slots is not a record and takes the plain path.
+// outside the ten slots is not a record and takes the plain path, and so does
+// a computer player marked FullIncome (DESIGN_ECONOMY_CONSTRUCTION "Modern AI
+// full income").
 func (s *Service) specialPlayerSlot(owner uint8) bool {
 	if s == nil || int(owner) >= len(s.Players) {
 		return false
 	}
 	p := &s.Players[owner]
-	return p.Exists && p.ControllerState == 2
+	return p.Exists && p.ControllerState == 2 && !p.FullIncome
 }
 
 // CreditFeatureReclaim is the credit half of the feature-reclaim payout
@@ -353,20 +358,27 @@ func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner u
 // CreditUnitReclaimRefund is the death-side metal refund of a lethal cause-5
 // reclaim pulse [05 "Unit reclaim"]: `(1 - victim remaining) x victim metal
 // build cost`, paid to the killing builder's metal production accumulator, with
-// no energy counterpart.
+// no energy counterpart. The discount applies when the killer's owner is a
+// discounted computer player (DiscountsCredit), which the caller reads from
+// the owner's record because the killer's slot may already be freed or reused.
 //
 // Remaining and cost are stored single floats, but subtraction, multiplication,
 // discount and accumulation stay at working precision until the final bucket
 // store [05 R-WORK-01 §4].
-func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal float32, killerController uint8) {
+func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal float32, discounted bool) {
 	if s == nil || killerHandle == 0 {
 		return
 	}
 	s.ensureUnitBuckets(killerHandle)
 	refund := (1 - float64(victimRemaining)) * float64(victimBuildCostMetal)
 	b := &s.unitBuckets[killerHandle].Buckets[Metal]
-	creditReclaimedMaterial(s, b, refund, killerController == 2)
+	creditReclaimedMaterial(s, b, refund, discounted)
 }
+
+// DiscountsCredit reports whether owner's credits take the difficulty
+// discount: an existing computer player (control byte 2) that is not marked
+// FullIncome [05 R-ECO-01 §3][05 R-WORK-01 §4].
+func (s *Service) DiscountsCredit(owner uint8) bool { return s.specialPlayerSlot(owner) }
 
 // AdmitStockpile charges one stockpile tick against the builder's buckets
 // and reports whether the charge was admitted.

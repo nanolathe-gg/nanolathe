@@ -310,7 +310,20 @@ type Player struct {
 	AllyGroup  int `json:"allyGroup"`
 	Metal      int `json:"metal"`
 	Energy     int `json:"energy"`
+	// AI is a computer row's AI, a Nanolathe lobby choice with no retail
+	// registry value (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer
+	// player", "Per-player selection"). A Classic row stores "classic"; a
+	// row without the key plays the Modern AI, so every computer row of a
+	// file written before this encoding — Classic rows included, which were
+	// stored without it — loads on the Modern AI (user decision
+	// 2026-09-25). Normalize keeps "classic" and reads everything else as
+	// Modern, which the writer omits.
+	AI string `json:"ai,omitempty"`
 }
+
+// PlayerAIClassic is the stored word of a row that plays the Classic AI; a
+// Modern row stores none.
+const PlayerAIClassic = "classic"
 
 // Skirmish is the SKIRMISH.GUI setup: everything retail stores under the
 // Skirmish* value names plus the per-slot rows.
@@ -332,6 +345,59 @@ type Skirmish struct {
 type ModSelection struct {
 	ID      string `json:"id,omitempty"`
 	Version string `json:"version,omitempty"`
+}
+
+// ModernAI is the `modernAI` block: key=value parameters for the Modern AI
+// computer players' brain, applied to every computer player, by the battle's
+// difficulty and by lobby slot. For each key the most specific layer that
+// names it wins: the slot's, then the difficulty's, then All.
+type ModernAI struct {
+	// All applies to every computer player.
+	All AIParams `json:"all,omitempty"`
+	// Difficulty applies by the battle's difficulty, keyed "easy", "medium"
+	// or "hard".
+	Difficulty map[string]AIParams `json:"difficulty,omitempty"`
+	// Players applies to one slot, keyed "1" to "10" as the lobby numbers
+	// its rows.
+	Players map[string]AIParams `json:"players,omitempty"`
+}
+
+// IsZero reports a block that configures nothing; the writer omits it.
+func (m ModernAI) IsZero() bool {
+	return len(m.All) == 0 && len(m.Difficulty) == 0 && len(m.Players) == 0
+}
+
+// AIParams is one layer of the `modernAI` block: brain keys and their
+// values. A value may be written as a JSON string or a number, and is kept
+// as its text; the writer spells every value as a string.
+type AIParams map[string]string
+
+// UnmarshalJSON accepts string and number values.
+func (p *AIParams) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw == nil {
+		*p = nil
+		return nil
+	}
+	out := make(AIParams, len(raw))
+	for key, value := range raw {
+		var text string
+		if err := json.Unmarshal(value, &text); err == nil {
+			out[key] = text
+			continue
+		}
+		var number json.Number
+		if err := json.Unmarshal(value, &number); err == nil {
+			out[key] = number.String()
+			continue
+		}
+		return fmt.Errorf("settings: modernAI value %s for %q is not a string or a number", value, key)
+	}
+	*p = out
+	return nil
 }
 
 // Settings is the whole persisted block.
@@ -361,6 +427,14 @@ type Settings struct {
 	// only stored and round-tripped here; the mod library resolves it. The
 	// zero value selects no mod and is omitted from the file.
 	Mod ModSelection `json:"mod,omitzero"`
+	// ModernAI is the settings key `modernAI`: parameters for the Modern AI
+	// computer players' brain, in three layers
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+	// "Configuration"). No screen edits it; it is kept verbatim and written
+	// back unchanged. This package does not know the keys: the desktop
+	// command checks every layer at start-up and refuses to start on a bad
+	// one. A --ai flag wins over it.
+	ModernAI ModernAI `json:"modernAI,omitzero"`
 	// ControlsOffered lists the content whose recommended settings (a
 	// controls preset) the player has already been offered, one entry per mod
 	// id, or `profile:<name>` for a content profile mounted without a mod
@@ -818,11 +892,28 @@ func (s *Skirmish) Normalize() {
 		if s.Players[i].Controller < 0 || s.Players[i].Controller > 2 {
 			s.Players[i].Controller = 0
 		}
+		// A row's AI is "classic" or absent: "modern", absence and any word
+		// this build does not know read as the Modern default, as an
+		// out-of-range controller reads as Open.
+		if strings.EqualFold(strings.TrimSpace(s.Players[i].AI), PlayerAIClassic) {
+			s.Players[i].AI = PlayerAIClassic
+		} else {
+			s.Players[i].AI = ""
+		}
 	}
 }
 
 // Normalize applies Skirmish.Normalize and the top-level defaults.
 func (s *Settings) Normalize() {
+	// The retired modern-ai selection played every computer player on the
+	// Modern AI under Modern rules. That choice is now per row, so such a
+	// file loads as Modern with every row on the Modern AI, the game it
+	// selected, rather than falling back like an unknown word
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player").
+	retiredModernAI := s.Gameplay == gameplay.RetiredModernAI
+	if retiredModernAI {
+		s.Gameplay = gameplay.Modern
+	}
 	s.Gameplay = s.Gameplay.Normalize()
 	s.BuilderOptions.Normalize()
 	// A stored profile selector is kept verbatim apart from surrounding
@@ -835,6 +926,9 @@ func (s *Settings) Normalize() {
 	if len(s.Mutators) == 0 {
 		s.Mutators = nil
 	}
+	// The modernAI layers are likewise kept verbatim for the command that
+	// checks them; only empty maps are folded to absent.
+	s.ModernAI.normalize()
 	s.ControlsOffered = normalizeOffered(s.ControlsOffered)
 	if s.Version == 0 {
 		s.Version = FileVersion
@@ -873,6 +967,24 @@ func (s *Settings) Normalize() {
 	s.Audio.Normalize()
 	s.Messages.Normalize()
 	s.Skirmish.Normalize()
+	if retiredModernAI {
+		for i := range s.Skirmish.Players {
+			s.Skirmish.Players[i].AI = ""
+		}
+	}
+}
+
+// normalize folds empty maps to absent, so an emptied block is omitted.
+func (m *ModernAI) normalize() {
+	if len(m.All) == 0 {
+		m.All = nil
+	}
+	if len(m.Difficulty) == 0 {
+		m.Difficulty = nil
+	}
+	if len(m.Players) == 0 {
+		m.Players = nil
+	}
 }
 
 // Path is the settings file location: $NANOLATHE_SETTINGS when set, otherwise

@@ -76,11 +76,18 @@ type FreshBattleRequest struct {
 	Progress           content.Progress
 	PresentationWidth  int32
 	PresentationHeight int32
+	// AutomatedPlayers composes a skirmish with no human row (AI arena).
+	AutomatedPlayers bool
 	// Mutators are the battle's global multipliers, forwarded to the session
 	// entry options, which apply them to the entry's catalog clone in every
 	// gameplay mode (docs/DESIGN_MODS_MUTATORS.md §6). The zero value applies
 	// none, so a request that names none composes the unchanged battle.
 	Mutators content.Mutators
+	// AIOverrides are the Modern AI computer players' configured parameters,
+	// forwarded to the session entry options
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player"). The
+	// zero value configures none.
+	AIOverrides session.AIOverrides
 }
 
 // FreshBattle is the authoritative result of composition. Presentation owns
@@ -123,6 +130,13 @@ type Request struct {
 	// computer players (docs/DESIGN_SURVIVAL.md §10).
 	Survival        session.SurvivalOptions
 	SurvivalBuddies int
+	// ComputerAI marks computer rows Classic or Modern by lobby row number
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+	// "Per-player selection"): row 2 is the direct skirmish's computer
+	// player, rows 2 and 3 a Survival battle's buddies. A row that is not a
+	// computer player of the battle is an error. Nil leaves every computer
+	// player Classic.
+	ComputerAI []session.ComputerAI
 	// ContentProfile selects the mounted content set's directory table and
 	// limits by name or by the path of a profile JSON file. Empty detects the
 	// profile from the mounted markers. Run overwrites it with the resolved
@@ -200,6 +214,14 @@ func RunWithContent(request Request, fs vfs.FSOps, catalog *content.Catalog) (Re
 	if request.UnitLimit != 0 {
 		cfg.UnitLimit = request.UnitLimit
 	}
+	if len(request.ComputerAI) != 0 {
+		if kind == ScenarioMission {
+			return Report{}, diagnostic("session load failed: a computer AI choice names a lobby row", identity, nil, "a skirmish or Survival map")
+		}
+		if err := cfg.ApplyComputerAI(request.ComputerAI); err != nil {
+			return Report{}, diagnostic("session load failed: "+err.Error(), identity, nil, "a computer player's lobby row")
+		}
+	}
 	composed, err := ComposeFreshBattle(FreshBattleRequest{
 		CommunitySources: session.CommunitySources{Content: request.ProfileFeatures, Player: request.GameplayFeatures, CommandLine: request.GameplayOverrides},
 		Kind:             freshKind,
@@ -238,9 +260,9 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	var sess *session.Session
 	switch kind {
 	case ScenarioCampaign:
-		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits, Mutators: request.Mutators}, request.Progress)
+		sess, err = session.NewMissionWithEntryOptions(request.FS, request.Catalog, identity, request.Difficulty, request.SimulationSeed, request.CRTSeed, session.MissionEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Gameplay: request.Gameplay, SelectedSide: request.SelectedSide, SelectedSideSet: request.SelectedSideSet, ContentLimits: request.ContentLimits, Mutators: request.Mutators, AIOverrides: request.AIOverrides}, request.Progress)
 	case ScenarioDirectOTA, ScenarioSkirmish, ScenarioSurvival:
-		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Progress: request.Progress, ContentLimits: request.ContentLimits, Mutators: request.Mutators})
+		sess, err = session.NewSkirmishWithEntryOptions(request.FS, request.Catalog, cfg, session.SkirmishEntryOptions{BuilderOptions: request.BuilderOptions, CommunitySources: request.CommunitySources, Progress: request.Progress, ContentLimits: request.ContentLimits, Mutators: request.Mutators, AIOverrides: request.AIOverrides, AutomatedPlayers: request.AutomatedPlayers})
 	default:
 		err = fmt.Errorf("headless: unsupported fresh battle kind %q", kind)
 	}

@@ -1046,6 +1046,14 @@ func (s *Session) tickPlayers(tick uint32) {
 		if mgr != nil && mgr.CanPursueAir == nil {
 			mgr.CanPursueAir = s.aiCanPursueAir
 		}
+		// Every manager of this battle holds the battle's one slot for the
+		// map knowledge a Modern controller would otherwise derive for
+		// itself, bound before its first dispatch can build one
+		// (docs/DESIGN_GAMEPLAY_RULES.md "The Modern AI controller"). The
+		// retail step never reads it.
+		if mgr != nil && mgr.Shared == nil {
+			mgr.Shared = s.aiBattleShared()
+		}
 		before := func() {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)

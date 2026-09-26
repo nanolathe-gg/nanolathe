@@ -102,7 +102,10 @@ func (s *Service) communityVisible(viewer PlayerID, t Target) bool {
 	if t.Hidden {
 		return false
 	}
-	if t.UnitID != 0 && s.Community.OffMap != nil {
+	// Only an aircraft's request reads the off-map filing below, so a ground
+	// target skips the lookup (a quarter of the Modern AI observation's
+	// predicate cost, docs/MODERN_AI_RESEARCH.md §5.1).
+	if t.Flying && t.UnitID != 0 && s.Community.OffMap != nil {
 		t.OffMap = s.Community.OffMap(t.UnitID)
 	}
 	if !t.Flying || (!t.OffMap && !s.originProjectionOutside(t)) || !s.footprintWithinCommunityMargin(t) {

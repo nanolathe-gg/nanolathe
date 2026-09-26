@@ -129,18 +129,12 @@ func (s *Session) visibilityOffMap(unitID uint16) bool {
 	return filing != nil && filing.Filed && filing.OffMap
 }
 
+// unitVisibilityTarget is one unit's visibility query by value; the fields
+// and the hull are fillUnitVisibilityTarget's.
 func unitVisibilityTarget(u *units.Unit, status uint32) visibility.Target {
-	if u == nil {
-		return visibility.Target{}
-	}
-	min, max := u.Def.BoundingExtents()
-	return visibility.TargetFromBounds(visibility.Target{
-		UnitID: uint16(u.Handle), Owner: visibility.PlayerID(u.Owner), X: u.X, Y: u.Y, Z: u.Z,
-		Hidden: u.Hidden, Status: status, OriginX: u.X, OriginY: u.Y, OriginZ: u.Z,
-		Flying:     u.Move.ModeMirror == 2,
-		FootprintX: int32(u.CachedOccupancyX), FootprintZ: int32(u.CachedOccupancyZ),
-		FootprintSizeX: int32(u.FootprintSizeX), FootprintSizeZ: int32(u.FootprintSizeZ),
-	}, min, max)
+	var t visibility.Target
+	fillUnitVisibilityTarget(&t, u, status)
+	return t
 }
 
 // PreservePreparedBuildToggle projects the bound order rule into host input.

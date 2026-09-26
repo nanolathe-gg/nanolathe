@@ -209,6 +209,14 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.StringVar(&survivalPace, "survival-pace", "normal", "Survival wave pace: normal, relaxed or relentless")
 	flags.BoolVar(&request.Survival.NoAir, "survival-no-air", false, "Survival: no air waves")
 	flags.BoolVar(&request.Survival.NoNaval, "survival-no-naval", false, "Survival: no naval waves")
+	flags.Func("ai-player", "a computer player's AI by lobby row, <row>=<classic|modern> or all=<classic|modern> for every computer row (repeatable; a named row overrides all), in any gameplay mode: row 2 is the --map skirmish's computer player, rows 2 and 3 a Survival battle's buddies; omitted rows play Classic (docs/DESIGN_SESSIONS_AI_SAVE.md \"Modern AI computer player\")", func(text string) error {
+		choice, err := session.ParseComputerAI(text)
+		if err != nil {
+			return fmt.Errorf("nanolathe: invalid computer AI: logical path <command line>, providers searched [ai-player], expected <row>=<classic|modern> or all=<classic|modern>: %w", err)
+		}
+		request.ComputerAI = append(request.ComputerAI, choice)
+		return nil
+	})
 	flags.StringVar(&request.Mission, "mission", "", "campaign selector, e.g. camps/Arm Campaign.tdf:MISSION0")
 	flags.IntVar(&request.Difficulty, "difficulty", 1, "battle difficulty: 0 easy, 1 medium, 2 hard (skirmish and campaign)")
 	flags.Int64Var(&seed, "seed", -1, "seed for both deterministic streams; negative derives a pair from the clock")
@@ -239,6 +247,12 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	}
 	if request.Survival.Enabled && (request.Map == "" || request.Mission != "") {
 		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: survival needs a map: logical path <command line>, providers searched [survival], expected --map and no --mission")
+	}
+	if len(request.ComputerAI) != 0 && bench.OutputDir != "" {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: a computer AI choice is not applied to the simulation-cost benchmark: logical path <command line>, providers searched [ai-player], expected no --ai-player with --sim-benchmark")
+	}
+	if len(request.ComputerAI) != 0 && (request.Map == "" || request.Mission != "") {
+		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: a computer AI choice needs a map: logical path <command line>, providers searched [ai-player], expected --map and no --mission")
 	}
 	if request.SurvivalBuddies < 0 || request.SurvivalBuddies > session.SurvivalMaxBuddies {
 		return request, reportPath, profiles, bench, fmt.Errorf("nanolathe: invalid survival buddies: logical path <command line>, providers searched [survival-buddies], expected 0..%d", session.SurvivalMaxBuddies)

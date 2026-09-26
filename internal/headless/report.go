@@ -46,10 +46,16 @@ type IntentReport struct {
 
 // PlayerReport is one player slot's row of the run report.
 type PlayerReport struct {
-	Player          int            `json:"player"`
-	LiveUnits       int            `json:"live_units"`
-	UnitsCreated    int            `json:"units_created"`
-	AIManagerBound  bool           `json:"ai_manager_bound"`
+	Player         int  `json:"player"`
+	LiveUnits      int  `json:"live_units"`
+	UnitsCreated   int  `json:"units_created"`
+	AIManagerBound bool `json:"ai_manager_bound"`
+	// AIController is "modern" for a computer player the Modern AI decides
+	// for (session.ModernAIPlayer), and absent for every other player, so a
+	// battle of Classic computer players reports exactly what it did before
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+	// "Per-player selection").
+	AIController    string         `json:"ai_controller,omitempty"`
 	OrdersSubmitted int            `json:"orders_submitted"`
 	Kills           int            `json:"kills"`
 	Losses          int            `json:"losses"`
@@ -228,6 +234,9 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 		}
 		report.Players[i].UnitsCreated = observer.created[i]
 		report.Players[i].AIManagerBound = sess.AI[i] != nil
+		if sess.ModernAIPlayer(uint8(i)) {
+			report.Players[i].AIController = ai.ControllerModernWord
+		}
 		report.Players[i].OrdersSubmitted = observer.submitted[i]
 		// Kills and losses are the settlement counters the result collector
 		// already maintains; the report only copies them [08 R-CAMP-01 §7].

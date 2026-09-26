@@ -52,6 +52,9 @@ type MissionEntryOptions struct {
 	// this entry's catalog clone (docs/DESIGN_MODS_MUTATORS.md §6.3). The
 	// zero value applies none.
 	Mutators content.Mutators
+	// AIOverrides are the Modern AI computer players' configured parameters,
+	// as for a skirmish (SkirmishEntryOptions.AIOverrides).
+	AIOverrides AIOverrides
 }
 
 // NewMissionWithEntryOptions is the explicit battle-entry constructor used by
@@ -248,6 +251,9 @@ func NewMissionWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, path string,
 		if err := initializeBattleAI(s, uint8(i), sharedProf, sessionKindCampaign); err != nil {
 			return nil, err
 		}
+	}
+	if err := applyAIOverrides(s, options.AIOverrides); err != nil {
+		return nil, err
 	}
 	if err := battleEntryPlacement(s, m); err != nil {
 		return nil, err

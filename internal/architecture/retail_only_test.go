@@ -28,8 +28,18 @@ import (
 // and the simulation benchmark's scene and timing records hold float64s that
 // never reach simulation state.  Admitting it would mean allowlisting all of
 // that, which buys a weaker guard than leaving the edge outside the boundary.
+//
+// internal/aikit and mods/aikit ARE here: a Modern computer player's
+// controller and the rule set that binds it issue orders from phase 5, so
+// every audit that guards the simulation — forbidden imports, float64, map
+// order, fused arithmetic, goroutines — reads them too. The Modern AI
+// exception of INVARIANTS I4 is a private generator the controller owns, and
+// the asynchronous host's worker is the one justified goroutine carve-out
+// (authoritativeGoroutines below); neither relaxes any audit for another
+// package.
 var authoritativeDirs = []string{
 	"internal/ai",
+	"internal/aikit",
 	"internal/clock",
 	"internal/cob",
 	"internal/combat",
@@ -52,6 +62,7 @@ var authoritativeDirs = []string{
 	"internal/version",
 	"internal/visibility",
 	"internal/world",
+	"mods/aikit",
 }
 
 // TestAuthoritativePackagesDoNotImportHostOrNondeterministicRuntime checks
@@ -79,6 +90,52 @@ func TestAuthoritativePackagesDoNotImportHostOrNondeterministicRuntime(t *testin
 	if len(violations) != 0 {
 		sort.Strings(violations)
 		t.Fatalf("authoritative package imports host or nondeterministic runtime: %s", strings.Join(violations, "; "))
+	}
+}
+
+// authoritativeGoroutines is the goroutine allowlist for the authoritative
+// packages: the files that may contain a `go` statement, each with the reason
+// its goroutine cannot make the simulation depend on scheduling (I1). It is
+// shrink-only; an entry whose file no longer starts a goroutine is stale.
+var authoritativeGoroutines = map[string]string{
+	"internal/aikit/host.go": "the asynchronous host's worker runs one brain think on a copy the simulation thread built; the thread hands it the observation, joins it at the fixed reaction deadline and applies its commands there, so the tick the commands land on and their content are the synchronous host's (DESIGN_GAMEPLAY_RULES §5)",
+}
+
+// TestAuthoritativePackagesStartNoGoroutines keeps goroutine scheduling out of
+// the simulation (I1): no authoritative file starts one unless it is named
+// above with the argument that makes its result independent of scheduling.
+func TestAuthoritativePackagesStartNoGoroutines(t *testing.T) {
+	root := repositoryRoot(t)
+	seen := map[string]bool{}
+	violations := scanAuthoritativeFiles(t, root, func(path string, file *ast.File, fset *token.FileSet) []string {
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			relative = path
+		}
+		relative = filepath.ToSlash(relative)
+		var found []string
+		ast.Inspect(file, func(node ast.Node) bool {
+			statement, ok := node.(*ast.GoStmt)
+			if !ok {
+				return true
+			}
+			if _, allowed := authoritativeGoroutines[relative]; allowed {
+				seen[relative] = true
+				return true
+			}
+			found = append(found, formatViolation(root, path, fset.Position(statement.Pos()).Line, "go statement"))
+			return true
+		})
+		return found
+	})
+	for path := range authoritativeGoroutines {
+		if !seen[path] {
+			violations = append(violations, path+" (stale goroutine allowance)")
+		}
+	}
+	if len(violations) != 0 {
+		sort.Strings(violations)
+		t.Fatalf("authoritative package starts a goroutine outside the allowlist (I1): %s", strings.Join(violations, "; "))
 	}
 }
 

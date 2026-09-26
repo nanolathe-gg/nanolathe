@@ -71,6 +71,14 @@ type RuleSet struct {
 	// makes with that state on a dispatched tick (docs/DESIGN_GAMEPLAY_RULES.md
 	// "The computer player's think step").
 	Planner ai.Planner
+	// ComputerIncome decides the word the computer players' difficulty
+	// discount on income and construction refunds selects on
+	// [05 R-ECO-01 §3]. Every reserved set answers retail's difficulty word;
+	// the AI arena's research set composes FullComputerIncome, so difficulty
+	// comes from the planner alone. A computer player the lobby marks Modern
+	// is paid in full whatever this answers (DESIGN_ECONOMY_CONSTRUCTION
+	// "Modern AI full income").
+	ComputerIncome ComputerIncomeRules
 }
 
 // UnitLimitRules is the save/restore unit-limit policy seam
@@ -131,17 +139,18 @@ const (
 // does, with no work, no state and no draw from any stream.
 func StrictRuleSet() RuleSet {
 	return RuleSet{
-		Name:         StrictRuleSetName,
-		Base:         gameplay.Strict31,
-		Combat:       combat.StrictRules{},
-		Visibility:   visibility.StrictRules{},
-		Orders:       orders.StrictRules{},
-		Construction: construction.StrictRules{},
-		UnitLimit:    StrictUnitLimit{},
-		ScriptPorts:  StrictScriptPorts{},
-		Movement:     movement.StrictRules{},
-		Path:         path.RetailKernel{},
-		Planner:      ai.RetailPlanner{},
+		Name:           StrictRuleSetName,
+		Base:           gameplay.Strict31,
+		Combat:         combat.StrictRules{},
+		Visibility:     visibility.StrictRules{},
+		Orders:         orders.StrictRules{},
+		Construction:   construction.StrictRules{},
+		UnitLimit:      StrictUnitLimit{},
+		ScriptPorts:    StrictScriptPorts{},
+		Movement:       movement.StrictRules{},
+		Path:           path.RetailKernel{},
+		Planner:        ai.RetailPlanner{},
+		ComputerIncome: StrictComputerIncome{},
 	}
 }
 
@@ -152,17 +161,18 @@ func StrictRuleSet() RuleSet {
 // "Modern save unit limits"), preserving slot identities across mode changes.
 func CommunityRuleSet() RuleSet {
 	return RuleSet{
-		Name:         CommunityRuleSetName,
-		Base:         gameplay.Community39,
-		Combat:       &combat.CommunityRules{},
-		Visibility:   visibility.CommunityRules{},
-		Orders:       &orders.CommunityRules{},
-		Construction: &construction.CommunityRules{},
-		UnitLimit:    ModernUnitLimit{},
-		ScriptPorts:  CommunityScriptPorts{},
-		Movement:     &movement.CommunityRules{},
-		Path:         path.RetailKernel{},
-		Planner:      ai.RetailPlanner{},
+		Name:           CommunityRuleSetName,
+		Base:           gameplay.Community39,
+		Combat:         &combat.CommunityRules{},
+		Visibility:     visibility.CommunityRules{},
+		Orders:         &orders.CommunityRules{},
+		Construction:   &construction.CommunityRules{},
+		UnitLimit:      ModernUnitLimit{},
+		ScriptPorts:    CommunityScriptPorts{},
+		Movement:       &movement.CommunityRules{},
+		Path:           path.RetailKernel{},
+		Planner:        ai.RetailPlanner{},
+		ComputerIncome: CommunityComputerIncome{},
 	}
 }
 
@@ -188,7 +198,8 @@ func ModernRuleSet() RuleSet {
 		// weapon that can engage an airborne hostile take a grounded one
 		// (DESIGN_SESSIONS_AI_SAVE "Modern wave air targets"). Target choice,
 		// cadence and simulation-stream draws stay the retail step's.
-		Planner: ai.ModernPlanner{},
+		Planner:        ai.ModernPlanner{},
+		ComputerIncome: ModernComputerIncome{},
 	}
 }
 
@@ -339,6 +350,9 @@ func completeRuleSet(name string, set RuleSet) RuleSet {
 	if set.Planner == nil {
 		set.Planner = base.Planner
 	}
+	if set.ComputerIncome == nil {
+		set.ComputerIncome = base.ComputerIncome
+	}
 	return set
 }
 
@@ -436,6 +450,7 @@ func (s *Session) BindRules(set RuleSet) {
 func (s *Session) bindRuleServices(set RuleSet) {
 	s.Rules = set
 	s.projectCommunity()
+	s.projectComputerIncome()
 	if s.Vis != nil {
 		s.Vis.Rules = set.Visibility
 	}
@@ -456,11 +471,18 @@ func (s *Session) bindRuleServices(set RuleSet) {
 	// direct indexed walk and never a map range [RS-02][I1]. A manager
 	// composed after the binding takes the same field from the bound set at
 	// construction (initializeBattleAI), which is what makes re-projection
-	// idempotent here.
+	// idempotent here. A bind that replaces the think step first discards
+	// the controller the previous step kept in the manager's Ext.
+	//
+	// A computer player marked Modern keeps the Modern AI controller's step
+	// whatever set is bound (plannerFor); every other manager takes the
+	// set's own.
 	for player := range s.AI {
-		if s.AI[player] != nil {
-			s.AI[player].Planner = set.Planner
-			s.AI[player].ConstructionRules = set.Construction
+		if m := s.AI[player]; m != nil {
+			next := s.plannerFor(m, set.Planner)
+			releaseReplacedAIController(m, next)
+			m.Planner = next
+			m.ConstructionRules = set.Construction
 		}
 	}
 }

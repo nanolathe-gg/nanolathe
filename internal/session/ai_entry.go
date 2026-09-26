@@ -2,6 +2,8 @@ package session
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -45,6 +47,9 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile, sessionKi
 		// and a rebind is idempotent. An unbound session leaves this nil,
 		// which the manager reads as the retail step
 		// (docs/DESIGN_GAMEPLAY_RULES.md "The computer player's think step").
+		// Every manager is built Classic; a player marked Modern takes the
+		// Modern AI step when battle entry or a load applies the marks
+		// (applyAIControllers, restoreAIControllers).
 		Planner:           s.Rules.Planner,
 		ConstructionRules: s.Rules.Construction,
 		Community:         s.aiCommunity(),
@@ -96,12 +101,7 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile, sessionKi
 		return pa.Exists && pb.Exists && !pa.IsObserver && !pb.IsObserver && pa.Allies[b]
 	}
 	if !mgr.InitializeBattleState(s.World, ai.RallyBattleBindings{
-		Visible: func(viewer uint8, target *units.Unit) bool {
-			if int(viewer) >= len(s.Econ.Players) || !s.Econ.Players[viewer].Exists || s.Econ.Players[viewer].IsObserver {
-				return false
-			}
-			return s.IsUnitVisible(int(viewer), target)
-		},
+		Visible:    s.computerPlayerSees,
 		ProbeKnown: rallyProbeKnowledge(s),
 		// [08 R-AI-01 §19]: the rally task's member gate for a unit with no
 		// mover is the slot-1 shot-time PHYSICAL gate of [06 §3.3] from the
@@ -118,9 +118,68 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile, sessionKi
 	}) {
 		return fmt.Errorf("session: AI battle state initialization failed for player %d", player)
 	}
+	// Public map knowledge and the computer player's own sight, for a Modern
+	// controller (internal/aikit). The retail step reads neither.
+	if s.Mission != nil {
+		for _, sp := range s.Mission.Specials {
+			if sp.Kind == 1 {
+				mgr.StartPositions = append(mgr.StartPositions, [2]int32{int32(sp.X), int32(sp.Z)})
+			}
+		}
+	}
+	// The seed a Modern controller's private generator starts from; a copy of
+	// the entry seed, so no stream is advanced [I4 "Modern AI exception"].
+	// On a restored battle it is the load's own entry seed until the stage
+	// replaces it with the seed the save's sidecar recorded, when the sidecar
+	// carries one (RetailLoadDeps.AIControllers); the bank itself carries
+	// neither the seed nor the controller
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player").
+	mgr.BattleSeed = s.RNGSimSeed
+	mgr.UnitVisible = s.computerPlayerSeesOwn
 	bindAIQueue(mgr, s)
 	s.AI[player] = mgr
 	return nil
+}
+
+// publishStartOwners tells each computer player's manager which slot the
+// skirmish placement put on each start position, in StartPositions order.
+// A slot owns the first start-position record carrying its assigned stored
+// number, as the placement's own lookup resolves it [08 R-ENTRY-01 §5]
+// step 3. A manager whose StartPositions do not match the placement's
+// records keeps none, so it searches rather than trusting a misaligned
+// table. The managers share one read-only slice.
+func publishStartOwners(s *Session, starts []mission.Special, eligible []int, assignment map[int]int) {
+	owners := make([]int8, len(starts))
+	for i := range owners {
+		owners[i] = -1
+	}
+	for _, slot := range eligible {
+		perm, ok := assignment[slot]
+		if !ok {
+			continue
+		}
+		for i := range starts {
+			if int(starts[i].ID) == perm {
+				owners[i] = int8(slot)
+				break
+			}
+		}
+	}
+	for _, mgr := range s.AI {
+		if mgr == nil || len(mgr.StartPositions) != len(starts) {
+			continue
+		}
+		aligned := true
+		for i := range starts {
+			if mgr.StartPositions[i] != [2]int32{int32(starts[i].X), int32(starts[i].Z)} {
+				aligned = false
+				break
+			}
+		}
+		if aligned {
+			mgr.StartOwners = owners
+		}
+	}
 }
 
 // rallyProbeKnowledge binds the rally task to the visibility mode's LineOfSight
@@ -304,4 +363,169 @@ func clearLiveResourceStocks(s *Session) {
 func overwriteCampaignResources(s *Session, m *mission.Mission) error {
 	clearLiveResourceStocks(s)
 	return grantResourcesStrict(s, m)
+}
+
+// AIOverrides are the configured parameters of a battle's Modern AI computer
+// players (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+// "Configuration"): one layer for every computer player, one per battle
+// difficulty and one per player slot. Each layer is canonical text
+// (CanonicalAIParams) that the host has already checked against the brain's
+// vocabulary; the session knows no key. Battle entry merges the layers once
+// per computer player into ai.Manager.ControllerParams and never reads them
+// again. Like the mutators they ride in the battle-entry options and are
+// fixed for the battle; they change what a Modern controller's brain is
+// built with and nothing else, so every set that binds no such controller
+// carries them dormant. The zero value configures nothing.
+type AIOverrides struct {
+	// All applies to every computer player.
+	All string
+	// Difficulty applies by the difficulty the controller plays at
+	// (ControllerDifficulty), indexed 0 easy, 1 medium, 2 hard.
+	Difficulty [3]string
+	// Players applies to one slot, indexed from 0. The lobby and the
+	// settings file name slot i "player i+1".
+	Players [SkirmishMaxPlayers]string
+}
+
+// IsZero reports a set that configures nothing.
+func (o AIOverrides) IsZero() bool { return o == AIOverrides{} }
+
+// For is one computer player's effective parameters: the All layer, then its
+// difficulty's, then its slot's, merged key by key, so the most specific
+// layer that names a key sets it. The result is canonical.
+func (o AIOverrides) For(player uint8, difficulty ai.Difficulty) (string, error) {
+	layers := []string{o.All, o.Difficulty[difficultyLayer(difficulty)]}
+	if int(player) < len(o.Players) {
+		layers = append(layers, o.Players[player])
+	}
+	var merged []AIParam
+	for _, layer := range layers {
+		params, err := ParseAIParams(layer)
+		if err != nil {
+			return "", err
+		}
+		for _, p := range params {
+			merged = setAIParam(merged, p)
+		}
+	}
+	return joinAIParams(merged), nil
+}
+
+// difficultyLayer indexes AIOverrides.Difficulty.
+func difficultyLayer(d ai.Difficulty) int {
+	switch d {
+	case ai.DifficultyEasy:
+		return 0
+	case ai.DifficultyHard:
+		return 2
+	}
+	return 1
+}
+
+// ControllerDifficulty is the difficulty a Modern controller plays at: the
+// battle's word as the shared AI profile's plan gate holds it after
+// initializeBattleAI, with anything but easy or hard read as medium. The
+// Modern AI picks its persona by it and battle entry picks the AIOverrides
+// difficulty layer by it, so the two always agree.
+func ControllerDifficulty(p *ai.Profile) ai.Difficulty {
+	if p != nil && (p.Plan == ai.DifficultyEasy || p.Plan == ai.DifficultyHard) {
+		return p.Plan
+	}
+	return ai.DifficultyMedium
+}
+
+// AIParam is one key=value pair of a Modern controller's parameters.
+type AIParam struct{ Key, Value string }
+
+// ParseAIParams reads "key=value,key=value" text: the canonical form, a
+// save's record or a --ai argument. Space around a key or a value is
+// dropped, and the empty text is no parameters. A piece without "=", an
+// empty key or value, or a key named twice is an error. Whether a key and
+// its value mean anything is the brain's to say (mods/aikit
+// ValidateParams); this is only the text form.
+func ParseAIParams(text string) ([]AIParam, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	var out []AIParam
+	for _, piece := range strings.Split(text, ",") {
+		key, value, ok := strings.Cut(piece, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !ok || key == "" || value == "" {
+			return nil, fmt.Errorf("session: AI parameter %q: want key=value", strings.TrimSpace(piece))
+		}
+		for i := range out {
+			if out[i].Key == key {
+				return nil, fmt.Errorf("session: AI parameter %q is given twice", key)
+			}
+		}
+		out = append(out, AIParam{Key: key, Value: value})
+	}
+	return out, nil
+}
+
+// CanonicalAIParams is the canonical text of a parameter set: its pairs in
+// key order, each "key=value", joined by commas; "" when the set is empty.
+// Equal sets spell the same text whatever the map's order, which is what a
+// manager, a report and a save's record hold. A key or a value that is
+// empty, holds a separator or has surrounding space is an error.
+func CanonicalAIParams(kv map[string]string) (string, error) {
+	params := make([]AIParam, 0, len(kv))
+	for _, key := range slices.Sorted(maps.Keys(kv)) {
+		value := kv[key]
+		if !canonicalAIToken(key) || !canonicalAIToken(value) {
+			return "", fmt.Errorf("session: AI parameter %q=%q: want a key and a value without spaces, commas or '='", key, value)
+		}
+		params = append(params, AIParam{Key: key, Value: value})
+	}
+	return joinAIParams(params), nil
+}
+
+func canonicalAIToken(s string) bool {
+	return s != "" && !strings.ContainsAny(s, ",= \t\r\n")
+}
+
+// setAIParam sets p.Key to p.Value, replacing an earlier value.
+func setAIParam(params []AIParam, p AIParam) []AIParam {
+	for i := range params {
+		if params[i].Key == p.Key {
+			params[i].Value = p.Value
+			return params
+		}
+	}
+	return append(params, p)
+}
+
+// joinAIParams spells params canonically; it sorts them in place.
+func joinAIParams(params []AIParam) string {
+	sort.Slice(params, func(i, j int) bool { return params[i].Key < params[j].Key })
+	var b strings.Builder
+	for i, p := range params {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(p.Key)
+		b.WriteByte('=')
+		b.WriteString(p.Value)
+	}
+	return b.String()
+}
+
+// applyAIOverrides gives every computer player's manager its effective
+// Modern AI parameters (AIOverrides.For). A fresh battle entry calls it after
+// initializeBattleAI has set the shared profile's difficulty and before the
+// battle-entry prime can build a controller. A restored battle takes its
+// save's record instead (restoreAIControllers).
+func applyAIOverrides(s *Session, o AIOverrides) error {
+	for player, mgr := range s.AI {
+		if mgr == nil {
+			continue
+		}
+		params, err := o.For(uint8(player), ControllerDifficulty(mgr.Profile))
+		if err != nil {
+			return fmt.Errorf("nanolathe: Modern AI parameters rejected: logical path player %d, providers searched [battle-entry options], expected canonical key=value text: %w", player+1, err)
+		}
+		mgr.ControllerParams = params
+	}
+	return nil
 }

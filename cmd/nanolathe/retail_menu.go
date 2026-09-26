@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -54,6 +55,9 @@ func (g *gameShell) applyRetailSkirmishOpenRowsFallback() {
 	g.setup.Players[0].Controller = session.SkirmishDefaultController
 	g.retailControllers[1] = 2
 	g.setup.Players[1].Controller = 1
+	// A computer row this fallback adds is a new computer slot, so it plays
+	// the Modern AI (DESIGN_INTERFACE_HUD_INPUT §2.6 "Computer AI").
+	g.setup.Players[1].AI = ai.ControllerModern
 }
 
 // skirmishConfigForStart converts the authored retail row state into the
@@ -76,6 +80,8 @@ func (g *gameShell) skirmishConfigForStart(mapName string) session.SkirmishConfi
 		cfg.Players[out] = g.setup.Players[i]
 		if g.retailControllers[i] == 1 {
 			cfg.Players[out].Controller = session.SkirmishDefaultController
+			// Only a computer row carries an AI choice.
+			cfg.Players[out].AI = ai.ControllerClassic
 		} else {
 			cfg.Players[out].Controller = 1
 		}
@@ -514,13 +520,21 @@ func (g *gameShell) refreshSkirmishPanel() {
 		p.SetActive("Energy"+prefix, configured)
 		p.SetActive("Color"+prefix, configured)
 		if rowActive {
+			help := ""
 			switch controller {
 			case 1:
 				p.SetText("Player"+prefix, "Player")
 			case 2:
-				p.SetText("Player"+prefix, "Computer")
+				// Retail captions a computer row "Computer"; Nanolathe names
+				// the row's AI instead (computerAICaption).
+				p.SetText("Player"+prefix, computerAICaption(player.AI))
+				help = computerAIHelp(player.AI, false)
 			default:
 				p.SetText("Player"+prefix, "Open")
+			}
+			// The Survival screen writes its own row help afterwards.
+			if !g.survivalMenu {
+				p.SetHelp("Player"+prefix, help)
 			}
 			p.SetText("Metal"+prefix, strconv.Itoa(player.Metal))
 			p.SetText("Energy"+prefix, strconv.Itoa(player.Energy))
@@ -544,6 +558,31 @@ func (g *gameShell) refreshSkirmishPanel() {
 		p.SetHelp("Metal"+prefix, "Left click to increase metal. Right click to decrease metal.")
 		p.SetHelp("Energy"+prefix, "Left click to increase energy. Right click to decrease energy.")
 	}
+}
+
+// computerAICaption is a computer row's Player%d caption: the row's AI,
+// "Modern AI" or "Classic AI", in place of retail's "Computer". It is the
+// whole of the per-row choice's presentation: the retail row keeps its
+// layout and art, and the caption fits the name button
+// (DESIGN_INTERFACE_HUD_INPUT §2.6 "Computer AI").
+func computerAICaption(c ai.Controller) string {
+	if c == ai.ControllerModern {
+		return "Modern AI"
+	}
+	return "Classic AI"
+}
+
+// computerAIHelp is a computer row's hover help: what the row plays and what
+// a click does next, which on the skirmish screen continues retail's
+// controller cycle and on the Survival screen removes the ally.
+func computerAIHelp(c ai.Controller, survivalRow bool) string {
+	if c == ai.ControllerModern {
+		return "The Modern AI plays this computer player. Click for the Classic AI."
+	}
+	if survivalRow {
+		return "The Classic AI plays this computer ally. Click to remove it."
+	}
+	return "The Classic AI plays this computer player. Click to change the row."
 }
 
 // retailAllyIconFrame is the retail implementation, which runs after every change to a row

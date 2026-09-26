@@ -14,12 +14,9 @@ func (s *Session) finalizeReclaimRefund(victim *units.Unit) {
 	if attacker == nil {
 		return
 	}
-	var controller uint8
-	if int(attacker.Owner) < len(s.Econ.Players) {
-		player := &s.Econ.Players[attacker.Owner]
-		if player.Exists {
-			controller = player.ControllerState
-		}
-	}
-	s.Econ.CreditUnitReclaimRefund(attacker.Handle, victim.Remaining, victim.Def.BuildCostMetal, controller)
+	// The refund is discounted when the owner's record is an existing
+	// computer player's (control byte 2) that the lobby did not mark Modern;
+	// a Modern one is paid in full (DESIGN_ECONOMY_CONSTRUCTION "Modern AI
+	// full income").
+	s.Econ.CreditUnitReclaimRefund(attacker.Handle, victim.Remaining, victim.Def.BuildCostMetal, s.Econ.DiscountsCredit(attacker.Owner))
 }

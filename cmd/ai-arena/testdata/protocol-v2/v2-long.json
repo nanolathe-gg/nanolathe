@@ -1,0 +1,2 @@
+{"name":"v2-long","protocol":"v2","maps":["the pass","show down","plains and passes","greenhaven","sherwood","great divide"],"seeds":[301,302,303,304,305,306,307,308],"ticks":72000,
+ "pairs":[["util+tac:hard","util+tac:hard"],["util+tac:hard","util+tac:hard::naval=0,air=0,tech=0,layout=0,style=balanced,jitter=0,def_plan=0,posture=0,att_curve=0,passage=0,reach_mix=0,fleet=0,tidal_field=0,growth=0,unseen=0,harass=0,probe=0,tour=0,open_reclaim=0,open_army=0,metal=0,fac_backoff=0,personality=off,label=v1"]],"swap_sides":true,"starts":"random"}

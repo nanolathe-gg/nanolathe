@@ -560,7 +560,9 @@ callbacks. Producer tags and reconsideration timers add no retail save bytes;
 Strict neither marks these producers nor visits the new periodic policy.
 
 Current construction, factories, construction assistance and direct repair
-are protected from both reaction insertion and the AI damage purge. Temporary
+are protected from both reaction insertion and the AI damage purge. A Modern
+AI player's running move is also spared that purge, by the separate
+**Modern AI move retention** policy below. Temporary
 control records and an approach child cannot conceal an already started work
 parent. Future queued construction/repair behind a patrol or guard does not
 protect the unrelated current assignment. Repair provenance is an explicit
@@ -640,6 +642,85 @@ multi-threat and short-corridor withdrawal, maneuver return, secondary weapons,
 Fire at Will reconsideration versus Return Fire, queue isolation, mode switching
 and retail save restoration. The session owns visibility/feasibility composition
 and the integration, visual and performance gates.
+
+### Modern AI move retention
+
+**Nanolathe Modern policy (user-authorized 2026-09-25).** The user approved
+it in these words: "That modern rule to keep move orders sounds fine."
+
+*Strict 3.1.* When damage reaches a unit whose definition authors
+`cancapture` and whose owner's control byte is 2 (a computer player), the
+construction throttle draws `RNG(300)`, arms the owning manager's throttle
+deadline, and then selectively purges the unit's primary queue: every record
+without the purge-survivor flag goes, a running move included, and the rear
+queue stays `[08 R-AI-01 §11]` `[04 R-MOV-03 §6]`. The retail computer
+player never tries to walk its commander away from fire, so the purge costs
+it nothing. The Modern AI computer player does
+([DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player)):
+its commander and constructors retreat with plain move orders, and before
+this policy every hit erased the move, so the unit stopped where it was hit.
+Modern's protected work (**Modern danger response** above) already spared
+construction and repair, but not a plain move.
+
+*Modern.* `orders.Rules.KeepsMoveOnDamage` answers, after
+`ProtectWorkOnDamage`, whether the purge is skipped; when it answers yes the
+whole primary queue survives, exactly as it does for protected work. It
+answers yes only when both hold:
+
+- **Which players.** The unit's owner is a Modern AI player: a live computer
+  slot, not the Survival attacker, whose bound think step runs the Modern AI
+  controller for it (`Session.ModernAIPlayer`, handed to the queue binding as
+  `ModernAIPlayer`). That is a computer player the lobby, `--ai-player` or a
+  save marks Modern, and in the AI arena a player the arena gave a brain. A human player, a Classic
+  computer player and the Survival attacker never qualify.
+- **Which orders.** The running record of the unit's primary queue, read past
+  the temporary control records protected work also skips (activation,
+  cloak, the two standing orders and a stun), is a move record, `Move_Ground`
+  or `VTOL_Move`, whoever inserted it. Records queued behind it survive with
+  it. Any other running record — an attack, a reclaim, a patrol — is purged
+  as before unless protected work spares it.
+- **Which modes.** Modern and every registered set whose order rules derive
+  from `orders.ModernRules` without overriding this answer (the example
+  set). `orders.StrictRules` answers no and
+  `orders.CommunityRules` promotes it, so under Strict 3.1 and Community 3.9
+  the purge is retail's for every player, Modern AI players included.
+
+*Boundaries.* Only the purge decision changes. The throttle's one draw and
+its deadline are armed as before; the Modern AI controller does not read the
+deadline, and a Classic player's construction task still does. Return fire,
+the Modern danger response and the under-attack notice are untouched. The
+decision reads the queue and the player predicate only: it draws no random
+number, spends and credits nothing, adds no state and no save bytes. It is
+asked at each hit against the bound rules and the player's current think
+step, so a rule-set switch applies from the next hit, with nothing to unwind.
+
+*Tests.* `orders.TestModernAIMoveSurvivesTheDamagePurge` locks the Modern
+contract (a Modern AI player's running move and its successors survive, the
+record untouched), the Strict and Community bypass (purged as retail), a
+Classic player purged under Modern, and no draw in any case;
+`orders.TestModernAIMoveRetentionReadsTheRunningRecord` the air move, the
+control records skipped, an attack or reclaim purged and a binding with no
+predicate playing every owner Classic; `orders.TestAbsentRulesAnswerStrictWithoutDrawing`
+and `orders.TestRuleDispatchDoesNotAllocate` the seam. Through the composed
+damage path, `session.TestModernAIMoveRetentionThroughTheDamagePath` checks
+under Modern and Strict that a hit on a Modern AI or a Classic computer
+player's commander draws exactly the throttle's one number, that both leave
+equal simulation and CRT streams and equal stocks whichever way the purge
+went, and that only the Modern AI player under Modern keeps its move.
+
+*Observed (2026-09-25).* A battle where nobody fights a Modern AI
+commander or constructor never asks: the Great Divide seed 7 headless battle
+with its computer player Modern (27,000 ticks, an idle human; then
+`--gameplay modern-ai`, now `--gameplay modern --ai-player all=modern`,
+which gives the same hash) keeps its state hash (`e658c98a9a8ffb3c`), and so
+do a The Pass skirmish against an idle human and a Painted Desert Survival
+battle with two Modern buddies (18,000 ticks), where the purge reached a
+buddy's unit twice, both times protected construction. In four-player
+free-for-alls of Modern AI players at seed 7 (36,000 ticks) the policy
+spared a running move 91 times on The Pass and 193 times on Great Divide,
+and each battle then diverged from the same battle with only this answer
+switched off; every other purge the Modern AI players took there was spared
+by protected work or hit a non-move record.
 
 ### Modern guard assistance
 

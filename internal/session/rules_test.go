@@ -109,7 +109,7 @@ func TestBindRulesProjectsEverySeam(t *testing.T) {
 		if s.Movement.Rules != set.Movement {
 			t.Fatalf("%s did not reach the movement policy seam", set.Name)
 		}
-		if s.orderRules() != set.Orders || s.unitLimitRules() != set.UnitLimit {
+		if s.orderRules() != set.Orders || s.unitLimitRules() != set.UnitLimit || s.computerIncomeRules() != set.ComputerIncome {
 			t.Fatalf("%s accessors did not read the bound set", set.Name)
 		}
 	}
@@ -212,6 +212,9 @@ func TestBoundRuleDispatchDoesNotAllocate(t *testing.T) {
 				ruleDispatchSink = s.Combat.Rules.HoldsFire(&shooter, false)
 				ruleDispatchSink = s.Build.OrderBinding.Rules.HoldsFire(&shooter) || ruleDispatchSink
 				s.Build.Rules.YieldObstruction(nil, nil, rect, nil, 7, false)
+				// The income seam is asked by every re-projection, and a
+				// re-projection runs on every unit allocation.
+				s.projectComputerIncome()
 			}); allocs != 0 {
 				t.Fatalf("%s rule dispatch allocated %v per tick's worth of questions", set.Name, allocs)
 			}
@@ -355,6 +358,7 @@ func TestCompleteRuleSetFillsFromCommunityBase(t *testing.T) {
 		{name: "Movement", got: set.Movement, want: want.Movement},
 		{name: "Path", got: set.Path, want: want.Path},
 		{name: "Planner", got: set.Planner, want: want.Planner},
+		{name: "ComputerIncome", got: set.ComputerIncome, want: want.ComputerIncome},
 	} {
 		if reflect.TypeOf(seam.got) != reflect.TypeOf(seam.want) {
 			t.Fatalf("%s is %T, want Community base %T", seam.name, seam.got, seam.want)
@@ -402,6 +406,7 @@ func TestLookupRuleSetBuildsOnceAndCompletesFromItsBase(t *testing.T) {
 		{name: "Movement", got: first.Movement, want: modern.Movement},
 		{name: "Path", got: first.Path, want: modern.Path},
 		{name: "Planner", got: first.Planner, want: modern.Planner},
+		{name: "ComputerIncome", got: first.ComputerIncome, want: modern.ComputerIncome},
 		{name: "Orders", got: first.Orders, want: modern.Orders, overridden: true},
 	} {
 		same := reflect.TypeOf(seam.got) == reflect.TypeOf(seam.want)

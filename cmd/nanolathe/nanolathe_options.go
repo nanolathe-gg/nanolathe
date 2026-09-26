@@ -256,10 +256,13 @@ func (g *gameShell) syncNanolatheOptions() {
 	if optionsState == nil || optionsState.page != "nanolathe" || optionsPanel == nil {
 		return
 	}
-	// A third-party rule set shows the reserved layer it derives from; selecting
-	// a set by name is a command-line or settings-file choice
-	// (docs/DESIGN_GAMEPLAY_RULES.md §8).
-	optionsPanel.SetStageAt(optionsPanel.Index("NGAMEPLAY"), gameplayOptionStage(g.gameplay))
+	// A third-party rule set sits at the stage of the reserved layer it
+	// derives from, captioned with its own name; selecting a set by name is a
+	// command-line or settings-file choice (docs/DESIGN_GAMEPLAY_RULES.md §8).
+	if index := optionsPanel.Index("NGAMEPLAY"); index >= 0 {
+		optionsPanel.Window.Gadgets[index].Labels = gameplayOptionLabels(g.gameplay)
+		optionsPanel.SetStageAt(index, gameplayOptionStage(g.gameplay))
+	}
 	optionsPanel.SetStageAt(optionsPanel.Index("NRENDER"), boolInt(g.presentation.Renderer == "modern"))
 	g.syncNanolatheFPSStage()
 	// The Enhanced switches. Glow reads the display block; the others
@@ -351,6 +354,22 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 }
 
 var gameplayOptionModes = [...]gameplay.Mode{gameplay.Strict31, gameplay.Community39, gameplay.Modern}
+
+// gameplayOptionLabels are the gameplay control's three stage captions. The
+// control selects only the reserved sets, but the selection it shows may be a
+// registered set chosen by name on the command line or in the settings file,
+// and that choice is persisted like any other. Such a set is captioned with
+// its own name at the stage of the reserved set it derives from, so the page
+// never reads "Modern" while `example` is what the game runs and saves.
+// Cycling selects a reserved set, and the next sync restores its caption. The
+// control chooses rules only: each computer player's AI is its lobby row's.
+func gameplayOptionLabels(mode gameplay.Mode) []string {
+	labels := []string{"Strict 3.1", "Community 3.9", "Modern"}
+	if selected := mode.Normalize(); selected != session.BaseModeOf(selected) {
+		labels[gameplayOptionStage(selected)] = string(selected)
+	}
+	return labels
+}
 
 func gameplayOptionStage(mode gameplay.Mode) int {
 	base := session.BaseModeOf(mode)

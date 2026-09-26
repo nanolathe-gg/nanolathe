@@ -1,0 +1,2 @@
+{"name":"v2-ladder","protocol":"v2","maps":["great divide","the pass","dark side","red planet","full moon","sherwood","metal heck","comet catcher","evad river confluence","ashap plateau","painted desert","coast to coast"],"seeds":[301,302,303,304,305,306,307,308],"ticks":36000,
+ "pairs":[["util+tac:easy","retail"],["util+tac:medium","retail"],["util+tac:medium","util+tac:hard"],["util+tac:easy","util+tac:medium"]],"swap_sides":true,"starts":"random"}

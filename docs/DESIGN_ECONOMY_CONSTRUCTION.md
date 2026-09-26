@@ -622,6 +622,78 @@ units plus the start bonus `[05 "Terrain metal extraction"]`
 `[05 R-PROD-01 §6]` `[05 "Storage capacity"]` `[05 "Completed-unit eligibility"]`
 `[05 R-ECO-01 §4]`.
 
+### Modern AI full income
+
+**Nanolathe policy (user-authorized 2026-09-24; in every rule set since
+2026-09-25), not retail evidence.** It belongs to the
+[Modern AI computer player](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player),
+a mode-independent exception (AGENTS.md): a computer player the lobby, the
+command line or a save marks Modern is paid in full under Strict 3.1,
+Community 3.9, Modern and every other set (user decision 2026-09-25: "Full
+in every mode"). That player's difficulty is its persona — how often it
+looks, how late it acts, how much it attempts — and its personas were
+measured on full income, so difficulty does not also cut its income. A
+Classic computer player keeps its rule set's answer, so Strict 3.1 with only
+Classic players is the retail baseline and every fingerprint lock is
+unchanged.
+
+**Strict baseline.** The battle's difficulty word selects the computer
+players' discount: a computer player is credited half of each positive
+production contribution on easy, seven tenths on medium and the whole amount
+on hard, and the same word selects the discount at the feature-reclaim credit,
+the unit-reclaim refund and the construction refund sites (reverse work,
+cancellation and unattended decay) `[05 R-ECO-01 §3]` `[05 R-ECO-01 §11]`
+`[05 R-WORK-01 §4]`. Strict 3.1, Community 3.9 and the reserved Modern set
+keep it: each binds a `session.ComputerIncomeRules` layer that answers the
+difficulty word unchanged, for every computer player that is not marked
+Modern.
+
+**Modern AI behaviour.** The ledger's player record carries a Nanolathe mark,
+`economy.Player.FullIncome`, which the session sets for every computer player
+marked Modern (`ai.Manager.Controller`) and clears for every other. A marked
+player takes the plain credit a human takes at every discount site: the
+production contributions (and a share it receives), the feature-reclaim
+credit and the unit-reclaim refund in the ledger (`economy.Service.DiscountsCredit`),
+and the construction refunds, whose computer-player test the session binds
+(`construction.Service.IsSpecialSecondState`). Plain means whole: no
+difficulty discount and, with the ProTA 4.8 table's `aiDifficultyIncome`,
+no package factor either, so the credit is the same at every difficulty.
+The lobby difficulty still reaches the AI profile and, through it, the
+persona.
+
+**The AI arena's sets.** The arena's `aikit` set composes
+`session.FullComputerIncome`, which answers the undiscounted word for every
+computer player of the battle, retail planner and brain alike, so a match
+measures planners on equal full income; `aikit-retail-income` keeps the
+retail answer for every one of them. The arena gives a brain to a manager
+directly and never marks the player Modern, so the mark does not apply there.
+
+**Boundaries.** Only who is discounted changes. The discount's sites,
+arithmetic, precision and selector word are untouched for every other
+player, and nothing draws from either stream. The session projects the mark
+outside any tick — on every rule-set bind, beside the set's word, and
+whenever battle entry or a load marks a player — so it follows the lobby
+mark in every set and a switch changes nothing for a Modern player. The mark
+is not a save field: a load takes the Modern players from the save's
+Nanolathe record and marks them again, and a load without the record marks
+nobody. A battle of Classic players marks nobody, so its credits are the
+retail ones.
+
+**Verification.** `economy.TestAFullIncomePlayerIsCreditedAsAHuman` (every
+discount site, every difficulty, with and without the ProTA table, beside a
+Classic computer player on the retail ladder),
+`session.TestAModernPlayerIsPaidInFullInEveryRuleSet` (the mark under every
+reserved set and the arena's full-income shape, the construction and ledger
+tests, the credits themselves, and no stream draw),
+`session.TestTheSaveRecordCarriesTheModernPlayers` (the mark after a load),
+`session.TestComputerIncomeFollowsEveryBind` (both selectors across switches
+between Modern, full income, Strict 3.1 and Community 3.9, and across
+re-projection), `session.TestComputerIncomeReachesServicesComposedAfterTheBind`,
+`session.TestReservedSetsKeepTheRetailComputerDiscount`, and the retail ladder
+through composition, `session.TestComposedConstructionRefundDifficulty`. The
+three reserved fingerprint locks and the reserved sets' Great Divide headless
+reports do not move.
+
 ### 3.3 Construction — C15…C24
 
 **C15 — one queue.** Factory and mobile products live as typed payloads on

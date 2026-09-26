@@ -480,6 +480,7 @@ var mapRangeExceptions = map[string]string{
 	"internal/construction/placement.go *Service.SnapshotLinks 25a0e243eae77988d06fc0ea4c7529adb42fc0c4bc4a0a0b640eee53edbee946":   "gathers records and sorts product then builder before returning",
 	"internal/session/ai_entry.go initializeBattleAI ccc09334e9842e8b751ea2fb6be83c568675169ad3be0e46d82e3aa365396b71":             "gathers catalog keys and sorts them before strategic initialization",
 	"internal/session/mission.go pruneRestrictedBuildMenus 7e59e489ce3fe77412e3b63fa6daf9a84cea740f31e48ffa7cc12a8ce2812e4f":       "gathers builder keys and sorts them before rewriting the catalog",
+	"internal/aikit/brains/utility/params.go ParseParams 05169ff4b658fc9b5db5f74110b55fdb14e68b2d1a5750d874b6fccd484c4cd0":         "gathers the override names and sorts them before any is applied; it runs when a brain is built from a player spec, never in a think",
 }
 
 // mapFunctionHashes bind the enclosing operation as well as its individual
@@ -513,12 +514,18 @@ var mapFunctionHashes = map[string]string{
 	"internal/save/battle_image.go validateCarrierReferenceGraph": "3dd0048516ffdf5e47c88f0d813e8ea79da1990b598ab004ebc0fd0f6d031da0",
 	// Re-audited: the manager literal now also takes the bound rule set's
 	// think step, construction membership rule and the projected ProTA package
-	// AI switches. The catalog-key union, its sort and the order every consumer
-	// sees are unchanged (I1).
-	"internal/session/ai_entry.go initializeBattleAI": "d16f7cb07404e2562c8de87850e13ca625ee89fee5ec5272b280404316fb4dbd",
+	// AI switches, and the manager copies the battle seed for a Modern
+	// controller's private generator. The two sight predicates are session
+	// methods (the retail rally one and the Modern controller's own-coverage
+	// one). The catalog-key union, its sort and the order every consumer sees
+	// are unchanged (I1).
+	"internal/session/ai_entry.go initializeBattleAI": "da22bc07e8158042bdbb851558aa6acebdd0bde7af894fe2b43e9601fbceb591",
 	// Re-audited: both immutable membership lists are filtered after the same
 	// sorted builder-key walk; no map-order-dependent decisions were added.
-	"internal/session/mission.go pruneRestrictedBuildMenus":       "c3aa02729cb3a830ca92bcefe79a443222aec45bbb113205058dbd0579365b29",
+	"internal/session/mission.go pruneRestrictedBuildMenus": "c3aa02729cb3a830ca92bcefe79a443222aec45bbb113205058dbd0579365b29",
+	// A Modern AI brain's parameter overrides, applied in sorted name order
+	// when the brain is built; a think never reaches it (I1).
+	"internal/aikit/brains/utility/params.go ParseParams":         "4e69b3d510bbaf5e0ae6ad1d6ef0e39443eae75eda7d248adc2a29c386de3e19",
 	"internal/units/cob_binding.go bindUnitPortHandlers":          "31dfa18e2683e5bec165669f55e4f5dad260588513831504622f3b1596ba5548",
 	"internal/units/cob_binding.go bindCOBWithPortsAndVisibility": "68a25d9937cf032996d5feb8d96ce60224e51e9aa8e1bc13808fd2eff2ecfe75",
 }
@@ -547,12 +554,12 @@ func mapRangeViolations(sites []typedMapRange, rangeExceptions, functionHashes m
 		functionKey := site.functionKey()
 		expected, ok := functionHashes[functionKey]
 		if !ok {
-			failures = append(failures, fmt.Sprintf("%s:%d: map range has no function audit for %q", site.path, site.line, functionKey))
+			failures = append(failures, fmt.Sprintf("%s:%d: map range has no function audit for %q; audit it and pin %s", site.path, site.line, functionKey, site.functionHash))
 			continue
 		}
 		seenFunctions[functionKey] = true
 		if site.functionHash != expected {
-			failures = append(failures, fmt.Sprintf("%s:%d: audited map function changed: %s", site.path, site.line, functionKey))
+			failures = append(failures, fmt.Sprintf("%s:%d: audited map function changed: %s; re-audit it and pin %s", site.path, site.line, functionKey, site.functionHash))
 		}
 	}
 	for key := range rangeExceptions {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/community"
@@ -311,5 +312,43 @@ func TestGameplaySwitchRetainsHostSelectionOnInvalidFeatures(t *testing.T) {
 	g.setGameplay(gameplay.Community39)
 	if g.gameplay != gameplay.Strict31 || g.opts.Gameplay != gameplay.Strict31 || sess.Gameplay != gameplay.Strict31 || len(sess.PendingHumanCommands()) != 0 {
 		t.Fatal("rejected switch changed host or session")
+	}
+}
+
+// The control shows the selection the game runs and persists: a registered
+// set is captioned with its own name at its base's stage, and the reserved
+// sets keep their reserved captions. The arena's research set is not linked
+// into the game, so it is not selectable at all, and the retired modern-ai
+// selection is refused with its replacement: the Modern AI is chosen per
+// computer player, never by a gameplay rule set.
+func TestGameplayOptionShowsTheSelectedSet(t *testing.T) {
+	reserved := []string{"Strict 3.1", "Community 3.9", "Modern"}
+	for _, name := range session.RuleSetNames() {
+		mode := gameplay.Mode(name)
+		labels := gameplayOptionLabels(mode)
+		stage := gameplayOptionStage(mode)
+		for i, label := range labels {
+			want := reserved[i]
+			if i == stage && session.BaseModeOf(mode) != mode {
+				want = name
+			}
+			if label != want {
+				t.Fatalf("%s: stage %d caption %q, want %q", name, i, label, want)
+			}
+		}
+	}
+	for _, name := range session.RuleSetNames() {
+		if name == string(gameplay.RetiredModernAI) || name == "aikit" {
+			t.Fatalf("the game offers %q", name)
+		}
+	}
+	if labels := gameplayOptionLabels(gameplay.RetiredModernAI); labels[2] != "Modern" {
+		t.Fatalf("the retired modern-ai word captions %v", labels)
+	}
+	if _, err := parseFlags([]string{"--gameplay=aikit"}, io.Discard); err == nil {
+		t.Fatal("the arena's research set is selectable in the game")
+	}
+	if _, err := parseFlags([]string{"--gameplay=modern-ai"}, io.Discard); err == nil || !strings.Contains(err.Error(), "--ai-player all=modern") {
+		t.Fatalf("the retired modern-ai selection was not refused with its replacement: %v", err)
 	}
 }

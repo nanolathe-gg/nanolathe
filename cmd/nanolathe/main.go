@@ -185,6 +185,11 @@ func run(opts Options, out, errOut *os.File) error {
 	if opts.Mutators, err = resolveStartupMutators(opts); err != nil {
 		return err
 	}
+	// The Modern AI parameters, under the same precedence; a bad key or value
+	// in the saved block stops the start rather than being ignored.
+	if opts.AIOverrides, err = resolveStartupAIOverrides(opts); err != nil {
+		return err
+	}
 	// Only a command line that names both is refused: a saved mod never stops
 	// the start, and the window raises the selection to its minimum visibly.
 	if minimum, ok := modMinimumGameplay(content.mod); ok && opts.GameplaySet && !content.savedMod && gameplayBelow(opts.Gameplay, minimum) {

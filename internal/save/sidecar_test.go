@@ -1,6 +1,7 @@
 package save
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -95,5 +96,38 @@ func TestSidecarRefusesAnotherSchemaAndMalformedFiles(t *testing.T) {
 		if _, ok, err := ReadSidecar(bank); err == nil || ok {
 			t.Fatalf("%s: ReadSidecar = (%v, %v), want an error", name, ok, err)
 		}
+	}
+}
+
+// The Modern AI record rides in the sidecar as raw JSON and comes back with
+// the same content; a sidecar without it reads as having none
+// (docs/DESIGN_MODS_MUTATORS.md §7.2).
+func TestSidecarCarriesTheAIRecord(t *testing.T) {
+	dir := t.TempDir()
+	const record = `{"seed":7,"generators":[{"player":1,"position":9}]}`
+	bank := filepath.Join(dir, "ai.SAV")
+	if err := WriteSidecar(bank, Sidecar{Profile: "nanolathe-1.0", AI: json.RawMessage(record)}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := ReadSidecar(bank)
+	if err != nil || !ok {
+		t.Fatalf("read: ok %v, err %v", ok, err)
+	}
+	var want, have any
+	if err := json.Unmarshal([]byte(record), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got.AI, &have); err != nil {
+		t.Fatalf("ai record does not parse after the round trip: %v", err)
+	}
+	if !reflect.DeepEqual(want, have) {
+		t.Fatalf("ai record %s, want %s", got.AI, record)
+	}
+	plain := filepath.Join(dir, "plain.SAV")
+	if err := WriteSidecar(plain, Sidecar{Profile: "nanolathe-1.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := ReadSidecar(plain); err != nil || len(got.AI) != 0 {
+		t.Fatalf("a sidecar without the record read back %q (err %v)", got.AI, err)
 	}
 }

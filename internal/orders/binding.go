@@ -44,6 +44,13 @@ type QueueBinding struct {
 	DangerCanRespond    func(observer, target *units.Unit, slot int) bool
 	DangerStepFeasible  func(u *units.Unit, x, z numeric.Fixed) bool
 	DangerRouteFeasible func(u *units.Unit, x, z numeric.Fixed) bool
+	// ModernAIPlayer reports whether owner is a computer player the Modern
+	// AI controller decides for. Queues share this binding across players,
+	// so the owner is an argument. Only a Modern policy that covers those
+	// players alone asks it ("Modern AI move retention",
+	// docs/DESIGN_UNITS_ORDERS_COB.md); nil answers no, so an unbound
+	// fixture plays every player as Classic.
+	ModernAIPlayer func(owner uint8) bool
 
 	Economy interface {
 		UnitBuckets(pool.Handle) *[2]economy.Bucket

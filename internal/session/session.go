@@ -185,6 +185,18 @@ type Session struct {
 	Mission  *mission.Mission
 	Snapshot *frame.Buffer
 
+	// aiShared is the battle's one slot for what a Modern controller derives
+	// from the map alone, given to every computer player's manager
+	// (ai.Manager.Shared). It belongs to this session, so two battles never
+	// share it, and it is not saved.
+	aiShared *ai.BattleShared
+	// modernAI is the Modern AI controller's think step, resolved from the
+	// slot mods/aikit fills (RegisterModernAI) when a battle first has a
+	// computer player marked Modern, and projected onto that player's
+	// manager in place of the bound set's own step (plannerFor). Nil while
+	// no player is marked Modern.
+	modernAI ai.Planner
+
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
 	debris      *render.DebrisPool
 	// orderSnapshotScratch and routePointScratch are the publication
@@ -837,7 +849,46 @@ func (s *Session) IsUnitVisible(viewer int, target *units.Unit) bool {
 	// Unit.Hidden IS that instance bit; Unit.IsCloaked is the request, and a
 	// unit whose owner could not pay this pass requests cloak while being fully
 	// visible and targetable (WU-19-92).
-	return s.Vis.IsVisible(vid, unitVisibilityTarget(target, status))
+	var t visibility.Target
+	fillUnitVisibilityTarget(&t, target, status)
+	return s.Vis.IsVisible(vid, t)
+}
+
+// fillUnitVisibilityTarget writes one unit's visibility query into t in place:
+// the definition-bounds hull about the unit's position, its instance cloak bit
+// and the given runtime status, and the Community substitute's origin, flight
+// and occupancy-stamp inputs [06 §3.1][03 §3.2][community patch engine
+// behavior CP-ENV-1(a)]. unitVisibilityTarget is its by-value form.
+//
+// The hull is visibility.TargetFromBounds' arithmetic, written field by field:
+// the first probe at the bounds' minimum X, maximum Y and minimum Z, and each
+// span subtracted in signed 32 bits before widening [06 §3.1][03 §3.2].
+// Building the query as a literal and passing it through TargetFromBounds by
+// value zeroed and copied the whole record several times per call, which was a
+// large part of the Modern AI observation — one query per hostile unit — and
+// of frame publication (docs/MODERN_AI_RESEARCH.md §5.1).
+// TestUnitVisibilityTargetIsTargetFromBounds holds the two forms together.
+func fillUnitVisibilityTarget(t *visibility.Target, u *units.Unit, status uint32) {
+	if u == nil {
+		*t = visibility.Target{}
+		return
+	}
+	min, max := u.Def.BoundingExtents()
+	t.UnitID = uint16(u.Handle)
+	t.Owner = visibility.PlayerID(u.Owner)
+	t.X = u.X + numeric.Fixed(min[0])
+	t.Y = u.Y + numeric.Fixed(max[1])
+	t.Z = u.Z + numeric.Fixed(min[2])
+	t.OriginX, t.OriginY, t.OriginZ = u.X, u.Y, u.Z
+	t.Flying = u.Move.ModeMirror == 2
+	t.OffMap = false
+	t.FootprintX, t.FootprintZ = int32(u.CachedOccupancyX), int32(u.CachedOccupancyZ)
+	t.FootprintSizeX, t.FootprintSizeZ = int32(u.FootprintSizeX), int32(u.FootprintSizeZ)
+	t.XExtent = numeric.Fixed(max[0] - min[0])
+	t.YExtent = numeric.Fixed(max[1] - min[1])
+	t.ZExtent = numeric.Fixed(max[2] - min[2])
+	t.Hidden = u.Hidden
+	t.Status = status
 }
 
 // handleTeardownA implements state 0 cleanup variant A, then state 2 [08 "Session states"].
@@ -865,10 +916,13 @@ func handleTeardownB(s *Session) {
 // belong to their concrete command/platform owners [01 §2.3]. Simulation pools
 // remain owned by their respective services. The strip table is destroyed with
 // every object at battle exit [R-CORE-01 §4.4.1]; a fresh battle entry
-// allocates a new one.
+// allocates a new one. A Modern computer-player controller is stopped here as
+// well, so an asynchronous worker never outlives its battle
+// (docs/DESIGN_GAMEPLAY_RULES.md "The Modern AI controller").
 func (s *Session) teardown(variant int) {
 	_ = variant
 	s.strips.release()
+	s.closeAIControllers()
 }
 
 // handleRouter implements state 2 front-end/session router, selects 3|4|5 [08 "Session states"].

@@ -1000,11 +1000,15 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		DangerCanRespond:    s.dangerCanRespond,
 		DangerStepFeasible:  s.dangerStepFeasible,
 		DangerRouteFeasible: s.dangerRouteFeasible,
-		Damage:              s.acceptDamage,
-		Economy:             s.Econ,
-		Lookup:              worldQueries.LookupUnit,
-		Hostility:           worldQueries.Hostile,
-		SimRNG:              s.SimRNG(),
+		// Which players the Modern AI decides for, read by the Modern order
+		// policies that cover those players alone (DESIGN_UNITS_ORDERS_COB
+		// "Modern AI move retention").
+		ModernAIPlayer: s.ModernAIPlayer,
+		Damage:         s.acceptDamage,
+		Economy:        s.Econ,
+		Lookup:         worldQueries.LookupUnit,
+		Hostility:      worldQueries.Hostile,
+		SimRNG:         s.SimRNG(),
 		CurrentTick: func() uint32 {
 			if s.Clock == nil {
 				return 0
@@ -1480,8 +1484,11 @@ func (s *Session) bindConstructionEconomy(service *construction.Service) {
 	} else if word, ok := sessionDifficultyWord(s); ok {
 		service.ModeSelector = word
 	}
+	// A computer player the lobby marked Modern is paid in full, so its
+	// refunds skip the discount (DESIGN_ECONOMY_CONSTRUCTION "Modern AI full
+	// income"); the mark is false for every player of a Classic battle.
 	service.IsSpecialSecondState = func(owner uint8) bool {
-		return s.Econ != nil && int(owner) < len(s.Econ.Players) && s.Econ.Players[owner].ControllerState == 2
+		return s.Econ != nil && int(owner) < len(s.Econ.Players) && s.Econ.Players[owner].ControllerState == 2 && !s.Econ.Players[owner].FullIncome
 	}
 }
 
@@ -1749,7 +1756,10 @@ func createAndBindServices(s *Session) error {
 	// battle's difficulty word [05 R-ECO-01 §3]; it is the same word the AI
 	// plan gate reads, through the same accessor. A word outside 0..2 leaves
 	// the selector unset, which the ledger already treats as the undiscounted
-	// (hard) path rather than guessing a value.
+	// (hard) path rather than guessing a value. No rule set is bound yet; the
+	// bind that follows projects the bound set's answer over this word
+	// (projectComputerIncome), so a set asking for full computer income is
+	// applied there, once, for every composition path.
 	if word, ok := sessionDifficultyWord(s); ok {
 		s.Econ.SetEconomySelector(word)
 	}
@@ -2227,6 +2237,9 @@ func sessionAIDifficulty(s *Session) (ai.Difficulty, bool) {
 // AI profile's plan gate [08 R-AI-01 §12] and the ledger's production discount
 // for a computer player, whose "global mode selector" is established as this
 // same difficulty word [05 R-ECO-01 §3]. One reader, so there is one copy.
+// A bound rule set may project a different word onto the ledger
+// (projectComputerIncome); it derives that word from this reader when it is
+// bound and keeps no copy of the difficulty of its own.
 // A word outside the vocabulary is reported absent rather than guessed.
 func sessionDifficultyWord(s *Session) (int, bool) {
 	if s == nil {

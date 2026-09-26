@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 )
 
 // Nanolathe preferences migrate independently of the retail display block
@@ -504,5 +507,158 @@ func TestMutatorsAndModRoundTrip(t *testing.T) {
 	}
 	if got.Mutators != nil || got.Mod != (ModSelection{}) {
 		t.Fatalf("absent keys loaded as %v %+v", got.Mutators, got.Mod)
+	}
+}
+
+// The `modernAI` block is stored and round-tripped verbatim, like the
+// mutators: this package does not know the brain's keys, so an entry the
+// desktop command will refuse still survives a save. A value may be written
+// as a string or a number; a value of another type fails the parse rather
+// than being dropped, and an empty block is omitted from the file.
+func TestModernAIBlockRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	file := `{"version": 1, "modernAI": {"all": {"style": "eco", "jitter": 0},
+		"difficulty": {"hard": {"w_army": 120}}, "players": {"2": {"style": "tower", "notAKey": "1"}}}}`
+	if err := os.WriteFile(path, []byte(file), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ModernAI{
+		All:        AIParams{"style": "eco", "jitter": "0"},
+		Difficulty: map[string]AIParams{"hard": {"w_army": "120"}},
+		Players:    map[string]AIParams{"2": {"style": "tower", "notAKey": "1"}},
+	}
+	if !reflect.DeepEqual(got.ModernAI, want) {
+		t.Fatalf("loaded %+v, want %+v", got.ModernAI, want)
+	}
+	if err := got.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := LoadFrom(path)
+	if err != nil || !reflect.DeepEqual(again.ModernAI, want) {
+		t.Fatalf("round trip %+v (%v), want %+v", again.ModernAI, err, want)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"version": 1, "modernAI": {"all": {"jitter": false}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFrom(path); err == nil {
+		t.Fatal("a boolean value loaded")
+	}
+
+	empty := Defaults()
+	empty.ModernAI = ModernAI{All: AIParams{}, Players: map[string]AIParams{}}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"modernAI"`)) {
+		t.Fatalf("an empty block must be omitted:\n%s", data)
+	}
+}
+
+// A skirmish row's AI is "classic" or absent, and absence is the Modern AI:
+// "classic" in any case reads as Classic, while "modern", an unknown word and
+// no word at all read as Modern, and a save writes the word only for a
+// Classic row (user decision 2026-09-25).
+func TestSkirmishRowAIRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	file := `{"version": 1, "skirmish": {"numPlayers": 4, "players": [
+		{"controller": 1}, {"controller": 2, "ai": "Modern"}, {"controller": 2, "ai": " Classic "},
+		{"controller": 2, "ai": "genius"}, {"controller": 2}]}}`
+	if err := os.WriteFile(path, []byte(file), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"", "", PlayerAIClassic, "", ""} {
+		if got.Skirmish.Players[i].AI != want {
+			t.Fatalf("row %d AI %q, want %q", i, got.Skirmish.Players[i].AI, want)
+		}
+	}
+	if err := got.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), `"ai"`); n != 1 || !strings.Contains(string(data), `"ai": "classic"`) {
+		t.Fatalf("the saved file names a row AI %d times, want the Classic row once:\n%s", n, data)
+	}
+}
+
+// A file written before the per-row choice existed names no row AI, so every
+// computer row loads on the Modern AI; a file written by the first per-row
+// encoding stored "modern" for a Modern row and nothing for a Classic one,
+// and every row of it loads Modern too (user decision 2026-09-25: old rows
+// switch to Modern).
+func TestOldSettingsRowsLoadModern(t *testing.T) {
+	for name, file := range map[string]string{
+		"before the choice":       `{"version": 1, "gameplay": "strict-3.1", "skirmish": {"numPlayers": 3, "players": [{"controller": 1}, {"controller": 2}, {"controller": 2}]}}`,
+		"the first row encoding":  `{"version": 1, "gameplay": "strict-3.1", "skirmish": {"numPlayers": 3, "players": [{"controller": 1}, {"controller": 2, "ai": "modern"}, {"controller": 2}]}}`,
+		"no skirmish rows at all": `{"version": 1, "gameplay": "strict-3.1"}`,
+	} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		if err := os.WriteFile(path, []byte(file), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadFrom(path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got.Gameplay != gameplay.Strict31 {
+			t.Fatalf("%s: gameplay %q", name, got.Gameplay)
+		}
+		for i, p := range got.Skirmish.Players {
+			if p.AI != "" {
+				t.Fatalf("%s: row %d AI %q, want the Modern default", name, i, p.AI)
+			}
+		}
+	}
+}
+
+// The retired modern-ai selection loads as Modern with every row on the
+// Modern AI, Classic rows included, which is the game it selected; saving
+// it back writes neither the word nor a Classic row.
+func TestTheRetiredModernAISelectionLoadsAsModernWithModernRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	file := `{"version": 1, "gameplay": "modern-ai", "skirmish": {"numPlayers": 3, "players": [
+		{"controller": 1}, {"controller": 2, "ai": "classic"}, {"controller": 2}]}}`
+	if err := os.WriteFile(path, []byte(file), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Gameplay != gameplay.Modern {
+		t.Fatalf("gameplay %q, want modern", got.Gameplay)
+	}
+	for i, p := range got.Skirmish.Players {
+		if p.AI != "" {
+			t.Fatalf("row %d AI %q, want the Modern AI", i, p.AI)
+		}
+	}
+	if err := got.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "modern-ai") || strings.Contains(string(data), `"ai"`) {
+		t.Fatalf("the saved file keeps the retired selection:\n%s", data)
 	}
 }

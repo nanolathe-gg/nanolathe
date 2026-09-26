@@ -143,6 +143,7 @@ The owners are intentionally ordered by entry and runtime role:
 | segmented-projectile presentation | client copy taken at battle binding | retail draws the live main-thread CRT `[01 R-DET-01 §5]` |
 | effect strips, including nanolathe particles | phase-11 session state; draws the retained session CRT and publishes completed particles | retail's tick-side effect draws use the main-thread CRT `[01 R-DET-01 §4]` `[03 R-STRIP-01 §3]` |
 | battle restore | load supplies a fresh explicit pair; the save restores neither stream | retail reseeds simulation while main-thread CRT history continues `[08 "Scheduler and random state in saves"]` `[01 R-CORE-02]` |
+| Modern AI decisions (computer players marked Modern) | one private PCG32 per such computer player, owned by its controller and seeded from the battle's simulation seed and the slot; it never draws from or seeds either stream | none: Nanolathe policy, user-authorized 2026-09-24 and, per player in every mode, 2026-09-25 (§5) |
 
 Which stream draws, and when, is a per-phase fact `[01 R-DET-01 §4]`
 `[01 R-DET-01 §5]`. Gameplay draws from the simulation stream. The retained
@@ -762,6 +763,19 @@ initialization, whose authoritative entries are integers `[04 §5.1]`.
   render/audio cadence therefore cannot move authoritative battle state, and
   setup draws cannot move gameplay history. This is the approved isolation
   policy behind I4 and I6; it is one behavior with no compatibility mode.
+* **The Modern AI controller** (user-authorized 2026-09-24; per player in
+  every gameplay mode since 2026-09-25). For each computer player marked
+  Modern, the player's decisions come from a controller with a private
+  generator and, optionally, a background think ([INVARIANTS.md](INVARIANTS.md) I1 and I4, "Modern AI exception"). The
+  generator never touches either stream. The simulation thread builds the
+  controller's observation in phase 5 and applies its commands at a fixed
+  reaction deadline, joining a background think there, so the tick is the same
+  whichever thread thought. Its decisions replace the retail planner's and
+  their simulation draws; the strategic refresh keeps its draw in the retail
+  position. A Classic computer player binds no controller, so a battle of
+  Classic players — every fingerprint lock — keeps its streams and
+  fingerprints unchanged in every rule set
+  ([DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-modern-ai-controller)).
 * **A zero bound on the CRT sampler.** Retail's unsigned divide would fault. The
   draw is still consumed — retail draws before the divide — and zero is
   returned rather than panicking (C9) [I11].

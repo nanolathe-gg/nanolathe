@@ -467,9 +467,11 @@ choices for play-testing, recorded here so they change in one place.
   every skirmish control handler serves it unchanged; the skirmish rows are
   set aside and restored on leaving, and the settings file only ever records
   the skirmish rows. Changes from the skirmish screen:
-  - three rows: the human, always Player, and two buddy rows that toggle
-    between Open and Computer; the allegiance icons are hidden (the team is
-    fixed);
+  - three rows: the human, always Player, and two buddy rows that a click
+    walks from Open to Modern AI, Classic AI and back to Open, so a new ally
+    starts on the Modern AI (user decision 2026-09-25); the caption names
+    the buddy's AI (§16, and DESIGN_INTERFACE_HUD_INPUT §2.6 "Computer AI");
+    the allegiance icons are hidden (the team is fixed);
   - Wave Pace (Normal, Relaxed, Relentless) takes the start-location
     control's framed slot and label, cloned from Difficulty;
   - Air Waves and Naval Waves (On, Off) sit under the player box, cloned from
@@ -489,6 +491,10 @@ choices for play-testing, recorded here so they change in one place.
 
 - `--survival` on `nanolathe` and `nanolathe-headless`, with `--map`; with
   `--survival-buddies 0..2`. Rejected with `--mission` and `--load-save`.
+- `--ai-player 2=<classic|modern>` and `--ai-player 3=<classic|modern>`
+  choose the buddies' AI by lobby row (§16), and `--ai-player all=modern`
+  marks every buddy; an omitted buddy is Classic, and row 4 (the attacker,
+  with two buddies) is refused.
 - The headless report's scenario kind is `survival`, with the Survival
   counters and the last wave reached. This is how the director is tested.
 
@@ -535,6 +541,10 @@ Strict 3.1.
 
 The single-player menu button and the Survival setup screen (§9) are in.
 
+The Modern AI's survival brain for Modern computer buddies (§16) is in,
+chosen per buddy in every gameplay mode: the scenario record and the published warnings, the
+composition, the survival layer, its keys, and its tests.
+
 Not yet: best scores; an entry-edge minimap marker.
 
 ## 14. Proposals awaiting confirmation
@@ -559,3 +569,406 @@ Not yet: best scores; an entry-edge minimap marker.
 - Reachability flood fills per class and their rebuild cost on large maps.
 - An entry-edge minimap marker.
 - Balance: every §7 value is a starting point for play-testing.
+- The survival brain's open items are in §16.7.
+
+## 16. Computer survivors under the Modern AI
+
+Each buddy is Classic or Modern, chosen per buddy on the Survival screen
+(§9) or by `--ai-player` (§10), in every gameplay mode (user decision
+2026-09-25; [DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player)
+"Per-player selection"); `--ai-player all=modern` marks both. A Modern
+buddy is the
+[Modern AI computer player](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player).
+Its skirmish brain looks for an enemy base, spreads a wide base and attacks
+out. In Survival there is no base to find and the waves come to the team,
+so a Survival battle's Modern buddies play a **survival brain** instead
+(`internal/aikit/brains/survival`, composed by `mods/aikit/survival.go`).
+It belongs to the Modern AI policy (user request 2026-09-24: "a special AI
+for the survival mode as it needs to build towers, walls, centralize its
+base, protect its commander, work with the player and other AI"), not to
+Survival: a Classic buddy runs its set's retail planner exactly as before,
+a Modern buddy plays under the battle's rules — Strict 3.1 rules in a
+Strict 3.1 battle — and Survival itself (§3) is unchanged. One battle may
+mix a Modern and a Classic buddy.
+
+### 16.1 What the session tells the survivors
+
+At battle entry, once the commanders are placed, the session sets
+`ai.Manager.Survival` on every survivor's manager (never the attacker's):
+the start site, the team slot-ascending with the computer buddies marked,
+and where each member's commander was placed. When a warning begins
+(§6.7) the director publishes what it announces — the wave's number, its
+arrival tick, and each direction's bearing, entry point and theme (air,
+naval or hover; any other group, amphibious included, as ground, since the
+announcement names it as a plain direction). Nothing the announcement does
+not tell the human is published; the user authorized the Modern AI to use
+what the human is told.
+
+Only the Modern AI controller reads the record. It is set outside any
+tick and draws nothing; a Classic buddy's step carries it dormant, so no
+fingerprint moves, and a battle that is not Survival never has one.
+Survival cannot be saved (§11), so the save sidecar carries none of it.
+
+**Threads.** A published warning never changes and the list is replaced
+whole (an atomic pointer), and the brain asks for the warnings published
+at or before its observation's tick. The director publishes in phase 1 and
+the controller observes in phase 5, so a think on the simulation thread and
+one on a worker read the same list.
+
+### 16.2 Composition
+
+`newUtilTacHost` builds the survival brain when the manager is a Survival
+computer buddy and its configured parameters do not say `survival=0`; any
+other manager gets exactly the brain it got before. The survival brain is
+the util+tac layers — utility strategy, economy and production, tactics
+army — built by `NewUtilTac` from the survival defaults with the
+configured parameters on top, key by key, and wrapped layer by layer:
+
+| Default | Why |
+|---|---|
+| `def_plan=0` | the utility's own towers only answer danger; the survival layer plans the ring |
+| `w_scout=0` | there is no base to scout |
+| `tech_time=12` | the waves climb the build tree |
+| `wide_base=0`, `style=balanced` | a compact base; the tuned weights |
+| `raid=0`, `harass=0`, `probe=0`, `tour=0` | there is nothing to raid or probe |
+
+The survival layer's own keys are `survival.Specs`: `survival` (0 plays the
+skirmish brain), `sv_tower`, `sv_walls` and `sv_claim` (§16.3), validated
+by `mods/aikit` `ValidateParams` like every other key.
+
+### 16.3 The survival layer
+
+- **Home.** A buddy's home — where the utility economy centres its base,
+  where its commander works and shelters — is its start moved out on the
+  bearing from the start site to 560 wu from the site, on dry land the
+  commander reaches from its start. The session places buddies 320 wu out
+  (§4.2), inside a commander's death explosion (stock: 950 wu across, 9,999
+  damage): a buddy's commander that died near its start, or sheltered
+  between the two starts, took the human's commander with it.
+- **Facing.** Each buddy's base faces outward. The board's enemy point,
+  which the utility zones orient a base by, is 1,500 wu beyond the buddy's
+  home on the bearing from the start site through it. The zones put
+  factories toward that point and energy and makers on its flanks, and cap
+  each class's distance at a share of it (factories 35–40 %, energy
+  45–50 %), so the base stays compact and on the buddy's own side, clear of
+  the ground around the start site.
+- **Metal spots.** A free spot nearer another survivor's start than this
+  buddy's is held back: the human's within 480 wu of its start for good (a
+  buddy's extractor there is a building a wave goes for, and it brought
+  the fight to the human's commander), its other spots for the first three
+  minutes (after that, since income is split evenly, whoever builds the
+  extractor the team gains), and the other buddy's for good (both are
+  survival brains and would race for them).
+- **Sectors.** The ground around the start site is cut into sixteen
+  bearings. Each belongs to the computer buddy whose start bearing is
+  nearest, so the two buddies never tower the same lane; a lone buddy owns
+  them all, the human's side included.
+- **Tower ring.** From minute 2 the buddy keeps `sv_tower` percent of what
+  it has received — stock gained plus spent, so the wave rewards and its
+  share of the teammates' production count — as towers of its own
+  planning, and whatever stands above half of both stores besides (full
+  stores are resources nobody is spending, and they waste the next wave
+  reward). The towers are spread over its sectors by weight: every owned
+  sector that has reachable ground between 640 and 1,300 wu from the site
+  1, a warned direction's sector +5 (half that to its neighbours, a sixth
+  to the next), and a fading history of the armed attackers seen on each
+  bearing +6 in all. The next tower goes to the sector furthest behind its
+  share whose site will do (else the next), 72 wu beyond the buddy's
+  outermost core building on that bearing
+  (factories, energy, makers, storage, radar; at most 1,300 wu from the
+  site) and at least 640 wu from the site, shifted
+  sideways for each tower already there so they form a line across the
+  approach. (A wave goes for the building nearest it, so a tower drawn in
+  beside the human's start brought the fight to the human's commander.)
+  The site is pulled in (not nearer than 640 wu) until the point is on the
+  dry land the buddy's commander class reaches from its start, and moved out
+  or in by turns after a failed placement. The tower is the one the builder can make with
+  the most ground firepower times hit points per cost, heavier and
+  longer-ranged towers winning as income grows, none dearer than 90
+  seconds of income or than the stores hold, whichever is more; while aircraft threaten, a sector's second tower is
+  anti-air. Towers go through the executor's layout rules and exit guard
+  (`Kit.BuildKeep`), so they never seal a factory.
+- **Walls.** A warned or attacked sector with two towers gets a segment of
+  three wall pieces 128 wu beyond its towers' line, across the bearing: at
+  most one segment per 90 seconds and three per sector, never more than
+  half its towers, later rows staggered sideways. A segment spans a fraction
+  of its sector's arc, so the bearings between segments stay open —
+  corridors for the buddy's units and the human's, and the lanes the
+  attackers are funnelled into. Pieces avoid own factories' exit lanes and
+  metal spots.
+- **Repairs.** Damaged buildings (below 70 %) with no stronger attacker at
+  them are repaired, towers and factories first — its own and, within
+  1,300 wu of the site, its teammates' (§16.4).
+- **Builders.** The layer takes up to `sv_claim` percent of the
+  constructors, at least one (twice that while a wave is warned), from the
+  utility economy, which is not shown them while they work; their orders are issued
+  after the economy's, from the action budget it left. When a tower is owed
+  and none is free, the constructor whose work is cheapest to break off
+  (anything but a factory or a tower) is taken. A builder whose job ended
+  before it started building (a site that would not take the building, a
+  builder boxed in by rows) is left to the economy for 30 seconds, three
+  minutes after three failures in a row. With no constructor at all (a
+  poor map), from minute 6 the commander builds towers within 700 wu of its
+  start when both stores can fund the tower (half again its cost in stock,
+  or the store four-fifths full) — even breaking off work the economy is
+  not paying for when both stores are four-fifths full, or a walk to a
+  factory site it has not begun after they have stood so for 90 seconds
+  (on The Pass the only factory site lies across the map).
+- **Commander.** Its death takes the buddy's whole base with it (the
+  skirmish commander-death rule). When the armed attackers within 650 wu
+  are more than half the strength of the commander itself, the buddy's
+  units and its towers there, or it is below 60 % health with attackers
+  near, it is sent 300 wu from its home, to whichever of eight points
+  stands farthest from them at least 560 wu from the start site, and kept
+  from the economy for 15 seconds. While a warned wave is due within
+  30 seconds or armed attackers are within 1,300 wu of it, it is kept
+  within 700 wu of its home, among its towers and units rather than out on
+  an extractor run — but not before its first factory stands (on The Pass
+  the only factory site lies far out, and the leash kept it from ever
+  being built).
+- **Army.** The posture never permits an offensive. The tactics army is
+  shown a Survival world: its home is the start site itself — the team's
+  weakest point is the human's commander, and a wave that walks past the
+  buddy's side reaches it first; its enemy point lies 1,600 wu
+  out on the threatened bearing (an allied building under fire, §16.4, else
+  the warned ground direction the buddy weighs most, else the armed
+  attackers in view, else its outer side), so
+  it gathers on the towers' line; and its picture holds only attackers
+  within 1,400 wu beyond the buddy's perimeter, so it fights what comes and
+  does not chase stragglers to a map edge.
+
+### 16.4 The team in sight
+
+The observation lists the allied units in sight (`aikit.Obs.Allies`,
+MODERN_AI_RESEARCH §3): in Survival the team shares sight (§4.3), so a
+buddy sees the human's and the other buddy's units wherever the team does,
+with their type, position, hit points and completion. Each think the
+survival layer reads from them:
+
+- **Covered lanes.** Allied towers (framed or built) out on the ring's
+  ground, at least 480 wu from the site, count for their bearing's sector:
+  they cancel the sector's owed tower value up to what it is owed, never
+  more, so a lane the human or the other buddy already towers draws none
+  of this buddy's towers, which go to its other sectors, and the value
+  they would have cost stays with the economy. A tower nearer the site
+  guards the human's core, which the ring stands in front of, and covers
+  no lane.
+- **The team's perimeter.** Allied factories, energy, makers, storage and
+  radar push each sector's perimeter out as the buddy's own do, so its
+  towers stand in front of the whole team's base.
+- **Clear of the human's buildings.** Every allied building keeps a box
+  48 wu beyond its footprint, and an allied factory the 160 wu in front of
+  it (its exit lane, toward +Z as the executor keeps an own factory's). A
+  tower site in one moves 96 or 192 wu to either side, then up to 256 wu
+  out in front, when that clears it. Failing that, a site beside a
+  building stands — the placement search keeps footprints apart, and on a
+  cramped map (Ashap Plateau) the team's buildings fill the ring's ground,
+  where refusing such sites left the human's side without towers — and a
+  site in a factory's lane is pulled in further. Wall pieces are dropped
+  from anywhere in a box.
+- **Repairs.** A teammate's damaged building within 1,300 wu of the site is
+  repaired as the buddy's own are (§16.3). The repair order takes a
+  friendly target on nano-reach alone, with no ownership test
+  [04 R-ORD-02 §1], and bills the repairer's energy [05 R-WORK-01 §3].
+- **Defence.** The allied building under fire that the buddy weighs most
+  (its value times the share of its hit points lost, armed attackers
+  within 480 wu) sets the army's threatened bearing (§16.3).
+- **Metal spots.** A spot an allied extractor stands on (within 40 wu of
+  its centre) is held from the economy, which could not see it taken.
+- **Commander.** While the armed attackers within 650 wu of the buddy's
+  commander are more than a quarter of the strength about it (§16.3), or
+  it is below 80 % health, it keeps 560 wu from every allied commander:
+  one nearer is sent to whichever of the eight points 300 wu (else 600 wu)
+  from its home stands farthest from the attackers, 560 wu from the site
+  and 560 wu from every allied commander; every refuge (§16.3) avoids
+  allied commanders so. A commander in no danger stays: kept away from the
+  human's whenever any attacker was near, it no longer killed a lone
+  raider at the start site, and idle humans died to one in the first
+  minutes. The buddy cannot move the human's commander, and proximity
+  costs nothing while no commander dies.
+
+### 16.5 Evaluation (2026-09-25)
+
+Displayless Survival battles through an evaluation harness kept outside
+the repository, which composes the battle like `nanolathe-headless
+--survival` and samples it. The human's slot is idle, as in the §6.2
+measurement: the stand-in is the same in every variant, so the buddies'
+contribution is what varies, and the battle ends when the idle human's
+commander dies. Six maps (Painted Desert, Great Divide, Ashap Plateau,
+Coast to Coast, The Pass, Comet Catcher), seeds 1–3, one and two buddies,
+normal pace, the lobby's hard difficulty (the hard persona). The variants:
+(a) `--gameplay modern`, the retail planner; (b) the since-retired
+`modern-ai` set (every buddy Modern, which `--gameplay modern --ai-player
+all=modern` now plays) with `survival=0`, the skirmish util+tac brain as
+before this section; (c) `modern-ai`, the survival brain.
+
+| Variant | Battles | Mean minutes | Median | Mean wave reached | Mean score | Structures lost to waves | Towers / walls a battle |
+|---|---|---|---|---|---|---|---|
+| (a) retail | 36 | 20.2 | 18.2 | 8.4 | 46k | 26 | 8 / 0 |
+| (b) util+tac | 36 | 28.8 | 29.8 | 10.5 | 247k | 78 | 63 / 0 |
+| (c) survival | 36 | 30.2 | 35.6 | 11.0 | 267k | 78 | 32 / 9 |
+
+Paired by scenario, (c) outlasts (a) in 27 of 36 battles (+10.0 minutes,
+90 % map-cluster interval +5.8 to +14.6) and (b) in 21 of 36 (+1.4
+minutes, −0.4 to +3.3); it reaches a later wave than (b) in 16 and an
+earlier one in 8. With two buddies (c) averages 38.5 minutes against
+34.8; with one, 22.0 against 22.8. On the relentless pace (seed 1, two
+buddies, six maps) the means are 13.1, 28.2 and 30.3 minutes. The first
+fifteen minutes, where most one-buddy battles are lost, were measured
+separately on seeds 11–15 (60 battles a variant): the human's commander
+was alive at fifteen minutes in 50 of 60 with (c) and 43 of 60 with (b).
+Walls and towers trap nothing: the survival buddies never had more than
+four ground units standing boxed in at once (the arena's measure: two
+minutes within 320 wu with an order leading farther), as with (b); the
+retail planner reached six.
+
+What the numbers taught, in order: a buddy commander's death explosion
+killed the idle human's commander more often than any wave (the home at
+560 wu, §16.3); the army's defence centre at the human's start was worth
+more than the buddy's own; more towers did not help (`sv_tower=40`
+outlasted the default in 5 of 16 two-buddy battles, fewer in 11); and a
+commander stand beside the human, a commander that attacks raiders at the
+start site, a guard squad kept at the start site and a commander that
+flees sooner and fights back all measured worse or no better and were
+dropped. The noise is large — a battle's waves are drawn from the
+simulation stream, so any change of play changes every later wave — and
+the paired intervals above are what to trust.
+
+Cost, late waves (two buddies, over 100 attackers alive): a survival
+buddy's think took 196 µs (median over the pool's buddies; util+tac 460
+µs) and its host step 35 µs a tick on average; a CPU profile of Painted Desert's
+minutes 35–51 put both controllers' whole step at 2.4 % of the tick,
+their thinking at 0.5 %, and most of the tick in frame publication (28 %)
+and path search (21 %).
+
+**Against an active human (the team in sight, §16.4).** An idle human
+never builds, so the allied behaviour was measured against a stand-in that
+does: the harness plays slot 0 with util+tac at the hard persona,
+`style=tower,jitter=0,w_scout=0,raid=0,harass=0,probe=0,tour=0,att_curve=0,att_min=6000,att_grow=1000`
+— a turtle that opens on a tower, builds its base and 50–100 towers around
+the start site, never scouts or raids, and holds its army at home until it
+is worth 6,000 plus 1,000 a minute. It was chosen over the retail planner
+because it plays the same way in every variant (a fixed style, no jitter,
+no draw from the simulation stream; the retail planner draws there) and
+builds as a human who holds ground does, while the retail planner towers
+little (eight a battle as a buddy above) and sends its army out. Its
+commander works across its base, up to 900 wu from the site. (The harness
+gives slot 0 the computer's control byte while its commander lives and the
+human's again at its death: the session polls the end conditions only on
+the human's slot.) Same pool as above; (c) is the survival brain as merged
+before §16.4, (d) this one.
+
+| Variant | Battles | Mean minutes | Median | Mean wave | Human's structures lost to waves | Buddies' | Buddy towers | within 384 wu of a teammate's | in a sector a teammate towered | Allied repairs ordered |
+|---|---|---|---|---|---|---|---|---|---|---|
+| (c) | 36 | 40.4 | 43.0 | 14.0 | 83 | 74 | 46 | 24 | 24 | 0 |
+| (d) | 36 | 40.4 | 42.7 | 14.0 | 79 | 63 | 40 | 19 | 17 | 9 |
+
+(Per battle; the tower columns count the buddies' finished towers and
+those that stood, when finished, within 384 wu of another survivor's
+finished tower, or in the same one of sixteen bearings about the site,
+beyond 160 wu, as one.) Paired by scenario, (d) lasts as long as (c):
+−0.0 minutes, 90 % map-cluster interval −2.1 to +2.0, longer in 18
+battles and shorter in 17 (one buddy +1.5, −2.0 to +5.1; two −1.6, −4.4
+to +1.7). The team loses fewer structures to the waves — 3.01 a minute
+against 3.39 (−0.67 to −0.10), the buddies 1.31 against 1.57 (−0.38 to
+−0.13), the human 1.70 against 1.82 (−0.30 to +0.08) — with 6 fewer buddy
+towers a battle (−7.9 to −4.3), 5 fewer of them beside a teammate's (−8.3
+to −2.3; by sector −7.1, −11.0 to −3.5). Buddy units carried a repair
+order on a teammate's unit 13.0 times a battle against 7.6 (the rest
+are orders the engine gives by itself, as a patrolling constructor
+repairs what it passes); the survival layer ordered 9.4 of them. Boxed-in units: at most seven at once against six, in 30
+battles each.
+
+The commanders: buddy commanders stood within 480 wu of the human's with
+attackers within 1,300 wu of them for 218 seconds a battle against 262
+(summed over the buddies, sampled every second). A buddy commander's
+death was followed within 15 ticks by a teammate's commander within 600 wu
+of it — the explosion — in 2 battles of 36 with (d) and 5 with (c) where
+the victim had a quarter of its health or more the tick before, and in 3
+and 3 where it had none left (the human's commander died first, to the
+wave, and took the buddy's with it); buddy commanders died before the
+human's in 18 and 19 battles. In both kills that remain, and in four of
+the five traced in earlier versions, the buddy's commander could not move
+while it was killed — every move it was given ended within a few ticks —
+and the human's commander stood 300–440 wu away (§16.7).
+
+Against the idle human of the first evaluation, same pool, (d) plays as
+(c) did: 29.8 against 30.2 minutes, −0.4 (−1.9 to +1.1), longer in 13 and
+shorter in 16; explosion kills 3 and 1, with 8 and 7 more where the
+human's commander was already dead. (The base reproduces (c)'s 30.2
+minutes above exactly.)
+
+What the development runs taught: a repair a builder could not reach (a
+construction ship sent ashore) was reordered every think, some 3,900
+times a battle on Coast to Coast; a tower site that had to be clear of
+every allied building gave up the human's side of a cramped map (Ashap
+Plateau: five of six battles shorter); the human's own core towers
+counted as covering the ring's lanes; and a commander kept from the
+human's whenever any attacker was near no longer killed a lone raider at
+an idle human's start site (Coast to Coast, two buddies: battles of 41 and
+35 minutes ended at 5 and 7). §16.3–§16.4 describe the rules as fixed.
+Cost, late waves: a survival buddy's think 401 µs (median; (c) 344 µs),
+its observation 135 µs (90 µs; the allied units in sight,
+MODERN_AI_RESEARCH §3).
+
+### 16.6 Verification
+
+- `mods/aikit.TestSurvivalBuddiesPlayTheirOwnAIRetail`: in a Strict 3.1
+  Survival battle with one buddy of each kind, the Modern buddy plays the
+  survival brain, the Classic buddy the retail step, and the attacker is
+  never a Modern AI player; `cmd/nanolathe.TestSurvivalBuddiesCycleOpenModernClassic`
+  and `cmd/nanolathe.TestSetupScreensChooseEachComputerRowsAIRetail` lock the
+  screen's walk, its captions and the battle it builds.
+- `mods/aikit.TestSurvivalBrainOnlyForComputerSurvivors`: the Modern AI's
+  controller builds the survival brain only for a Survival computer buddy
+  and not with `survival=0`; a manager with no scenario (every other
+  battle), the human's and the attacker's get the skirmish brain.
+- `mods/aikit.TestValidateParamsReadsTheSurvivalKeys`: the keys join the
+  strict vocabulary with their ranges.
+- `mods/aikit.TestSurvivalWarningsFollowTheObservationTick`: a warning is
+  visible only at or after the tick it was published, and a list already
+  handed out never changes.
+- `mods/aikit.TestSurvivalBuddiesPlayTheSurvivalBrainRetail`: a four-minute
+  Painted Desert Survival battle under Modern with both buddies marked
+  Modern gives both the survival brain,
+  which hears the warnings, and buddies thinking asynchronously play the
+  same battle (equal partial-state fingerprint) as buddies thinking on the
+  simulation thread.
+- `mods/aikit.TestSurvivalBuddyRepairsAnAllyRetail`: a buddy's
+  observation lists the human's commander, and a repair ordered on it
+  becomes the buddy commander's `RepairUnit` order and restores its hit
+  points.
+- `internal/aikit.TestObsListsAlliedUnitsInSight`: allied units the sight
+  predicate passes are listed with their state, apart from the own and
+  enemy lists; one out of sight is not.
+- `internal/aikit/brains/survival`: sector binning, the sector split
+  between buddies, the parameters, the warned direction's draw on the
+  tower share, the home clear of the human's commander, allied towers
+  covering their lane, sites clear of allied buildings and lanes, allied
+  repairs, the repairer that can reach, and the commander's distance
+  from allied commanders.
+- Isolation, checked once by hand against the base commit (headless runs,
+  partial-state fingerprints and simulation draws equal): a `modern-ai`
+  (now `--ai-player all=modern` under Modern) skirmish on The Pass and a
+  Strict 3.1 skirmish on Great Divide (18,000 ticks), and Strict 3.1 and
+  Modern Survival battles on Painted Desert with two buddies (36,000
+  ticks).
+
+### 16.7 Open
+
+- The buddy cannot move the human's commander: a human who walks it to a
+  buddy's base while a wave is there still stands inside that buddy
+  commander's explosion (§16.4).
+- A dying buddy commander that stands near the human's is usually one
+  that cannot move: each move order it is given ends within a few ticks,
+  with the commander where it was (§16.5). Why it is held — its own
+  buildings, the Modern movement policies, or the order path — is not
+  traced; it lies outside the survival brain.
+- A buddy's early economy on a cramped or uniform-metal start (The Pass)
+  is the utility economy's known gap (MODERN_AI_RESEARCH §6): the first
+  factory site may lie across the map and extraction stays at the
+  commander's own.
+- Every value in §16.3 is a first tuning against an idle human. A
+  playing human draws waves to its own buildings and fights beside the
+  buddies; play-testing should decide the guard's share, the tower share
+  and the human's reserved spots.

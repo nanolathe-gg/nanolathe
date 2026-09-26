@@ -274,6 +274,14 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		deps.Gameplay, deps.CommunitySources, deps.Mutators = selection.gameplay, selection.sources, selection.mutators
 		deps.EntryCommunity = &selection.entry.Entry
 		deps.UnitLimit = sidecar.UnitLimit
+		// The Modern AI controllers resume their generators (DESIGN_SESSIONS_AI_SAVE
+		// "Modern AI computer player").
+		if deps.AIControllers, err = session.SidecarAIControllers(sidecar.AI); err != nil {
+			return err
+		}
+		if err := validateRecordedAIOverrides(deps.AIControllers); err != nil {
+			return err
+		}
 	}
 	loaded, err := session.LoadRetailSavePath(path, deps)
 	if err != nil {

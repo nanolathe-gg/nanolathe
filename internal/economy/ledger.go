@@ -106,6 +106,15 @@ type Player struct {
 	ControllerState uint8
 	IsObserver      bool  // observer byte excludes observers [05 "Authoritative settlement order"]
 	OptionKind      uint8 // lobby option kind used by network sharing [R-SHARE-01 §3]
+
+	// FullIncome is Nanolathe's mark for a computer player that is credited
+	// in full, as a human is, at every site the difficulty discount applies
+	// (docs/DESIGN_ECONOMY_CONSTRUCTION.md "Modern AI full income"): the
+	// session sets it for a computer player the lobby marks Modern and
+	// clears it for every other, outside any tick. Retail has no such mark;
+	// false everywhere is the retail ledger. It is not a save field: a load
+	// takes it again from the save's Nanolathe record.
+	FullIncome bool
 	// There is no elimination flag on the player record: elimination is derived
 	// from the record's two unit counters. See PlayerEliminated below.
 	GameEnded bool // game-ended flag bit clear required [05 "Authoritative settlement order"]

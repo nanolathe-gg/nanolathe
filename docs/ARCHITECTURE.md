@@ -151,8 +151,10 @@ package implements.
 | `internal/mission` | Campaign discovery, mission loading and dispatch, schema selection, placement decoding, the `InitialMission` interpreter | DESIGN_SESSIONS_AI_SAVE |
 | `internal/triggers` | Mission trigger records, parsing, evaluation, save form | DESIGN_SESSIONS_AI_SAVE |
 | `internal/ai` | The skirmish planner: profiles, manager and tasks, strategic refresh, candidate selection, placement, groups | DESIGN_SESSIONS_AI_SAVE |
+| `internal/aikit` | The Modern AI computer player's host: the controller kept in `ai.Manager.Ext`, its fair observation, command executor, unit table, map analysis, persona and private generator | DESIGN_SESSIONS_AI_SAVE "Modern AI computer player", DESIGN_GAMEPLAY_RULES "The Modern AI controller" |
+| `internal/aikit/core`, `internal/aikit/brains/...` | The brain chassis (blackboard and four replaceable policy layers) and the brains: `utility` and `tactics` (the shipped util+tac) and `survival` (a Survival battle's computer buddies) | MODERN_AI_RESEARCH |
 | `internal/save` | The retail HAPIBANK bank container and its boxes | DESIGN_SESSIONS_AI_SAVE |
-| `internal/headless` | Composes and advances an authoritative session with no window or device and emits the report; also hosts the simulation-cost benchmark's fixture, timing and census | DESIGN_SESSIONS_AI_SAVE, SIM_BENCHMARK |
+| `internal/headless` | Composes and advances an authoritative session with no window or device and emits the report; also hosts the simulation-cost benchmark's fixture, timing and census, and the AI arena's match loop | DESIGN_SESSIONS_AI_SAVE, SIM_BENCHMARK, MODERN_AI_RESEARCH |
 
 ### Interface and presentation
 
@@ -181,7 +183,8 @@ package implements.
 |---|---|---|
 | `cmd/nanolathe` | The game: front-end screens, briefing, battle composition and dispatch, the battle HUD wiring, load/save screens, post-battle, `--shot` captures, `--headless` | DESIGN_INTERFACE_HUD_INPUT (screens, dispatch), DESIGN_SESSIONS_AI_SAVE (composition, headless) |
 | `cmd/nanolathe-headless` | The displayless runner: one authoritative session to a tick limit or result, JSON report | DESIGN_SESSIONS_AI_SAVE |
-| `mods`, `mods/example` | The gameplay rule sets a build links beyond the two reserved ones: each registers itself from an init and is selected by name; imported only by the two commands | DESIGN_GAMEPLAY_RULES |
+| `cmd/ai-arena` | Displayless computer-versus-computer matches and tournaments for the Modern AI research; registers its own `aikit` rule set, which the game never links | MODERN_AI_RESEARCH |
+| `mods`, `mods/example`, `mods/aikit` | What a build links beyond the three reserved rule sets, each registering itself from an init: `mods/example` a rule set selected by name, and `mods/aikit` the Modern AI's think step (`session.RegisterModernAI`), which is not a rule set and which the session gives every computer player marked Modern; imported only by commands | DESIGN_GAMEPLAY_RULES, DESIGN_SESSIONS_AI_SAVE |
 
 ### Hygiene, probes and tools
 
@@ -203,6 +206,8 @@ anything in a lower layer and nothing in a higher one.
 
 ```
 platform      cmd/nanolathe, cmd/nanolathe-headless ─► mods ─► session   (linked rule sets, DESIGN_GAMEPLAY_RULES §8)
+              mods/aikit ─► session, aikit, aikit/core, aikit/brains, ai, economy, units, gameplay   (the Modern AI step, the arena's sets)
+              cmd/ai-arena ─► mods, mods/aikit, headless, session, aikit, aikit/core, aikit/brains   (research arena)
               cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
               cmd/nanolathe ─► upscale ─► formats, palette   (load-time 2× art, DESIGN_GPU_RENDERER §14)
               cmd/nanolathe ─► modfetch ─► modlibrary ─► content, gameplay, vfs   (mods, DESIGN_MODS_MUTATORS §4–§5)
@@ -214,10 +219,12 @@ presentation  client ─► render, hud, audio, camera, palette, input, model, f
               hud ─► render, camera, input, frame, units, world, content
 
 composition   session ─► every simulation package below, plus frame, hud, render, audio, save
-              headless ─► session, ai, orders, units, content, pool, vfs
+              headless ─► session, ai, aikit, orders, units, content, pool, vfs
               airdiag ─► session, movement, orders, units, content, pool, vfs
 
 planner       ai ─► economy, orders, units, world, content, pool, numeric, rng, vfs
+              aikit ─► ai, construction, orders, economy, features, units, world, content, pool, numeric
+              aikit/core ─► aikit, pool         aikit/brains/* ─► aikit/core, aikit, content, pool
 
 simulation    mission ─► triggers, movement, orders, units, content, formats, pool, numeric, vfs
               construction ─► movement, orders, combat, economy, frame, model, units, world, content, pool, rng
@@ -263,7 +270,9 @@ rather than by convention:
   make its behavior depend on which sets happen to be in the tree, and a set
   composing that package's own implementations would close the loop into an
   import cycle. The direction is cmd → mods → session → simulation
-  (DESIGN_GAMEPLAY_RULES §8).
+  (DESIGN_GAMEPLAY_RULES §8). `internal/aikit` and `mods/aikit` are inside
+  the simulation guards (§6) because their controller issues orders in
+  phase 5.
 * **Presentation does not own a random stream.** The presentation packages
   (`client`, `render`, `audio`, `hud`, `gui`, `ui`, `camera`) do not import
   `internal/sim/rng` except through a shrink-only allowlist of files that copy
@@ -554,7 +563,10 @@ citation text; it only shrinks.
 **Hygiene guards.** `internal/architecture` inspects source without importing
 it: the platform boundary and headless dependency closure (§3), the three
 random-stream ownership guards (§3), retail-only content, and the parity
-ratchets. The map guard type-checks the authoritative package graph and
+ratchets. The authoritative packages include `internal/aikit` and
+`mods/aikit`, and a goroutine guard names the only `go` statements they may
+contain, each with the argument that its result is independent of scheduling
+[I1]. The map guard type-checks the authoritative package graph and
 requires each map range to have a reviewed enclosing-function record; the `float64`
 guard keeps its shrink-only per-file baseline, with declaration-scoped records
 for the existing I2 operations formerly hidden by file-wide exceptions.

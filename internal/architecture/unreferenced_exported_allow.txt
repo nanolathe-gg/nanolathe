@@ -12,6 +12,7 @@
 cmd/nanolathe.BriefingActionNone  # iota anchor of BriefingAction; removal renumbers the siblings
 formats.ThreeDOModel  # unreferenced type alias; delete candidate once its comment mention is settled
 internal/ai.ReasonNone  # iota anchor of ReasonCode
+internal/aikit.RoleAssist  # iota member of the Role bit set; unit-table vocabulary for brains
 internal/client.RendererUnavailableFog  # iota member; removal renumbers RendererUnavailableTraceOverflow
 internal/client.RendererUnavailableHUD  # iota member; removal renumbers RendererUnavailableTraceOverflow
 internal/client.RendererUnavailableLaterWorld  # iota member; removal renumbers RendererUnavailableTraceOverflow

@@ -153,6 +153,13 @@ type SkirmishPlayer struct {
 	AllyGroup  int // 5 [GAP T14]
 	Metal      int // Player%dMetal default 1000 [GAP T14]
 	Energy     int // Player%dEnergy default 1000 [GAP T14]
+	// AI is a computer row's controller: Classic (the zero value) plays the
+	// bound rule set's own think step, Modern the Modern AI computer player
+	// in any rule set. It is a Nanolathe lobby choice with no retail
+	// counterpart and means nothing on a row that is not a computer player
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
+	// "Per-player selection").
+	AI ai.Controller
 }
 
 // SkirmishConfig is the skirmish setup discriminant per [08 "Skirmish configuration"].
@@ -523,6 +530,17 @@ func (c SkirmishConfig) NormalizedBytes() []byte {
 		o := c.Survival
 		b = append(b, 'S', byte(o.Pace), boolByte(o.NoAir), boolByte(o.NoNaval))
 	}
+	// The rows' controller choices likewise only when one is Modern, so a
+	// setup of Classic computer players keeps its existing bytes.
+	for i := 0; i < 10; i++ {
+		if c.Players[i].AI != ai.ControllerClassic {
+			b = append(b, 'A')
+			for j := 0; j < 10; j++ {
+				b = append(b, byte(c.Players[j].AI))
+			}
+			break
+		}
+	}
 	return b
 }
 
@@ -549,10 +567,20 @@ type SkirmishEntryOptions struct {
 	// (docs/DESIGN_CONTENT_VFS.md §5 "Content profiles"); the zero value is
 	// the retail baseline.
 	ContentLimits content.Limits
+	// AutomatedPlayers composes a battle with no human row, for displayless
+	// computer-versus-computer evaluation (the AI arena). The lobby's
+	// "at least one player" rule is a front-end rule; a host that plays only
+	// computers opts out of it here. Slot 0 then becomes the local slot.
+	AutomatedPlayers bool
 	// Mutators are the battle's global multipliers, applied to this entry's
 	// catalog clone in every gameplay mode (docs/DESIGN_MODS_MUTATORS.md §6).
 	// The zero value applies none.
 	Mutators content.Mutators
+	// AIOverrides are the Modern AI computer players' configured parameters,
+	// given to each computer player's manager at battle entry
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player"). The
+	// zero value configures none.
+	AIOverrides AIOverrides
 }
 
 // NewSkirmishWithProgress is NewSkirmishWithEntryOptions with only a load
@@ -584,7 +612,7 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if err := validateSkirmishLobby(cfg); err != nil {
+	if err := validateSkirmishLobby(cfg); err != nil && !options.AutomatedPlayers {
 		return nil, err
 	}
 	// DET-01 [R-CORE-02]: battle bootstrap seeds both streams fresh BEFORE any
@@ -823,6 +851,15 @@ func NewSkirmishWithEntryOptions(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	}
 	if a := cfg.survivalAttacker(); a >= 0 && s.AI[a] != nil {
 		s.AI[a].Passive = true
+	}
+	if err := applyAIOverrides(s, options.AIOverrides); err != nil {
+		return nil, err
+	}
+	// Each computer row's controller choice, before the battle-entry prime
+	// can step a manager (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI
+	// computer player", "Per-player selection").
+	if err := applyAIControllers(s, cfg); err != nil {
+		return nil, err
 	}
 	// 7-9. battle entry: place features → units → resources (InitialMission inside) [08 "Placement and battle entry"] C9
 	if err := skirmishBattleEntry(s, cfg, m); err != nil {
@@ -1180,6 +1217,13 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	// attempt suppresses; every other row keeps the strict fallback requirement.
 	if err := validateSkirmishCommanders(s.Catalog, cfg, s, permMap); err != nil {
 		return err
+	}
+	// With pre-determined starts the lobby shows every player which start
+	// each slot takes, so a Modern controller is told as well; under random
+	// starts nobody is, and it searches (docs/DESIGN_SESSIONS_AI_SAVE.md
+	// "Modern AI computer player"). The retail step never reads it.
+	if cfg.Location != 0 {
+		publishStartOwners(s, starts, eligible, permMap)
 	}
 	// Helper to find a StartPos special by its authored 1-based suffix, which
 	// is what this build's decode stores in Special.ID [GAP T14]. The scan is

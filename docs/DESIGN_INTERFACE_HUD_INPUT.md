@@ -800,6 +800,38 @@ The controller cycle and the row build's all-Open fallback (row 0 Player,
 row 1 Computer, applied when the rows are built, not at settings load) also
 read only the shown rows `[08 R-SKIR-01 §1]`.
 
+**Computer AI (Nanolathe divergence, user decision 2026-09-25).** Each
+computer row plays the Classic or the Modern AI
+([DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player)
+"Per-player selection"), chosen with the row's existing name button: no new
+gadget, no new art, and the retail layout unchanged. The button's caption
+names the row's AI, `Modern AI` or `Classic AI`, where retail writes
+`Computer`; both fit the 112-pixel `skirmname` button. The controller cycle
+splits retail's Computer stage in two: a row that becomes Computer (from
+Open, or by the all-Open fallback) starts as the Modern AI — the user's
+default for a newly added computer slot — the next click makes it the Classic
+AI, and a click on a Classic row leaves the Computer stage exactly as retail's
+Computer row does (to Player when no shown row is a human, otherwise to Open).
+A right click on the name button still does nothing. A computer row's hover
+help names its AI and what the next click does. The start conversion carries
+each computer row's AI through the compaction (`SkirmishPlayer.AI`) and gives
+a human row none. The choice persists with the row's other choices: the
+settings file's skirmish row stores `"ai": "classic"` for a Classic computer
+row and nothing for a Modern one, so a row without the word — every row of
+a file written before this encoding — loads on the Modern AI (user decision
+2026-09-25); the Survival screen keeps its buddy rows, choice included, for
+the session ([DESIGN_SURVIVAL §9](DESIGN_SURVIVAL.md#9-front-end), where a
+buddy row walks Open, Modern AI, Classic AI and back to Open). The row alone
+chooses: the options page's gameplay control chooses rules only, and no
+gameplay selection overrides a row. Tests: `TestComputerRowsCycleModernThenClassic`,
+`TestAClassicRowLeavesTheComputerStageAsRetail`,
+`TestTheLobbyCarriesEachRowsAIToTheBattle`, `TestTheSettingsFileKeepsEachRowsAI`,
+`TestSurvivalBuddiesCycleOpenModernClassic`,
+`TestTheAIPlayerFlagMarksComputerRows` and, on the retail art,
+`TestSetupScreensChooseEachComputerRowsAIRetail`, which also composes each
+screen's battle under Strict 3.1 and Modern and, with `NANOLATHE_SHOT_DIR`
+set, writes both screens as PNGs.
+
 `activateGadget`,
 `activateSkirmishGadget` and `activateDynamicSkirmishGadget`
 are the callbacks — the authored escape default is resolved by the widget

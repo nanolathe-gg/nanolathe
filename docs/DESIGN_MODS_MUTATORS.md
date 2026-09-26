@@ -656,7 +656,9 @@ sidecar. A sidecar whose bank is missing is ignored.
   "gameplay": "community-3.9",
   "community": {"sources": {…}, "entry": {…}},
   "unitLimit": 1500,
-  "mutators": {"buildSpeed": "2", "health": "1.5"}
+  "mutators": {"buildSpeed": "2", "health": "1.5"},
+  "ai": {"seed": 3427855529, "generators": [{"player": 1, "position": 1311768467463790320}],
+         "overrides": [{"player": 1, "params": "jitter=0,style=eco"}]}
 }
 ```
 
@@ -668,7 +670,14 @@ after mutators and the mounted set's manifest hash. A sidecar with another
 as absent, which would silently drop the selection it records. `community` records the session's Community sources and its
 battle-entry table (`Session.CommunitySources`, `Session.EntryCommunity`), so
 a restored battle resolves and switches exactly as the saved one did, whatever
-the host's current settings are.
+the host's current settings are. `ai`, present when the battle had a computer
+player, is the Modern AI controllers' record (the battle seed, each
+controller's generator position, each computer player's configured brain
+parameters, `overrides`, and the computer players marked Modern, `modern`;
+DESIGN_SESSIONS_AI_SAVE "Modern AI computer player"); the save package keeps
+it as raw JSON. Like the mutators, the
+recorded parameters replace the host's configuration on a load, and a
+record naming a parameter this build does not know refuses the load.
 
 ### 7.3 Loading
 

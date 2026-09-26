@@ -57,8 +57,12 @@ func TestFatalReclaimSettlementUsesRawAttackerAtVictimFinalization(t *testing.T)
 			victim := s.Units.Unit(victimHandle)
 			victim.Health = 1
 			victim.Remaining = 0.25
-			selector := 1
-			s.Econ.EconomySelector = &selector
+			// Medium discount, through the battle's difficulty word: the
+			// session projects the ledger's selector from it on every bind,
+			// so a selector written past the session would not survive the
+			// intake's queue binding [05 R-ECO-01 §3].
+			s.Skirmish.Difficulty, s.Mission.Difficulty = 1, 1
+			s.RebindRules()
 			s.Econ.Players[attackerOwner].Exists = true
 			s.Econ.Players[attackerOwner].ControllerState = 2
 			s.Econ.Players[victimOwner].Exists = true

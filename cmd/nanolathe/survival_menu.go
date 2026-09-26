@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -179,7 +180,11 @@ func (g *gameShell) refreshSurvivalPanel() {
 	}
 	p.SetHelp("Player0", "You. Your allies share your sight and income.")
 	for i := 1; i < survivalRows; i++ {
-		p.SetHelp("Player"+strconv.Itoa(i), "Click to add or remove a computer ally.")
+		help := "Click to add a computer ally."
+		if g.retailControllers[i] != 0 {
+			help = computerAIHelp(g.setup.Players[i].AI, true)
+		}
+		p.SetHelp("Player"+strconv.Itoa(i), help)
 	}
 	st := &g.survival
 	p.SetStageAt(p.Index(survivalPaceButton), clampMenuStage(int(st.pace), 3))
@@ -213,12 +218,20 @@ func (g *gameShell) activateSurvivalGadget(name string) bool {
 		}
 		switch kind {
 		case "Player":
-			// Row 0 is always the human; a buddy row is Open or Computer.
+			// Row 0 is always the human; a buddy row is Open or Computer,
+			// and a Computer row plays the Modern or the Classic AI. A click
+			// walks Open, Modern AI, Classic AI and back to Open, so a new
+			// ally starts on the Modern AI (DESIGN_SURVIVAL §9).
 			if slot > 0 && slot < survivalRows {
-				if g.retailControllers[slot] == 0 {
+				row := &g.setup.Players[slot]
+				switch {
+				case g.retailControllers[slot] == 0:
 					g.retailControllers[slot] = 2
+					row.AI = ai.ControllerModern
 					g.resolveRetailColorConflict(slot)
-				} else {
+				case row.AI == ai.ControllerModern:
+					row.AI = ai.ControllerClassic
+				default:
 					g.retailControllers[slot] = 0
 				}
 			}

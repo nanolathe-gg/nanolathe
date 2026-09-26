@@ -12,6 +12,7 @@ github.com/nanolathe-gg/nanolathe/formats EncodeGAF
 github.com/nanolathe-gg/nanolathe/formats EncodeThreeDO
 github.com/nanolathe-gg/nanolathe/formats EncodeWAV
 github.com/nanolathe-gg/nanolathe/formats encodeGAFRLE
+github.com/nanolathe-gg/nanolathe/internal/aikit AnalyzeMap
 github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Close
 github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Observe
 github.com/nanolathe-gg/nanolathe/internal/airdiag Harness.Order

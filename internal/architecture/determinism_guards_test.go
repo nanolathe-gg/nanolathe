@@ -169,6 +169,10 @@ var constructionAllowlist = map[string]string{
 	// The queue's private fallback/seed streams are presentation-only; its
 	// SetCRTRandom copies state so session draws never advance here.
 	"internal/audio/queue.go": "private presentation-only fallback streams",
+	// The AI arena predicts which CRT seed makes the session's own start
+	// randomization exchange two starts, on a scratch generator before the
+	// battle exists; the battle then owns its streams as usual.
+	"internal/headless/arena.go": "arena start-swap seed search on a scratch CRT, before composition",
 }
 
 // TestOnlySessionAndRNGMayConstruct pins (c): retail stream construction in

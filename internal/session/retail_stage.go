@@ -58,6 +58,17 @@ type RetailLoadDeps struct {
 	// table is still resolved from Gameplay and CommunitySources, exactly as
 	// the command boundary resolves it.
 	EntryCommunity *community.Features
+	// AIControllers is the Modern AI controllers' record a save's sidecar
+	// carried (RecordAIControllers). The restored battle's computer players
+	// then seed their generators from the recorded battle seed rather than
+	// the load's entry seed, so each draws the style and opening variation
+	// it drew in the saved game, and continue the generators from the
+	// recorded positions (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI
+	// computer player"). It also restores each computer player's controller
+	// choice, Classic or Modern ("Per-player selection"). Nil — every retail
+	// save, and every sidecar that does not carry the record — seeds them
+	// from the load's entry seed and leaves every computer player Classic.
+	AIControllers *AIControllers
 }
 
 // RetailBattleStage is an unreachable, fully detached staging result. The
@@ -260,6 +271,12 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// battle-entry planner that then meets a restored world.
 	if err := initializeRestoredBattleAI(s, deps.FS, m, sessionKind); err != nil {
 		return nil, fmt.Errorf("session: retail restore: computer player construction: %w", err)
+	}
+	// The saved game's Modern AI generators, from the sidecar: every manager
+	// now exists and no controller does yet, so the first one each manager
+	// builds seeds and resumes from the record.
+	if err := restoreAIControllers(s, deps.AIControllers); err != nil {
+		return nil, fmt.Errorf("session: retail restore: %w", err)
 	}
 	stage := &RetailBattleStage{Image: image, Session: s}
 	// Ignition draws before the unit allocator, whose new bob phase is not

@@ -33,17 +33,18 @@ implementation and no simulation code reads the mode word.
 
 ```go
 type RuleSet struct {
-    Name         string
-    Base         gameplay.Mode // the reserved set this one derives from; zero is Modern
-    Combat       combat.Rules
-    Visibility   visibility.Rules
-    Orders       orders.Rules
-    Construction construction.Rules
-    UnitLimit    UnitLimitRules
-    ScriptPorts  ScriptPortRules
-    Movement     movement.Rules
-    Path         path.Kernel
-    Planner      ai.Planner
+    Name           string
+    Base           gameplay.Mode // the reserved set this one derives from; zero is Modern
+    Combat         combat.Rules
+    Visibility     visibility.Rules
+    Orders         orders.Rules
+    Construction   construction.Rules
+    UnitLimit      UnitLimitRules
+    ScriptPorts    ScriptPortRules
+    Movement       movement.Rules
+    Path           path.Kernel
+    Planner        ai.Planner
+    ComputerIncome ComputerIncomeRules
 }
 ```
 
@@ -60,8 +61,9 @@ reserved sets in derivation order. Each package's `CommunityRules` embeds its
 only the answers its policy changes.
 `RuleSetForMode` resolves a selection word to a set and `Session.BindRules`
 projects each field onto the service that asks it — `Combat.Rules`,
-`Vis.Rules`, `Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Rules`, `Movement.Kernel`, and every
-computer player's `Planner` — and onto every queue binding composed
+`Vis.Rules`, `Build.Rules`, `Build.OrderBinding.Rules`, `Movement.Rules`, `Movement.Kernel`, every
+computer player's `Planner`, and the computer players' discount word on the
+ledger and construction selectors — and onto every queue binding composed
 afterwards. `Session.SetRules(name)` is the selection entry point
 that can report an unknown name; `SetGameplay` is the same selection for a
 word already known to be selectable, and it is what the phase-1 command
@@ -86,17 +88,27 @@ as a second way to select a policy: a composed session always binds.
 | Seam | Owner | Carries |
 |---|---|---|
 | `combat.Rules` | `internal/combat` | terrain admission ([DESIGN_WEAPONS_PROJECTILES §2.3.1](DESIGN_WEAPONS_PROJECTILES.md#231-modern-terrain-admission)) the launch-gate half of Hold Fire (§2.6.1), and Modern threat targeting/incoming-fire coordination |
-| `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), the three guard-assistance legs, Modern danger response/protected work, [crowded arrival](DESIGN_UNITS_ORDERS_COB.md#modern-crowded-arrival), and which records may finish as [unreachable moves](DESIGN_UNITS_ORDERS_COB.md#modern-unreachable-moves) |
+| `orders.Rules` | `internal/orders` | [Hold Fire](DESIGN_UNITS_ORDERS_COB.md#modern-hold-fire) at a combat join, the deferred bomber leash ([DESIGN_MOVEMENT_PATH §3.4.1](DESIGN_MOVEMENT_PATH.md#341-modern-bomber-pass-completion)), the three guard-assistance legs, Modern danger response/protected work, [Modern AI move retention](DESIGN_UNITS_ORDERS_COB.md#modern-ai-move-retention) (a Modern AI player's running move survives the damage purge), [crowded arrival](DESIGN_UNITS_ORDERS_COB.md#modern-crowded-arrival), and which records may finish as [unreachable moves](DESIGN_UNITS_ORDERS_COB.md#modern-unreachable-moves) |
 | `construction.Rules` | `internal/construction` | [factory-exit](DESIGN_ECONOMY_CONSTRUCTION.md#modern-factory-exit-yielding) and [construction-site](DESIGN_ECONOMY_CONSTRUCTION.md#modern-construction-site-yielding) clearance; [authored build membership](DESIGN_ECONOMY_CONSTRUCTION.md#modern-authored-build-membership) |
 | `visibility.Rules` | `internal/visibility` | Community allied-jammer suppression and aircraft border visibility (DESIGN_COMMUNITY_PATCH §4.4); no prior seam owned per-viewer sensor decisions |
 | `session.ScriptPortRules` | `internal/session` | Community recorder ports 32 and 69–75 (DESIGN_COMMUNITY_PATCH §4.5) |
 | `session.UnitLimitRules` | `internal/session` | [Modern save unit limits](DESIGN_SESSIONS_AI_SAVE.md#modern-save-unit-limits) |
 | `movement.Rules` | `internal/movement` | [learned terrain](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain): a ground mover rejected by static ground teaches its owner, and the owner's next search reads what it learned; [re-route staggering](DESIGN_MOVEMENT_PATH.md#modern-re-route-staggering): a 0–7 tick offset on the 60-tick re-route throttle; [group-order spreading](DESIGN_MOVEMENT_PATH.md#modern-group-order-spreading): a same-tick group's first requests admitted over three ticks, nearest first; [bounded path work](DESIGN_MOVEMENT_PATH.md#modern-bounded-path-work): carried search work capped at four shares and a futile polling sweep ends the player's call; [group destination slots](DESIGN_INTERFACE_HUD_INPUT.md#modern-group-destination-slots): each actor of an ordinary group move gets its own free destination footprint; [allied pass-through](DESIGN_MOVEMENT_PATH.md#modern-allied-pass-through): head-on friendly movers pass through each other mid-route; [unreachable moves](DESIGN_MOVEMENT_PATH.md#modern-unreachable-moves): a goal certified sealed by a static re-run of the setup ray finishes its eligible move at the frontier after a 90-tick dwell and a closing probe; [jam release](DESIGN_MOVEMENT_PATH.md#modern-jam-release): a ground mover friendly units have blocked for 30 ticks ignores friendly ground occupants other than same-way movers for 90 ticks and plans over the static view, and its [pocket release](DESIGN_MOVEMENT_PATH.md#modern-pocket-release) grants that release, 30 ticks after its search was rejected, to a unit that parked friends seal out of its own free destination, finishing the move in place after two such releases; [wedge escape](DESIGN_MOVEMENT_PATH.md#modern-wedge-escape): a ground mover a wreck was stamped over may step off the rejected cells it already covers, its own search reads them as passable, and a mover wedged under a route planned elsewhere re-plans at once |
 | `path.Kernel` | `internal/path` | the search a route request is opened with ("The path search kernel" below); Strict 3.1 and Community bind `path.RetailKernel`, Modern binds `path.StraightenKernel` ([route straightening](DESIGN_MOVEMENT_PATH.md#modern-route-straightening)) |
-| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); Strict 3.1 and Community bind `ai.RetailPlanner`, Modern binds `ai.ModernPlanner` ([wave air targets](DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets)) |
+| `ai.Planner` | `internal/ai` | the computer player's per-tick think step ("The computer player's think step" below); Strict 3.1 and Community bind `ai.RetailPlanner`, Modern binds `ai.ModernPlanner` ([wave air targets](DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets)); a computer player marked Modern takes the step `mods/aikit` installs, the [Modern AI computer player](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player), under any bound set, and no set binds it ("The Modern AI controller" below) |
+| `session.ComputerIncomeRules` | `internal/session` | the word the Classic computer players' difficulty discount selects on; every reserved set answers retail's difficulty word, and the AI arena's research set composes `FullComputerIncome`; a player marked Modern is paid in full whatever the set answers ([Modern AI full income](DESIGN_ECONOMY_CONSTRUCTION.md#modern-ai-full-income)) |
 
-The last two rows are the **whole-subsystem** seams: each replaces an
-algorithm rather than answering a question inside one, and both now exist.
+`session.ComputerIncomeRules` is a session seam for the same reason
+`UnitLimitRules` is: no simulation package asks the question. The ledger and
+the construction refund sites only read a selector word the session installs,
+so the session asks the bound set on every bind, outside any tick, and
+projects its one answer onto both. Beside it the same projection marks each
+computer player the lobby made Modern as paid in full; that mark is the
+Modern AI exception's, not a seam answer, so no set can change it.
+
+The `path.Kernel` and `ai.Planner` rows are the **whole-subsystem** seams:
+each replaces an algorithm rather than answering a question inside one, and
+both now exist.
 Strict 3.1 and Community bind the retail implementation of each. Modern binds
 a thin wrapper around it — route straightening around the retail search, and
 wave air targets around the retail think step — each a behaviour change with
@@ -162,8 +174,12 @@ A replacement answers the same step from the same manager. It may draw from the
 simulation stream only through the manager's own accessor and only in the order
 the retail step draws, because that call order is the whole future of the
 battle; a planner that draws differently is a gameplay policy needing its own
-contract. **Strict 3.1 and Community bind `RetailPlanner`**, and Strict 3.1
-could never bind anything else. Modern binds `ModernPlanner`, the retail step
+contract. The Modern AI controller below is such a policy.
+**Strict 3.1 and Community bind `RetailPlanner`**, and Strict 3.1
+could never bind anything else as its own step; a computer player the lobby
+marks Modern is the mode-independent exception described in "The Modern AI
+controller" below, and a Strict 3.1 battle of Classic players is the retail
+baseline. Modern binds `ModernPlanner`, the retail step
 with [Modern wave air targets](DESIGN_SESSIONS_AI_SAVE.md#modern-wave-air-targets):
 the same draws in the same order, with members that cannot engage an airborne
 wave target ordered at a grounded one. A set
@@ -177,11 +193,107 @@ the session already owns, and `initializeBattleAI` takes the same field from
 the bound set for a manager composed later, including on the restore path; both
 directions agree, which is what keeps rebinding idempotent (§1).
 
-**Out of scope, deliberately:** a replacement planner with state of its own.
-That would need its own save and restore contract, its own place in the
-per-player settlement walk, and a decision about what a save written by one
-planner means to another. Nothing here provides that: a planner is asked a
-question and answers it from the retail manager's state.
+### The Modern AI controller
+
+A replacement planner with state of its own was out of scope until the user
+authorized one for Modern on 2026-09-24 ("private random number gen is fine,
+keeping its own state is fine, background thinking thread is also fine").
+The policy — the brain, its persona and what it may observe — is owned by
+[DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player).
+This section is its mechanism. No rule set the game can select binds a
+controller as its own think step (only the AI arena's own `aikit` sets bind
+the host step for the brains the arena installs); since 2026-09-25 the
+session gives it, player by player, to every computer player marked Modern
+whatever set is bound
+([DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player)
+"Per-player selection"). That is not a per-player rule selector: the mark
+chooses who decides for a player, never a rule, and every player keeps playing
+under the bound set's seams.
+
+- **Where the step comes from.** `mods/aikit` installs the Modern AI's think
+  step from an init with `session.RegisterModernAI`: one slot, filled once,
+  holding one zero-size `ai.ModernAIStep`. It is not a rule set. A registered
+  set would have carried a name the vocabulary, the settings file, the
+  options page and a save's sidecar could each select, which is exactly what
+  the user retired on 2026-09-25 ("Should we get rid of that explicit rule
+  set? I just want to be able to select the class vs modern AI per player and
+  that defines how the AI will play"), and every other seam of such a set
+  would have meant nothing. Nor is the slot a second registry (§9 rule 3): it
+  has no names and nothing selects from it; the per-player lobby mark, the
+  user-authorized mode-independent exception, is the only choice, as
+  `gameplay.UseNameRegistry` installs the vocabulary's one view without being
+  a registry of its own. Registration panics on a nil step, a second one or
+  one that is not zero size, like `RegisterRuleSet`'s build mistakes.
+
+- **Which step a manager runs.** `ai.Manager.Controller` holds the player's
+  choice, Classic (the zero value) or Modern, set at battle entry from the
+  lobby row or at a load from the save's record. On every bind the session
+  projects `Session.plannerFor`: the installed Modern AI step for a manager
+  marked Modern, the bound set's own Planner for every other. It resolves the
+  step once per battle, outside any tick, and refuses to compose a Modern
+  player in a build that does not link `mods/aikit`. A step that runs the
+  Modern AI says so for a manager through `ai.ModernAIStep`;
+  `Session.ModernAIPlayer` asks it, and the queue binding hands that answer
+  to the order policies that cover Modern AI players alone. The same
+  projection marks the player paid in full
+  ([Modern AI full income](DESIGN_ECONOMY_CONSTRUCTION.md#modern-ai-full-income)).
+
+- **Where the state lives.** The bound planner stays zero size, so the
+  registry may cache and share it (§3 rule 1). The controller, an
+  `aikit.Host`, lives in the computer player's own `ai.Manager.Ext`, created
+  on the manager's first eligible step. Each manager belongs to one session,
+  so two sessions never share decision state.
+- **One map analysis per battle.** A controller's first step hands its map
+  analysis and its brain's `Init` to a preparation goroutine. What depends on
+  the terrain alone — the floor band and void snapshot, the extractor
+  candidates for each footprint, and the region map (`aikit.Reach`) for each
+  movement class — is computed once per battle and kept in
+  `ai.Manager.Shared`, one `ai.BattleShared` slot the session binds on every
+  manager of a battle before its first dispatch, beside the manager's other
+  session hooks. The slot belongs to the session, so it is never
+  process-global; a restored battle starts with an empty one, and it is not
+  saved. Each part is built under its
+  own `sync.Once`, so the first preparation to reach it builds it and the
+  others wait. Each part is a pure function of the terrain and its key, so
+  every player gets exactly the answer it would have computed alone. The
+  start-dependent parts — the order of the metal spots and the home point —
+  stay with each player, and a player whose void cells differ from the first
+  player's (the feature word is live) analyzes the map alone.
+- **Its place in the tick.** It runs in the manager's ordinary phase-5
+  dispatch slot, through the retail dispatch gates (`Manager.StepGates`), and
+  finishes with the retail step's engine upkeep — weapon maintenance and the
+  strategic refresh — so weapons and targeting are the same whichever brain
+  decides. It replaces the retail decisions and, with them, their
+  simulation-stream draws; the only simulation draw on its dispatch is the
+  strategic refresh's, in the retail position. A battle with a Modern
+  player therefore has a history of its own, and no fingerprint lock runs
+  one: every lock is a battle of Classic players.
+- **Its generator.** One private PCG32 generator per computer player, seeded
+  from `ai.Manager.BattleSeed` (the battle's simulation seed) and the slot,
+  drawn only by that player's brain inside its think
+  ([INVARIANTS.md](INVARIANTS.md) I4 "Modern AI exception"). A restored
+  battle's managers take the seed and generator positions the save recorded,
+  when the load is given them; the first controller a manager builds draws
+  its brain's `Init` from that seed and then continues from the recorded
+  position (`ai.Manager.ResumeGenerator`).
+- **Background thinking.** The simulation thread builds the observation, the
+  brain thinks on it, and the resulting command batch is applied a fixed
+  persona reaction window later, revalidated against the live world. With an
+  asynchronous persona the think runs on the controller's worker goroutine in
+  that window and the simulation thread joins it at the deadline, so the
+  commands land on the same tick with the same content as the synchronous
+  host's: sync equals async, and no state depends on scheduling
+  ([INVARIANTS.md](INVARIANTS.md) I1). The game's Modern AI personas think
+  asynchronously, which takes the think off the simulation thread
+  ([MODERN_AI_RESEARCH §5.1](MODERN_AI_RESEARCH.md)); a persona with no
+  reaction window thinks synchronously.
+- **Switching** never replaces a Modern-marked player's step, so its
+  controller survives (§5); **saving** records only the players marked Modern and each controller's
+  seed, generator position and configured parameters in the save's sidecar,
+  not the controller, and a load starts a fresh one from observation (§6,
+  and
+  [DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md#modern-ai-computer-player)
+  "Saves"); **teardown** stops it.
 
 ### The package seams are in-package extension points
 
@@ -214,6 +326,8 @@ they are checked by tests rather than trusted:
    must not hide mutable state in globals or retain request arguments.
    Supporting stateful implementations later requires a deliberate lifecycle,
    isolation, switching and save/restore design (§9), not weakening the guard.
+   The Modern AI controller has that design ("The Modern AI controller"): its
+   planner stays zero size and the controller lives in the manager it serves.
 2. **No call site builds a closure per call.** A method takes the concrete
    state its answer needs — the unit, the order record, the resolved fire
    attempt as a pointer to caller-owned reusable storage, the tick — and never a closure
@@ -222,12 +336,16 @@ they are checked by tests rather than trusted:
    Introducing a seam moves no logic; it only changes who answers. That is
    what makes an identity fingerprint the correct gate for a seam unit.
 4. **Strict policy answers add no randomness or state writes.** The policy
-   methods in `combat.Rules`, `orders.Rules`, `construction.Rules` and
-   `UnitLimitRules` and `movement.Rules` preserve the retail path without extra work. The whole
+   methods in `combat.Rules`, `orders.Rules`, `construction.Rules`,
+   `movement.Rules`, `UnitLimitRules` and `ComputerIncomeRules` preserve the
+   retail path without extra work. The whole
    subsystem seams still execute retail search and planner behavior, including
    their established state writes and RNG consumption; they are not no-ops.
    An approved Modern change documents its RNG and resource effects and uses
-   only the owning service's supplied stream, never a new private stream.
+   only the owning service's supplied stream, never a new private stream. The
+   one exception is the Modern AI controller's private per-player generator
+   (user-authorized 2026-09-24; [INVARIANTS.md](INVARIANTS.md) I4 "Modern AI
+   exception"), which never draws from or seeds either authoritative stream.
 5. **Binding happens outside a tick.** Composition and the phase-1 command
    boundary are the only two places a set may be bound, so no phase selects an
    implementation ([INVARIANTS.md](INVARIANTS.md) I1).
@@ -266,6 +384,24 @@ creating new ones. There is deliberately no detach or rollback step: an
 unwind would be new behaviour in both directions and would need its own
 contract and its own tests. A player who wants a clean Strict run starts one.
 
+Two pieces of state do follow a switch, both in both directions:
+
+- **The computer-income word.** Every bind re-projects the bound set's
+  `ComputerIncomeRules` answer onto the ledger and construction selectors, so
+  leaving a full-income set restores the difficulty word and entering one
+  replaces it. A player marked Modern stays paid in full across every
+  switch; the projection re-marks it on every bind.
+- **A computer player's controller.** A controller that a think step keeps in
+  `ai.Manager.Ext` belongs to that step. A bind that replaces a manager's step
+  (compared by type) stops the controller through its `Close` method, if it
+  has one, and clears `Ext`; switching back starts a fresh controller from
+  observation, as a load does. Re-projecting the same set on a unit
+  allocation keeps it, and an `Ext` on a manager with no bound step — the AI
+  arena installs its own — is kept. A player marked Modern takes the Modern
+  AI's step under every set, so no switch replaces its step and its
+  controller runs on. Session teardown stops every controller, so a
+  background worker never outlives its battle.
+
 Future extensions must state which in-flight work keeps its original
 implementation and which subsequent decisions use the newly bound set. They
 must also specify residual orders, deadlines, request storage and resource
@@ -299,12 +435,20 @@ settle the metadata format, versioning, missing-set behavior and restoration
 contract in the owning save design. The current omission is a limitation,
 not permission to invent save bytes or infer a set from loaded content.
 
-Two consequences are worth stating because they are observable:
+Three consequences are worth stating because they are observable:
 
 - Modern transient state that is not in the save is simply absent after a
   load, whichever set is bound. Staged movement clearance routes and the
   [learned-terrain grid](DESIGN_MOVEMENT_PATH.md#modern-learned-terrain) are
   the existing examples.
+- The Modern AI controller's memory is not in the save. A load starts each
+  computer player's controller again from observation. The save's sidecar
+  ([DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar))
+  records the battle seed and each controller's generator position, so a
+  restored controller draws the same style and opening variation and then
+  continues its sequence; without a sidecar record (a retail save) it seeds
+  from the load's own entry seed and draws again
+  (DESIGN_SESSIONS_AI_SAVE "Modern AI computer player").
 - The unit-limit seam is asked on both sides of a save. The writer asks
   whether the summary records the live session limit; the loader asks whether
   a present, nonzero saved limit may size the pool. Both answers, their
@@ -337,6 +481,11 @@ Two consequences are worth stating because they are observable:
 | The retail kernel opens the retail search, is asked once per request, and its dispatch adds no allocation | `path.TestRetailKernelOpensTheRetailSearch`, `path.TestAKernelIsAskedOncePerRequest`, `path.TestRetailKernelDispatchAddsNoAllocation`, `movement.TestSearchFuncOpensItsSearchThroughTheBoundKernel`, `movement.TestAnUnboundKernelIsRetailAndCostsNothing` |
 | All three reserved sets' fingerprints are locked to constants | `headless.TestStrictFingerprintIsLocked`, `headless.TestCommunityFingerprintIsLocked`, `headless.TestModernFingerprintIsLocked` |
 | The think step reaches every computer player, all reserved sets bind the retail step, and the dispatch allocates nothing | `session.TestBindRulesProjectsThePlannerOntoEveryComputerPlayer` |
+| Replacing a think step stops and drops the controller the old step kept; re-projection and a host-installed controller keep theirs; teardown stops every controller | `session.TestReplacingThePlannerReleasesItsController`, `session.TestTeardownStopsEveryAIController` |
+| A player marked Modern keeps the Modern AI's step and controller under every reserved set, and a Classic player takes each set's step; the step is installed once, is not a rule set, and no gameplay word selects it | `session.TestAMarkedPlayerKeepsTheModernAIInEveryRuleSet`, `ai.TestModernAIDecidesAsksTheBoundStep`, `session.TestTheModernAIStepIsInstalledOnceAndIsNotARuleSet` |
+| A player marked Modern is paid in full under every set and a Classic one keeps the set's word | `session.TestAModernPlayerIsPaidInFullInEveryRuleSet` |
+| Every bind projects the income word in both directions, reaches services composed after the bind, and every reserved set keeps the retail discount | `session.TestComputerIncomeFollowsEveryBind`, `session.TestComputerIncomeReachesServicesComposedAfterTheBind`, `session.TestReservedSetsKeepTheRetailComputerDiscount` |
+| Only the listed goroutines exist in the authoritative packages, `internal/aikit` and `mods/aikit` included | `architecture.TestAuthoritativePackagesStartNoGoroutines` |
 | A nil planner is the retail step, a bound one answers in its place, and neither dispatch allocates | `ai.TestANilPlannerRunsTheRetailStep`, `ai.TestABoundPlannerAnswersTheStepInPlaceOfRetail`, `ai.TestPlannerDispatchDoesNotAllocate` |
 
 Each Modern policy keeps its own behaviour tests in the package that owns it;
@@ -391,7 +540,13 @@ reserved behaviors needs no knowledge of the registry.
 mods/
   all.go            blank imports of every shipped set; both commands import this
   example/rules.go  RegisterRuleSet("example", build) from an init
+  aikit/rules.go    not a rule set: RegisterModernAI(step), the think step every player marked Modern takes; composes, but does not register, the arena's "aikit" sets
 ```
+
+Every rule set `mods/all.go` links is selectable in the game. A research
+harness's own set is registered by the harness: `cmd/ai-arena/ruleset.go`
+registers the AI arena's `aikit` and `aikit-retail-income` sets, so
+`--gameplay aikit` is refused by the game.
 
 `mods` is the list of sets a build links, and **only a command imports it**.
 Nothing under `internal/` may: a simulation package that reached a mod would
@@ -421,15 +576,24 @@ of a package below the session — knows only the reserved words.
 registered name survive, and a word this build cannot select becomes Modern.
 That is what lets a settings file, a host option and a session constructor
 pass a name through untouched while a typo or a file written by a build that
-linked other sets still starts under the default instead of failing.
+linked other sets still starts under the default instead of failing. One
+word is retired rather than unknown: `modern-ai`, the set that once put
+every computer player on the Modern AI. `gameplay.Parse` refuses it naming
+its replacement (`--gameplay modern --ai-player all=modern`), and the
+settings reader loads it as `modern` with every skirmish row on the Modern
+AI (DESIGN_SESSIONS_AI_SAVE "Modern AI computer player").
 
 Two consequences are worth stating because they are observable:
 
 - The retail-shaped options panel is a three-stage control in derivation order:
-  Strict 3.1, Community 3.9, Modern. It shows the reserved set a selection
-  derives from (`session.BaseModeOf`), and cycling it selects a reserved set —
-  replacing a third-party selection. Selecting a set by name is a command-line
-  or settings-file choice.
+  Strict 3.1, Community 3.9, Modern. It sits at the stage of the reserved set a
+  selection derives from (`session.BaseModeOf`), and a registered set is
+  captioned there with its own name, so the page reads `example` rather than
+  "Modern" while that set is selected and saved. Cycling it selects a reserved
+  set — replacing a third-party selection — and restores the reserved caption.
+  Selecting a set by name is a command-line or settings-file choice, and it is
+  persisted like any other. The control chooses rules only; each computer
+  player's AI is its lobby row's.
 - Headless and simulation-cost reports include `rules` for the bound set
   name; session debug captures also include `rules`. The headless report
   exposes the session base separately as `gameplay`. A retail bank still
@@ -453,8 +617,8 @@ to ask for the same approval again.
    ordering, RNG/resource effects and boundaries before implementing it.
 2. **Use the existing interface.** Compose a shipped implementation when it
    already answers the question. Add a method to the owning `combat.Rules`,
-   `orders.Rules`, `construction.Rules`, `movement.Rules` or
-   `session.UnitLimitRules` when the
+   `orders.Rules`, `construction.Rules`, `movement.Rules`,
+   `session.UnitLimitRules` or `session.ComputerIncomeRules` when the
    package needs a new decision. Implement Strict, Community and Modern
    defaults in their derivation chain, with each layer promoting the lower
    answer where no departure is approved.
@@ -475,7 +639,10 @@ to ask for the same approval again.
    must hold state, first design per-session construction and isolation,
    rebind idempotence, disposal, in-flight work and save identity/versioning.
    The current registry is not a per-session factory and supplies none of
-   those facilities; no such redesign is authorized by this guidance.
+   those facilities; no such redesign is authorized by this guidance. The
+   Modern AI controller is the worked example of keeping state with its
+   owner: its think step is stateless and the controller lives in the
+   manager ("The Modern AI controller").
 5. **Verify the contract.** Test the extension behavior and the Strict bypass,
    including RNG draws and resource effects; retain allocation, composition,
    restoration and registry guards. Test any added state across rebinding and
@@ -502,10 +669,10 @@ well.
 
 ### Decisions still required for future extensions
 
-The existing mechanism deliberately does not settle stateful rule lifecycles,
-new migration/cancellation semantics on switching, or persistent rule-set
-identity and compatibility across saves. These require concrete extension
-requirements, an approved design and tests before dependent behavior can be
+Beyond the Modern AI controller's, the existing mechanism deliberately does
+not settle stateful rule lifecycles, new migration/cancellation semantics on
+switching, or persistent rule-set identity and compatibility across saves.
+These require concrete extension requirements, an approved design and tests before dependent behavior can be
 implemented. Record unresolved behavior as `TODO(question)` at its code site
 and in its owning research contract; record Nanolathe design decisions in the
 owning design document. The existence of a seam or an extension reference does

@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""Summarize ai-arena tournament directories (DIR/matches/*.json).
+
+usage: tools/ai-arena-summary DIR [DIR ...] [--by-map] [--score recorded|default|invested]
+                              [--boot N] [--json OUT]
+
+Per contestant pairing "A vs B" (labels sorted; in a mirror, A is slot 0):
+
+  games      games counted, maps, seeds, and the number of distinct style
+             pairings sampled (the utility brain's "style" report, A then B)
+  W-D-L      A's wins, draws and losses, split into commander kills, points
+             wins at the tick limit, adjudicated wins (a match ended early for
+             a clear leader, ai-arena match -adjudicate), timeouts (a draw on
+             points) and mutual kills (both commanders gone at the same check)
+  decisive   A's share of the games a commander kill decided
+  points     A's points share, (W + D/2) / games, with a 90% map-cluster
+             bootstrap interval (maps resampled with replacement, all of a
+             map's games together; fixed seed, so the interval is repeatable),
+             then the same share with timeouts re-adjudicated at points margins
+             1.1, 1.3, 1.5 and 2.0 (the arena uses 1.3; commander kills and
+             adjudicated games keep their winner)
+  t90        the protocol v3 interval (docs/MODERN_AI_RESEARCH.md §5.3): A's
+             mean points per block (a map and seed, every slot order and start
+             played), averaged per map; the share is the mean of the map means
+             and the 90% interval is Student's t on their spread (maps - 1
+             degrees of freedom). "yes" marks an interval that excludes 50%
+  slot/start A's points share by A's slot and by A's start position (results
+             from before start positions were recorded placed slot i at start i)
+  play       median kill/loss value ratio, mean final metal income and army
+             value A:B, mean minutes
+
+A directory a sequential tournament wrote (DIR/sequential.json) counts only
+the games its verdicts used, and each pairing's looks and verdict follow.
+
+--score picks the score outcomes are read on: "recorded" (default) keeps each
+game's adjudicated result and sweeps the margin on the score the game was
+adjudicated on; "default" or "invested" re-adjudicate every timeout on that
+score (formulas in docs/MODERN_AI_RESEARCH.md §5). Games that repeat an
+identical configuration with an identical outcome (a mirror played in both
+slot orders before the tournament stopped doing so) count once. The cost
+table follows: think mean/p99/max µs, host step mean/max µs, allocation bytes
+per think when measured, command outcomes.
+"""
+import glob
+import json
+import math
+import os
+import random
+import statistics
+import sys
+from collections import defaultdict
+
+MARGINS = (1.1, 1.3, 1.5, 2.0)
+ARENA_MARGIN = 1.3
+BOOT_SEED = 20260924
+
+
+def sequential_of(d):
+    """A sequential tournament's record, or None."""
+    p = os.path.join(d, "sequential.json")
+    return json.load(open(p)) if os.path.exists(p) else None
+
+
+def load(dirs):
+    games, dropped, clashes = [], 0, 0
+    seen = {}
+    for d in dirs:
+        seq = sequential_of(d)
+        excluded = set(seq.get("excluded") or []) if seq else set()
+        for f in sorted(glob.glob(os.path.join(d, "matches", "*.json"))):
+            if os.path.basename(f)[:-len(".json")] in excluded:
+                continue
+            try:
+                r = json.load(open(f))
+            except Exception:
+                continue
+            if len(r.get("players", [])) != 2:
+                continue
+            key, outcome = identity(r)
+            if key in seen:
+                if seen[key] == outcome:
+                    dropped += 1
+                    continue
+                clashes += 1  # same configuration, different outcome: keep both
+            seen[key] = outcome
+            r["_file"] = f
+            games.append(r)
+    return games, dropped, clashes
+
+
+def identity(r):
+    """A game's configuration and its outcome. Two results with the same
+    configuration and outcome are one deterministic game played twice."""
+    ps = r["players"]
+    seed = r.get("battle_seed", r["seed"])
+    key = (r["map"].lower(), seed, r.get("crt_seed", seed), r.get("starts", "slot"), r["gameplay"],
+           tuple((p["slot"], p["label"], p["brain"], p["persona"], p["side"], start_of(r, p)) for p in ps))
+    outcome = (r["ticks"], r["winner"], r["reason"],
+               tuple((p["score"], p["value_killed"], p["value_lost"], p["kills"], p["losses"]) for p in ps))
+    return key, outcome
+
+
+def start_of(r, p):
+    # Before starts were recorded, the arena always placed slot i at start i.
+    return p.get("start", p["slot"]) if "starts" in r else p["slot"]
+
+
+def score_of(r, p, kind):
+    if kind == "recorded":
+        return p["score"]
+    if kind == "default":
+        if "score_default" in p:
+            return p["score_default"]
+        if r.get("score_kind", "default") == "default":
+            return p["score"]
+        return None
+    return p.get("score_" + kind)
+
+
+def adjudicate(r, kind, margin):
+    """The winner index under the arena's rule: a commander kill or an
+    adjudicated early end stands; at the tick limit the higher score wins when
+    it is at least margin times the other (a negative score, including -1 for
+    a dead player, loses at any margin), otherwise the game is a draw (-1)."""
+    if r["reason"] in ("decisive", "adjudicated"):
+        return r["winner"]
+    scores = [score_of(r, p, kind) for p in r["players"]]
+    if any(s is None for s in scores):
+        raise SystemExit(f"{r['_file']}: no {kind} score recorded")
+    best = second = -1
+    bi = -1
+    for i, s in enumerate(scores):
+        if s > best:
+            second, best, bi = best, s, i
+        elif s > second:
+            second = s
+    if bi >= 0 and (second < 0 or best * 100 >= second * round(margin * 100)):
+        return bi
+    return -1
+
+
+def classify(r, ia, winner):
+    """A's outcome letter and how it was decided, for one game."""
+    if winner < 0:
+        return "D", ("mutual" if r["reason"] == "decisive" else "timeout")
+    how = {"decisive": "ck", "adjudicated": "adj"}.get(r["reason"], "pts")
+    return ("W" if winner == ia else "L"), how
+
+
+def share(rows):
+    if not rows:
+        return None
+    return sum(1.0 if o == "W" else 0.5 if o == "D" else 0.0 for o in rows) / len(rows)
+
+
+def pct(x):
+    return "-" if x is None else f"{100 * x:.1f}%"
+
+
+def bootstrap(rows_by_map, n, rnd):
+    """5th and 95th percentile of the points share over n resamples of whole
+    maps, or None with fewer than two maps."""
+    maps = sorted(rows_by_map)
+    if len(maps) < 2:
+        return None
+    vals = []
+    for _ in range(n):
+        rows = []
+        for _ in maps:
+            rows.extend(rows_by_map[maps[rnd.randrange(len(maps))]])
+        vals.append(share(rows))
+    vals.sort()
+    return vals[int(0.05 * (len(vals) - 1))], vals[int(0.95 * (len(vals) - 1))]
+
+
+def _betacf(a, b, x):
+    tiny = 1e-300
+    c, d = 1.0, 1 - (a + b) * x / (a + 1)
+    d = 1 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, 301):
+        for num in (m * (b - m) * x / ((a + 2 * m - 1) * (a + 2 * m)),
+                    -(a + m) * (a + b + m) * x / ((a + 2 * m) * (a + 2 * m + 1))):
+            d = 1 + num * d
+            d = 1 / (d if abs(d) > tiny else tiny)
+            c = 1 + num / c
+            c = c if abs(c) > tiny else tiny
+            h *= d * c
+        if abs(d * c - 1) < 1e-15:
+            break
+    return h
+
+
+def t_cdf(t, df):
+    """Student's t distribution function (ai-arena's tCDF)."""
+    x = df / (df + t * t)
+    a, b = df / 2, 0.5
+    front = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x)) if 0 < x < 1 else 0
+    if x <= 0:
+        ib = 0.0
+    elif x >= 1:
+        ib = 1.0
+    elif x < (a + 1) / (a + b + 2):
+        ib = front * _betacf(a, b, x) / a
+    else:
+        ib = 1 - front * _betacf(b, a, 1 - x) / b
+    return 1 - ib / 2 if t > 0 else ib / 2
+
+
+def t_quantile(p, df):
+    lo, hi = -1e4, 1e4
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if t_cdf(mid, df) < p:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def t_interval(block_rows):
+    """Protocol v3's share and 90% interval: block_rows maps (map, seed) to A's
+    outcome letters; blocks average within a map, maps average alike, and the
+    interval is Student's t on the spread of the map means."""
+    by_map = defaultdict(list)
+    for (m, _), rows in sorted(block_rows.items()):
+        by_map[m].append(share(rows))
+    means = [statistics.mean(v) for _, v in sorted(by_map.items())]
+    if len(means) < 2:
+        return None
+    est = statistics.mean(means)
+    se = statistics.stdev(means) / math.sqrt(len(means))
+    q = t_quantile(0.95, len(means) - 1)
+    return est, est - q * se, est + q * se
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(2)
+    by_map, kind, boot, json_out, dirs = False, "recorded", 2000, None, []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--by-map":
+            by_map = True
+        elif a == "--score":
+            i += 1
+            kind = args[i]
+        elif a == "--boot":
+            i += 1
+            boot = int(args[i])
+        elif a == "--json":
+            i += 1
+            json_out = args[i]
+        else:
+            dirs.append(a)
+        i += 1
+    if kind not in ("recorded", "default", "invested"):
+        raise SystemExit(f"unknown --score {kind}")
+    games, dropped, clashes = load(dirs)
+    pairs = defaultdict(list)
+    cost = defaultdict(lambda: defaultdict(list))
+    for r in games:
+        ps = r["players"]
+        labels = [p["label"] for p in ps]
+        key = tuple(sorted(labels))
+        if by_map:
+            key = key + (r["map"],)
+        pairs[key].append((r, labels.index(key[0])))  # slot 0 in a mirror
+        for p in ps:
+            c, cm = p["cost"], p["commands"]
+            k = cost[p["label"]]
+            k["think_mean"].append(c["think_mean_us"]); k["think_p99"].append(c["think_p99_us"])
+            k["think_max"].append(c["think_max_us"]); k["step_mean"].append(c["step_mean_us"])
+            k["step_max"].append(c["step_max_us"]); k["alloc"].append(c.get("think_alloc_bytes_mean", 0))
+            k["fail"].append(cm["Failed"]); k["drop"].append(cm["DroppedAPM"]); k["applied"].append(cm["Applied"])
+
+    print(f"{len(games)} games in {', '.join(dirs)}"
+          + (f" ({dropped} repeated games counted once)" if dropped else "")
+          + (f"; {clashes} configurations played twice with different outcomes, both kept" if clashes else ""))
+    print(f"score: {kind}; points margin swept over {', '.join(str(m) for m in MARGINS)}; "
+          f"interval: 90% map-cluster bootstrap, {boot} resamples, seed {BOOT_SEED}\n")
+    out = []
+    mismatched = 0
+    for key in sorted(pairs):
+        rows = pairs[key]
+        mirror = key[0] == key[1]
+        name = f"{key[0]} vs {key[1]}" + (f" @{key[2]}" if len(key) > 2 else "") + ("  (mirror: A is slot 0)" if mirror else "")
+        tally = defaultdict(int)
+        outcomes, by_map_rows, block_rows = [], defaultdict(list), defaultdict(list)
+        slot_rows, start_rows = defaultdict(list), defaultdict(list)
+        sweep = {m: [] for m in MARGINS}
+        styles, maps, seeds = set(), set(), set()
+        kl, mi_a, mi_b, av_a, av_b, mins = [], [], [], [], [], []
+        for r, ia in rows:
+            pa, pb = r["players"][ia], r["players"][1 - ia]
+            if kind == "recorded":
+                winner = r["winner"]
+                if r["reason"] != "decisive" and adjudicate(r, "recorded", ARENA_MARGIN) != winner:
+                    mismatched += 1
+            else:
+                winner = adjudicate(r, kind, ARENA_MARGIN)
+            o, how = classify(r, ia, winner)
+            tally[o + how] += 1
+            outcomes.append(o)
+            by_map_rows[r["map"]].append(o)
+            block_rows[(r["map"], r["seed"])].append(o)
+            slot_rows[pa["slot"]].append(o)
+            start_rows[start_of(r, pa)].append(o)
+            for m in MARGINS:
+                sweep[m].append(classify(r, ia, adjudicate(r, kind, m))[0])
+            styles.add((pa.get("extra", {}).get("style"), pb.get("extra", {}).get("style")))
+            maps.add(r["map"])
+            seeds.add(r["seed"])
+            kl.append((pa["value_killed"] + 1) / (pa["value_lost"] + 1))
+            la = pa["series"][-1] if pa.get("series") else {}
+            lb = pb["series"][-1] if pb.get("series") else {}
+            mi_a.append(la.get("mi", 0)); mi_b.append(lb.get("mi", 0))
+            av_a.append(la.get("av", 0)); av_b.append(lb.get("av", 0))
+            mins.append(r["ticks"] / 1800)
+        n = len(rows)
+        w, l = tally["Wck"] + tally["Wpts"] + tally["Wadj"], tally["Lck"] + tally["Lpts"] + tally["Ladj"]
+        d = tally["Dtimeout"] + tally["Dmutual"]
+        dec = tally["Wck"] + tally["Lck"]
+        dec_share = tally["Wck"] / dec if dec else None
+        pts = share(outcomes)
+        ci = bootstrap(by_map_rows, boot, random.Random(BOOT_SEED))
+        tci = t_interval(block_rows)
+        swept = {m: share(v) for m, v in sweep.items()}
+        n_styles = len(styles) if any(s != (None, None) for s in styles) else None
+        print(name)
+        print(f"  games {n}: {len(maps)} maps, {len(seeds)} seeds, "
+              f"{'-' if n_styles is None else n_styles} distinct style pairings")
+        adj_w = f" + {tally['Wadj']} adjudicated" if tally["Wadj"] or tally["Ladj"] else ""
+        adj_l = f" + {tally['Ladj']} adjudicated" if tally["Wadj"] or tally["Ladj"] else ""
+        print(f"  W-D-L {w}-{d}-{l}   W: {tally['Wck']} commander kills + {tally['Wpts']} points{adj_w};"
+              f"  D: {tally['Dtimeout']} timeouts" + (f" + {tally['Dmutual']} mutual kills" if tally["Dmutual"] else "")
+              + f";  L: {tally['Lck']} commander kills + {tally['Lpts']} points{adj_l}")
+        print(f"  decisive-only share {pct(dec_share)} ({tally['Wck']} of {dec})")
+        print(f"  points share {pct(pts)}  90% [{pct(ci[0]) if ci else '-'}, {pct(ci[1]) if ci else '-'}]"
+              f"   by margin " + "  ".join(f"{m}: {pct(swept[m])}" for m in MARGINS))
+        if tci:
+            print(f"  t90 {pct(tci[0])} [{pct(tci[1])}, {pct(tci[2])}] over {len(maps)} map means"
+                  + ("   yes" if tci[1] > 0.5 or tci[2] < 0.5 else ""))
+        print("  A by slot " + "  ".join(f"{s}: {pct(share(v))} ({len(v)})" for s, v in sorted(slot_rows.items()))
+              + "   A by start " + "  ".join(f"{s}: {pct(share(v))} ({len(v)})" for s, v in sorted(start_rows.items())))
+        print(f"  kill/loss {statistics.median(kl):.2f}   metal/s {statistics.mean(mi_a):.0f}:{statistics.mean(mi_b):.0f}"
+              f"   army {statistics.mean(av_a):.0f}:{statistics.mean(av_b):.0f}   minutes {statistics.mean(mins):.1f}\n")
+        out.append({"a": key[0], "b": key[1], "map": key[2] if len(key) > 2 else None, "mirror": mirror,
+                    "games": n, "maps": len(maps), "seeds": len(seeds), "style_pairings": n_styles,
+                    "w": w, "d": d, "l": l, "w_commander": tally["Wck"], "w_points": tally["Wpts"],
+                    "d_timeout": tally["Dtimeout"], "d_mutual": tally["Dmutual"],
+                    "l_commander": tally["Lck"], "l_points": tally["Lpts"],
+                    "w_adjudicated": tally["Wadj"], "l_adjudicated": tally["Ladj"],
+                    "decisive_share": dec_share, "points_share": pts, "points_ci90": list(ci) if ci else None,
+                    "t_share": tci[0] if tci else None, "t_ci90": list(tci[1:]) if tci else None,
+                    "points_share_by_margin": {str(m): v for m, v in swept.items()},
+                    "by_slot": {str(s): share(v) for s, v in sorted(slot_rows.items())},
+                    "by_start": {str(s): share(v) for s, v in sorted(start_rows.items())}})
+    for d in dirs:
+        seq = sequential_of(d)
+        if not seq:
+            continue
+        print(f"sequential ({d}): looks at {seq['looks']} seeds, alpha {seq['alpha']}, futility {seq['futility']}"
+              f", {len(seq.get('excluded') or [])} games past a decided look left out")
+        for p in seq["pairs"]:
+            looks = "; ".join(f"{lk['seeds']} seeds {pct(lk['share'])} t {lk['t']:.2f}/{lk['bound']:.2f}"
+                              + (f" power {lk['power']:.2f}" if lk.get("power") else "")
+                              + (f" -> {lk['decision']}" if lk.get("decision") else "") for lk in p["looks"])
+            print(f"  {p['pair'][0]} vs {p['pair'][1]}: {p['verdict'] or 'undecided'} ({looks})")
+        print()
+    if mismatched:
+        print(f"WARNING: {mismatched} timeout games re-adjudicate differently from their recorded result at {ARENA_MARGIN}\n")
+    print(f"{'contestant':28s} {'think µs mean':>13s} {'p99':>7s} {'max':>8s} {'step µs mean':>12s} {'max':>8s} {'alloc B/think':>13s} {'applied':>8s} {'failed':>7s} {'apm-drop':>8s}")
+    for label in sorted(cost):
+        c = cost[label]
+        print(f"{label:28s} {statistics.mean(c['think_mean']):13.1f} {statistics.mean(c['think_p99']):7.0f} {max(c['think_max']):8.0f} "
+              f"{statistics.mean(c['step_mean']):12.1f} {max(c['step_max']):8.0f} {statistics.mean(c['alloc']):13.0f} "
+              f"{statistics.mean(c['applied']):8.0f} {statistics.mean(c['fail']):7.0f} {statistics.mean(c['drop']):8.0f}")
+    if json_out:
+        json.dump({"score": kind, "margins": MARGINS, "boot": boot, "boot_seed": BOOT_SEED,
+                   "games": len(games), "repeats_dropped": dropped, "pairings": out}, open(json_out, "w"), indent=1)
+
+
+if __name__ == "__main__":
+    main()

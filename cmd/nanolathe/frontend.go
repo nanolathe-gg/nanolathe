@@ -163,6 +163,10 @@ type gameShell struct {
 	// (docs/DESIGN_MODS_MUTATORS.md §4.3, §6).
 	modSetting     settings.ModSelection
 	mutatorSetting map[string]string
+	// modernAISetting is the saved modernAI block, written back unchanged:
+	// no screen edits it, and a --ai flag never overwrites it
+	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player").
+	modernAISetting settings.ModernAI
 	// controlsOffered is the saved list of content whose recommended
 	// settings have been offered, so each is offered once
 	// (docs/DESIGN_MODS_MUTATORS.md §4.3).

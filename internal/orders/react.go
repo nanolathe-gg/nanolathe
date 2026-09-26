@@ -212,6 +212,12 @@ func categoryAdmitsChase(victim, attacker *content.UnitDef) bool {
 // PurgeOrdersOnDamage applies the construction throttle's selective primary
 // purge [08 R-AI-01 §11][04 R-MOV-03 §6]. A full Stop would additionally clear
 // autonomous targets and cancel the commander's weapon aiming scripts.
+//
+// The bound rules may spare the whole queue: Modern protected work
+// (ProtectWorkOnDamage), and a Modern AI player's running move
+// (KeepsMoveOnDamage, DESIGN_UNITS_ORDERS_COB "Modern AI move retention").
+// Both are pure reads; neither draws nor spends, and Strict answers no to
+// both.
 func PurgeOrdersOnDamage(u *units.Unit) {
 	if u == nil {
 		return
@@ -220,7 +226,8 @@ func PurgeOrdersOnDamage(u *units.Unit) {
 	if q == nil {
 		return
 	}
-	if rulesOfUnit(u).ProtectWorkOnDamage(u) {
+	r := rulesOfUnit(u)
+	if r.ProtectWorkOnDamage(u) || r.KeepsMoveOnDamage(u) {
 		return
 	}
 	q.PurgeUnprotected()

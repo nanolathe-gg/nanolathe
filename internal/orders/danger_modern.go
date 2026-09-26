@@ -137,6 +137,55 @@ func (*ModernRules) ProtectWorkOnDamage(u *units.Unit) bool {
 	return protectedDangerWork(q) || q != nil && (q.danger.response != nil || len(q.primary) > 0 && dangerEligibleHead(q))
 }
 
+// KeepsMoveOnDamage is Modern AI move retention (Nanolathe Modern policy,
+// user-authorized 2026-09-25; DESIGN_UNITS_ORDERS_COB "Modern AI move
+// retention"): the construction throttle's purge [08 R-AI-01 §11] spares the
+// queue of a Modern AI player's unit whose running record is a move, so a
+// commander or constructor that controller sends away from fire keeps going.
+// A Classic player's unit is purged as before. It reads the queue and the
+// binding's player predicate only: no draw, no resource, no state.
+func (*ModernRules) KeepsMoveOnDamage(u *units.Unit) bool {
+	if u == nil {
+		return false
+	}
+	b := bindingFor(u)
+	if b == nil || b.ModernAIPlayer == nil || !b.ModernAIPlayer(u.Owner) {
+		return false
+	}
+	return runningMove(QueueOfUnit(u))
+}
+
+// runningMove reports whether q's running record, past the temporary control
+// records, is a move record.
+func runningMove(q *Queue) bool {
+	if q == nil {
+		return false
+	}
+	for _, n := range q.primary {
+		if n == nil {
+			continue
+		}
+		name := DescriptorFor(n.ID).Name
+		if temporaryControlRecord(name) {
+			continue
+		}
+		return name == "Move_Ground" || name == "VTOL_Move"
+	}
+	return false
+}
+
+// temporaryControlRecord names the records the protected-work reads skip to
+// reach the running assignment: activation, cloak and the two standing
+// orders, which finish at once, and a stun, which holds the unit without
+// replacing its work.
+func temporaryControlRecord(name string) bool {
+	switch name {
+	case "Activate", "Deactivate", "Cloak_On", "Cloak_Off", "Standing_MoveOrder", "Standing_FireOrder", "Paralyze":
+		return true
+	}
+	return false
+}
+
 func protectedDangerWork(q *Queue) bool {
 	if q == nil {
 		return false
@@ -148,9 +197,11 @@ func protectedDangerWork(q *Queue) bool {
 		if n == nil {
 			continue
 		}
-		switch DescriptorFor(n.ID).Name {
-		case "Activate", "Deactivate", "Cloak_On", "Cloak_Off", "Standing_MoveOrder", "Standing_FireOrder", "Paralyze":
+		name := DescriptorFor(n.ID).Name
+		if temporaryControlRecord(name) {
 			continue
+		}
+		switch name {
 		case "MobileBuild", "VTOL_MobileBuild", "BuildingBuild", "HelpBuild", "VTOL_HelpBuild", "GetBuilt":
 			return true
 		case "RepairUnit", "RepairUnitNoMove", "VTOL_RepairUnit", "SelfRepair":

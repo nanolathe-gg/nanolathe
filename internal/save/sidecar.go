@@ -113,6 +113,10 @@ type Sidecar struct {
 	Community       SidecarCommunity  `json:"community"`
 	UnitLimit       int               `json:"unitLimit"`
 	Mutators        map[string]string `json:"mutators"`
+	// AI is the Modern AI controllers' record (session.AIControllers),
+	// kept as raw JSON so this package stays ignorant of its shape; absent
+	// when the battle had no computer player.
+	AI json.RawMessage `json:"ai,omitempty"`
 }
 
 // SidecarPath is the sidecar file of the bank at bankPath.

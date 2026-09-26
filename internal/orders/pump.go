@@ -343,6 +343,20 @@ func (q *Queue) Primary() []*Node {
 	return out
 }
 
+// PrimaryLen is the number of records in the front segment. With PrimaryAt
+// it reads the segment without copying it, for a reader that neither
+// changes the queue nor keeps a record past the walk.
+func (q *Queue) PrimaryLen() int {
+	if q == nil {
+		return 0
+	}
+	return len(q.primary)
+}
+
+// PrimaryAt returns the i-th front-segment record (0 is the head); see
+// PrimaryLen.
+func (q *Queue) PrimaryAt(i int) *Node { return q.primary[i] }
+
 // Secondary returns a copy of the rear segment's record pointers; see Primary.
 func (q *Queue) Secondary() []*Node {
 	if q == nil {

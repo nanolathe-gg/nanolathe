@@ -471,9 +471,15 @@ target knowledge, and infers no hostility from ownership or side identity
 
 What the manager *does* with that state on a dispatched tick is selected by the
 session's bound rule set: `ai.Planner` is the think step `Manager.Tick`
-dispatches, both reserved sets bind the retail one, and the manager keeps
-owning its state, its save and its restore either way
+dispatches. Strict 3.1 and Community 3.9 bind the retail one, the reserved
+Modern set binds it with [Modern wave air targets](#modern-wave-air-targets),
+and the manager keeps owning its state, its save and its restore either way
 ([DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-computer-players-think-step)).
+A computer player the lobby marks Modern, in any rule set, has its decisions
+made instead by the [Modern AI computer player](#modern-ai-computer-player)
+("Per-player selection"), whose controller lives in the manager's `Ext`
+beside the bindings only it reads — the map's start positions, the battle
+seed and the player's own sight predicate.
 
 `TaskKind` is the ten-slot task vector and its order is load-bearing. Slot 0
 holds no task object at all — the dispatcher's null test skips it — while slot
@@ -1730,6 +1736,427 @@ qualify; ballistic, water and command-fire weapons do not),
 `ai.TestOrderSubmissionSeamCarriesOnlyMoveAttackPatrolCodes`, which now audits
 the split broadcast's call sites too.
 
+### Modern AI computer player
+
+**Nanolathe policy (user-authorized 2026-09-24 and 2026-09-25), research
+prototype.** The Modern AI computer player replaces a computer player's
+decisions with the util+tac brain — utility-scored economy and production, a
+tactical army — hosted by `internal/aikit` and installed by `mods/aikit` as
+the Modern AI's think step (`session.RegisterModernAI`). On 2026-09-24 the user approved,
+for it, a private random generator, controller state of its own and
+background thinking: "Modern doesn't have the same limitations as 3.1 or
+community - we should use whatever we can to make the gameplay experience
+better." On 2026-09-25 the user made it a choice per computer player in every
+gameplay mode: "merging an initial version of this AI to main and having it
+be selectable per player in skirmish and survival. Ideally we can select it
+per player, e.g. one computer player could use classic, another our modern
+AI". Later that day the user retired the rule set that had selected it for
+every computer player ("Should we get rid of that explicit rule set? I just
+want to be able to select the class vs modern AI per player and that defines
+how the AI will play"), chose to pay a Modern AI player in full in every
+mode ("Full in every mode"), and switched old settings rows to Modern. Like
+mutators and Survival it is therefore a mode-independent exception
+(AGENTS.md): a lobby choice about who plays, not a rule.
+
+**Strict baseline.** A computer player marked Classic — the zero value, and
+every computer player a setup, a fixture or a save does not mark — runs its
+rule set's own think step: the retail planner (§3.3) under Strict 3.1 and
+Community 3.9, the retail planner with
+[wave air targets](#modern-wave-air-targets) under Modern; and it is paid by
+its rule set's income answer, the retail difficulty discount in every
+reserved set. A battle whose computer players are all Classic binds no
+controller and pays nobody in full, so Strict 3.1 with only Classic players
+is the retail baseline and every fingerprint lock runs Classic.
+
+**Per-player selection.** Each computer player is Classic or Modern
+(`ai.Controller`, zero value Classic).
+
+- *Where the choice comes from.* The lobby row carries it
+  (`session.SkirmishPlayer.AI`): the skirmish and Survival setup screens
+  ([DESIGN_INTERFACE_HUD_INPUT §2.6](DESIGN_INTERFACE_HUD_INPUT.md#26-cmdnanolathe--the-front-end-screens)
+  "Computer AI"), where a newly added computer row starts Modern (user
+  decision 2026-09-25), and the settings file's skirmish rows: a Classic
+  computer row stores `"ai": "classic"`, and a row without the key plays
+  the Modern AI, so every computer row of a file written before this
+  encoding — whose Classic rows stored nothing — loads Modern (user decision
+  2026-09-25: old settings rows switch to Modern). `"modern"`, the word the
+  first per-row encoding wrote, and any other word also read as Modern; the
+  writer omits the key for a Modern row and for a row that is not a
+  computer player. A battle the command line composes takes
+  `--ai-player <row>=<classic|modern>` or `--ai-player all=<classic|modern>`
+  (repeatable, on `nanolathe` and `nanolathe-headless`): rows are numbered 1
+  to 10 as the lobby numbers them — row 2 is a `--map` skirmish's computer
+  player, rows 2 and 3 a Survival battle's buddies — and `all` marks every
+  computer row of the battle, which a named row overrides in either order. A
+  row that is not a computer player of the battle, a row or `all` named
+  twice, an `all` that finds no computer row, or a word other than `classic`
+  or `modern` stops the start with the command's diagnostic. Campaign
+  computer players have no lobby row and are Classic. The AI arena keeps its
+  own contestant syntax.
+- *Battle entry.* After the managers exist and before the entry prime can
+  step one, the session marks every live computer row's manager
+  (`ai.Manager.Controller`). The human's row, an observer's and the Survival
+  attacker's passive manager are never marked.
+- *Which think step.* A player marked Modern runs the Modern AI's think
+  step, which `mods/aikit` installs in the session's one slot for it
+  (`session.RegisterModernAI`), whatever set the battle binds; a Classic
+  player runs the bound set's own. The session projects this on every bind
+  (`Session.plannerFor`), so the mark survives a rule-set switch at the
+  command boundary: the Modern player keeps its controller, the Classic
+  players change step with the set. A build that does not link `mods/aikit`
+  refuses to compose a player marked Modern rather than playing it as
+  Classic.
+- *Rules.* A Modern player plays under the bound set's rules. In a Strict 3.1
+  battle it plays under Strict 3.1 — every seam answers as retail, and only
+  who decides differs; under Modern it plays under Modern, including
+  [Modern AI move retention](DESIGN_UNITS_ORDERS_COB.md#modern-ai-move-retention),
+  the one order policy that covers Modern AI players alone.
+- *Difficulty and income.* The battle's difficulty picks the persona (below)
+  in every set. A player marked Modern is paid in full in every rule set,
+  Strict 3.1 included (user decision 2026-09-25, "Full in every mode";
+  [Modern AI full income](DESIGN_ECONOMY_CONSTRUCTION.md#modern-ai-full-income)):
+  its personas were measured on full income, so its difficulty comes from
+  the persona alone. A Classic computer player is paid by the bound set's
+  answer, the retail discount in every reserved set, so Classic players are
+  credited exactly as before, beside a Modern one or not.
+- *No rule set chooses it.* The gameplay selection — `--gameplay`, the
+  settings file's `gameplay`, the options page — chooses rules only; each
+  computer player's lobby mark alone chooses its AI. The `modern-ai` rule set
+  that once put every computer player on the Modern AI was retired on
+  2026-09-25. `--gameplay modern-ai` is refused, naming its replacement,
+  `--gameplay modern --ai-player all=modern`, which plays the same battle:
+  Great Divide seed 7 at 27,000 ticks gives the state hash the retired set
+  gave (`e658c98a9a8ffb3c`), and the report differs only in `rules`. A
+  settings file whose `gameplay` is `modern-ai` loads as `modern` with every
+  skirmish row Modern, Classic rows included, the game it selected, and the
+  next save writes it that way; refusing it would have stopped the game at
+  start-up over a preference. A save's sidecar naming the set is treated as
+  "Saves" below says.
+- *Who counts as a Modern AI player.* `Session.ModernAIPlayer`: a live
+  computer slot (control byte 2), not the Survival attacker, whose bound
+  think step says it runs the Modern AI for that manager (`ai.ModernAIStep`:
+  the Modern AI's step always does, the arena's host step for a player the
+  arena gave a brain). The headless report names such a player
+  (`"ai_controller": "modern"`) and says nothing for any other, so a battle
+  of Classic players reports exactly what it did before.
+
+**Modern behaviour.**
+
+- *Persona.* The lobby difficulty picks the easy, medium or hard persona:
+  how often the brain looks, its reaction latency, its action budget, how
+  many operations it runs at once, its skill refinements, and its ambition —
+  how much of a top human's plan it attempts. Calibration and results are in
+  [MODERN_AI_RESEARCH](MODERN_AI_RESEARCH.md).
+- *Income.* [Full income](DESIGN_ECONOMY_CONSTRUCTION.md#modern-ai-full-income)
+  in every rule set, so difficulty comes from the persona alone.
+- *Observation.* Its own units; hostile units in its own sight and untyped
+  contacts inside its own radar; remembered sightings; allied units in its
+  sight, by the same predicate (a Survival team's shared sight,
+  [DESIGN_SURVIVAL §4.3](DESIGN_SURVIVAL.md)). Its sight is its own
+  coverage in both visibility modes — under Permanent LOS its own mapping
+  bit, where the retail predicate reads the local viewer's `[03 §3.2]`.
+  Start positions and metal spots are public map knowledge.
+- *Start assignment.* With pre-determined starts (the lobby's `Location`
+  setting, where slot *i* takes start *i*), every player can read from the
+  lobby which start each opponent took, so the session tells the controller
+  too (`ai.Manager.StartOwners`, published at skirmish placement). Its army
+  and scouts then look for an enemy base only at an opponent's start instead
+  of walking every start on the map (user decision 2026-09-24). Under random
+  starts, on a restored battle and in a campaign it is not told and searches
+  the starts. The arena's `-starts slot` is pre-determined; `random` and
+  `swap` are random placements.
+- *Action.* Player-level orders through the ordinary order and construction
+  paths, applied after the persona's reaction window and revalidated against
+  the live world, then the retail step's engine upkeep.
+- *Randomness and threads.* One private generator per computer player
+  ([INVARIANTS.md](INVARIANTS.md) I4 "Modern AI exception"); an optional
+  background think whose result equals the synchronous one
+  ([DESIGN_GAMEPLAY_RULES](DESIGN_GAMEPLAY_RULES.md#the-modern-ai-controller)).
+
+**Configuration** (user request 2026-09-24: "keep some of the AI behaviors
+& personalities configurable (not in the UI). By default we could randomize
+it, so each round the AI might behave slightly differently but overall still
+smart"; and 2026-09-25: "Maybe for the variety we don't need completely
+different styles, just weights between them changing a bit. So some raids
+still happen, some towers still get built, etc, just at different rates to
+randomize things a bit."). The brain's parameters may be set per battle
+without any screen. With nothing configured every game plays the balanced
+style (the tuned opening), jitters its opening and waves, and draws a
+personality: eight traits (aggression, raids, towers, expansion, tech,
+heavy units, air, scouting), each drawn on its own around neutral, which
+move the rates at which the same brain raids, builds towers, expands and
+so on — nothing is switched off — all from the player's private
+generator. Each trait's range was measured to keep the brain as strong as
+without it ([utility README §13.15](../internal/aikit/brains/utility/README.md)).
+
+- *Keys.* One vocabulary, the AI arena's player-spec keys for `util+tac`.
+  The game and the arena build the brain with the same builder
+  (`mods/aikit` `NewUtilTac`), so a key means the same in both. Each layer
+  lists its own keys: the utility parameters are `utility.Specs`
+  (`internal/aikit/brains/utility/params.go`: name, default, range and
+  meaning); the variety switches are those `utility.VarietyFrom` reads
+  (`style=<name|random>`, `jitter=0|1`, the attack-value switches, the
+  front rules, the opening switches, and the personality:
+  `personality=<name|random|off>` and one key per trait,
+  `trait_aggression`, `trait_raids`, `trait_towers`, `trait_expansion`,
+  `trait_tech`, `trait_heavy`, `trait_air` and `trait_scouting`, each
+  −100..100 with 0 neutral, `utility.TraitKeys`; the styles are in
+  [MODERN_AI_RESEARCH §8](MODERN_AI_RESEARCH.md#8-variety-and-ambition-utility-brain),
+  the personalities and what each trait moves in the
+  [utility README §13.15](../internal/aikit/brains/utility/README.md));
+  the tactics switches and knobs are listed at the top of
+  `internal/aikit/brains/tactics/README.md`; the survival brain's keys,
+  which only a Survival battle's computer buddies read, are
+  `survival.Specs` (`internal/aikit/brains/survival/params.go`). The arena's persona keys
+  (`think`, `apm`, `skill`, `ambition` and the rest) and its `label` are not
+  keys here: the lobby difficulty picks the persona.
+- *Strict check.* `mods/aikit` `ValidateParams` refuses an unknown key and a
+  value its layer would not use as written: a value other than a style
+  name, a personality word or `pv`'s word that is not an integer spelled
+  plainly (`+1` and `01` are refused, because the layers read them
+  differently), a utility parameter outside its documented range (the
+  arena clamps it; a configuration is refused), a switch other than `0` or
+  `1`, a personality other than an archetype's name, `random` or `off`, a
+  trait outside −100..100, a tactics knob that is not a
+  32-bit integer of the least value the army reads (`hn`, `sm` and `raidv`
+  at least 1, `hv` at least 0), or `pv` other than `main`. `mods/aikit`
+  `TestTheVocabularyIsWhatTheLayersRead` fails when a layer reads a key the
+  check does not name.
+- *The settings block.* The settings file's `modernAI` key has three
+  layers of key/value pairs; a value may be a JSON string or number:
+
+  ```json
+  "modernAI": {
+    "all": {"jitter": 0},
+    "difficulty": {"hard": {"style": "units", "w_army": 120}},
+    "players": {"3": {"style": "eco"}}
+  }
+  ```
+
+  `all` applies to every computer player; `difficulty` by the battle's
+  difficulty (`easy`, `medium`, `hard`: the skirmish lobby's word, or the
+  campaign difficulty), read as the persona reads it
+  (`session.ControllerDifficulty`); `players` by slot, numbered 1 to 10 as
+  the lobby numbers its rows (Nanolathe decision; the session indexes slots
+  from 0). For each key the most specific layer that names it wins: the
+  slot's, then the difficulty's, then `all`. In the example the computer
+  player in row 3 of a hard battle plays `jitter=0,style=eco,w_army=120`. No
+  screen edits the block; the front end writes it back unchanged.
+- *The flag.* `--ai key=value[,key=value...]` (repeatable; a later value
+  for a key wins) sets every computer player's parameters, which a Modern
+  AI player's brain reads, e.g.
+  `nanolathe --map "Great Divide" --ai-player all=modern --ai style=tower,jitter=0`. As with
+  `--mutator`, a flag replaces the saved block for that run, and `--shot`,
+  `--film`, `--battle-benchmark` and `--headless` never read the block, so
+  they reproduce from their command line.
+- *Validation.* The flag is checked while the command line is read, the
+  block at start-up, and a save's record when it is loaded (a record this
+  build cannot read refuses the load, as an unknown mutator does). An
+  unknown key, a bad value, a difficulty other than the three words or a
+  slot outside 1–10 stops the start with the command's diagnostic, naming
+  the entry (`logical path modernAI.players.3 in <settings file>`); nothing
+  is ignored. None of this runs in a tick.
+- *Where it lives.* The command resolves the flag or the block into
+  `session.AIOverrides` (canonical text per layer) on every battle request
+  (`headless.FreshBattleRequest`, then `SkirmishEntryOptions` or
+  `MissionEntryOptions`). Battle entry merges the layers once per computer
+  player, after the managers exist and before the entry prime can build a
+  controller, into `ai.Manager.ControllerParams`: canonical text, keys in
+  order (`session.CanonicalAIParams`), never a map ranged in the tick. The
+  Modern AI's controller parses that text when it builds its host; it reads
+  no file and no setting.
+- *Dormant elsewhere.* Only the Modern AI controller reads the text. A
+  Classic player carries it dormant, as it carries the private generator's
+  seed, so no fingerprint of a Classic battle moves; the arena's brains take
+  their parameters from their player specs.
+- *Randomness.* The default style is `balanced` (since 2026-09-25; the
+  drawn opening archetypes lost points to it); `style=<name>` plays an
+  opening archetype in every game and `style=random` draws one per game at
+  the share humans play it. `jitter=0` stops the opening and wave jitter
+  and the personality's draws: the default personality is then neutral
+  and a named one plays its archetype's centres, so
+  `style=balanced,jitter=0` is the deterministic brain.
+  `personality=<name>` plays a personality archetype, `personality=off`
+  none (every trait neutral unless pinned), and `trait_<name>=<value>`
+  pins that trait whatever is drawn, leaving the other traits as drawn.
+  With nothing configured the game builds the default util+tac brain
+  (`mods/aikit` `TestTheUnconfiguredPlayBrainIsUnchanged`);
+  `style=random,personality=off` plays the default from before the
+  personality game for game (checked: identical arena result JSON).
+
+**Switching.** A player marked Modern keeps its controller and its full
+income across every rule-set switch; a Classic player takes each set's think
+step and income word. No switch starts or stops a Modern controller: only
+the lobby mark chooses it, and nothing changes the mark in battle.
+
+**Saves.** The retail bank carries nothing of the controller. What a load
+needs to rebuild each controller with the same personality is a small record
+for the save's Nanolathe sidecar
+([DESIGN_MODS_MUTATORS §7](DESIGN_MODS_MUTATORS.md#7-the-save-sidecar)),
+`session.AIControllers`, taken by `session.RecordAIControllers` between
+ticks:
+
+```json
+"ai": {"seed": 3427855529, "generators": [{"player": 1, "position": 1311768467463790320}],
+       "overrides": [{"player": 1, "params": "jitter=0,style=eco"}], "modern": [1]}
+```
+
+- *The controller choice.* `modern` lists, ascending, the computer players
+  marked Modern (`ai.Manager.Controller`); every other computer player is
+  Classic. A load given the record marks exactly those players' managers
+  again, before any controller exists, and so gives them the Modern AI's
+  step, and full income, under whatever set the load binds. A record without
+  the list — every record written before the per-player choice — and a load
+  with no record (a retail save, or a sidecar without `ai`) restore every
+  computer player Classic, since that is the game that was played; the
+  settings file's switch of old rows to Modern does not reach saves. A
+  sidecar naming the retired `modern-ai` set, which only saves made on the
+  development branch before 2026-09-25 can carry, loads under its recorded
+  base like any set this build does not link (DESIGN_GAMEPLAY_RULES §6),
+  with its computer players as its record lists them. A record that marks a
+  player Modern in a build that cannot play the Modern AI refuses the load.
+  Survival battles are never saved, so a buddy's choice is never recorded.
+
+- *Restored.* `seed` is the battle seed every computer player's private
+  generator was seeded from (`ai.Manager.BattleSeed`): the fresh battle's
+  entry seed, or the seed a restored battle carried forward. It is recorded
+  whenever the battle has a computer player, even before any controller has
+  begun or under a set that binds none, so a later controller still draws
+  from the original battle's seed. `generators` holds, for every controller
+  that had begun, its generator's position (the PCG32 state; the stream is
+  fixed by the slot). Recording waits for the controller's work in flight,
+  which changes no game. A load given the record
+  (`session.RetailLoadDeps.AIControllers`) puts the seed on every restored
+  manager in place of the load's entry seed and each position on its own
+  player's manager (`ai.Manager.ResumeGenerator`). The first controller the
+  manager builds — usually in the load's battle-entry prime — runs its
+  brain's `Init` from that seed, so it draws the same style, opening
+  variation (opening lead, opening jitter, first wave factor) and
+  personality (the traits, and the temper the tactics army takes from them
+  at its own `Init`) as the saved game did, and then continues its
+  generator from the recorded position, so
+  later draws such as the per-wave attack factor continue the saved game's
+  sequence instead of repeating its opening ones. A controller built after a
+  later switch starts from the seed like any fresh one. `overrides` holds
+  every computer player's configured parameters (`ai.Manager.ControllerParams`,
+  canonical text; a player without an entry played the defaults), and the
+  load puts them back on the restored managers, so its controllers are
+  built as the saved game's were even if the settings file has changed
+  since: a load never reads the current `modernAI` block or `--ai`.
+- *Not restored.* The controller's memory: its observation history and
+  remembered sightings, its plans, squads and builder tasks, and the wave
+  factor in effect at the save (the brain starts again from its opening
+  factor and redraws from the continued sequence). The home point and every
+  other map reading are taken again from the restored world, so the home
+  point is where the commander stands at the load, and a draw that depends on
+  them — the opt-in drawn first-factory family (`fac_first=5`) — may differ.
+  The battle's shared map analysis is recomputed.
+- *No record.* A retail save, or a sidecar without the record, loads as
+  before: each controller starts from the load's own entry seed, so its style
+  and opening variation are drawn again, and plays the brain's defaults (as
+  a save without a sidecar takes no mutators). A record written before
+  `overrides` existed restores no parameters, which is how its game played.
+- *Where it lives.* `session.SaveSidecar` writes the record as the
+  sidecar's `ai` value (`save.Sidecar.AI`, raw JSON), and the desktop load
+  path decodes it (`session.SidecarAIControllers`) into
+  `RetailLoadDeps.AIControllers`; a record that does not parse refuses the
+  load like any malformed sidecar value.
+
+**Survival.** A [Survival](DESIGN_SURVIVAL.md) battle's Modern computer
+buddies — a buddy the Survival screen or `--ai-player` marks Modern, in any
+rule set — play a survival brain instead of the skirmish one (user request
+2026-09-24), while a Classic
+buddy plays its set's own step. The survival brain is
+the same util+tac layers with survival defaults, wrapped by
+`internal/aikit/brains/survival` — a compact base facing away from the
+human's start site, a tower ring split between the buddies by bearing and
+weighted toward the warned directions, wall segments with corridors,
+repairs, the commander kept behind the towers and an army that never
+attacks out. The session tells every survivor's manager the scenario at
+battle entry and hands it each wave warning as the HUD announces it
+(`ai.Manager.Survival`); only the Modern AI controller reads it, and
+`survival=0` among the configured parameters keeps the skirmish brain. The
+design, its defaults and keys (`survival`, `sv_tower`, `sv_walls`,
+`sv_claim`) and its measurements are
+[DESIGN_SURVIVAL §16](DESIGN_SURVIVAL.md#16-computer-survivors-under-the-modern-ai).
+
+**Boundaries.** Only a Modern computer player's decisions and its income
+discount change; human players, Classic computer players and the rules every
+player plays under are untouched. The one order policy that covers Modern AI players alone,
+[Modern AI move retention](DESIGN_UNITS_ORDERS_COB.md#modern-ai-move-retention),
+is a Modern rule and is off under Strict 3.1 and Community 3.9. The AI arena's
+`aikit` and `aikit-retail-income` sets — the host planner with whatever brain
+the arena installs, with full or retail income for every computer player —
+are registered by `cmd/ai-arena` only and cannot be selected in the game. The
+arena gives its brains to managers directly without marking the players
+Modern, so its set alone decides every contestant's income.
+
+**Verification.** `session.TestComputerPlayerSightReadsItsOwnCoverage`,
+`session.TestReplacingThePlannerReleasesItsController`,
+`session.TestTeardownStopsEveryAIController`, the income tests of
+[DESIGN_ECONOMY_CONSTRUCTION](DESIGN_ECONOMY_CONSTRUCTION.md#modern-ai-full-income),
+`cmd/ai-arena.TestTheArenaRegistersItsRuleSet`,
+`architecture.TestAuthoritativePackagesStartNoGoroutines`, the private
+generator's `aikit.TestRandPCG32KnownAnswer` and `aikit.TestPlayerRandStreams`,
+`aikit.TestSharedMapAnalysisEqualsTheHostsOwn` (the battle's one map analysis
+gives every player the analysis it would have computed alone),
+`aikit.TestRestoredHostRedrawsInitAndResumesItsGenerator`,
+`session.TestAIControllerRecordRoundTrips`,
+`aikit.TestModernAIPersonalitySurvivesALoadRetail` (a four-player Modern AI
+skirmish saved and loaded under another entry seed keeps every computer
+player's style and generator position and plays on), for configuration
+`session.TestAIOverridesMostSpecificLayerWins`,
+`session.TestCanonicalAIParamsIgnoresMapOrder`,
+`session.TestAIControllerRecordCarriesOverrides`,
+`settings.TestModernAIBlockRoundTrip`,
+`cmd/nanolathe.TestModernAISettingsBecomeTheSessionLayers`,
+`cmd/nanolathe.TestTheAIFlagWinsOverTheSavedBlock`,
+`cmd/nanolathe.TestASaveWithUnknownAIParametersIsRefused`,
+`mods/aikit.TestValidateParamsRejectsWhatTheBrainWouldNotRead`, the two
+`mods/aikit` tests named above and
+`mods/aikit.TestConfiguredStylesReachTheControllersAndSurviveALoadRetail` (a
+configured four-player Modern skirmish of Modern AI players plays the
+configured styles, and keeps them through a save and a load), for the
+personality
+`utility.TestPersonalityDrawsAfterTheOthers`,
+`utility.TestPinnedTraitsAndNamedArchetypes`,
+`tactics.TestTemperShiftsMarginsAndRaids` and
+`mods/aikit.TestTheArmyIsTemperedByItsStrategy` (a load keeping every
+computer player's personality and army temper was checked on a
+four-player skirmish of Modern AI players; a committed lock is owed beside
+the configured-styles test), for the per-player selection
+`ai.TestControllerWords`, `ai.TestModernAIDecidesAsksTheBoundStep`,
+`session.TestTheModernAIStepIsInstalledOnceAndIsNotARuleSet` (one step, not
+a rule set, and the retired word is not selectable),
+`session.TestAMarkedPlayerKeepsTheModernAIInEveryRuleSet` (a Modern player
+keeps the Modern AI's step and its controller in every reserved set, and a
+Classic player takes each set's step),
+`session.TestApplyAIControllersMarksOnlyComputerRows`,
+`session.TestTheSaveRecordCarriesTheModernPlayers` (including the full-income
+mark after a load),
+`session.TestComputerAIChoicesNameComputerRows` (named rows and `all`),
+`session.TestClassicRowsKeepTheSetupBytes`, for income
+`session.TestAModernPlayerIsPaidInFullInEveryRuleSet` and
+`economy.TestAFullIncomePlayerIsCreditedAsAHuman`, for the settings file
+`settings.TestSkirmishRowAIRoundTrip`, `settings.TestOldSettingsRowsLoadModern`
+and `settings.TestTheRetiredModernAISelectionLoadsAsModernWithModernRows`,
+`cmd/nanolathe.TestGameplayOptionShowsTheSelectedSet` (the retired word is
+refused with its replacement), the front end's tests
+(DESIGN_INTERFACE_HUD_INPUT §2.6 "Computer AI"),
+`mods/aikit.TestMixedControllersPlayAndSurviveALoadRetail` (one Classic and
+one Modern computer player under Strict 3.1 and under Modern play, save,
+load with the record as they were and without it both Classic, and play
+on), `mods/aikit.TestSurvivalBuddiesPlayTheirOwnAIRetail` (a Strict 3.1
+Survival battle's Modern buddy plays the survival brain and its Classic buddy
+the retail step), and the three reserved fingerprint locks, which do not
+move. The reserved sets' Great Divide seed 7 headless reports (27,000 ticks)
+are byte-identical with and without the per-player choice and the per-player
+income, and the same battle under Modern with `--ai-player all=modern` gives
+the retired `modern-ai` set's state hash. Synchronous and
+asynchronous hosts are compared by arena runs
+([MODERN_AI_RESEARCH §6](MODERN_AI_RESEARCH.md#6-results-2026-09-23)); an
+automated lock is owed.
+
 ## 6. Research map
 
 | Behaviour | Owning research |
@@ -1888,6 +2315,11 @@ with the observation that would settle it:
 * **Which retail spans inside a save body remain opaque.** Only those the
   corrections section does not name; every account it names is implemented
   `[08 R-SAVE-02 §13]`.
+
+The Nanolathe policy decision this section listed — a Modern AI player's
+income in the reserved sets — was settled by the user on 2026-09-25: a player
+marked Modern is paid in full in every rule set ("Modern AI computer player",
+"Per-player selection").
 
 Two formerly open items are established: rally probe validation selects its
 grid using the session's LineOfSight bit `[08 R-AI-01 §7]`; planner state,

@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Analyze ai-arena tournament directories into one JSON for the report.
+
+usage: tools/ai-arena-analyze OUT.json DIR [DIR ...] [--anchor retail] [--boot 200] [--boot-unit map|game]
+
+Reads every DIR/matches/*.json, except the games a sequential tournament
+played past a decided look (DIR/sequential.json). A game that repeats an
+identical configuration with an identical outcome (a mirror played in both
+slot orders) counts once. An adjudicated game (ai-arena match -adjudicate)
+counts its recorded winner. Produces:
+  contestants, games
+  ratings: Bradley-Terry strength on an Elo-like scale (400·log10), draws
+           counted as half a win each way, anchored so --anchor is 0, with
+           bootstrap 5–95% intervals. The bootstrap resamples whole maps
+           (every game on a sampled map together; --boot-unit game resamples
+           games, the pre-2026-09-24 behaviour). Mirror games (the same label
+           on both sides) say nothing about relative strength and are left
+           out of the ratings, the matrix and per_map.
+  matrix:  per ordered pair W/D/L and points share
+  per_map: per contestant points share against the field on each map
+  curves:  per contestant median metal income, army value and units at each
+           sample tick (games still running at that tick)
+  cost:    per contestant think/step timing distribution summaries,
+           allocations, command outcomes
+  outcomes: decisive share, median game length
+Pure standard library (deterministic bootstrap seed).
+"""
+import json, glob, os, sys, math, random, statistics
+from collections import defaultdict
+
+def load(dirs):
+    games, dropped = [], 0
+    seen = {}
+    for d in dirs:
+        # A sequential tournament's games past a decided look are not evidence.
+        seq = os.path.join(d, "sequential.json")
+        excluded = set(json.load(open(seq)).get("excluded") or []) if os.path.exists(seq) else set()
+        for f in sorted(glob.glob(os.path.join(d, "matches", "*.json"))):
+            if os.path.basename(f)[:-len(".json")] in excluded:
+                continue
+            try:
+                r = json.load(open(f))
+            except Exception:
+                continue
+            if len(r.get("players", [])) != 2:
+                continue
+            key, outcome = identity(r)
+            if seen.get(key) == outcome:
+                dropped += 1
+                continue
+            seen[key] = outcome
+            r["_file"] = f
+            games.append(r)
+    return games, dropped
+
+
+def identity(r):
+    """A game's configuration and outcome, as tools/ai-arena-summary keys them."""
+    ps = r["players"]
+    seed = r.get("battle_seed", r["seed"])
+    starts = lambda p: p.get("start", p["slot"]) if "starts" in r else p["slot"]
+    key = (r["map"].lower(), seed, r.get("crt_seed", seed), r.get("starts", "slot"), r["gameplay"],
+           tuple((p["slot"], p["label"], p["brain"], p["persona"], p["side"], starts(p)) for p in ps))
+    outcome = (r["ticks"], r["winner"], r["reason"],
+               tuple((p["score"], p["value_killed"], p["value_lost"], p["kills"], p["losses"]) for p in ps))
+    return key, outcome
+
+
+def mirror(g):
+    return g["players"][0]["label"] == g["players"][1]["label"]
+
+def bt(games, names, iters=300):
+    idx = {n: i for i, n in enumerate(names)}
+    n = len(names)
+    wins = [0.0] * n
+    pair = defaultdict(float)
+    for g in games:
+        if mirror(g):
+            continue
+        a, b = idx[g["players"][0]["label"]], idx[g["players"][1]["label"]]
+        w = g["winner"]
+        sa = 0.5 if w < 0 else (1.0 if w == 0 else 0.0)
+        wins[a] += sa
+        wins[b] += 1 - sa
+        pair[(a, b)] += 1
+        pair[(b, a)] += 1
+    p = [1.0] * n
+    for _ in range(iters):
+        newp = []
+        for i in range(n):
+            den = 0.0
+            for j in range(n):
+                if i != j and pair[(i, j)]:
+                    den += pair[(i, j)] / (p[i] + p[j])
+            # small prior toward equality keeps undefeated/winless finite
+            newp.append((wins[i] + 0.5) / (den + 1.0 / p[i]) if den > 0 else p[i])
+        s = sum(newp) / n
+        p = [x / s for x in newp]
+    return p
+
+def elo(p, names, anchor):
+    a = names.index(anchor) if anchor in names else 0
+    return {names[i]: 400 * math.log10(p[i] / p[a]) for i in range(len(names))}
+
+def main():
+    args = [x for x in sys.argv[1:] if not x.startswith("--")]
+    opts = dict(zip(sys.argv[1::1], sys.argv[2::1]))
+    anchor = "retail"
+    boot = 200
+    unit = "map"
+    for i, x in enumerate(sys.argv):
+        if x == "--anchor":
+            anchor = sys.argv[i + 1]
+        if x == "--boot":
+            boot = int(sys.argv[i + 1])
+        if x == "--boot-unit":
+            unit = sys.argv[i + 1]
+    if unit not in ("map", "game"):
+        raise SystemExit(f"unknown --boot-unit {unit}")
+    args = [a for a in args if a not in (anchor, str(boot), unit)]
+    out, dirs = args[0], args[1:]
+    games, dropped = load(dirs)
+    names = sorted({p["label"] for g in games for p in g["players"]})
+    p = bt(games, names)
+    ratings = elo(p, names, anchor)
+    rnd = random.Random(7)
+    samples = defaultdict(list)
+    by_map = defaultdict(list)
+    for g in games:
+        by_map[g["map"]].append(g)
+    map_names = sorted(by_map)
+    for _ in range(boot):
+        if unit == "map":
+            gs = [g for _ in map_names for g in by_map[map_names[rnd.randrange(len(map_names))]]]
+        else:
+            gs = [games[rnd.randrange(len(games))] for _ in range(len(games))]
+        present = sorted({pl["label"] for g in gs if not mirror(g) for pl in g["players"]})
+        if set(present) != set(names):
+            continue
+        r = elo(bt(gs, names, iters=150), names, anchor)
+        for k, v in r.items():
+            samples[k].append(v)
+    ci = {}
+    for k, v in samples.items():
+        v.sort()
+        ci[k] = [v[int(0.05 * (len(v) - 1))], v[int(0.95 * (len(v) - 1))]]
+
+    matrix = defaultdict(lambda: {"w": 0, "d": 0, "l": 0, "decisive_w": 0, "decisive_l": 0})
+    per_map = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))
+    lengths = []
+    decisive = 0
+    for g in games:
+        la, lb = g["players"][0]["label"], g["players"][1]["label"]
+        w = g["winner"]
+        lengths.append(g["ticks"] / 1800)
+        if g["reason"] == "decisive":
+            decisive += 1
+        if la == lb:
+            continue
+        for me, them, i in ((la, lb, 0), (lb, la, 1)):
+            m = matrix[me + "|" + them]
+            if w < 0:
+                m["d"] += 1; s = 0.5
+            elif w == i:
+                m["w"] += 1; s = 1.0
+                if g["reason"] == "decisive":
+                    m["decisive_w"] += 1
+            else:
+                m["l"] += 1; s = 0.0
+                if g["reason"] == "decisive":
+                    m["decisive_l"] += 1
+            pm = per_map[me][g["map"]]
+            pm[0] += s; pm[1] += 1
+
+    curves = {}
+    for name in names:
+        byt = defaultdict(lambda: defaultdict(list))
+        for g in games:
+            for pl in g["players"]:
+                if pl["label"] != name:
+                    continue
+                for s in pl.get("series", []):
+                    t = s["t"]
+                    byt[t]["mi"].append(s["mi"]); byt[t]["av"].append(s["av"]); byt[t]["u"].append(s["u"])
+                    byt[t]["ev"].append(s["ev"]); byt[t]["ib"].append(s["ib"]); byt[t]["b"].append(s["b"])
+        ts = sorted(byt)
+        curves[name] = {"t": ts,
+                        "mi": [statistics.median(byt[t]["mi"]) for t in ts],
+                        "av": [statistics.median(byt[t]["av"]) for t in ts],
+                        "ev": [statistics.median(byt[t]["ev"]) for t in ts],
+                        "u": [statistics.median(byt[t]["u"]) for t in ts],
+                        "idle": [sum(byt[t]["ib"]) / max(1, sum(byt[t]["b"])) for t in ts],
+                        "n": [len(byt[t]["mi"]) for t in ts]}
+
+    cost = {}
+    for name in names:
+        c = defaultdict(list)
+        for g in games:
+            for pl in g["players"]:
+                if pl["label"] != name:
+                    continue
+                k = pl["cost"]
+                for key in ("think_mean_us", "think_p99_us", "think_max_us", "step_mean_us", "step_p99_us", "step_max_us", "think_alloc_bytes_mean"):
+                    c[key].append(k.get(key, 0))
+                c["thinks"].append(k.get("thinks", 0))
+                cm = pl["commands"]
+                c["applied"].append(cm["Applied"]); c["failed"].append(cm["Failed"]); c["dropped"].append(cm["DroppedAPM"])
+                c["kl"].append((pl["value_killed"] + 1) / (pl["value_lost"] + 1))
+                c["tick_mean_us"].append(g["tick_mean_us"])
+        cost[name] = {k: {"median": statistics.median(v), "p90": sorted(v)[int(0.9 * (len(v) - 1))], "max": max(v), "mean": statistics.mean(v)} for k, v in c.items()}
+
+    res = {"contestants": names, "games": len(games), "repeats_dropped": dropped, "boot_unit": unit, "anchor": anchor,
+           "ratings": ratings, "ci": ci, "matrix": dict(matrix),
+           "per_map": {k: {m: v[0] / v[1] for m, v in d.items()} for k, d in per_map.items()},
+           "curves": curves, "cost": cost,
+           "outcomes": {"decisive_share": decisive / max(1, len(games)), "median_minutes": statistics.median(lengths) if lengths else 0},
+           "maps": sorted({g["map"] for g in games})}
+    json.dump(res, open(out, "w"), indent=1)
+    print(f"{len(games)} games ({dropped} repeats counted once), {len(names)} contestants; bootstrap over {unit}s")
+    for name in sorted(names, key=lambda n: -ratings[n]):
+        lo, hi = ci.get(name, [0, 0])
+        tot = [0, 0, 0]
+        for k, m in matrix.items():
+            if k.split("|")[0] == name:
+                tot[0] += m["w"]; tot[1] += m["d"]; tot[2] += m["l"]
+        cst = cost[name]
+        print(f"  {name:16s} {ratings[name]:7.0f}  [{lo:6.0f},{hi:6.0f}]  {tot[0]}-{tot[1]}-{tot[2]}  think {cst['think_mean_us']['median']:7.1f}µs (p99 {cst['think_p99_us']['median']:6.0f}, max {cst['think_max_us']['max']:6.0f})  step {cst['step_mean_us']['median']:5.1f}µs")
+
+if __name__ == "__main__":
+    main()

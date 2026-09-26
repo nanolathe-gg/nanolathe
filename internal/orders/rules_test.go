@@ -33,6 +33,7 @@ func ruleCalls(u *units.Unit, n *Node, sink *bool) []struct {
 		{"GuardWorksNearby", func() { *sink = rulesOfUnit(u).GuardWorksNearby(u, n, 100) }},
 		{"GuardResumesFromPad", func() { *sink = rulesOfUnit(u).GuardResumesFromPad(u) }},
 		{"UnreachableMoveArrival", func() { *sink = rulesOfUnit(u).UnreachableMoveArrival(u, n) }},
+		{"KeepsMoveOnDamage", func() { *sink = rulesOfUnit(u).KeepsMoveOnDamage(u) }},
 		{"ScriptAttackSurfaceFire", func() {
 			*sink = rulesOfUnit(u).ScriptAttackSurfaceFire(ScriptAttackSurfaceFireRequest{Binding: bindingOfUnit(u), Actor: u})
 		}},

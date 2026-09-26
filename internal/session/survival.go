@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/construction"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -190,6 +191,9 @@ type survivalState struct {
 
 	walk    []*units.Unit
 	history []SurvivalWaveRecord
+	// info is the scenario record every survivor's manager holds
+	// (ai.Manager.Survival); the director appends each warning to it.
+	info *ai.SurvivalInfo
 }
 
 // SurvivalWaveRecord is one planned wave, as reports and tests read it.
@@ -392,6 +396,7 @@ func (s *Session) placeSurvivalCommanders(cfg SkirmishConfig) error {
 	st := s.Survival
 	cx, cz, region := st.centreX, st.centreZ, st.startRegion
 	buddies := cfg.NumPlayers - 2
+	info := &ai.SurvivalInfo{CentreX: cx*16 + 8, CentreZ: cz*16 + 8, Attacker: st.attacker}
 	for p := 0; p < cfg.NumPlayers; p++ {
 		if p == int(st.attacker) {
 			continue
@@ -412,12 +417,25 @@ func (s *Session) placeSurvivalCommanders(cfg SkirmishConfig) error {
 		if err != nil {
 			continue
 		}
+		info.Team = append(info.Team, uint8(p))
+		info.Computer = append(info.Computer, cfg.Players[p].Controller == SkirmishControllerComputer)
+		info.Starts = append(info.Starts, [2]int32{int32(wx >> 16), int32(wz >> 16)})
 		if u := s.Units.Unit(h); u != nil {
 			u.PlacementIdx = -1
 			publishOne(s, u)
 			if s.Movement != nil && s.Movement.Routes != nil {
 				s.Movement.EnsureUnit(u)
 			}
+		}
+	}
+	// Every survivor's manager learns the scenario it plays in: the start
+	// site, the team and where each member began. Only the Modern AI
+	// controller reads it (a Modern buddy's survival brain); a Classic
+	// buddy's step carries it dormant, and the attacker's manager gets none.
+	st.info = info
+	for _, p := range info.Team {
+		if m := s.AI[p]; m != nil {
+			m.Survival = info
 		}
 	}
 	return nil
@@ -623,6 +641,7 @@ func (s *Session) survivalBeginWarning(tick uint32) {
 		rec.Groups = append(rec.Groups, gr)
 	}
 	st.history = append(st.history, rec)
+	s.survivalPublishWarning(tick)
 	var parts []string
 	for _, g := range st.plan.Groups {
 		word := compassWord(g.Angle)
@@ -639,6 +658,33 @@ func (s *Session) survivalBeginWarning(tick uint32) {
 		parts = append(parts, word)
 	}
 	s.survivalSay(tick, fmt.Sprintf("Wave %d incoming: %s", st.wave, strings.Join(parts, ", ")))
+}
+
+// survivalPublishWarning hands the survivors' managers what the warning
+// announces (DESIGN_SURVIVAL §6.7): the wave, when it arrives, and each
+// entry direction with its theme. Amphibious groups are announced as plain
+// directions, so they are published as ground. It draws nothing and reads
+// only the planned wave.
+func (s *Session) survivalPublishWarning(tick uint32) {
+	st := s.Survival
+	if st.info == nil {
+		return
+	}
+	w := ai.SurvivalWarning{Wave: int32(st.wave), Tick: tick, Arrive: st.phaseEnd}
+	for _, g := range st.plan.Groups {
+		ex, ez := s.survivalEntryCell(g.Angle)
+		domain := "ground"
+		switch g.Domain {
+		case survival.Air:
+			domain = "air"
+		case survival.Naval:
+			domain = "naval"
+		case survival.Hover:
+			domain = "hover"
+		}
+		w.Groups = append(w.Groups, ai.SurvivalApproach{Angle: g.Angle, X: ex*16 + 8, Z: ez*16 + 8, Domain: domain})
+	}
+	st.info.PublishWarning(w)
 }
 
 // compassWord names the direction a wave comes FROM, as seen on the map

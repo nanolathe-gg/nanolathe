@@ -79,7 +79,7 @@ func TestBothReclaimPayoutsUseOneCreditForm(t *testing.T) {
 
 		unit := reclaimCreditService(selector)
 		// remaining 0 makes the refund the victim's whole 1000 metal cost.
-		unit.CreditUnitReclaimRefund(pool.Handle(4), 0, 1000, 2)
+		unit.CreditUnitReclaimRefund(pool.Handle(4), 0, 1000, true)
 
 		f := feature.UnitBuckets(pool.Handle(4))[Metal].Production
 		u := unit.UnitBuckets(pool.Handle(4))[Metal].Production
@@ -121,7 +121,7 @@ func TestReclaimCreditUsesTheSingleNarrowingForm(t *testing.T) {
 func TestUnitReclaimRefundUsesStoredDefinitionCost(t *testing.T) {
 	source := int32(16777217)
 	s := reclaimCreditService(0)
-	s.CreditUnitReclaimRefund(pool.Handle(4), 0.25, float32(source), 1)
+	s.CreditUnitReclaimRefund(pool.Handle(4), 0.25, float32(source), false)
 	if got := s.UnitBuckets(pool.Handle(4))[Metal].Production; got != 12582912 {
 		t.Fatalf("refund = %v, want 12582912 from the single-float definition cost", got)
 	}
@@ -130,7 +130,7 @@ func TestUnitReclaimRefundUsesStoredDefinitionCost(t *testing.T) {
 // The old intermediate single store changes this result by one float32 ULP.
 func TestUnitReclaimRefundNarrowsOnlyAtBucketStore(t *testing.T) {
 	s := reclaimCreditService(1)
-	s.CreditUnitReclaimRefund(pool.Handle(4), 0.001, 11, 2)
+	s.CreditUnitReclaimRefund(pool.Handle(4), 0.001, 11, true)
 	const want float32 = 7.692299842834473
 	if got := s.UnitBuckets(pool.Handle(4))[Metal].Production; got != want {
 		t.Fatalf("refund=%v, want %v", got, want)

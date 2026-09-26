@@ -58,11 +58,25 @@ func checkedPlacementArea(width, depth int32) (int, error) {
 	if width <= 0 || depth <= 0 {
 		return 0, fmt.Errorf("%w: %dx%d", ErrInvalidFootprint, width, depth)
 	}
-	area := int64(width) * int64(depth)
-	if area > int64(int(^uint(0)>>1)) {
+	area, ok := placementArea(width, depth)
+	if !ok {
 		return 0, ErrPlacementOverflow
 	}
-	return int(area), nil
+	return area, nil
+}
+
+// placementArea is checkedPlacementArea without the error: the cell count of
+// a width x depth rectangle, and false exactly where checkedPlacementArea
+// fails.
+func placementArea(width, depth int32) (int, bool) {
+	if width <= 0 || depth <= 0 {
+		return 0, false
+	}
+	area := int64(width) * int64(depth)
+	if area > int64(int(^uint(0)>>1)) {
+		return 0, false
+	}
+	return int(area), true
 }
 
 // Width is the extent's cell width.
@@ -634,11 +648,88 @@ type PlacementResult struct {
 //   - a mobile product has no yard map and no rectangle aggregate anywhere:
 //     feature blocking and ground occupancy apply to every covered cell, and
 //     terrain legality is decided cell by cell on that cell's own derived pair
-//     (mobileCellLegal).
+//     (mobileCellRefusal).
 //
 // Both classes run the terrain half only in the inline terrain-check mode; the
 // site height is published either way.
+//
+// The gates themselves are placementGates, which PlacementLegal shares; this
+// function words the refusal as an error.
 func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
+	result, refusal := t.placementGates(q)
+	if refusal.reason != placementAccepted {
+		return PlacementResult{}, t.placementError(q, refusal)
+	}
+	return result, nil
+}
+
+// PlacementLegal reports whether CheckPlacement accepts q. It runs the same
+// gates in the same order — AdmitOccupant and the viewer's grid are consulted
+// exactly as CheckPlacement consults them — and only skips wording the
+// refusal. A site search that tries thousands of anchors and keeps none of the
+// messages asks this: an error formatted for every rejected anchor was more
+// than half of a failed factory search (docs/MODERN_AI_RESEARCH.md §5.1).
+func (t *Terrain) PlacementLegal(q PlacementQuery) bool {
+	_, refusal := t.placementGates(q)
+	return refusal.reason == placementAccepted
+}
+
+// placementReason names the validator gate that refused a query; the zero
+// value is acceptance. placementError words each one as the error
+// CheckPlacement has always returned for it.
+type placementReason uint8
+
+const (
+	placementAccepted placementReason = iota
+	refuseNilTerrain
+	refuseRectangleExtent
+	refuseEntryBounds
+	refuseTerrainDimensions
+	refusePlotUninitialized
+	refuseRectangleArea
+	refuseYardLength
+	refuseUnseenSite
+	refusePlotCell
+	refuseStructureYard
+	refuseOccupant
+	refuseMover
+	refuseBlockingFeature
+	refuseFeatureSentinel
+	refuseIndestructibleFeature
+	refuseCellWaterDepth
+	refuseCellMinWaterDepth
+	refuseCellSlope
+	refuseCellWaterSlope
+	refuseGeothermal
+	refuseSlope
+	refuseHeightPeak
+	refuseWaterDepth
+	refuseMinWaterDepth
+)
+
+// placementRefusal is a refused gate and what its message quotes: the
+// refusing cell, the compared figures that are not already on the query, and
+// the refusing feature.
+type placementRefusal struct {
+	reason  placementReason
+	cx, cz  int32
+	a, b    int32
+	feature *content.FeatureDef
+}
+
+// placementEntryBounds is a class's entry bounds (see placementGates): the
+// class as the refusal names it, the lowest admitted anchor cell, and the
+// highest admitted rectangle end on each axis.
+func (t *Terrain) placementEntryBounds(mobile bool) (class string, minCell, maxX, maxZ int32) {
+	if mobile {
+		return "mobile", 0, t.CellW, t.CellH
+	}
+	return "building", 1, t.CellW - 1, t.CellH - 1
+}
+
+// placementGates is the validator CheckPlacement documents, every gate in
+// order, returning the refusing gate instead of an error.
+func (t *Terrain) placementGates(q PlacementQuery) (PlacementResult, placementRefusal) {
 	admitted := false
 	admit := func(occupant uint16) bool {
 		if q.AdmitOccupant == nil || !q.AdmitOccupant(occupant) {
@@ -648,10 +739,10 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 		return true
 	}
 	if t == nil {
-		return PlacementResult{}, fmt.Errorf("world: nil terrain")
+		return PlacementResult{}, placementRefusal{reason: refuseNilTerrain}
 	}
 	if q.Rect.Width() <= 0 || q.Rect.Depth() <= 0 {
-		return PlacementResult{}, fmt.Errorf("%w: rectangle dimensions %dx%d", ErrInvalidFootprint, q.Rect.Width(), q.Rect.Depth())
+		return PlacementResult{}, placementRefusal{reason: refuseRectangleExtent}
 	}
 	// Entry bounds, by CLASS. The two sides of the shared validator do not
 	// admit the same rectangle:
@@ -678,26 +769,23 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// would settle it is a census of which Nanolathe callers pass an airborne
 	// product to this function and whether the mover commit path needs the
 	// mode verdict rather than an error.
-	class, minCell, maxX, maxZ := "mobile", int32(0), t.CellW, t.CellH
-	if !q.Mobile {
-		class, minCell, maxX, maxZ = "building", 1, t.CellW-1, t.CellH-1
-	}
+	_, minCell, maxX, maxZ := t.placementEntryBounds(q.Mobile)
 	if q.Rect.MinX() < minCell || q.Rect.MinZ() < minCell || q.Rect.MaxX() > maxX || q.Rect.MaxZ() > maxZ {
-		return PlacementResult{}, fmt.Errorf("world: placement rectangle [%d,%d)x[%d,%d) out of bounds %dx%d: the %s entry bounds require anchor >= %d and rectangle end <= %d,%d", q.Rect.MinX(), q.Rect.MaxX(), q.Rect.MinZ(), q.Rect.MaxZ(), t.CellW, t.CellH, class, minCell, maxX, maxZ)
+		return PlacementResult{}, placementRefusal{reason: refuseEntryBounds}
 	}
-	plotArea, err := checkedPlacementArea(t.CellW, t.CellH)
-	if err != nil {
-		return PlacementResult{}, fmt.Errorf("world: invalid terrain dimensions: %w", err)
+	plotArea, ok := placementArea(t.CellW, t.CellH)
+	if !ok {
+		return PlacementResult{}, placementRefusal{reason: refuseTerrainDimensions}
 	}
 	if t.Plot == nil || len(t.Plot) < plotArea {
-		return PlacementResult{}, fmt.Errorf("world: terrain plot not initialized")
+		return PlacementResult{}, placementRefusal{reason: refusePlotUninitialized}
 	}
-	area, err := checkedPlacementArea(q.Rect.Width(), q.Rect.Depth())
-	if err != nil {
-		return PlacementResult{}, err
+	area, ok := placementArea(q.Rect.Width(), q.Rect.Depth())
+	if !ok {
+		return PlacementResult{}, placementRefusal{reason: refuseRectangleArea}
 	}
 	if !q.Mobile && len(q.Yard) != area {
-		return PlacementResult{}, fmt.Errorf("world: yard length %d != rectangle %dx%d=%d", len(q.Yard), q.Rect.Width(), q.Rect.Depth(), area)
+		return PlacementResult{}, placementRefusal{reason: refuseYardLength}
 	}
 
 	// The known-site gate of [04 R-P0-08-B §1]. With retail's null player it is
@@ -706,9 +794,9 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// footprint, before the cell walk, and can reject outright.
 	occupancyApplies := true
 	if q.Viewer != nil {
-		var ok bool
-		if occupancyApplies, ok = t.knownSiteGate(q); !ok {
-			return PlacementResult{}, fmt.Errorf("world: placement site is not currently visible to the local viewer [04 R-P0-08-B §1]")
+		var seen bool
+		if occupancyApplies, seen = t.knownSiteGate(q); !seen {
+			return PlacementResult{}, placementRefusal{reason: refuseUnseenSite}
 		}
 	}
 
@@ -742,7 +830,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 			cx, cz := q.Rect.MinX()+dx, q.Rect.MinZ()+dz
 			cell := t.PlotAt(cx, cz)
 			if cell == nil {
-				return PlacementResult{}, fmt.Errorf("world: plot cell %d,%d out of range", cx, cz)
+				return PlacementResult{}, placementRefusal{reason: refusePlotCell, cx: cx, cz: cz}
 			}
 			class, def := t.classifyCell(cx, cz)
 
@@ -757,7 +845,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 			// [04 R-P0-08-B §1]. The visibility half of the old description is
 			// the blocker's known-site gate, applied once above.
 			if occupancyApplies && yard&0x01 != 0 && cell.StructureYard() {
-				return PlacementResult{}, fmt.Errorf("world: cell %d,%d already lies under a building yard [04 R-P0-08-B §1]", cx, cz)
+				return PlacementResult{}, placementRefusal{reason: refuseStructureYard, cx: cx, cz: cz}
 			}
 			if occupancyApplies && yard&0x06 != 0 {
 				// The occupancy test reads the cell's GROUND word only:
@@ -771,7 +859,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				// later product's placement is refused (construction's
 				// four-aircraft liveness run stalls at two).
 				if occ := cell.OccupantA(); occ != 0 && uint16(occ) != q.Self && !admit(uint16(occ)) {
-					return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", cx, cz)
+					return PlacementResult{}, placementRefusal{reason: refuseOccupant, cx: cx, cz: cz}
 				}
 				// The same test on the other half of the split ground word.
 				// "Bits 1-2 reject any nonzero occupant other than the passed
@@ -782,7 +870,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				// [04 R-COLL-01 §2][04 R-COLL-01 §6].
 				if t.Movers != nil {
 					if occ := t.Movers.CellOccupant(cx, cz); occ != 0 && occ != q.Self && !admit(occ) {
-						return PlacementResult{}, fmt.Errorf("world: cell %d,%d occupied by a mover [04 R-COLL-01 §2]", cx, cz)
+						return PlacementResult{}, placementRefusal{reason: refuseMover, cx: cx, cz: cz}
 					}
 				}
 			}
@@ -790,14 +878,14 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 				switch class {
 				case featureReal:
 					if def.Blocking {
-						return PlacementResult{}, fmt.Errorf("world: cell %d,%d blocked by feature %s [04 §6.2]", cx, cz, def.CanonicalKey)
+						return PlacementResult{}, placementRefusal{reason: refuseBlockingFeature, cx: cx, cz: cz, feature: def}
 					}
 				case featureVoid:
-					return PlacementResult{}, fmt.Errorf("world: cell %d,%d holds an occupied feature sentinel [04 §6.2]", cx, cz)
+					return PlacementResult{}, placementRefusal{reason: refuseFeatureSentinel, cx: cx, cz: cz}
 				}
 			}
 			if yard&0x40 != 0 && class == featureReal && def.Indestructible {
-				return PlacementResult{}, fmt.Errorf("world: cell %d,%d holds an indestructible feature %s [04 §6.2]", cx, cz, def.CanonicalKey)
+				return PlacementResult{}, placementRefusal{reason: refuseIndestructibleFeature, cx: cx, cz: cz, feature: def}
 			}
 			if yard&0x80 != 0 {
 				geothermalNeeded = true
@@ -813,8 +901,8 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 			// steps 3-5, so a footprint whose cells are each legal is legal
 			// however far apart their heights lie.
 			if q.Mobile && !skipTerrain {
-				if err := mobileCellLegal(cell, sea, q.Rules); err != nil {
-					return PlacementResult{}, fmt.Errorf("world: cell %d,%d %w", cx, cz, err)
+				if reason, slope := mobileCellRefusal(cell, sea, q.Rules); reason != placementAccepted {
+					return PlacementResult{}, placementRefusal{reason: reason, cx: cx, cz: cz, a: slope}
 				}
 			}
 
@@ -843,7 +931,7 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 		}
 	}
 	if geothermalNeeded && !geothermalFound {
-		return PlacementResult{}, fmt.Errorf("world: geothermal requirement not satisfied [05 %q]", "Geothermal requirement")
+		return PlacementResult{}, placementRefusal{reason: refuseGeothermal}
 	}
 
 	// With no sampled cell at all the published height is the definition's
@@ -860,20 +948,20 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// was already decided cell by cell inside the walk above, and the mobile
 	// path publishes only siteHeight from here.
 	if q.Mobile || skipTerrain {
-		return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight, OccupantsAdmitted: admitted}, nil
+		return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight, OccupantsAdmitted: admitted}, placementRefusal{}
 	}
 	// The yard walk compares the rectangle span against the land MaxSlope
 	// alone — there is no water pair on this path [04 R-SLOPE-01 §3 "Bounded
 	// census"] — and the comparison is strict, so a span exactly equal to the
 	// limit passes [04 R-P0-08].
 	if maxHigh >= minLow && maxHigh-minLow > q.Rules.MaxSlope {
-		return PlacementResult{}, fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.4]", maxHigh-minLow, q.Rules.MaxSlope)
+		return PlacementResult{}, placementRefusal{reason: refuseSlope, a: maxHigh - minLow}
 	}
 	if bit4Max > siteHeight {
-		return PlacementResult{}, fmt.Errorf("world: placement height peak %d exceeds site height %d [05 %q]", bit4Max, siteHeight, "Geothermal requirement")
+		return PlacementResult{}, placementRefusal{reason: refuseHeightPeak, a: bit4Max, b: siteHeight}
 	}
 	if minLow < sea-q.Rules.MaxWaterDepth {
-		return PlacementResult{}, fmt.Errorf("world: placement water depth exceeds %d [05 %q]", q.Rules.MaxWaterDepth, "Geothermal requirement")
+		return PlacementResult{}, placementRefusal{reason: refuseWaterDepth}
 	}
 	maxSample := maxHigh
 	if bit4Max > maxSample {
@@ -883,12 +971,72 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 	// value is zero. Land profiles use the established -10000 template value
 	// to disable this gate [04 §6.1, §6.4][05 "Geothermal requirement"].
 	if maxSample > sea-q.Rules.MinWaterDepth {
-		return PlacementResult{}, fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
+		return PlacementResult{}, placementRefusal{reason: refuseMinWaterDepth}
 	}
-	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight, OccupantsAdmitted: admitted}, nil
+	return PlacementResult{Rect: q.Rect, SiteHeight: siteHeight, OccupantsAdmitted: admitted}, placementRefusal{}
 }
 
-// mobileCellLegal is the mobile class's terrain test for ONE covered cell,
+// placementError words a refusal exactly as the validator always has: the
+// same text, and the same sentinels and wrapping for errors.Is.
+func (t *Terrain) placementError(q PlacementQuery, r placementRefusal) error {
+	switch r.reason {
+	case refuseNilTerrain:
+		return fmt.Errorf("world: nil terrain")
+	case refuseRectangleExtent:
+		return fmt.Errorf("%w: rectangle dimensions %dx%d", ErrInvalidFootprint, q.Rect.Width(), q.Rect.Depth())
+	case refuseEntryBounds:
+		class, minCell, maxX, maxZ := t.placementEntryBounds(q.Mobile)
+		return fmt.Errorf("world: placement rectangle [%d,%d)x[%d,%d) out of bounds %dx%d: the %s entry bounds require anchor >= %d and rectangle end <= %d,%d", q.Rect.MinX(), q.Rect.MaxX(), q.Rect.MinZ(), q.Rect.MaxZ(), t.CellW, t.CellH, class, minCell, maxX, maxZ)
+	case refuseTerrainDimensions:
+		_, err := checkedPlacementArea(t.CellW, t.CellH)
+		return fmt.Errorf("world: invalid terrain dimensions: %w", err)
+	case refusePlotUninitialized:
+		return fmt.Errorf("world: terrain plot not initialized")
+	case refuseRectangleArea:
+		_, err := checkedPlacementArea(q.Rect.Width(), q.Rect.Depth())
+		return err
+	case refuseYardLength:
+		area, _ := placementArea(q.Rect.Width(), q.Rect.Depth())
+		return fmt.Errorf("world: yard length %d != rectangle %dx%d=%d", len(q.Yard), q.Rect.Width(), q.Rect.Depth(), area)
+	case refuseUnseenSite:
+		return fmt.Errorf("world: placement site is not currently visible to the local viewer [04 R-P0-08-B §1]")
+	case refusePlotCell:
+		return fmt.Errorf("world: plot cell %d,%d out of range", r.cx, r.cz)
+	case refuseStructureYard:
+		return fmt.Errorf("world: cell %d,%d already lies under a building yard [04 R-P0-08-B §1]", r.cx, r.cz)
+	case refuseOccupant:
+		return fmt.Errorf("world: cell %d,%d occupied [04 §6.2]", r.cx, r.cz)
+	case refuseMover:
+		return fmt.Errorf("world: cell %d,%d occupied by a mover [04 R-COLL-01 §2]", r.cx, r.cz)
+	case refuseBlockingFeature:
+		return fmt.Errorf("world: cell %d,%d blocked by feature %s [04 §6.2]", r.cx, r.cz, r.feature.CanonicalKey)
+	case refuseFeatureSentinel:
+		return fmt.Errorf("world: cell %d,%d holds an occupied feature sentinel [04 §6.2]", r.cx, r.cz)
+	case refuseIndestructibleFeature:
+		return fmt.Errorf("world: cell %d,%d holds an indestructible feature %s [04 §6.2]", r.cx, r.cz, r.feature.CanonicalKey)
+	case refuseCellWaterDepth:
+		return fmt.Errorf("world: cell %d,%d %w", r.cx, r.cz, fmt.Errorf("water depth exceeds %d [04 R-COLL-01 §2]", q.Rules.MaxWaterDepth))
+	case refuseCellMinWaterDepth:
+		return fmt.Errorf("world: cell %d,%d %w", r.cx, r.cz, fmt.Errorf("is deeper than minimum water depth %d [04 R-COLL-01 §2]", q.Rules.MinWaterDepth))
+	case refuseCellSlope:
+		return fmt.Errorf("world: cell %d,%d %w", r.cx, r.cz, fmt.Errorf("slope %d exceeds limit %d [04 R-COLL-01 §2]", r.a, q.Rules.MaxSlope))
+	case refuseCellWaterSlope:
+		return fmt.Errorf("world: cell %d,%d %w", r.cx, r.cz, fmt.Errorf("slope %d exceeds water limit %d [04 R-COLL-01 §2]", r.a, q.Rules.MaxWaterSlope))
+	case refuseGeothermal:
+		return fmt.Errorf("world: geothermal requirement not satisfied [05 %q]", "Geothermal requirement")
+	case refuseSlope:
+		return fmt.Errorf("world: placement slope %d exceeds limit %d [04 §6.4]", r.a, q.Rules.MaxSlope)
+	case refuseHeightPeak:
+		return fmt.Errorf("world: placement height peak %d exceeds site height %d [05 %q]", r.a, r.b, "Geothermal requirement")
+	case refuseWaterDepth:
+		return fmt.Errorf("world: placement water depth exceeds %d [05 %q]", q.Rules.MaxWaterDepth, "Geothermal requirement")
+	case refuseMinWaterDepth:
+		return fmt.Errorf("world: placement is deeper than minimum water depth %d [05 %q]", q.Rules.MinWaterDepth, "Geothermal requirement")
+	}
+	return fmt.Errorf("world: placement refused by unworded gate %d", r.reason)
+}
+
+// mobileCellRefusal is the mobile class's terrain test for ONE covered cell,
 // [04 R-COLL-01 §2] "the mode-1 scan" steps 3-5, in that order:
 //
 //  3. deep:    hmin < seaLevel − MaxWaterDepth  → reject
@@ -908,23 +1056,25 @@ func (t *Terrain) CheckPlacement(q PlacementQuery) (PlacementResult, error) {
 // (internal/movement/profile_footprint.go, IsPassableCommitCell). The two
 // cannot share code: movement depends on world, so the dependency may not run
 // the other way.
-func mobileCellLegal(cell *PlotCell, sea int32, rules PlacementRules) error {
+//
+// It returns the refusing step, and the cell's slope for the two slope steps.
+func mobileCellRefusal(cell *PlotCell, sea int32, rules PlacementRules) (placementReason, int32) {
 	low, high := int32(cell.MinHeight()), int32(cell.MaxHeight())
 	if low < sea-rules.MaxWaterDepth {
-		return fmt.Errorf("water depth exceeds %d [04 R-COLL-01 §2]", rules.MaxWaterDepth)
+		return refuseCellWaterDepth, 0
 	}
 	if high > sea-rules.MinWaterDepth {
-		return fmt.Errorf("is deeper than minimum water depth %d [04 R-COLL-01 §2]", rules.MinWaterDepth)
+		return refuseCellMinWaterDepth, 0
 	}
 	if slope := high - low; slope > rules.MaxSlope {
 		if low >= sea {
-			return fmt.Errorf("slope %d exceeds limit %d [04 R-COLL-01 §2]", slope, rules.MaxSlope)
+			return refuseCellSlope, slope
 		}
 		if slope > rules.MaxWaterSlope {
-			return fmt.Errorf("slope %d exceeds water limit %d [04 R-COLL-01 §2]", slope, rules.MaxWaterSlope)
+			return refuseCellWaterSlope, slope
 		}
 	}
-	return nil
+	return placementAccepted, 0
 }
 
 // knownSiteGate is the build-cursor preview's half of the footprint blocker

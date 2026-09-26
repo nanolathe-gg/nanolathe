@@ -22,6 +22,14 @@ const (
 	Strict31    Mode = "strict-3.1"
 )
 
+// RetiredModernAI is the word of the rule set that once put the Modern AI
+// behind every computer player. The Modern AI is chosen per computer player
+// since 2026-09-25 (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer
+// player", "Per-player selection"), so no build selects the word: Parse
+// refuses it with the replacement, and a settings file that stores it loads
+// as Modern with every computer row on the Modern AI (internal/settings).
+const RetiredModernAI Mode = "modern-ai"
+
 // NameRegistry is how a build tells this package which rule-set names it can
 // select. The names belong to internal/session, which owns the registry and
 // would be an import cycle here, so the session installs a view of it instead
@@ -84,6 +92,9 @@ func (m Mode) Normalize() Mode {
 func Parse(text string) (Mode, error) {
 	if mode := Mode(text); mode.selectable() {
 		return mode, nil
+	}
+	if Mode(text) == RetiredModernAI {
+		return Modern, fmt.Errorf("nanolathe: gameplay rule set %q was removed: logical path <command line>, providers searched [gameplay, mods], expected one of %s, with each computer player's AI chosen per player (--gameplay modern --ai-player all=modern)", text, strings.Join(selectableNames(), ", "))
 	}
 	return Modern, fmt.Errorf("nanolathe: invalid gameplay rule set %q: logical path <command line>, providers searched [gameplay, mods], expected one of %s", text, strings.Join(selectableNames(), ", "))
 }

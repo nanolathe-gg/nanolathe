@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -65,6 +66,7 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.setGameplay(startupGameplay(g.opts, s.Gameplay))
 	g.gameplayFeatures = s.GameplayFeatures
 	g.modSetting, g.mutatorSetting = s.Mod, s.Mutators
+	g.modernAISetting = s.ModernAI
 	g.controlsOffered = s.ControlsOffered
 	g.builderOptions = s.BuilderOptions
 	g.fullscreen = s.Fullscreen
@@ -122,6 +124,13 @@ func (g *gameShell) applySettings(s settings.Settings) {
 		row.AllyGroup = p.AllyGroup
 		row.Metal = p.Metal
 		row.Energy = p.Energy
+		// Only a row stored "classic" plays the Classic AI: a row without
+		// the word, including every row of a file written before this
+		// encoding, plays the Modern AI (user decision 2026-09-25).
+		row.AI = ai.ControllerModern
+		if p.AI == settings.PlayerAIClassic {
+			row.AI = ai.ControllerClassic
+		}
 		g.retailControllers[i] = p.Controller
 		// Keep the session-side compatibility field consistent with the row,
 		// the way cycleRetailController does when the value is changed live.
@@ -192,6 +201,7 @@ func (g *gameShell) captureSettings() settings.Settings {
 		BuilderOptions:   g.builderOptions,
 		Mod:              g.modSetting,
 		Mutators:         g.mutatorSetting,
+		ModernAI:         g.modernAISetting,
 		ControlsOffered:  g.controlsOffered,
 		// The interface page's three message controls write into this block;
 		// `screenchat` rides through unchanged [02 §3][07 R-CAM-01 §7].
@@ -224,6 +234,11 @@ func (g *gameShell) captureSettings() settings.Settings {
 			AllyGroup:  row.AllyGroup,
 			Metal:      row.Metal,
 			Energy:     row.Energy,
+		}
+		// A Classic computer row says so; a Modern row, and a row that is
+		// not a computer player, whose AI means nothing, store no word.
+		if row.AI == ai.ControllerClassic && controllers[i] == 2 {
+			s.Skirmish.Players[i].AI = settings.PlayerAIClassic
 		}
 	}
 	return s
