@@ -90,7 +90,7 @@ func (h *retailBattleHUD) footerDY(c *client.Client) int32 {
 	if h.side != nil && h.side.BaseHeight > 0 {
 		base = h.side.BaseHeight
 	}
-	_, height := c.Size()
+	_, height := c.ChromeSize()
 	return int32(height) - base
 }
 

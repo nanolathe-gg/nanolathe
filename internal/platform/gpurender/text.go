@@ -215,7 +215,8 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	// World text keeps native glyphs, centering and outline pixels. Project and
 	// snap its anchor once, then compile framebuffer geometry in the existing
 	// schedule so strip/fog ordering and batching remain intact (§14.2, §16.3).
-	if r.sched.worldOn {
+	// Magnified chrome is the exception: its glyphs scale with the region.
+	if r.sched.worldOn && !r.chromeRegion {
 		g.X = int32(math.Floor(float64(r.sched.txx(float32(g.X))) + .5))
 		g.Y = int32(math.Floor(float64(r.sched.txy(float32(g.Y))) + .5))
 		if g.HasClip {
@@ -238,7 +239,11 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	// Whole-string admission uses the baseline origin, not the adjusted glyph
 	// top, and tests one-past text edges against inclusive clip bounds
 	// [03 R-FONT-01 §3].
-	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, r.w, r.h)
+	surfaceW, surfaceH := r.w, r.h
+	if r.chromeRegion {
+		surfaceW, surfaceH = r.chromeW, r.chromeH
+	}
+	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, surfaceW, surfaceH)
 	if int(g.X) < clipX0 || int(g.Y) < clipY0 || int(g.X)+measureText(fnt, text) >= clipX1 || int(g.Y)+int(fnt.Height) >= clipY1 {
 		return
 	}
@@ -248,7 +253,7 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	}
 	// Once admitted, the signed baseline may overrun the private surface.
 	// Only framebuffer bounds remain as host storage protection.
-	clipX0, clipY0, clipX1, clipY1 = 0, 0, r.w, r.h
+	clipX0, clipY0, clipX1, clipY1 = 0, 0, surfaceW, surfaceH
 	top := int(g.Y) - baselineDescender(fnt)
 	curX := int(g.X)
 	gh := atlas.height

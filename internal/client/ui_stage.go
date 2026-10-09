@@ -24,6 +24,14 @@ type UIStage interface {
 	DrawUI(*Client, UIFrame)
 }
 
+// UIPreparationStage optionally prepares host-owned layout before a presented
+// frame's audio, validity digests and world recording. It runs only at the
+// joined host boundary, never during speculative composition [I6]
+// (DESIGN_GPU_RENDERER §13.10).
+type UIPreparationStage interface {
+	PrepareUI(*Client)
+}
+
 // ScreenOnlyStage paints an opaque front-end screen over the entire surface.
 // The retained battle picture is needed through the ending fade, but ENDMSN
 // replaces it outright [08 R-CAMP-01 §6][08 R-CAMP-01 §8]. A stage may expose
@@ -81,6 +89,9 @@ func (c *Client) ResourceDisplayTimers() map[uint8]uint32 {
 func (c *Client) BeginPresentationFrame() {
 	if c == nil {
 		return
+	}
+	if stage, ok := c.uiStage.(UIPreparationStage); ok {
+		stage.PrepareUI(c)
 	}
 	c.displayedResources, c.resourceTimers = c.nextResourceDisplayState()
 	// Under the asynchronous simulation the host drains audio in its update,

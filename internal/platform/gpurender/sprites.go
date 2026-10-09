@@ -121,7 +121,7 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 				return
 			}
 			clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
-			r.drawKeyed(sp.Frame, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset),
+			r.drawKeyedDetail(sp.Frame, sp.Detail, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset),
 				clipX, clipY, clipW, clipH)
 			if sp.Emissive {
 				// Effect and projectile art is a light source for the glow layer
@@ -132,7 +132,7 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 		} else {
 			// UIBlit: the rectangle is the contract, no offset [07 §4].
 			clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
-			r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
+			r.drawKeyedDetail(sp.Frame, sp.Detail, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
 		}
 	case drawlist.BlitScaled:
 		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
@@ -260,10 +260,25 @@ func (r *Renderer) spriteClip(has bool, rect drawlist.Rect) (x, y, w, h int) {
 // region, whose fragment skips the transparent texels (C-G4). x and y are the
 // destination top-left the byte writer received.
 func (r *Renderer) drawKeyed(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
+	r.drawKeyedDetail(f, nil, x, y, clipX, clipY, clipW, clipH)
+}
+
+// drawKeyedDetail is drawKeyed with an optional 2x chrome remaster of f. Inside
+// a 2x chrome region the transform doubles the destination, so sampling the
+// variant at twice f's source coordinates lands one texel on each framebuffer
+// pixel; f still decides placement and clipping (DESIGN_GPU_RENDERER §14.9).
+func (r *Renderer) drawKeyedDetail(f, detail *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
 	if f == nil || r.scene2D == nil {
 		return
 	}
-	e := r.sceneFrameFor(f)
+	k := 1
+	if detail != nil && r.chromeRegion && r.sched.worldScale == 2 &&
+		detail.Width == 2*f.Width && detail.Height == 2*f.Height {
+		k = 2
+	} else {
+		detail = f
+	}
+	e := r.sceneFrameFor(detail)
 	if !e.ok {
 		return
 	}
@@ -280,7 +295,7 @@ func (r *Renderer) drawKeyed(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cli
 	}
 	r.sched.quad(schedOpaque,
 		float32(x+col0), float32(y+row0), float32(x+col1), float32(y+row1),
-		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
+		float32(int(e.x)+k*col0), float32(int(e.y)+k*row0), float32(int(e.x)+k*col1), float32(int(e.y)+k*row1),
 		[4]float32{}, [4]float32{r.worldFilterLane(), 0, 0, sceneOpKeyed})
 }
 

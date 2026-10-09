@@ -218,7 +218,7 @@ func TestNLSidebarOptionsGraphicsPresetScopeAndRestore(t *testing.T) {
 func TestNLSidebarPageOwnsBothChoicesAndTheirPaths(t *testing.T) {
 	_, s := settingsRegressionScreen(nil, settings.Defaults())
 	card := s.sidebarCard()
-	if card.label != "Sidebar" || card.kind != nlGroup || len(card.parts) != 2 || card.compare != nil {
+	if card.label != "Sidebar" || card.kind != nlGroup || len(card.parts) != 3 || card.compare != nil {
 		t.Fatal("sidebar choices do not share one page")
 	}
 	for _, c := range s.gameCards() {
@@ -227,7 +227,7 @@ func TestNLSidebarPageOwnsBothChoicesAndTheirPaths(t *testing.T) {
 		}
 	}
 	paths := s.cardPaths(card, settings.Defaults())
-	for _, path := range []string{"presentation.buildMenuPageSize", "presentation.sidebarOrders"} {
+	for _, path := range []string{"presentation.buildMenuPageSize", "presentation.sidebarOrders", "presentation.uiScale"} {
 		if !slices.Contains(paths, path) {
 			t.Fatalf("Sidebar paths omitted %s: %v", path, paths)
 		}

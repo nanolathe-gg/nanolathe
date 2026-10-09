@@ -46,13 +46,20 @@ type battleSession struct {
 	debugCapturePath  string
 	debugCaptureError error
 
-	sess  *session.Session
-	cat   *content.Catalog
-	cam   *camera.Camera
-	hud   *retailBattleHUD
-	cs    *contentSet
-	fs    vfs.FSOps
-	shell *gameShell
+	sess *session.Session
+	cat  *content.Catalog
+	cam  *camera.Camera
+	// chromeK is the sidebar magnification fixed at the last draw, and
+	// chromeFixed holds it at 1 for captures that replay through the classic
+	// executor (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+	chromeK     int32
+	barOffsetY  int32
+	chromeFixed bool
+	railEvents  []input.PointerEvent
+	hud         *retailBattleHUD
+	cs          *contentSet
+	fs          vfs.FSOps
+	shell       *gameShell
 
 	// slowSim holds the simulation batches a live trace keeps until its census
 	// takes them (battle_sim_timing.go); always empty without a trace.
@@ -800,6 +807,11 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetTerrain(b.sess.World)
 	// The detail-art provider is installed with the terrain it belongs to and
 	// cleared by the SetTerrain(nil) of teardown (DESIGN_GPU_RENDERER §14.3).
+	cl.RegisterChromeBank(chromeCommonGAF, b.hud.common)
+	if b.shell != nil && b.shell.assets != nil {
+		cl.RegisterChromeBank(chromeCommonGAF, b.shell.assets.common)
+	}
+	cl.RegisterChromeBank(b.hud.intGAFPath, b.hud.intGAF)
 	cl.SetDetailArt(b.detail)
 	cl.SetCamera(b.cam)
 	cl.SetPalette(b.hud.pal)
@@ -1528,6 +1540,7 @@ func (b *battleSession) overBattleViewport(x, y int32) bool {
 	if b == nil || b.cam == nil {
 		return false
 	}
-	return x > camera.OriginX && x < b.cam.ViewW &&
-		y >= camera.OriginY && y < b.cam.ViewH-camera.OriginY
+	left, top, bottom := b.cam.ChromeInset()
+	return x > left && x < b.cam.ViewW &&
+		y >= top && y < b.cam.ViewH-bottom
 }

@@ -62,10 +62,11 @@ func NewViewportTransform(cam *camera.Camera, width, height int32) ViewportTrans
 	// [0,0]..[W-129,H-65] which paired a rebased rect with unrebased pointers
 	// [C-3]. Fix: keep logical coordinates [129,32]..[W-1,H-33] so the pointer
 	// region and the drawn overWorld rect agree [07 §8][07 §10][C-3].
-	left := camera.OriginX + 1 // 129 [07 §6] drawn panel edge
-	top := camera.OriginY      // 32 [07 §6][03 §2.5]
+	insetL, insetT, insetB := c.ChromeInset()
+	left := insetL + 1 // 129 [07 §6] drawn panel edge
+	top := insetT      // 32 [07 §6][03 §2.5]
 	right := width - 1
-	bottom := height - camera.OriginY - 1 // 447 for 480
+	bottom := height - insetB - 1 // 447 for 480
 	if right < left {
 		right = left - 1
 	}

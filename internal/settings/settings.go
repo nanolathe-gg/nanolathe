@@ -620,6 +620,12 @@ const (
 	RadarDotsAttackable = 2
 )
 
+// Chrome scale preferences (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+const (
+	ChromeScaleAuto = 0
+	MaxChromeScale  = 2
+)
+
 // Presentation holds Nanolathe's host presentation preferences
 // (DESIGN_GPU_RENDERER §13.5, §14.6). FPS zero follows the display refresh;
 // positive values cap modern presentation without changing the simulation.
@@ -654,6 +660,14 @@ type Presentation struct {
 	// Modern gameplay (DESIGN_INTERFACE_HUD_INPUT "Modern radar dots").
 	// Visible dots is the default; zero explicitly disables them.
 	RadarDots int `json:"radarDots"`
+	// UIScale magnifies the Modern renderer's battle chrome — sidebar,
+	// minimap and the top and bottom bars (DESIGN_INTERFACE_HUD_INPUT "Modern
+	// UI scale"): ChromeScaleAuto, the default, follows the window height; 1
+	// to MaxChromeScale is fixed.
+	UIScale int `json:"uiScale"`
+	// LegacySidebarScale reads the sidebar-only size stored before UIScale;
+	// Normalize moves it across.
+	LegacySidebarScale int `json:"sidebarScale,omitempty"`
 
 	Renderer string `json:"renderer"`
 	FPS      int    `json:"fps"`
@@ -826,6 +840,14 @@ func (p *Presentation) Normalize() {
 	if p.RadarDots < RadarDotsNone || p.RadarDots > RadarDotsAttackable {
 		p.RadarDots = RadarDotsVisible
 	}
+	if p.UIScale == ChromeScaleAuto && p.LegacySidebarScale > 0 {
+		p.UIScale = p.LegacySidebarScale
+	}
+	p.LegacySidebarScale = 0
+	if p.UIScale < ChromeScaleAuto {
+		p.UIScale = ChromeScaleAuto
+	}
+	p.UIScale = min(p.UIScale, MaxChromeScale)
 	if p.NanoframePreview < 0 || p.NanoframePreview > 3 {
 		p.NanoframePreview = 0
 	}

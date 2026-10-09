@@ -33,6 +33,7 @@ func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, 
 	if b == nil {
 		return
 	}
+	x, y = b.railPointer(x, y)
 	window, _, err := h.windowForRequired(b, f)
 	if err != nil {
 		h.assetErr = err
@@ -107,6 +108,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		}
 		return true
 	}
+	x, y = b.railPointer(x, y)
 	// A committed frame is required for every HUD action [I6]. A frame with a
 	// non-empty selection but no command-page builder still exposes the authored
 	// general/order controls; with an empty selection the command windows are
@@ -162,6 +164,7 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	if unitInfoCovers(x, y) {
 		return true
 	}
+	x, y = b.railPointer(x, y)
 	// The composed committed frame: its command page is the host's local
 	// selection's (battle_local_interface.go).
 	f, _ := b.currentSnapshot()
@@ -198,6 +201,7 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 	if h == nil || b == nil {
 		return -1
 	}
+	x, y = b.railPointer(x, y)
 	// The composed committed frame: its command page is the host's local
 	// selection's (battle_local_interface.go).
 	f, _ := b.currentSnapshot()
@@ -264,13 +268,16 @@ func (h *retailBattleHUD) overWorld(x, y int32) bool {
 	if h == nil {
 		return true
 	}
-	const railX = 129 // authored rail boundary, matching the PANELSIDE blit
+	// The authored rail boundary, matching the PANELSIDE blit, magnified with
+	// the rail (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+	railX := railInset(max(h.chromeScale, 1)) + 1
 	if x < railX {
 		return false
 	}
+	bar := max(h.chromeScale, 1)
 	top := int32(0)
 	if h.panelTop != nil {
-		top = int32(h.panelTop.Height)
+		top = int32(h.panelTop.Height) * bar
 	}
 	// The world viewport's last row is `H-33` inclusive at every display
 	// mode, one row above the bottom strip's origin [03 §4.1][07 R-HUD-05].
@@ -278,6 +285,6 @@ func (h *retailBattleHUD) overWorld(x, y int32) bool {
 	if screenH <= 0 {
 		screenH = retailScreenH
 	}
-	bottom := hud.BottomStripY(screenH)
+	bottom := screenH - hud.ChromeStripHeight*bar
 	return y >= top && y < bottom
 }

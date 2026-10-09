@@ -63,7 +63,7 @@ func (h *retailBattleHUD) drawClock(c *client.Client, b *battleSession, cur *fra
 	if captions := hudCaptionTranslator(h); captions != nil {
 		label = captions.Translate(label)
 	}
-	_, height := c.Size()
+	_, height := c.ChromeSize()
 	y := height - standaloneClockBottomDY - int(font.Height)
 	c.UIText(font, h.texts.clock.clock(label, cur.Tick), standaloneClockX, y, h.guiColor(15))
 }

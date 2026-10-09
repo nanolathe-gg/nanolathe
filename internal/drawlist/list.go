@@ -83,6 +83,10 @@ type Sprite struct {
 	// Frame is the resolved GAF frame; its Pixels are physical indices already
 	// [C-G2]. It is nil for a PCX blit, where PCX carries the source instead.
 	Frame *formats.GAFFrame
+	// Detail is Frame's 2x chrome remaster (DESIGN_GPU_RENDERER §14.9). A
+	// keyed blit inside a 2x chrome region samples it in place of Frame, whose
+	// geometry still places and clips the blit; every other path ignores it.
+	Detail *formats.GAFFrame
 	// PCX is the resolved PCX image for the opaque frontend-background blit, used
 	// when Frame is nil [fmt pcx][07 "Retail palette contract"]. It is an additive
 	// discriminator (WU-1.7b): Sprite cannot carry a PCX in Frame, so the executor

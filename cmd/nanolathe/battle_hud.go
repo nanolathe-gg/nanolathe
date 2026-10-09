@@ -55,6 +55,7 @@ type retailBattleHUD struct {
 	panelSide   *formats.GAFFrame
 	panelBottom *formats.GAFFrame
 	intGAF      *formats.GAF
+	intGAFPath  string
 	common      *formats.GAF
 	oldMain     *formats.GAF
 	share       *formats.GAF
@@ -84,7 +85,12 @@ type retailBattleHUD struct {
 	// laid out for; applyDisplaySize re-places the size-dependent windows when
 	// it changes [07 R-HUD-05].
 	screenW, screenH int32
-	modalFont        *formats.GAFEntry
+	// chromeScale is the last drawn rail magnification, for the pointer
+	// classification that has no session (DESIGN_INTERFACE_HUD_INPUT
+	// "Modern UI scale").
+	chromeScale int32
+	placedScale int32
+	modalFont   *formats.GAFEntry
 	// modalFontSmall is GAF-font slot 1, anims/hattfont11.gaf — the face the
 	// composer selects for the slide strip's three readouts and the kind-13
 	// score-bar painter selects for its decimal, each restoring slot 0
@@ -136,6 +142,15 @@ type retailBattleHUD struct {
 	// radar owns the presentation-only PICTURE→MAPPED→FINAL lifecycle. Its
 	// inputs are rebuilt from the committed frame at draw time [03 §3.6].
 	radar *render.MinimapService
+
+	// The magnified sidebar's radar: the same lifecycle over a picture built at
+	// the magnified canvas, created on first use at each scale and rebuilt only
+	// when the scale changes (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+	radarDetail       *render.MinimapService
+	radarDetailScale  int32
+	radarDetailFinal  render.RadarSurface
+	radarDetailSource func(side int32) *render.RadarSurface
+	radarConfig       render.MinimapServiceConfig
 
 	// FX radar markers are authored indexed GAF bytes. They are retained with
 	// the battle HUD so FINAL can copy the selected frame directly, without
@@ -220,6 +235,12 @@ type retailBattleHUD struct {
 // CORE does not load ARM-specific options unconditionally [07 "Tab options menu and manual exit"].
 // GUI/GAF loads are cached at battle entry in the HUD maps (windows/pages) so
 // the frame loop does not re-read VFS [07 §4].
+// chromeCommonGAF is the shared interface bank of every side's buttons.
+const chromeCommonGAF = "anims/commongui.gaf"
+
+// intGAFPath is a side's interface bank's logical path [02 §6].
+func intGAFPath(intGAF string) string { return "anims/" + strings.ToLower(intGAF) + ".gaf" }
+
 func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, pal *palette.Tables, shell *gameShell, windowContext *battleWindowContext) (*retailBattleHUD, error) {
 	if fs == nil || sess == nil || cat == nil {
 		return nil, fmt.Errorf("nanolathe: battle HUD load failed: no mounted content, session or catalog")
@@ -273,7 +294,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		return nil, hudAssetError(fs, "fonts/smlfont.fnt", "developer terrain font", err)
 	}
 	// Mandatory side intgaf [02 §6][07 §6].
-	logicalIntGAF := "anims/" + strings.ToLower(side.IntGAF) + ".gaf"
+	logicalIntGAF := intGAFPath(side.IntGAF)
 	intGAF, err := formats.LoadGAFFile(fs, logicalIntGAF)
 	if err != nil {
 		return nil, hudAssetError(fs, logicalIntGAF, fmt.Sprintf("side %s intgaf %q [02 §6]", side.Name, side.IntGAF), err)
@@ -293,7 +314,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	}
 	// Optional support GAFs — degradable individually [07 §4][07 "Tab options menu and manual exit"].
 	// Missing optional assets log a provider-aware warning and leave nil so battle still enters.
-	common := loadGAFOptional(fs, "anims/commongui.gaf", "commongui.gaf")
+	common := loadGAFOptional(fs, chromeCommonGAF, "commongui.gaf")
 	oldMain := loadGAFOptional(fs, "anims/oldmain.gaf", "oldmain.gaf")
 	share := loadGAFOptional(fs, "anims/share.gaf", "share.gaf")
 	logoPath := "textures/logos.gaf"
@@ -373,7 +394,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel, optionsNoSave: sess.IsSurvival(),
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, primaryFont: primaryFont, developerFont: developerFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
-		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
+		intGAF: intGAF, intGAFPath: logicalIntGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, talkWin: talkWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
 		info:      info,
 		modalFont: modalFont, modalFontSmall: modalFontSmall, stripArt: stripArt,
@@ -444,10 +465,17 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		guiRemap = pal.Gray[:]
 		fogFill = pal.Logical[render.FogDarkPaletteIndex]
 	}
-	h.radar = render.NewMinimapService(render.MinimapServiceConfig{
-		Picture: picture, MapW: mapW, MapH: mapH, LocalSlot: sess.LocalOwner,
+	h.radarConfig = render.MinimapServiceConfig{
+		MapW: mapW, MapH: mapH, LocalSlot: sess.LocalOwner,
 		FogFill: fogFill, GUIRemap: guiRemap,
-	})
+	}
+	cfg := h.radarConfig
+	cfg.Picture = picture
+	h.radar = render.NewMinimapService(cfg)
+	radarMap, radarWorld := sess.Skirmish.MapName, sess.World
+	h.radarDetailSource = func(side int32) *render.RadarSurface {
+		return buildBattleRadarCanvas(fs, cat, radarMap, radarWorld, pal, side)
+	}
 	// The three contact-pass markers, in the order the contacts pass draws them
 	// [03 §3.9]: the regular unit blip is `radlogo`, whose ten frames are the
 	// ten player colours the owning-player selector indexes; the hover marker
@@ -479,11 +507,19 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 // Retail reads outside such a source with an Unknown result, so this is host
 // policy and never stops battle entry (DESIGN_PRESENTATION_CLIENT §3.1 C4).
 func buildBattleRadar(fs vfs.FSOps, cat *content.Catalog, mapName string, terrain *world.Terrain, pal *palette.Tables) *render.RadarSurface {
+	return buildBattleRadarCanvas(fs, cat, mapName, terrain, pal, camera.MinimapLongSide)
+}
+
+// buildBattleRadarCanvas builds the radar picture for a side×side canvas. A
+// magnified canvas takes the generated terrain picture whenever the authored
+// minimap is too small to reduce, without a warning: the canonical picture
+// already reported any unusable source.
+func buildBattleRadarCanvas(fs vfs.FSOps, cat *content.Catalog, mapName string, terrain *world.Terrain, pal *palette.Tables, side int32) *render.RadarSurface {
 	if terrain == nil || pal == nil {
 		return nil
 	}
 	playW, playH := terrain.PlayRight, terrain.PlayBottom
-	layout := camera.LayoutMinimap(playW, playH)
+	layout := camera.LayoutMinimapCanvas(playW, playH, side)
 	if layout.W <= 0 || layout.H <= 0 {
 		return nil
 	}
@@ -502,7 +538,7 @@ func buildBattleRadar(fs vfs.FSOps, cat *content.Catalog, mapName string, terrai
 					w, h := int(tnt.MinimapWidth), int(tnt.MinimapHeight)
 					if w > 0 && h > 0 && len(tnt.Minimap) == w*h && render.BakedRadarSourceFits(layout, tnt.Minimap, w, h) {
 						baked, bakedW, bakedH = tnt.Minimap, w, h
-					} else {
+					} else if side == camera.MinimapLongSide {
 						hudAssetWarning(fs, mh.LogicalTNT, "authored minimap cannot supply the radar picture; using the generated terrain picture [03 §3.7]",
 							fmt.Errorf("stored minimap %dx%d with %d bytes, expected a complete rectangle of at least %dx%d for the %dx%d radar picture",
 								w, h, len(tnt.Minimap), 2*layout.W, 2*layout.H, layout.W, layout.H))
@@ -526,18 +562,20 @@ func (h *retailBattleHUD) applyDisplaySize(w, height int) {
 	if h == nil || w <= 0 || height <= 0 {
 		return
 	}
-	if int32(w) == h.screenW && int32(height) == h.screenH {
+	scale := max(h.chromeScale, 1)
+	if int32(w) == h.screenW && int32(height) == h.screenH && scale == max(h.placedScale, 1) {
 		return
 	}
-	h.screenW, h.screenH = int32(w), int32(height)
-	placeBattleModal(h.exitWin, w, height)
-	placeBattleModal(h.confirmWin, w, height)
-	placeBattleModal(h.restartWin, w, height)
+	h.screenW, h.screenH, h.placedScale = int32(w), int32(height), scale
+	rail := railInset(scale)
+	placeBattleModal(h.exitWin, w, height, rail)
+	placeBattleModal(h.confirmWin, w, height, rail)
+	placeBattleModal(h.restartWin, w, height, rail)
 	// GAMEOPTIONS and HELP carry the same centring flag; the in-battle
 	// briefing opens with no flags and keeps its authored origin
 	// [07 R-FE-01 §7].
-	placeBattleModal(h.info.gameOptionsWin, w, height)
-	placeBattleModal(h.info.helpWin, w, height)
+	placeBattleModal(h.info.gameOptionsWin, w, height, rail)
+	placeBattleModal(h.info.helpWin, w, height, rail)
 	h.placeTalkWindow(w, height)
 }
 
@@ -562,7 +600,7 @@ func (h *retailBattleHUD) placeTalkWindow(w, height int) {
 	if h == nil || h.talkWin == nil || w <= 0 || height <= 0 {
 		return
 	}
-	x, y := int32(128), int32(height)-h.talkWin.Rect.H
+	x, y := railInset(max(h.chromeScale, 1)), int32(height)-h.talkWin.Rect.H
 	h.talkWin.Rect.X, h.talkWin.Rect.Y = x, y
 	h.talkWin.OriginX, h.talkWin.OriginY = x, y
 	if len(h.talkWin.Gadgets) != 0 {
@@ -897,8 +935,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// with PANELBOT throughout — each stamp advancing by its frame width until
 	// the running x reaches the surface width [07 R-HUD-03 §1][07 R-HUD-03 §4].
 	// At 640x480 every stock frame reaches the edge in one stamp.
-	screenW, screenH := c.Size()
-	h.applyDisplaySize(screenW, screenH)
+	rail, strip := b.railRegion(), b.stripRegion()
+	c.BeginChromeRegion(rail)
+	screenW, _ := c.ChromeSize()
 	blitBattlePanel(c, h.panelTop, hud.ChromeRailX, 0)
 	if h.panelTop != nil && h.panelBottom != nil {
 		h.stamps = hud.StripStamps(h.stamps[:0], int32(screenW), int32(h.panelTop.Width), int32(h.panelBottom.Width))
@@ -913,6 +952,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			c.UIBlitClipped(h.panelBottom, int(x), 0, int(x), 0, int(h.panelBottom.Width), hud.ChromeStripHeight)
 		}
 	}
+	c.EndChromeRegion()
+	c.BeginChromeRegion(strip)
+	screenW, screenH := c.ChromeSize()
 	if h.panelBottom != nil {
 		bottomY := int(hud.BottomStripY(int32(screenH)))
 		h.stamps = hud.StripStamps(h.stamps[:0], int32(screenW), int32(h.panelBottom.Width), int32(h.panelBottom.Width))
@@ -920,6 +962,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			blitBattlePanel(c, h.panelBottom, int(x), bottomY)
 		}
 	}
+	c.EndChromeRegion()
 	// The left rail keeps its authored 129x480 art: retail stamps PANELSIDE
 	// once at battle start onto a surface cleared to palette index 0 and never
 	// extends it, so on a surface taller than the art the band under the panel
@@ -929,21 +972,28 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// the panel's only position: the slide does not move it. A host layout
 	// that places rail controls below those rows stretches the art instead
 	// (drawRailBackdrop).
-	h.drawRailBackdrop(c, b, cur, screenH)
+	c.BeginChromeRegion(rail)
+	_, railH := c.ChromeSize()
+	h.drawRailBackdrop(c, b, cur, railH)
+	c.EndChromeRegion()
 	// The hovered-gadget index is the footer's first source, so the pointer
 	// pass over the open page runs before the footer draws [07 R-HUD-03 §1].
 	if c.Input() != nil && c.Input().Mouse != nil {
 		mouse, _ := c.Input().PointerSample()
 		h.updateHoveredGadget(b, cur, int32(mouse.X), int32(mouse.Y))
 	}
-	ok := false
-	ok = cur != nil
-	if ok && cur != nil {
+	if cur != nil {
+		c.BeginChromeRegion(rail)
 		h.drawResources(c, cur, presented.Resources)
+		c.EndChromeRegion()
+		c.BeginChromeRegion(strip)
 		h.drawFooter(c, b, cur)
+		c.EndChromeRegion()
 	}
+	c.BeginChromeRegion(rail)
 	h.drawSidePage(c, b, cur)
 	h.drawCommunityRotationMenu(c, b, cur)
+	c.EndChromeRegion()
 	// Stock ARMINT.GAF and CORINT.GAF inspection shows PANELSIDE's decoded
 	// 129×480 raster is opaque at every pixel, including the radar area; there
 	// is no authored transparent cutout to preserve by clipping [fmt gaf].
@@ -959,6 +1009,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// column, the developer overlays and the options unfold after it
 	// [07 R-HUD-03 §14.4]. This call used to run before the footer, so the
 	// footer's own bottom-strip fields painted over the strip (WU-19-223).
+	c.BeginChromeRegion(strip)
 	if cur != nil {
 		h.drawSlideStrip(c, b, cur)
 	}
@@ -978,9 +1029,13 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	h.drawClock(c, b, cur)
 	h.drawSurvivalStatus(c, cur)
 	h.drawCommunityBPS(c, b)
+	c.EndChromeRegion()
+	// These two hang below the top strip, aligned to its resource readouts.
+	c.BeginChromeRegion(rail)
 	h.drawOnlineNetwork(c, b)
 	h.drawCommunityIncome(c, b, cur)
 	h.drawCommunityWeather(c, b, cur)
+	c.EndChromeRegion()
 	if b != nil {
 		b.developer.probes.Font = h.primaryFont
 		b.developer.probes.Layout = &b.developer.probeLayout

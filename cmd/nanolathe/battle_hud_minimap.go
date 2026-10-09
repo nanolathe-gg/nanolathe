@@ -24,7 +24,8 @@ func (h *retailBattleHUD) minimapRect() (hud.Rect, bool) {
 	if right < left || bottom < top {
 		return hud.Rect{}, false
 	}
-	return h.minimapAnchor, true
+	k := max(h.chromeScale, 1)
+	return hud.Rect{X1: left * k, Y1: top * k, X2: (right+1)*k - 1, Y2: (bottom+1)*k - 1}, true
 }
 
 // radarMapPixel performs the retail signed high-word narrowing before radar
@@ -53,15 +54,27 @@ func radarGAFFrameCount(entry *formats.GAFEntry) int {
 // pixels are already PALETTE.PAL indexes; transparent bytes are skipped and
 // no GUI remap is applied [03 §3.9][fmt gaf].
 func blitRadarGAF(dst *render.RadarSurface, anchorX, anchorY int32, f *formats.GAFFrame) {
+	blitRadarGAFScaled(dst, anchorX, anchorY, f, 1)
+}
+
+// blitRadarGAFScaled is blitRadarGAF with each art pixel drawn scale×scale,
+// its authored offsets magnified with it.
+func blitRadarGAFScaled(dst *render.RadarSurface, anchorX, anchorY int32, f *formats.GAFFrame, scale int32) {
 	if dst == nil || f == nil {
 		return
 	}
-	left, top := int(anchorX)-int(f.XOffset), int(anchorY)-int(f.YOffset)
+	k := int(max(scale, 1))
+	left, top := int(anchorX)-int(f.XOffset)*k, int(anchorY)-int(f.YOffset)*k
 	for y := 0; y < int(f.Height); y++ {
 		for x := 0; x < int(f.Width); x++ {
 			p, ok := f.At(x, y)
-			if ok {
-				dst.Set(left+x, top+y, p)
+			if !ok {
+				continue
+			}
+			for dy := range k {
+				for dx := range k {
+					dst.Set(left+x*k+dx, top+y*k+dy, p)
+				}
 			}
 		}
 	}
@@ -136,16 +149,26 @@ func (h *retailBattleHUD) radarOwnerFrameIndex(contact frame.RadarContactView, f
 // not reconstructed from the live unit or visibility services [03 §3.4][03
 // §3.6][03 §3.9].
 func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layout camera.Minimap) *render.RadarSurface {
-	if h == nil || b == nil || b.sess == nil || h.radar == nil || cur == nil {
+	if h == nil {
+		return nil
+	}
+	return h.rebuildRadarOn(b, cur, layout, h.radar, &h.radarFinal, 1)
+}
+
+// rebuildRadarOn rebuilds one radar service's FINAL. A magnified service's
+// layout is its own canvas's, and its marker art is drawn magnified by scale
+// so blips keep their size against the magnified rail.
+func (h *retailBattleHUD) rebuildRadarOn(b *battleSession, cur *frame.Frame, layout camera.Minimap, radar *render.MinimapService, finalStore *render.RadarSurface, scale int32) *render.RadarSurface {
+	if h == nil || b == nil || b.sess == nil || radar == nil || cur == nil {
 		return nil
 	}
 	// Consume only the committed phase. Presentation may redraw the same frame
 	// repeatedly without advancing or otherwise owning the cadence [R-CORE-03]
 	// [03 §3.6][I6].
-	h.radar.SetViewingPlayer(cur.ViewingPlayer)
-	h.radar.SetBlinkPhase(cur.Radar.BlinkPhase)
+	radar.SetViewingPlayer(cur.ViewingPlayer)
+	radar.SetBlinkPhase(cur.Radar.BlinkPhase)
 	if cur.Visibility.Valid {
-		h.radar.RebuildMappedVersion(cur.Visibility.WordVisible, cur.Visibility.Visible, cur.Visibility.MappingSource, cur.Visibility.MappingVersion)
+		radar.RebuildMappedVersion(cur.Visibility.WordVisible, cur.Visibility.Visible, cur.Visibility.MappingSource, cur.Visibility.MappingVersion)
 	}
 	// The committed contacts are the whole circle input: the sensor phase has no
 	// surface of its own and rasterizes nothing [03 §3.10] correction of
@@ -157,7 +180,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	contacts := h.radarContacts[:0]
 	regularArt := h.radarRegularArt[:0]
 	hoverArt := h.radarHoverArt[:0]
-	blink := h.radar.Blink()
+	blink := radar.Blink()
 	for _, published := range cur.Radar.Contacts {
 		// The renderer's contact adapter owns the blip, hover-ring and ring
 		// passes. Projectile records are applied below, after the rings, in
@@ -229,16 +252,16 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		return nil
 	}
 	regularIndex, hoverIndex := 0, 0
-	returnFinal := h.radar.RebuildFinalVersion(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, hovered bool) {
+	returnFinal := radar.RebuildFinalVersion(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, hovered bool) {
 		if hovered {
 			if hoverIndex < len(hoverArt) {
-				blitRadarGAF(dst, int32(x), int32(y), hoverArt[hoverIndex])
+				blitRadarGAFScaled(dst, int32(x), int32(y), hoverArt[hoverIndex], scale)
 			}
 			hoverIndex++
 			return
 		}
 		if regularIndex < len(regularArt) {
-			blitRadarGAF(dst, int32(x), int32(y), regularArt[regularIndex])
+			blitRadarGAFScaled(dst, int32(x), int32(y), regularArt[regularIndex], scale)
 		}
 		regularIndex++
 	}, h.paletteIndex(10), h.paletteIndex(12), h.paletteIndex(15), uint64(cur.Tick))
@@ -250,7 +273,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// contacts-only composite so a repeated presentation of one committed frame
 	// reproduces it exactly [03 §3.6]. The copy reuses the HUD's storage rather
 	// than cloning a fresh surface per frame.
-	final := h.radar.FinalInto(&h.radarFinal)
+	final := radar.FinalInto(finalStore)
 	if final == nil {
 		return nil
 	}
@@ -267,9 +290,13 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		switch radarPublishedProjectileArt(published) {
 		case frame.RadarProjectileMarker:
 			index := h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarMarkerGAF))
-			blitRadarGAF(final, rx, ry, radarGAFFrame(h.radarMarkerGAF, index))
+			blitRadarGAFScaled(final, rx, ry, radarGAFFrame(h.radarMarkerGAF, index), scale)
 		case frame.RadarProjectileDot:
-			final.Set(int(rx), int(ry), h.paletteIndex(14))
+			for dy := range scale {
+				for dx := range scale {
+					final.Set(int(rx+dx), int(ry+dy), h.paletteIndex(14))
+				}
+			}
 		}
 	}
 	return final
@@ -283,22 +310,62 @@ func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *f
 	if !ok {
 		return
 	}
-	surf := h.rebuildRadar(b, cur, layout)
-	if surf == nil {
-		return
-	}
-	// Drawing and input receive the same layout and destination rectangle.
-	c.DrawMinimapLayoutVersion(surf, dst, layout, h.radar.FinalIdentity(), h.radar.FinalRevision())
-	// Then the viewport rectangle, exactly as retail's minimap repaint pre-pass
-	// strokes the camera-to-radar rectangle over the copied radar surface
-	// [03 R-MM-01 §1][03 R-COMP-02 §5]. The five-pixel cross that used to be
-	// drawn here instead is a film-mode diagnostic the **world** composer draws
-	// over the game viewport [03 §3.12] — a different figure.
 	playW, playH, ok := b.sess.PlayArea()
 	if !ok {
 		return
 	}
-	if marker, ok := hud.MinimapViewportRect(b.cam, layout, playW, playH, dst); ok {
-		c.DrawMinimapViewportRect(dst, marker, h.paletteIndex(hud.ViewportMarkerLogicalColor))
+	// Drawing and input receive the same layout and destination rectangle. A
+	// magnified rail draws a picture built at its own canvas instead, so the
+	// destination is filled one picture pixel per framebuffer pixel; input
+	// keeps the canonical layout (DESIGN_INTERFACE_HUD_INPUT "Modern UI
+	// scale").
+	scale := max(h.chromeScale, 1)
+	if radar := h.detailRadar(scale); radar != nil {
+		side := camera.MinimapLongSide * scale
+		detail := camera.LayoutMinimapCanvas(playW, playH, side)
+		surf := h.rebuildRadarOn(b, cur, detail, radar, &h.radarDetailFinal, scale)
+		if surf == nil {
+			return
+		}
+		c.DrawMinimapCanvasVersion(surf, dst, detail, side, radar.FinalIdentity(), radar.FinalRevision())
+	} else {
+		surf := h.rebuildRadar(b, cur, layout)
+		if surf == nil {
+			return
+		}
+		c.DrawMinimapLayoutVersion(surf, dst, layout, h.radar.FinalIdentity(), h.radar.FinalRevision())
 	}
+	// Then the viewport rectangle, exactly as retail's minimap repaint pre-pass
+	// strokes the camera-to-radar rectangle over the copied radar surface
+	// [03 R-MM-01 §1][03 R-COMP-02 §5]. The five-pixel cross that used to be
+	// drawn here instead is a film-mode diagnostic the **world** composer draws
+	// over the game viewport [03 §3.12] — a different figure. A magnified rail
+	// strokes it as many pixels thick as its scale.
+	if marker, ok := hud.MinimapViewportRect(b.cam, layout, playW, playH, dst); ok {
+		color := h.paletteIndex(hud.ViewportMarkerLogicalColor)
+		for i := range scale {
+			inset := hud.Rect{X1: marker.X1 + i, Y1: marker.Y1 + i, X2: marker.X2 - i, Y2: marker.Y2 - i}
+			c.DrawMinimapViewportRect(dst, inset, color)
+		}
+	}
+}
+
+// detailRadar returns the magnified radar service for scale, building its
+// picture when the scale changes; nil at 1x or when no picture can be built.
+func (h *retailBattleHUD) detailRadar(scale int32) *render.MinimapService {
+	if h == nil || scale <= 1 || h.radarDetailSource == nil {
+		return nil
+	}
+	if h.radarDetailScale == scale {
+		return h.radarDetail
+	}
+	h.radarDetail, h.radarDetailScale = nil, scale
+	picture := h.radarDetailSource(camera.MinimapLongSide * scale)
+	if picture == nil {
+		return nil
+	}
+	cfg := h.radarConfig
+	cfg.Picture = picture
+	h.radarDetail = render.NewMinimapService(cfg)
+	return h.radarDetail
 }

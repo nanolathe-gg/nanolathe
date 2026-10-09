@@ -49,17 +49,18 @@ func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 	// 640×480 corner, so at a larger mode a build site could not be picked
 	// outside the authored area at all.
 	screenW, screenH := b.surfaceSize()
+	left, top, bottom := b.cam.ChromeInset()
 	clampedX := sx
 	clampedY := sy
-	if clampedX < camera.OriginX+1 {
-		clampedX = camera.OriginX + 1
+	if clampedX < left+1 {
+		clampedX = left + 1
 	} else if clampedX > screenW-1 {
 		clampedX = screenW - 1
 	}
-	if clampedY < camera.OriginY {
-		clampedY = camera.OriginY
-	} else if clampedY > screenH-camera.OriginY-1 {
-		clampedY = screenH - camera.OriginY - 1
+	if clampedY < top {
+		clampedY = top
+	} else if clampedY > screenH-bottom-1 {
+		clampedY = screenH - bottom - 1
 	}
 	// The renderer stores world points at beam position minus OriginX/Y. Restore
 	// those fixed offsets for the camera inverse [03 §2.5].

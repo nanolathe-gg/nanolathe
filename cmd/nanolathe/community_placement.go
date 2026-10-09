@@ -248,7 +248,8 @@ func (b *battleSession) communityClickSnapAllowed(mx int32) bool {
 		return false
 	}
 	screenW, _ := b.surfaceSize()
-	return mx >= camera.OriginX+1 && mx < screenW
+	left, _, _ := b.cam.ChromeInset()
+	return mx >= left+1 && mx < screenW
 }
 
 func (b *battleSession) communityReclaimSnap() (orders.ResolvePos, bool) {

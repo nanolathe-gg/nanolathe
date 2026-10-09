@@ -41,7 +41,8 @@ func battleViewCentre(cam *camera.Camera) (int32, int32) {
 	}
 	// The viewport is `(128,32)..(W-1,H-33)` of the live surface [03 §4.1]
 	// [07 R-HUD-05]: leading inset on X only, equal insets top and bottom.
-	return (cam.ViewW + camera.OriginX) / 2, cam.ViewH / 2
+	left, top, bottom := cam.ChromeInset()
+	return (cam.ViewW + left) / 2, (cam.ViewH + top - bottom) / 2
 }
 
 // beamAnchor converts a framebuffer point — the pointer, the viewport centre,

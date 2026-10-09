@@ -202,6 +202,7 @@ Reconnect, replays and general multiplayer lobby entry remain later work.
 | `internal/platform/metalrender` | The macOS Metal renderer: device, pipelines, resident resources, per-frame packing and encoding, the Cocoa window and input pump, embedded MSL | DESIGN_METAL_RENDERER |
 | `internal/platform/mtl` | Calls the Objective-C runtime, Metal, AppKit and Core Graphics from Go with no cgo; imports nothing from the game | DESIGN_METAL_RENDERER §5 |
 | `internal/upscale` | Load-time 2× synthesis of terrain tiles and feature sprite banks from the map's own pixels, with the on-disk cache; the `tools/mapupscale` synthesizers are wrappers over it | DESIGN_GPU_RENDERER §14 |
+| `internal/upscale/chrome` | Load-time 2× remaster of the battle chrome's buttons: stock frames redrawn as gunmetal with a bundled font, other art enlarged by Scale2x | DESIGN_GPU_RENDERER §14.9 |
 
 ### Commands
 

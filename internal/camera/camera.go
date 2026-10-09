@@ -57,10 +57,40 @@ type Camera struct {
 	scrollX, scrollZ int64
 	scrollZoom       Zoom
 
+	// Chrome is the framebuffer extent the battle chrome covers at each edge.
+	// Zero fields are retail's [03 §4.1]; the host widens them when it
+	// magnifies the chrome (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+	Chrome ChromeInsets
+
 	// Follow is the rest of the retail camera block: the desired origin, the
 	// tracked object and the four bookmark slots [07 R-CAM-01 §12]. It is
 	// presentation state; no simulation phase reads it back [I6].
 	Follow FollowState
+}
+
+// ChromeInsets are framebuffer pixels covered by the chrome at the battle
+// viewport's left, top and bottom edges; nothing covers the right edge.
+type ChromeInsets struct {
+	Left, Top, Bottom int32
+}
+
+// ChromeInset returns the effective insets, substituting retail's for each
+// zero field [03 §4.1].
+func (c *Camera) ChromeInset() (left, top, bottom int32) {
+	left, top, bottom = OriginX, OriginY, OriginY
+	if c == nil {
+		return
+	}
+	if c.Chrome.Left > 0 {
+		left = c.Chrome.Left
+	}
+	if c.Chrome.Top > 0 {
+		top = c.Chrome.Top
+	}
+	if c.Chrome.Bottom > 0 {
+		bottom = c.Chrome.Bottom
+	}
+	return
 }
 
 // Direction is a scroll direction [07 §10].
@@ -148,8 +178,8 @@ func clampAxis(camera, mapSize, viewportSpan, leading int32) int32 { // [07 §10
 }
 
 // clampInsets returns the battle viewport's leading and trailing insets on each
-// axis, measured in world pixels [03 §4.1]. At native scale they are the
-// OriginX/OriginY constants: the chrome covers the framebuffer's leftmost 128
+// axis, measured in world pixels [03 §4.1]. At native scale they are
+// ChromeInset's: retail's chrome covers the framebuffer's leftmost 128
 // columns and its top and bottom 32 rows, and nothing at the right edge.
 //
 // Presentation zoom is not a retail concept [F-P1-008]. The chrome is drawn in
@@ -162,12 +192,12 @@ func (c *Camera) clampInsets() (leadX, trailX, leadZ, trailZ int32) { // [03 §4
 	// The LIVE factor, not the record step: the chrome covers the same
 	// framebuffer pixels whatever the recorder emitted at, so the world it hides
 	// is measured through what the player is actually seeing (§16.4).
+	left, top, bottom := c.ChromeInset()
 	z := c.zoom()
 	if z == ZoomUnit {
-		return OriginX, 0, OriginY, OriginY
+		return left, 0, top, bottom
 	}
-	insetY := z.Inverse(OriginY)
-	return z.Inverse(OriginX), 0, insetY, insetY
+	return z.Inverse(left), 0, z.Inverse(top), z.Inverse(bottom)
 }
 
 // scale returns the effective view scale, clamped to the two views with

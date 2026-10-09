@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"github.com/nanolathe-gg/nanolathe/internal/upscale"
+	"github.com/nanolathe-gg/nanolathe/internal/upscale/chrome"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -55,7 +57,7 @@ var detailArtExclusions = []string{"burn", "boom", "fire", "smoke", "rec"}
 //
 // It returns nil when there is nothing to install, which is the same thing to
 // the client as no provider at all: every frame is doubled by nearest sampling.
-func buildDetailArt(cs *contentSet, terrain *world.Terrain, progress content.Progress) *client.DetailArt {
+func buildDetailArt(cs *contentSet, terrain *world.Terrain, uiFont string, progress content.Progress) *client.DetailArt {
 	report := func(percent int) {
 		if progress != nil {
 			// Keep the popup alive through final assembly and cache writes;
@@ -83,11 +85,7 @@ func buildDetailArt(cs *contentSet, terrain *world.Terrain, progress content.Pro
 			cs.root, err)
 		return nil
 	}
-	var pal [256][3]uint8
-	for i := range 256 {
-		r, g, b, _ := tables.RGBA(byte(i))
-		pal[i] = [3]uint8{r, g, b}
-	}
+	pal := tablesRGB(tables)
 	alp := tables.Alpha[:]
 
 	cache, err := upscale.DefaultCache()
@@ -130,10 +128,50 @@ func buildDetailArt(cs *contentSet, terrain *world.Terrain, progress content.Pro
 			art.Banks[name] = bank
 		}
 	}
-	if art.Tiles == nil && len(art.Banks) == 0 {
+	art.Chrome = buildChromeArt(cache, cs, pal, uiFont)
+	if art.Tiles == nil && len(art.Banks) == 0 && len(art.Chrome) == 0 {
 		return nil
 	}
 	return art
+}
+
+// buildChromeArt remasters the interface banks the battle HUD draws from at
+// 2x: commongui and every side's intgaf (DESIGN_GPU_RENDERER §14.9). A bank
+// that cannot be read or remastered is reported and left to nearest doubling.
+func buildChromeArt(cache *upscale.Cache, cs *contentSet, pal [256][3]uint8, uiFont string) map[string]*formats.GAF {
+	var opts chrome.Options
+	if uiFont != "" {
+		font, err := os.ReadFile(uiFont)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nanolathe: chrome remaster: logical path %s, providers searched [host filesystem], expected a TrueType or OpenType font: %v\n", uiFont, err)
+		}
+		opts.Font = font
+	}
+	paths := []string{chromeCommonGAF}
+	if sides, err := content.CompileSides(cs.fs); err == nil {
+		for _, side := range sides {
+			if side == nil || side.IntGAF == "" {
+				continue
+			}
+			if path := intGAFPath(side.IntGAF); !slices.Contains(paths, path) {
+				paths = append(paths, path)
+			}
+		}
+	}
+	out := map[string]*formats.GAF{}
+	for _, path := range paths {
+		bank, err := formats.LoadGAFFile(cs.fs, path)
+		if err != nil {
+			continue // the HUD reports its own missing art
+		}
+		remaster, _, err := chrome.CachedBank2x(cache, bank, pal, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nanolathe: chrome remaster: logical path %s, providers searched [%s], expected a 2x interface bank: %v\n", path, cs.root, err)
+			continue
+		}
+		out[path] = remaster
+	}
+	return out
 }
 
 // detailArtFor is the switch of §14.4: `--auto-remaster` (default on) enables
@@ -149,7 +187,7 @@ func detailArtFor(opts Options, cs *contentSet, terrain *world.Terrain, progress
 		}
 		return nil
 	}
-	return buildDetailArt(cs, terrain, progress)
+	return buildDetailArt(cs, terrain, opts.UIFont, progress)
 }
 
 // captureDetailArt is detailArtFor for the capture route. A capture has no F9,
@@ -161,9 +199,31 @@ func captureDetailArt(opts Options, cs *contentSet, terrain *world.Terrain) *cli
 	// show one of its pixels, so synthesizing it would cost seconds for nothing
 	// (§14.1, §16.8).
 	if opts.Zoom == 0 || opts.Zoom <= camera.ZoomUnit {
-		return nil
+		// The world stays native, but a 2x UI scale still shows the
+		// interface remaster (§14.9).
+		if !opts.AutoRemaster || opts.UIScale == 1 || cs == nil || cs.fs == nil {
+			return nil
+		}
+		tables, err := palette.Load(cs.fs)
+		if err != nil {
+			return nil
+		}
+		cache, err := upscale.DefaultCache()
+		if err != nil {
+			cache = &upscale.Cache{}
+		}
+		return &client.DetailArt{Chrome: buildChromeArt(cache, cs, tablesRGB(tables), opts.UIFont)}
 	}
 	return detailArtFor(opts, cs, terrain, nil)
+}
+
+func tablesRGB(tables *palette.Tables) [256][3]uint8 {
+	var pal [256][3]uint8
+	for i := range 256 {
+		r, g, b, _ := tables.RGBA(byte(i))
+		pal[i] = [3]uint8{r, g, b}
+	}
+	return pal
 }
 
 // detailArtBankQuery is one feature bank's query set: the entries the map's

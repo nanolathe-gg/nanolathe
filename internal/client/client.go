@@ -207,8 +207,10 @@ type Client struct {
 	// text width — take the record extent instead, because the commands between
 	// those markers are world-positioned and the executor scales them (§16.3).
 	worldOverlay bool
-	indexed      []uint8
-	rgba         []byte
+	// chrome is the open magnified chrome region (BeginChromeRegion).
+	chrome  chromeRegion
+	indexed []uint8
+	rgba    []byte
 
 	// The strategic marker layer of DESIGN_GPU_RENDERER §16.11.
 	// strategicBlip is the minimap blip art the marker colours are taken from
@@ -390,6 +392,10 @@ type Client struct {
 	// (DESIGN_GPU_RENDERER §14.3) [I1][I6].
 	detailArt    *DetailArt
 	detailFrames map[*formats.GAFFrame]*formats.GAFFrame
+	// chromeBanks are the interface banks the HUD registered; chromeFrames maps
+	// their frames to the provider's 2x chrome remaster.
+	chromeBanks  []chromeBank
+	chromeFrames map[*formats.GAFFrame]*formats.GAFFrame
 	// doubledFrames is the nearest-doubled fallback cache, provider-independent
 	// and kept for the client's life. enhanced records that the Enhanced
 	// (modern) executor is presenting: only then is the provider consulted, so

@@ -358,6 +358,15 @@ type battleHUDUIStage struct {
 	battle *battleSession
 }
 
+func (s battleHUDUIStage) PrepareUI(c *client.Client) {
+	s.battle.resolveChromeScale()
+	s.battle.syncChromeInsets()
+	if s.hud != nil && c != nil {
+		s.hud.chromeScale = s.battle.chromeScale()
+		s.hud.applyDisplaySize(c.Size())
+	}
+}
+
 func (s battleHUDUIStage) DrawUI(c *client.Client, presented client.UIFrame) {
 	if s.hud != nil {
 		s.hud.draw(c, s.battle, presented)

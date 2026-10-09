@@ -83,7 +83,8 @@ func (c *Client) selectionClip() Rect {
 	if c == nil {
 		return Rect{MinX: 1, MinY: 1, MaxX: 0, MaxY: 0}
 	}
-	return Rect{MinX: 128, MinY: 32, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - 33}
+	left, top, bottom := c.cam.ChromeInset()
+	return Rect{MinX: left, MinY: top, MaxX: int32(c.width) - 1, MaxY: int32(c.height) - bottom - 1}
 }
 
 func (c *Client) drawSelectionDrag() {

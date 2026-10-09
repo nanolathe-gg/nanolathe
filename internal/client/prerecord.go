@@ -61,6 +61,7 @@ type PresentationInputs struct {
 	CamPrevView, CamCurView camera.PresentationView
 	CamZoom                 camera.Zoom
 	CamScale                camera.ViewScale
+	CamChrome               camera.ChromeInsets
 	// Interpolation and Enhanced are the two presentation switches a record
 	// reads; Width and Height are the surface the pass composes for.
 	Interpolation bool
@@ -254,6 +255,7 @@ func (c *Client) PresentationDigest() PresentationInputs {
 	if c.cam != nil {
 		d.CamX, d.CamZ = c.cam.X, c.cam.Z
 		d.CamZoom, d.CamScale = c.cam.Zoom, c.cam.Scale
+		d.CamChrome = c.cam.Chrome
 	}
 	return d
 }

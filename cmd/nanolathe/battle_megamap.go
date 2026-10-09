@@ -112,7 +112,8 @@ func (b *battleSession) megamapLens() camera.MegamapLens {
 	}
 	w, h := b.surfaceSize()
 	extentW, extentH := camera.MegamapExtent(b.sess.World.CellW, b.sess.World.CellH)
-	return camera.LayoutMegamap(camera.OriginX+1, camera.OriginY, w-camera.OriginX-1, h-2*camera.OriginY, extentW, extentH)
+	left, top, bottom := b.cam.ChromeInset()
+	return camera.LayoutMegamap(left+1, top, w-left-1, h-top-bottom, extentW, extentH)
 }
 
 // setMegamapShown enters or leaves the view. Entering plays `Options`, clears

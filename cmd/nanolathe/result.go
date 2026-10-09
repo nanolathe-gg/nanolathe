@@ -264,7 +264,7 @@ func (h *retailBattleHUD) drawEndTitle(c *client.Client, b *battleSession, cur *
 	if title == nil {
 		return
 	}
-	w, height := c.Size()
+	w, height := c.ChromeSize()
 	c.UIBlitAnchor(title, (w+128)/2, height/2)
 }
 

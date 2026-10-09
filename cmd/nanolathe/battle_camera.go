@@ -369,8 +369,9 @@ func (b *battleSession) onScreenUnit(v frame.UnitView) bool {
 	wx, wy, wz := int32(v.X>>16), int32(v.Y>>16), int32(v.Z>>16)
 	sx := z.Project(wx - b.cam.X)
 	sy := z.Project(wz - (wy >> 1) - b.cam.Z)
-	return sx >= camera.OriginX && sx < b.cam.ViewW &&
-		sy >= camera.OriginY && sy < b.cam.ViewH-camera.OriginY
+	left, top, bottom := b.cam.ChromeInset()
+	return sx >= left && sx < b.cam.ViewW &&
+		sy >= top && sy < b.cam.ViewH-bottom
 }
 
 // cycleFollowTarget is `t` / `T`: the tracked object becomes the next (or, with

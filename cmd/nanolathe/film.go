@@ -160,6 +160,8 @@ func (g *filmGame) startScene(opts Options, cs *contentSet, scene film.Scene) er
 		cl.Close()
 		return err
 	}
+	// Clean captures crop at retail's chrome insets.
+	b.chromeFixed = true
 	if !g.script.Messages {
 		// The message column draws inside the world viewport, so a clean
 		// capture has to silence it at the ring rather than crop it away. One

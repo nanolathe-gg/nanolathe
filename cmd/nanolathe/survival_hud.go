@@ -70,7 +70,7 @@ func (h *retailBattleHUD) drawSurvivalStatus(c *client.Client, cur *frame.Frame)
 // drawSurvivalLine draws one right-aligned line on its backing and returns
 // the next line's top.
 func (h *retailBattleHUD) drawSurvivalLine(c *client.Client, text string, y int, color uint8) int {
-	width, _ := c.Size()
+	width, _ := c.ChromeSize()
 	w := client.MeasureText(h.console, text)
 	x := width - w - 8
 	lineH := int(h.console.Height) + 4

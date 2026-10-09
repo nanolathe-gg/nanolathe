@@ -164,7 +164,7 @@ func (h *retailBattleHUD) overflowSidebarWindow(b *battleSession, f *frame.Frame
 	if !oversized {
 		return nil, false
 	}
-	width, height := b.cl.Size()
+	width, height := b.railSize()
 	p := &h.sidebarPaging
 	reseed := p.definition != def || p.builder != f.CommandPage.Builder || !slices.Equal(p.selection, f.Selection.Handles) || p.authoredPage != int(f.CommandPage.Page) || p.authoredRemembered != buildButtonPage(f) || p.authoredCount != int(f.CommandPage.PageCount)
 	key := expandedSidebarKey{base: base, definition: def, width: int32(width), height: int32(height), page: int(f.CommandPage.Page), count: int(f.CommandPage.PageCount), remembered: buildButtonPage(f), localPage: p.state.Page, transport: f.CommandPage.IsTransport, builder: f.CommandPage.Builder}

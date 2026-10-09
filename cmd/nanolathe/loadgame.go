@@ -283,6 +283,14 @@ func (g *gameShell) battleRadarPreviewBox() []byte {
 		return nil
 	}
 	h := g.battle.hud
+	// A magnified rail draws its own radar, so rebuild the canonical FINAL.
+	if h.radarDetailScale > 1 {
+		if f, ok := g.battle.currentSnapshot(); ok {
+			if layout, _, ok := g.battle.minimapLayout(); ok {
+				h.rebuildRadar(g.battle, f, layout)
+			}
+		}
+	}
 	// FINAL as the rail last drew it — the fogged picture with its contacts —
 	// is the image the player is looking at when the save screen opens.
 	surface := &h.radarFinal

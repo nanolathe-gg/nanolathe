@@ -2178,8 +2178,8 @@ out of date behind it. It is:
 - **the committed frame**, by pointer identity and tick, as a cross-check on the
   epoch;
 - **the two blend fractions of §13.5** and whether the camera's is set at all;
-- **the camera origin and its two stepped samples**, the surface size, and the
-  interpolation and Enhanced switches;
+- **the camera origin, chrome insets and its two stepped samples**, the surface
+  size, and the interpolation and Enhanced switches;
 - **the caption ring's producer and display cursors**, because the audio drain
   is the one thing that runs on the game goroutine between a launch and the Draw
   that consumes it, and the ring is what it writes that the recorder reads
@@ -2313,8 +2313,8 @@ switches discard the retained image; resizing replaces its allocation.
 
 `PausedWorldInputs` compares the committed frame identity and tick, frozen tick
 fraction, interpolation and Enhanced switches, actual blended camera origin,
-viewport and map extents, scale and smooth zoom factor, dimensions, world/asset
-binding revision, terrain, detail art, font, palette and display colours, the
+viewport and map extents, chrome insets, scale and smooth zoom factor, dimensions,
+world/asset binding revision, terrain, detail art, font, palette and display colours, the
 shadow, shading, antialias, fog and damage-bar options, and the effect selection
 (§30). The actual origin uses §13.5's integer blend and teleport snap, so a
 stationary camera can reuse across changing camera fractions while pan, follow
@@ -3091,6 +3091,68 @@ tiles it shows instead of every tile of the map — 40–50 MB at the detail sca
 on the preview maps, 200 MB on the largest — inside its first frame. Battles
 keep the complete atlas `PrepareTerrain` uploads at loading, so a camera jump
 mid-game never packs tiles. This is host presentation policy; no pixel changes.
+
+### 14.9 Chrome remaster — contract D5
+
+**Nanolathe host presentation policy**, not retail behaviour. At UI scale 2
+(DESIGN_INTERFACE_HUD_INPUT "Modern UI scale") the modern executor draws the
+battle chrome's buttons from 2x art made at load time instead of doubling the
+authored pixels. `internal/upscale/chrome` makes it; the experimental `uigen`
+generator it grew from is folded into that package.
+
+* **Coverage.** The banks the HUD registers with the client:
+  `anims/commongui.gaf` and every side's intgaf [02 §6]. Within them, PANELTOP
+  and the entries whose name, behind a side prefix, ends in a stock command
+  suffix — MOVE, STOP, ATTACK, PATROL, DEFEND, REPAIR, RECLAIM, CAPTURE,
+  LOAD, UNLOAD, BLAST, SPECIAL, the BUILD and ORDERS tabs, the FIREORD,
+  MOVEORD, ONOFF, CLOAK and ACTIVATE selectors, and the PREV and NEXT
+  arrows; the longest suffix wins, so UNLOAD is not LOAD. Every other entry
+  keeps a nil slot and the client's nearest doubling (D2).
+* **Stock art is redrawn.** `FrameHash` names a frame by its size and plain
+  raster, transparency included. A frame whose hash is in the generated
+  stock table under its own entry name and frame index is redrawn as worn
+  gunmetal: a procedural plate, the bevel, wear and caption of `uigen`, and
+  the caption, lights and state the stock art shows at that index (normal,
+  pressed, greyed; a selector's lit stage, its all-stages frame and its blank
+  pressed and greyed frames). The table holds hashes only, never art, and is
+  regenerated from an install by `TestStockTableCoversTheInstall` with
+  `NANOLATHE_CHROME_WRITE_TABLE=1`. Core's 511-column PANELTOP is stock art
+  with no design and stays nearest-doubled.
+* **Other art is enlarged.** A frame in a covered entry whose hash is not in
+  the table — a mod's repaint, a new side's button, a localized caption — is
+  enlarged from its own indices by Scale2x, so the remaster never puts stock
+  captions on art a mod authored and never invents colours.
+* **Composites.** Stock buttons are composites whose children all take the
+  ordinary path; the remaster replaces the parent's plain raster, which covers
+  the pixels its leaves draw [fmt gaf]. A composite with an alternate (ALP)
+  child is not covered.
+* **Palette.** The drawn element is dithered (Floyd–Steinberg) to the battle
+  palette and never takes the frame's colour key for an opaque pixel, so a
+  variant is an ordinary indexed frame to the sprite atlas.
+* **Font and material.** Captions use the bundled Saira Condensed (SIL Open
+  Font Licence; `internal/upscale/chrome/font/OFL.txt`); `--ui-font` names
+  another TrueType or OpenType file. The plate is generated from a fixed seed,
+  so nothing image-model-made is shipped. Font rendering takes
+  `golang.org/x/image` and, through it, `golang.org/x/text` (I12): both were
+  already in the module graph as Ebitengine requirements, so no new module
+  enters it.
+* **Cache and when.** Built beside §14.4's remaster on the loader goroutine,
+  under `--auto-remaster`, through the same cache directory: the key covers the
+  package version, the font, the palette and every frame of the bank. The
+  three stock banks take about three seconds cold and a file read cached. A
+  capture at native zoom builds only this art unless `--ui-scale 1`.
+* **Draw.** The client pairs a registered bank's frames with the remaster by
+  entry name and frame index, as D2 does, and tags a keyed sprite with its
+  variant (`drawlist.Sprite.Detail`) only while the Enhanced executor records
+  it inside a 2x chrome region. The modern executor keeps the 1x frame's
+  placement and clipping and samples the variant at twice the source
+  coordinates, so each framebuffer pixel takes one texel. Classic and 1x
+  recordings never carry a variant and are unchanged.
+* **Verification.** The stock-table test on retail assets; a synthetic test
+  that modded art in a covered entry takes Scale2x and an uncovered entry
+  stays nil; a client test that the tag needs Enhanced and a 2x region;
+  `NANOLATHE_CHROME_PREVIEW=<dir>` writes every stock frame beside its
+  remaster; and 2x captures with and without `--auto-remaster`.
 
 ## 15. Trails: Enhanced ground marks
 

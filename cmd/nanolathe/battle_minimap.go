@@ -320,6 +320,16 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 	}
 	left, top, right, bottom := dst.Ordered()
 	width, height := right-left+1, bottom-top+1
+	if mx < left || mx > right || my < top || my > bottom {
+		return 0
+	}
+	// The hover radius is in canonical radar pixels, like the contact list.
+	// Invert the magnified destination before comparing it [07 R-SEL-02B2]
+	// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+	mx, my, ok = layout.DisplayToCanvas(mx, my, left, top, width, height)
+	if !ok {
+		return 0
+	}
 	best := pool.Handle(0)
 	bestDist := int64(1 << 62)
 	for i := range f.Radar.Contacts {
@@ -332,7 +342,7 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 			continue
 		}
 		rx, ry := render.RadarProjection(radarMapPixel(v.X), radarMapPixel(v.Z), radarMapPixel(v.Y), playW, playH, layout)
-		px, py, ok := layout.CanvasToDisplay(rx+layout.PadX, ry+layout.PadY, left, top, width, height)
+		px, py, ok := layout.CanvasToDisplay(rx+layout.PadX, ry+layout.PadY, 0, 0, camera.MinimapLongSide, camera.MinimapLongSide)
 		if !ok {
 			continue
 		}

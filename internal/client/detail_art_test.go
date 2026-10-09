@@ -57,3 +57,40 @@ func TestDetailArtOnlyWhileEnhancedPresents(t *testing.T) {
 		t.Fatal("scale 1 must draw the authored frame itself")
 	}
 }
+
+// TestChromeRemasterOnlyInsideTwoXRegions locks a Nanolathe presentation rule:
+// a registered interface frame takes its 2x chrome remaster only while the
+// Enhanced executor records it inside a 2x chrome region, whichever order the
+// HUD registration and the provider arrive in (DESIGN_GPU_RENDERER §14.9).
+func TestChromeRemasterOnlyInsideTwoXRegions(t *testing.T) {
+	source := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{1}, Transparent: []bool{false}}
+	variant := &formats.GAFFrame{Width: 2, Height: 2, Pixels: make([]byte, 4), Transparent: make([]bool, 4)}
+	loaded := &formats.GAF{Entries: []formats.GAFEntry{{Name: "ARMMOVE", Frames: []formats.GAFFrameRef{{Frame: source}}}}}
+	remaster := &formats.GAF{Entries: []formats.GAFEntry{{Name: "ARMMOVE", Frames: []formats.GAFFrameRef{{Frame: variant}}}}}
+
+	c := &Client{}
+	c.RegisterChromeBank("anims/CommonGUI.gaf", loaded)
+	c.SetDetailArt(&DetailArt{Chrome: map[string]*formats.GAF{"anims/commongui.gaf": remaster}})
+	c.chrome = chromeRegion{open: true, recorded: true, scale: 2}
+	if c.chromeDetail(source) != nil {
+		t.Fatal("Original must draw the authored frame")
+	}
+	c.enhanced = true
+	if c.chromeDetail(source) != variant {
+		t.Fatal("Enhanced inside a 2x region must draw the remaster")
+	}
+	// A second loaded copy of the bank, as a menu shell keeps, maps too.
+	shellCopy := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{1}, Transparent: []bool{false}}
+	c.RegisterChromeBank("anims/commongui.gaf", &formats.GAF{Entries: []formats.GAFEntry{{Name: "ARMMOVE", Frames: []formats.GAFFrameRef{{Frame: shellCopy}}}}})
+	if c.chromeDetail(shellCopy) != variant {
+		t.Fatal("every registered copy of a bank must draw the remaster")
+	}
+	c.chrome.scale = 3
+	if c.chromeDetail(source) != nil {
+		t.Fatal("only a 2x region matches the remaster's resolution")
+	}
+	c.chrome = chromeRegion{}
+	if c.chromeDetail(source) != nil {
+		t.Fatal("unmagnified chrome must draw the authored frame")
+	}
+}

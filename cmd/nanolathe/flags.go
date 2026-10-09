@@ -151,6 +151,7 @@ type Options struct {
 	Zoom               camera.Zoom // presentation zoom factor from --zoom; zero is unset: all routes default to native [F-P1-008]
 	ZoomText           string      // the literal --zoom argument, kept so it can be rejected per executor after --renderer is known (DESIGN_GPU_RENDERER §16.8)
 	AutoRemaster       bool        // synthesize the detail view's 2x art at load time (DESIGN_GPU_RENDERER §14.4)
+	UIFont             string      // TrueType font for the 2x chrome remaster's captions; empty is the bundled Saira (§14.9)
 	ShotFocus          string      // "x,y" screen point kept fixed while scaling; default the screen centre
 	ShotShift          bool        // hold Shift for strategic range captures
 	ShotBuild          string      // preview a named product at the capture pointer
@@ -178,6 +179,7 @@ type Options struct {
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
 	FPSSet             bool        // explicit command-line override
+	UIScale            int         // -1 keeps the saved preference; 0 Auto, 1 or 2 fixed
 	Renderer           string      // start-up presentation executor: "classic" or "modern" (default)
 	Fullscreen         bool        // host desktop fullscreen override
 	FullscreenSet      bool        // distinguishes an omitted flag from --fullscreen=false
@@ -293,7 +295,8 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		opts.Zoom, opts.ZoomText = zoom, text
 		return nil
 	})
-	set.BoolVar(&opts.AutoRemaster, "auto-remaster", true, "synthesize the detail view's 2x terrain and feature art at load time; off leaves every asset to nearest doubling")
+	set.BoolVar(&opts.AutoRemaster, "auto-remaster", true, "synthesize the detail view's 2x terrain, feature and interface art at load time; off leaves every asset to nearest doubling")
+	set.StringVar(&opts.UIFont, "ui-font", "", "TrueType or OpenType font for the remastered 2x interface captions (default: the bundled Saira Condensed)")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --zoom (default the screen centre)")
 	set.BoolVar(&opts.ShotShift, "shot-shift", false, "hold Shift for queue overlays and enabled range guides in --shot")
 	set.StringVar(&opts.ShotBuild, "shot-build", "", "preview this unit beside the first selection or at viewport centre in --shot (no construction order)")
@@ -412,6 +415,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Renderer, "renderer", settings.DefaultPresentation().Renderer, "start-up presentation renderer (omitted uses saved preference): \"classic\" (software) or \"modern\" (GPU); any other value is classic")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "desktop fullscreen (Alt+Enter toggles); omitted uses saved preference")
 	set.BoolVar(&opts.Stats, "stats", false, "print periodic presentation statistics to the terminal")
+	set.IntVar(&opts.UIScale, "ui-scale", -1, "Modern battle UI scale: 0 Auto, 1 or 2 (omitted uses the saved preference); also applies to --shot")
 	set.IntVar(&opts.FPS, "fps", settings.DefaultPresentation().FPS, "cap presented frames per second for modern (omitted uses saved preference), rounded down to a multiple of the display's refresh (0 = the display's refresh rate)")
 	set.StringVar(&opts.ShotRenderer, "shot-renderer", "", "which executor --shot captures through: \"classic\", \"modern\", or \"both\"; omitted follows --renderer")
 	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")

@@ -166,5 +166,5 @@ func (h *retailBattleHUD) applyBattleInfoPlacement(window *gui.Window, centred b
 	if h == nil || window == nil || !centred {
 		return
 	}
-	placeBattleModal(window, int(h.screenW), int(h.screenH))
+	placeBattleModal(window, int(h.screenW), int(h.screenH), railInset(max(h.chromeScale, 1)))
 }

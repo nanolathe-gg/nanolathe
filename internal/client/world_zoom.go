@@ -109,18 +109,20 @@ func (c *Client) worldSpace(begin bool) drawlist.WorldSpace {
 }
 
 // battleViewportRect is the battle viewport in FRAMEBUFFER pixels — the
-// rectangle `(128,32)..(W-1,H-33)` the chrome leaves for the world [03 §4.1].
+// rectangle the chrome leaves for the world, `(128,32)..(W-1,H-33)` at
+// retail's insets [03 §4.1].
 // It does not move with the zoom: the chrome is drawn in framebuffer pixels.
 func (c *Client) battleViewportRect() drawlist.Rect {
-	w := int32(c.width) - camera.OriginX
-	h := int32(c.height) - 2*camera.OriginY
+	left, top, bottom := c.cam.ChromeInset()
+	w := int32(c.width) - left
+	h := int32(c.height) - top - bottom
 	if w < 0 {
 		w = 0
 	}
 	if h < 0 {
 		h = 0
 	}
-	return drawlist.Rect{X: camera.OriginX, Y: camera.OriginY, W: w, H: h}
+	return drawlist.Rect{X: left, Y: top, W: w, H: h}
 }
 
 // emitWorldBegin and emitWorldEnd bracket the world region of one recording.
@@ -172,6 +174,9 @@ func (c *Client) uiExtent() (int, int) {
 	}
 	if c.worldOverlay {
 		return c.recordExtent()
+	}
+	if c.chrome.open {
+		return c.chrome.w, c.chrome.h
 	}
 	return c.width, c.height
 }

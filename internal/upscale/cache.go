@@ -96,6 +96,24 @@ func (c *Cache) Bank2x(query *formats.GAF, examples []*formats.GAF, pal [256][3]
 	return bank, false, nil
 }
 
+// DerivedBank returns a bank another synthesizer derives, from the cache when
+// a result is stored under key and from build otherwise. key must be a hex
+// digest over the synthesizer's version and every input it reads; it shares
+// the bank file layout and directory with Bank2x.
+func (c *Cache) DerivedBank(key string, build func() (*formats.GAF, error)) (bank *formats.GAF, cached bool, err error) {
+	if payload, ok := c.load(key, cacheKindBank); ok {
+		if bank, ok := decodeBank(payload); ok {
+			return bank, true, nil
+		}
+	}
+	bank, err = build()
+	if err != nil {
+		return nil, false, err
+	}
+	c.store(key, cacheKindBank, encodeBank(bank))
+	return bank, false, nil
+}
+
 func (c *Cache) path(key string) (string, error) {
 	if c == nil || c.Dir == "" {
 		return "", errors.New("nanolathe: upscale cache: no directory configured")

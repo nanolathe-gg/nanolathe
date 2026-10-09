@@ -236,15 +236,16 @@ func (c *Client) SetCameraFraction(f float32) {
 	c.cameraFractionSet = true
 }
 
-// SnapCameraBlend collapses the two camera samples onto the current one, so
+// SnapCameraBlend collapses the two camera samples onto the installed camera, so
 // the next presented frames show the installed camera without blending toward
 // it. A capture that cuts between shots calls it at the cut: the outgoing
 // framing is not a move the incoming shot should slide out of
 // (docs/FILM_CAPTURE.md "Cuts"). Presentation state only [I6].
 func (c *Client) SnapCameraBlend() {
-	if c == nil {
+	if c == nil || c.cam == nil {
 		return
 	}
+	c.camCurView = c.cam.PresentationView()
 	c.camPrevView = c.camCurView
 }
 

@@ -45,7 +45,19 @@ func (c *Client) DrawMinimapLayoutVersion(surf *render.RadarSurface, dst hud.Rec
 	c.drawMinimapLayout(surf, dst, layout, identity, revision)
 }
 
+// DrawMinimapCanvasVersion samples through a side×side canvas instead of the
+// canonical one, for a radar picture built at a magnified size; layout must be
+// LayoutMinimapCanvas's for the same side (DESIGN_INTERFACE_HUD_INPUT "Modern
+// UI scale").
+func (c *Client) DrawMinimapCanvasVersion(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, side int32, identity, revision uint64) {
+	c.drawMinimapCanvas(surf, dst, layout, side, identity, revision)
+}
+
 func (c *Client) drawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, identity, revision uint64) {
+	c.drawMinimapCanvas(surf, dst, layout, camera.MinimapLongSide, identity, revision)
+}
+
+func (c *Client) drawMinimapCanvas(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, side int32, identity, revision uint64) {
 	if c == nil || surf == nil || surf.W <= 0 || surf.H <= 0 || len(surf.Bits) < surf.W*surf.H || layout.W <= 0 || layout.H <= 0 {
 		return
 	}
@@ -58,8 +70,8 @@ func (c *Client) drawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 	// framebuffer, then submit physical bytes as one surface. Sampling retains
 	// both integer divisions of the canonical canvas [03 R-MM-01 §1]; replacing
 	// them with a direct source-to-destination scale changes boundary pixels.
-	x0, x1 := minimapPictureSpan(dl, dw, layout.PadX, layout.W, int32(c.width))
-	y0, y1 := minimapPictureSpan(dt, dh, layout.PadY, layout.H, int32(c.height))
+	x0, x1 := minimapPictureSpan(dl, dw, layout.PadX, layout.W, int32(c.width), side)
+	y0, y1 := minimapPictureSpan(dt, dh, layout.PadY, layout.H, int32(c.height), side)
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
@@ -68,10 +80,10 @@ func (c *Client) drawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 	c.surfaceArena = append(c.surfaceArena, make([]byte, int(w)*int(h))...)
 	pixels := c.surfaceArena[off:len(c.surfaceArena):len(c.surfaceArena)]
 	for y := y0; y < y1; y++ {
-		canvasY := y * camera.MinimapLongSide / dh
+		canvasY := y * side / dh
 		sy := (canvasY - layout.PadY) * int32(surf.H) / layout.H
 		for x := x0; x < x1; x++ {
-			canvasX := x * camera.MinimapLongSide / dw
+			canvasX := x * side / dw
 			sx := (canvasX - layout.PadX) * int32(surf.W) / layout.W
 			pixels[int(y-y0)*int(w)+int(x-x0)] = surf.Bits[int(sy)*surf.W+int(sx)]
 		}
@@ -82,13 +94,13 @@ func (c *Client) drawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 		Dst: drawlist.Rect{X: dl + x0, Y: dt + y0, W: w, H: h}, Identity: identity, Revision: revision})
 }
 
-// minimapPictureSpan inverts floor(pixel*126/extent) into a half-open pixel
+// minimapPictureSpan inverts floor(pixel*side/extent) into a half-open pixel
 // interval. Ceil at both ends preserves inclusive canvas edges and untouched
 // bars. Wider intermediates keep clipping arithmetic independent of products.
-func minimapPictureSpan(origin, extent, pad, span, framebuffer int32) (int32, int32) {
+func minimapPictureSpan(origin, extent, pad, span, framebuffer, side int32) (int32, int32) {
 	ceil := func(n int64) int64 {
-		q := n / int64(camera.MinimapLongSide)
-		if n%int64(camera.MinimapLongSide) > 0 {
+		q := n / int64(side)
+		if n%int64(side) > 0 {
 			q++
 		}
 		return q

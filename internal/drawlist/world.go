@@ -46,6 +46,10 @@ type WorldSpace struct {
 	// wants to bound the region; the transform itself is about the surface
 	// origin, not about this rectangle.
 	Viewport Rect
+	// Chrome marks a magnified interface region rather than the world
+	// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale"): its text is
+	// magnified with it instead of keeping native glyphs.
+	Chrome bool
 	// RecordW, RecordH are the record-space extent the world was clipped to:
 	// the framebuffer measured in record pixels, which is larger than the
 	// framebuffer whenever the live factor is below the step (§16.3).

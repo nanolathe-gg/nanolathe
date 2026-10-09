@@ -28,7 +28,7 @@ func TestPlaceBattleModalCentersOverRetailPlayfield(t *testing.T) {
 				OriginY: 9,
 				Gadgets: []gui.Gadget{{Rect: gui.Rect{X: 7, Y: 9, W: test.w, H: test.h}}},
 			}
-			placeBattleModal(window, 640, 480)
+			placeBattleModal(window, 640, 480, 128)
 			if window.Rect.X != test.x || window.Rect.Y != test.y {
 				t.Fatalf("origin = (%d,%d), want (%d,%d)", window.Rect.X, window.Rect.Y, test.x, test.y)
 			}
@@ -59,7 +59,7 @@ func TestPlaceBattleModalCarriesGadgetsAtEveryDisplayMode(t *testing.T) {
 		for _, r := range local {
 			window.Gadgets = append(window.Gadgets, gui.Gadget{Kind: gui.KindButton, Rect: r})
 		}
-		placeBattleModal(window, mode.w, mode.h)
+		placeBattleModal(window, mode.w, mode.h, 128)
 		for i := 1; i < len(window.Gadgets); i++ {
 			placed := window.PlacedRect(i)
 			// The control keeps its authored offset from the window origin...

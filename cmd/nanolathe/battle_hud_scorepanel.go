@@ -65,7 +65,7 @@ func (h *retailBattleHUD) drawScorePanel(c *client.Client, b *battleSession, cur
 	}
 	order, _ := hud.ScoreRowOrder(slots, len(cur.Economy))
 	status := scorePanelStatusFor(b, cur, order)
-	width, _ := c.Size()
+	width, _ := c.ChromeSize()
 	// Retail sizes the body by occupied slots. Modern fits the drawn rows and
 	// adds one heading line (DESIGN_INTERFACE_HUD_INPUT "Modern defeated players").
 	playerCount, headingY, rowOffset := len(cur.Economy), hud.ScorePanelTop, 0
@@ -174,7 +174,7 @@ func (h *retailBattleHUD) drawScoreRow(c *client.Client, b *battleSession, cur *
 	// textures/logos.gaf [07 R-HUD-04 §4], which is the same handle the
 	// footer's LOGO2 draw and the result surface read.
 	if logo := h.sideLogoFrame(row.Logo); logo != nil {
-		width, height := c.Size()
+		width, height := c.ChromeSize()
 		c.UIBlitFrameSourceRectScaledClipped(logo, 1, 1, int(logo.Width)-1, int(logo.Height)-1,
 			int(rect.X0)+7, int(y)+1, hud.ScorePanelLogoWidth, hud.ScorePanelLogoHeight,
 			0, 0, width, height)

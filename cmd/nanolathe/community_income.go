@@ -13,13 +13,19 @@ import (
 
 // Host layout adapts the source's optional income panel to Nanolathe's HUD;
 // every changing value comes from the committed frame (interface design).
-func (b *battleSession) incomeWidget() (int, int) { w, _ := b.surfaceSize(); return int(w) - 18, 36 }
+// incomeWidget is in strip coordinates; the widget draws inside the strip region.
+func (b *battleSession) incomeWidget() (int, int) {
+	w, h := b.surfaceSize()
+	sw, _ := b.railRegion().VirtualSize(int(w), int(h))
+	return sw - 18, 36
+}
 func (b *battleSession) serviceCommunityIncome(mouse input.MouseState) bool {
 	if b == nil || b.hostPreferences().AlliedResources == 0 {
 		return false
 	}
 	x, y := b.incomeWidget()
-	inside := int(mouse.X) >= x && int(mouse.X) < x+14 && int(mouse.Y) >= y && int(mouse.Y) < y+14
+	mx, my := b.railPointer(int32(mouse.X), int32(mouse.Y))
+	inside := int(mx) >= x && int(mx) < x+14 && int(my) >= y && int(my) < y+14
 	if mouse.Pressed(input.MouseButtonLeft) && inside {
 		b.incomePointerCaptured = true
 		return true
@@ -64,7 +70,7 @@ func (h *retailBattleHUD) drawCommunityIncome(c *client.Client, b *battleSession
 	}
 	left := max(128, x-205)
 	top := y + 16
-	_, height := c.Size()
+	_, height := c.ChromeSize()
 	for _, e := range f.Economy {
 		slot := int(e.Player)
 		if !e.Active || slot == local || slot >= len(f.Players) || !f.Players[local].Allies[slot] || !f.Players[slot].Present {
@@ -173,7 +179,7 @@ func (h *retailBattleHUD) drawCommunityWeather(c *client.Client, b *battleSessio
 	if y2 <= y1 {
 		y2 = y1 + 16
 	}
-	width, height := c.Size()
+	width, height := c.ChromeSize()
 	wind, ok := h.texts.wind.cached("", [4]int64{int64(current), int64(lo), int64(hi)})
 	if !ok {
 		wind = h.texts.wind.store("", [4]int64{int64(current), int64(lo), int64(hi)}, fmt.Sprintf("Wind : +%d (%d-%d)", current, lo, hi))
@@ -208,7 +214,7 @@ func (h *retailBattleHUD) drawCommunityBPS(c *client.Client, b *battleSession) {
 	if h == nil || c == nil || b == nil || !b.bpsVisible || h.console == nil {
 		return
 	}
-	_, height := c.Size()
+	_, height := c.ChromeSize()
 	y := height - 95
 	for _, text := range []string{"Send - 0.0 K/s", "Receive - 0.0 K/s"} {
 		c.UIText(h.console, text, 129, y, h.guiColor(15))

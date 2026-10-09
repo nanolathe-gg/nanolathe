@@ -160,8 +160,9 @@ func (c *Camera) MinZoom() Zoom {
 	if c == nil {
 		return ZoomFloor
 	}
-	viewW := c.ViewW - OriginX
-	viewH := c.ViewH - 2*OriginY
+	left, top, bottom := c.ChromeInset()
+	viewW := c.ViewW - left
+	viewH := c.ViewH - top - bottom
 	if c.ViewportZoomFloor {
 		return viewportMinZoomFor(viewW, viewH, c.MapW, c.MapH)
 	}

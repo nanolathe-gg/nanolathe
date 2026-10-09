@@ -64,16 +64,19 @@ func (c *Client) drawMessageLines() {
 	if c == nil || c.messageFNT == nil {
 		return
 	}
+	// Ten columns right of the rail and twenty rows below the top strip:
+	// (138, 52) beside retail's chrome.
+	left, top, _ := c.cam.ChromeInset()
 	for i, line := range c.MessageLines() {
-		y := 52 + i*int(c.messageFNT.Height)
-		x := 138
+		y := int(top) + 20 + i*int(c.messageFNT.Height)
+		x := int(left) + 10
 		if line.SpeakerSlot < frame.PlayerRowSlots {
 			// The rectangle includes both endpoints. The logo height and text
 			// offset each truncate their complete double expression [07
 			// R-HUD-03 §14.4]. Missing art must not change the text geometry.
 			a := int(float64(c.messageFNT.Height) * 0.8)
-			c.UIBlitFrameScaled(c.messageLogo(line.SpeakerSlot), 138, y, a+1, a+1)
-			x = int(138.0 + 1.5*float64(a))
+			c.UIBlitFrameScaled(c.messageLogo(line.SpeakerSlot), x, y, a+1, a+1)
+			x = int(float64(x) + 1.5*float64(a))
 		}
 		if c.messageGAF != nil {
 			c.drawMessageGAFText(line.Text, x, y)

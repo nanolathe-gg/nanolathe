@@ -40,7 +40,8 @@ func (c *Camera) SetPresentationView(v PresentationView) {
 	if minZ := c.MinZoom(); z < minZ {
 		// The origin was derived for the requested factor; re-anchor it about
 		// the viewport centre for the factor the map allows.
-		w, h := float64(c.ViewW+OriginX)/2, float64(c.ViewH)/2
+		left, top, bottom := c.ChromeInset()
+		w, h := float64(c.ViewW+left)/2, float64(c.ViewH+top-bottom)/2
 		v.X += w * (1/v.Factor - 1/minZ.Float())
 		v.Z += h * (1/v.Factor - 1/minZ.Float())
 		z, v.Factor = minZ, minZ.Float()
@@ -75,8 +76,9 @@ func (c *Camera) setBoundedPresentationView(v PresentationView) {
 }
 
 func (c *Camera) boundedPresentationView(v PresentationView) PresentationView {
-	v.X = clampPresentationAxis(v.X, c.MapW, c.ViewW-OriginX, OriginX, v.Factor)
-	v.Z = clampPresentationAxis(v.Z, c.MapH, c.ViewH-2*OriginY, OriginY, v.Factor)
+	left, top, bottom := c.ChromeInset()
+	v.X = clampPresentationAxis(v.X, c.MapW, c.ViewW-left, left, v.Factor)
+	v.Z = clampPresentationAxis(v.Z, c.MapH, c.ViewH-top-bottom, top, v.Factor)
 	return v
 }
 

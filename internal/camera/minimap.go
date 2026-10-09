@@ -18,27 +18,35 @@ type Minimap struct {
 // The longer axis occupies 126 pixels; the shorter axis uses truncating
 // integer scale and is centered by truncating half-padding [03 §3.6][07 §10].
 func LayoutMinimap(mapW, mapH int32) Minimap {
-	if mapW <= 0 || mapH <= 0 {
+	return LayoutMinimapCanvas(mapW, mapH, MinimapLongSide)
+}
+
+// LayoutMinimapCanvas fits the playable map into a side×side canvas by
+// LayoutMinimap's arithmetic. Only the magnified sidebar's radar picture uses
+// another side (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale"); input and
+// world mapping keep the 126-pixel canvas.
+func LayoutMinimapCanvas(mapW, mapH, side int32) Minimap {
+	if mapW <= 0 || mapH <= 0 || side <= 0 {
 		return Minimap{}
 	}
 	if mapW < mapH {
-		w := int32(int64(mapW) * MinimapLongSide / int64(mapH))
+		w := int32(int64(mapW) * int64(side) / int64(mapH))
 		if w < 1 {
 			w = 1
 		}
-		if w > MinimapLongSide {
-			w = MinimapLongSide
+		if w > side {
+			w = side
 		}
-		return Minimap{PadX: (MinimapLongSide - w) / 2, W: w, H: MinimapLongSide}
+		return Minimap{PadX: (side - w) / 2, W: w, H: side}
 	}
-	h := int32(int64(mapH) * MinimapLongSide / int64(mapW))
+	h := int32(int64(mapH) * int64(side) / int64(mapW))
 	if h < 1 {
 		h = 1
 	}
-	if h > MinimapLongSide {
-		h = MinimapLongSide
+	if h > side {
+		h = side
 	}
-	return Minimap{PadY: (MinimapLongSide - h) / 2, W: MinimapLongSide, H: h}
+	return Minimap{PadY: (side - h) / 2, W: side, H: h}
 }
 
 // Right and Bottom return the inclusive radar edges in canvas coordinates.

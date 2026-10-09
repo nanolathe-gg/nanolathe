@@ -20,8 +20,18 @@ cached license files. They are downloaded by Go, not vendored into this tree.
 | github.com/ebitengine/purego | v0.11.0 | Apache-2.0 |
 | github.com/hajimehoshi/go-mp3 | v0.3.4 | Apache-2.0 |
 | github.com/jfreymuth/pulse | v0.1.3 | MIT |
+| golang.org/x/image | v0.45.0 | BSD-3-Clause |
 | golang.org/x/sync | v0.22.0 | BSD-3-Clause |
 | golang.org/x/sys | v0.47.0 | BSD-3-Clause |
+| golang.org/x/text | v0.41.0 | BSD-3-Clause |
+
+## Bundled font
+
+`internal/upscale/chrome/font/SairaCondensed-800.ttf` is an instance of Saira
+(condensed width, weight 800) by The Saira Project Authors, cut from its
+variable font with fontTools. It is licensed under the
+[SIL Open Font License 1.1](internal/upscale/chrome/font/OFL.txt), not MIT,
+and is embedded in the binary to draw the remastered interface captions.
 
 This inventory is not a replacement for license texts accompanying a binary.
 For each binary release, collect the licenses and notices for the actual linked

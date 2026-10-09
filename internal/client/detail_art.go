@@ -26,10 +26,13 @@ import (
 // index tile per Terrain.TileSet entry in the same order (nil = none). Banks
 // maps a feature bank's lowercase filename (no path, no .gaf) to a bank
 // parallel to the loaded one: same entry names, same frame counts, frames at
-// 2x; a nil Frame slot means "double the loaded frame yourself".
+// 2x; a nil Frame slot means "double the loaded frame yourself". Chrome maps
+// an interface bank's lowercase logical path to its 2x chrome remaster, laid
+// out the same way (DESIGN_GPU_RENDERER §14.9).
 type DetailArt struct {
-	Tiles [][detailTilePixels]byte
-	Banks map[string]*formats.GAF
+	Tiles  [][detailTilePixels]byte
+	Banks  map[string]*formats.GAF
+	Chrome map[string]*formats.GAF
 }
 
 // SetDetailArt installs the detail-art provider, or clears it when art is nil.
@@ -42,8 +45,14 @@ func (c *Client) SetDetailArt(art *DetailArt) {
 	c.detailArt = art
 	// Re-index provider variants; nearest-doubled fallbacks are provider-independent.
 	c.detailFrames = nil
+	c.chromeFrames = nil
 	if art == nil {
+		// Teardown: the next battle's HUD registers its own banks.
+		c.chromeBanks = nil
 		return
+	}
+	for _, registered := range c.chromeBanks {
+		c.indexChromeBank(registered.path, registered.bank)
 	}
 	c.detailFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
 	for name, bank := range c.featureGAFs { // presentation cache; no sim order [I1]
@@ -133,6 +142,69 @@ func (c *Client) indexDetailBank(name string, bank *formats.GAF) {
 			c.detailFrames[source] = variant
 		}
 	}
+}
+
+type chromeBank struct {
+	path string
+	bank *formats.GAF
+}
+
+// RegisterChromeBank records an interface bank the HUD draws from, under its
+// logical path, so its frames can take the provider's 2x chrome remaster. One
+// path may have several loaded copies: with a menu shell the HUD's buttons
+// take their art from the shell's own commongui, not the HUD's.
+func (c *Client) RegisterChromeBank(path string, bank *formats.GAF) {
+	if c == nil || bank == nil {
+		return
+	}
+	for _, registered := range c.chromeBanks {
+		if registered.bank == bank {
+			return
+		}
+	}
+	path = strings.ToLower(strings.TrimSpace(path))
+	c.chromeBanks = append(c.chromeBanks, chromeBank{path, bank})
+	c.indexChromeBank(path, bank)
+}
+
+// indexChromeBank pairs a registered bank's frames with the provider's
+// remaster by entry name and frame index, as indexDetailBank does.
+func (c *Client) indexChromeBank(path string, bank *formats.GAF) {
+	if c.detailArt == nil {
+		return
+	}
+	remaster := c.detailArt.Chrome[path]
+	if remaster == nil {
+		return
+	}
+	if c.chromeFrames == nil {
+		c.chromeFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
+	}
+	// The remaster is built entry for entry, so pair by index: a bank may
+	// repeat an entry name, which Find would resolve to the first.
+	if len(remaster.Entries) != len(bank.Entries) {
+		return
+	}
+	for i := range bank.Entries {
+		entry, variants := &bank.Entries[i], &remaster.Entries[i]
+		if !strings.EqualFold(entry.Name, variants.Name) {
+			continue
+		}
+		for j := range min(len(entry.Frames), len(variants.Frames)) {
+			if source, variant := entry.Frames[j].Frame, variants.Frames[j].Frame; source != nil && variant != nil {
+				c.chromeFrames[source] = variant
+			}
+		}
+	}
+}
+
+// chromeDetail is f's 2x chrome remaster while f is recorded inside a 2x
+// chrome region under the Enhanced executor, else nil.
+func (c *Client) chromeDetail(f *formats.GAFFrame) *formats.GAFFrame {
+	if f == nil || !c.enhanced || !c.chrome.recorded || c.chrome.scale != 2 {
+		return nil
+	}
+	return c.chromeFrames[f]
 }
 
 // viewFrame resolves the frame a world-space sprite draws at the current view

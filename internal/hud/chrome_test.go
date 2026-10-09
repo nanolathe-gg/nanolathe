@@ -54,13 +54,24 @@ func TestBottomStripAndRailGap(t *testing.T) {
 // (184,190) [07 "Tab options menu and manual exit"] — and at 800×600 the same
 // arithmetic runs on the live surface.
 func TestModalPlacement(t *testing.T) {
-	if x, y := ModalPlacement(640, 480, 150, 155); x != 309 || y != 162 {
+	if x, y := ModalPlacement(640, 480, 150, 155, 128); x != 309 || y != 162 {
 		t.Fatalf("exit window at 640x480 = (%d,%d), want (309,162)", x, y)
 	}
-	if x, y := ModalPlacement(640, 480, 400, 100); x != 184 || y != 190 {
+	if x, y := ModalPlacement(640, 480, 400, 100, 128); x != 184 || y != 190 {
 		t.Fatalf("confirm window at 640x480 = (%d,%d), want (184,190)", x, y)
 	}
-	if x, y := ModalPlacement(800, 600, 400, 100); x != 264 || y != 250 {
+	if x, y := ModalPlacement(800, 600, 400, 100, 128); x != 264 || y != 250 {
 		t.Fatalf("confirm window at 800x600 = (%d,%d), want (264,250)", x, y)
+	}
+}
+
+// Beside a magnified rail a modal too wide for the remaining width stays on
+// the surface; beside retail's rail the placement is unchanged.
+func TestModalPlacementBesideMagnifiedRail(t *testing.T) {
+	if x, _ := ModalPlacement(640, 480, 400, 100, 257); x != 240 {
+		t.Fatalf("x = %d, want 240", x)
+	}
+	if x, _ := ModalPlacement(640, 480, 520, 100, 128); x != 124 {
+		t.Fatalf("retail x = %d, want 124", x)
 	}
 }

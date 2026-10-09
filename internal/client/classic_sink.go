@@ -118,6 +118,15 @@ func (c *Client) emitFog(fg drawlist.Fog) {
 // leaves target clipping to the actual leaf blit [03 R-COMP-01 §2].
 func (c *Client) emitSprite(sp drawlist.Sprite) {
 	sp.HasClip, sp.Clip = c.clipUISprite(sp.HasClip, sp.Clip)
+	if sp.Kind == drawlist.BlitKeyed {
+		if detail := c.chromeDetail(sp.Frame); detail != nil {
+			// A remastered composite is drawn whole: its plain raster covers
+			// the same pixels its ordinary leaves would (§14.9).
+			sp.Detail = detail
+			c.list.RecordSprite(sp)
+			return
+		}
+	}
 	if sp.Frame != nil && len(sp.Frame.Subframes) != 0 {
 		if sp.LightingKind.Emitter() {
 			// An emitter is measured as the WHOLE composite, once, before its

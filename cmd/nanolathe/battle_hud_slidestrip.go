@@ -83,7 +83,7 @@ func (h *retailBattleHUD) drawSlideStrip(c *client.Client, b *battleSession, cur
 	if off == 0 {
 		return
 	}
-	_, height := c.Size()
+	_, height := c.ChromeSize()
 	x := slideStripViewLeft
 	yBottom := height - slideStripViewBottomUp
 	if h.stripArt != nil {

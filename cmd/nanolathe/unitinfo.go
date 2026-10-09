@@ -371,7 +371,7 @@ func (h *retailBattleHUD) placeUnitInfoWindow(window *gui.Window) {
 	if h == nil || window == nil || h.screenW <= 0 || h.screenH <= 0 {
 		return
 	}
-	placeBattleModal(window, int(h.screenW), int(h.screenH))
+	placeBattleModal(window, int(h.screenW), int(h.screenH), railInset(max(h.chromeScale, 1)))
 }
 
 // drawUnitInfoPicture stamps `unitpics/<internal name>.PCX` into the authored

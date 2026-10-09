@@ -57,6 +57,7 @@ type PausedWorldInputs struct {
 	camX, camZ, viewW, viewH, mapW, mapH int32
 	scale                                camera.ViewScale
 	zoom                                 camera.Zoom
+	chrome                               camera.ChromeInsets
 	view                                 camera.PresentationView
 	strategic                            bool
 
@@ -97,6 +98,7 @@ func (c *Client) PausedWorldDigest() (PausedWorldInputs, bool) {
 		revision: c.pausedWorldRevision, width: c.width, height: c.height,
 		camX: c.cam.X, camZ: c.cam.Z, viewW: c.cam.ViewW, viewH: c.cam.ViewH,
 		mapW: c.cam.MapW, mapH: c.cam.MapH, scale: c.cam.Scale, zoom: c.cam.Zoom,
+		chrome:  c.cam.Chrome,
 		terrain: c.terrain, palette: c.pal, display: c.base, detail: c.detailArt, font: c.fnt,
 		antiAlias: c.antiAlias, shadows: c.shadows, vehicleShadows: c.vehicleShadows,
 		featureShadows: c.featureShadows, shading: c.shading, ditheredFog: c.ditheredFog,

@@ -336,7 +336,7 @@ func (h *retailBattleHUD) sidebarProductsWindow(b *battleSession, f *frame.Frame
 	if !c.safe || len(c.cells) == 0 {
 		return nil
 	}
-	width, height := b.cl.Size()
+	width, height := b.railSize()
 	lock := b.buildPageLock()
 	layout := c.sidebarLayout(height, lock, b.sidebarOrdersEnabled())
 	capacity := layout.capacity
