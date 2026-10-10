@@ -70,14 +70,12 @@ github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp clipboardUTF16Text
 github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp presentedCursorRect
 github.com/nanolathe-gg/nanolathe/internal/pool NewUnitsSliced
 github.com/nanolathe-gg/nanolathe/internal/session CompareCheckpointHistories
-github.com/nanolathe-gg/nanolathe/internal/session CompareMatchIdentity
 github.com/nanolathe-gg/nanolathe/internal/session NewSkirmishWithProgress
 github.com/nanolathe-gg/nanolathe/internal/session RegisterModernAI
 github.com/nanolathe-gg/nanolathe/internal/session Session.markSeatRemovedForCommands
 github.com/nanolathe-gg/nanolathe/internal/session ValidateMatchInputs
 github.com/nanolathe-gg/nanolathe/internal/session checkpointComparisonError
 github.com/nanolathe-gg/nanolathe/internal/session checkpointComparisonRow
-github.com/nanolathe-gg/nanolathe/internal/session compareMatchKind
 github.com/nanolathe-gg/nanolathe/internal/session registeredModernAI
 github.com/nanolathe-gg/nanolathe/internal/session validateCheckpointComparisonHistory
 github.com/nanolathe-gg/nanolathe/internal/session validateCheckpointComparisonPositions

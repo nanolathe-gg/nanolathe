@@ -1341,6 +1341,7 @@ func (s *Session) ExecuteStep(plan StepPlan) {
 		}
 		s.stepOneSubTick(tick)
 		executed = true
+		s.replayTickEnded(tick) // a recorder's tick count and 30-tick checksum (DESIGN_MULTIPLAYER §10)
 		// Publication is outside the phase registry and follows sharing/result
 		// work for every completed sub-tick [01 §4.4][03 §2.4][I6].
 		s.publishSnapshot(tick)
@@ -1359,6 +1360,7 @@ func (s *Session) ExecuteStep(plan StepPlan) {
 	// including a zero-runnable pump. It cannot interpose between a phase-12
 	// result and that tick's publication [01 §4.4][01 R-PLAT-02 §7].
 	s.runRetailPostLoopTail(s.Clock.GlobalTick)
+	s.replayPumpEnded() // a recorded pump boundary, after its tail (DESIGN_MULTIPLAYER §4.5)
 	if executed {
 		s.checkpointCompletedTick(CheckpointFinalPumpTick)
 	}

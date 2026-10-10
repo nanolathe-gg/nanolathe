@@ -228,7 +228,9 @@ func (g *gameShell) modalInput(cl *client.Client) {
 	if result.Fired {
 		if gad, ok := modalGadget(m, result.FiredIndex); ok {
 			g.frontend.Panels.CloseModal()
-			g.finishMapRemovalConfirmation(m, gad.Name)
+			if !g.finishReplayDeleteConfirmation(m, gad.Name) {
+				g.finishMapRemovalConfirmation(m, gad.Name)
+			}
 		}
 	}
 }
@@ -256,6 +258,10 @@ func (g *gameShell) commitListSelection(name string, index int) {
 		return
 	}
 	if g.commitModsListSelection(name, index) {
+		return
+	}
+	if g.replaysPanelActive() && name == "GAMES" {
+		g.selectReplayRow(index)
 		return
 	}
 	if g.saveLoadPanelActive() && name == "GAMES" {
@@ -292,6 +298,10 @@ func (g *gameShell) activateGadget(name string) {
 	// The online screen and its lobby are children over MAINMENU too
 	// (DESIGN_MULTIPLAYER §16.6.2).
 	if g.activateOnlineGadget(name) {
+		return
+	}
+	// So is the Replays screen (DESIGN_INTERFACE_HUD_INPUT "Replays").
+	if g.activateReplaysGadget(name) {
 		return
 	}
 	// The save/load dialog is a child window over the screen that opened it,
@@ -336,6 +346,8 @@ func (g *gameShell) activateGadget(name string) {
 			}
 		case "MULTI":
 			g.openOnlineScreenReporting()
+		case replaysButton:
+			g.openReplaysScreenReporting()
 		case "INTRO":
 			reportRetailMessageError(g.startIntro(clPtr))
 		case "Credits":

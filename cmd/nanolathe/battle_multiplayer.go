@@ -102,7 +102,7 @@ func localMultiplayerFlagAllowed(name string) bool {
 		}
 	}
 	switch name {
-	case "battle-benchmark", "headless", "ticks", "mission", "difficulty", "load-save", "report", "list-installs", "check-install", "install-mod", "mutator", "restrict", "ai", "ai-player", "gameplay-feature", "unit-limit", "cpuprofile", "memprofile", "profile-seconds":
+	case "battle-benchmark", "headless", "ticks", "mission", "difficulty", "load-save", "report", "list-installs", "check-install", "install-mod", "mutator", "restrict", "ai", "ai-player", "gameplay-feature", "unit-limit", "cpuprofile", "memprofile", "profile-seconds", "replay", "verify-replay", "record-replay":
 		return false
 	}
 	return true
@@ -200,8 +200,12 @@ func (b *battleSession) startLocalMultiplayer(o Options, identity netproto.Ident
 	return nil
 }
 
+// onlineBattle reports a battle the host does not step from its clock and
+// that takes no local pause, save, load, restart or cheat: an online battle,
+// and a replay playback, which runs recorded pumps the way an online battle
+// runs granted ticks (replay_playback.go).
 func (b *battleSession) onlineBattle() bool {
-	return b != nil && (b.multiplayer != nil || b.sess != nil && b.sess.OnlineCommandContext())
+	return b != nil && (b.multiplayer != nil || b.playback != nil || b.sess != nil && b.sess.OnlineCommandContext())
 }
 
 func (m *battleMultiplayer) close() {

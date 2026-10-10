@@ -1262,7 +1262,10 @@ resolves the host's, as every new battle does.
 ### 8.1 The main-menu chip
 
 A Nanolathe-owned control drawn by the host over the authored `MAINMENU`, in a
-fixed position on the logical 640×480 surface. Its button reads *NANOLATHE*
+fixed position on the logical 640×480 surface: the left half of a centred
+pair whose right half is the REPLAYS button
+([DESIGN_INTERFACE_HUD_INPUT "Replays"](DESIGN_INTERFACE_HUD_INPUT.md#replays)).
+Its button reads *NANOLATHE*
 and its status line, for example, *ProTA 4.8 · Community 3.9 · 2 mutators*
 (with unit restrictions, *· 3 restrictions* follows, §15.9).
 In the window it opens the Nanolathe screen

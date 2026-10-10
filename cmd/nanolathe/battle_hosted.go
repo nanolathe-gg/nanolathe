@@ -61,10 +61,12 @@ func (b *battleSession) startHostedMultiplayer(o Options, identity netproto.Iden
 	if err != nil {
 		return err
 	}
-	stats := newOnlineNetStats(connection, b.sess.LocalOwner, 2)
+	// This seat records the relay stream it plays (replay_record.go).
+	client := b.recordHostedReplay(o, identity, connection)
+	stats := newOnlineNetStats(client, b.sess.LocalOwner, 2)
 	driver, err := lockstep.NewPacedDriver(b.sess, stats)
 	if err != nil {
-		_ = connection.Close()
+		_ = client.Close()
 		return err
 	}
 	b.multiplayer = &battleMultiplayer{driver: driver, completed: driver.Completed, net: stats}

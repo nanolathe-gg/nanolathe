@@ -143,8 +143,13 @@ Online multiplayer starts from the main menu's MULTI button: one player
 creates a game and shares its six-character room code, and the others join
 with it. A room plays skirmish for 2–10 players, as many as the map's start
 positions allow, or Survival for 2–3 survivors. In the lobby each player
-picks a team, side and colour, and the host chooses the map and options.
-Every player needs their own game files and the host's mod, if it uses one.
+picks a team, side and colour, and the host chooses the map and options and
+may add computer players. Every player needs their own game files and the
+host's mod, if it uses one.
+
+Every skirmish and Survival battle, online or not, is recorded to a replay
+file on your computer, and the main menu's Replays screen plays them back.
+`--verify-replay FILE` checks that a replay still plays the same.
 [docs/DESIGN_MULTIPLAYER.md](docs/DESIGN_MULTIPLAYER.md) describes what is
 built and what comes next. For implemented contracts and known gaps, read the
 design document for the relevant engine area.

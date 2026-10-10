@@ -407,15 +407,20 @@ func checkWireRef(context CommandContext, path string, r pool.UnitRef, nullable 
 // single-player result keeps the dead handle in the ground order's node
 // (§7.4.3).
 //
-// TODO(question): M4's recorder needs a replay form for a zero-serial
-// reference and for a repeated actor (seatWireActors). Proposal, with no
-// byte-layout change: in the single-player replay context only, `ref` admits
-// a nonzero handle with serial 0 — a capture from a slot that held no
-// allocation, which never resolves — and `actors` keeps repeats in captured
-// order for every kind but the ordinary Order, whose consumer visits a set;
-// phase-1 replay validation (seatSchema) widens to match, and the online
-// context keeps both refusals. Settle by approving or replacing that
-// proposal in DESIGN_MULTIPLAYER §7.4.1.
+// The single-player recorder needs no form for either (replay_convert.go): it
+// converts at the instant phase 1 applies the command, where a zero-serial
+// capture takes a serial no allocation has had — same handle, resolving to
+// no unit in the recording and its playback — and a repeated actor that
+// resolves to none, or of an idempotent kind, is kept once. A live repeat of
+// any other kind stops the recording.
+//
+// TODO(question): whether version 1 should carry a live repeated actor
+// natively. Proposal, with no byte-layout change: in the single-player
+// replay context only, `actors` keeps repeats in captured order for every
+// kind but the ordinary Order, whose consumer visits a set; phase-1 replay
+// validation (seatSchema) widens to match, and the online context keeps the
+// refusal. Settle by approving or replacing that proposal in
+// DESIGN_MULTIPLAYER §7.4.1.
 func seatWireReference(context CommandContext, path string) error {
 	return seatNoWireForm(context, path, "a reference with an allocation serial; a handle captured from a freed slot (serial 0) has no version-1 form")
 }

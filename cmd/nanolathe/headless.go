@@ -8,6 +8,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/headless"
+	"github.com/nanolathe-gg/nanolathe/internal/replay"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -37,8 +38,23 @@ func runHeadless(opts Options, cs *contentSet, out io.Writer) error {
 	if authoritative.Session.Features != nil {
 		defer authoritative.Session.Features.SetDefinitionAdmissionObserver(nil)
 	}
+	var recording *replayRecording
+	if opts.RecordReplay != "" {
+		if recording, err = startSinglePlayerReplay(replayTarget{path: opts.RecordReplay}, request.value, cs, authoritative.Session); err != nil {
+			return err
+		}
+	}
 	reportRequest.TickLimit = uint32(opts.Ticks)
 	report, runErr := headless.RunSession(reportRequest, authoritative.Session)
+	if recording != nil {
+		reason := replay.EndLeft
+		if authoritative.Session.State == session.StatePostBattle {
+			reason = replay.EndFinished
+		}
+		if _, err := recording.finish(reason, authoritative.Session.Clock.GlobalTick); err != nil && runErr == nil {
+			runErr = err
+		}
+	}
 	if report.ScenarioIdentity != "" {
 		if err := writeHeadlessReport(opts.Report, out, report); err != nil {
 			return err

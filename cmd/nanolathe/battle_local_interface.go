@@ -260,6 +260,10 @@ func (b *battleSession) submitHumanCommand(c session.HumanCommand) (uint64, erro
 		b.applyLocalInterfaceCommand(c)
 		return 0, nil
 	}
+	if b.playback != nil && c.Kind != session.HumanNoShake && c.Kind != session.HumanSetLogo {
+		// A playback plays the recorded commands and takes none of its own.
+		return 0, errReplayPlaybackCommand
+	}
 	local := b.localState()
 	online := b.onlineBattle()
 	switch c.Kind {

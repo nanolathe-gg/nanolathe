@@ -43,6 +43,16 @@ type Options struct {
 	RelayCA               string
 	RelayInsecureLoopback bool
 
+	// ReplayDir is where battles record their replays; run resolves an empty
+	// one to the default replay directory, and a shell without one records
+	// nothing (docs/DESIGN_MULTIPLAYER.md §10). Replay plays one replay in the
+	// window, VerifyReplay plays one headless and checks every checksum, and
+	// RecordReplay records a --headless or --shot run to that file.
+	ReplayDir    string
+	Replay       string
+	VerifyReplay string
+	RecordReplay string
+
 	// excludedMapRoot belongs only to a prepared map-removal mount; never saved.
 	excludedMapRoot   string
 	Gameplay          gameplay.Mode
@@ -256,6 +266,10 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.IntVar(&opts.MetalQuads, "metal-quads", 1, "Metal battle benchmark stress: mesh subdivisions, 1, 2 or 5")
 	set.IntVar(&opts.MetalTextures, "metal-textures", 1, "Metal battle benchmark stress: model texture scale, 1 or 2")
 	set.StringVar(&opts.SaveDir, "save-dir", "", "exact save/load directory (omitted uses savegame beneath the installation)")
+	set.StringVar(&opts.ReplayDir, "replay-dir", "", "directory battles record their replays to (omitted uses $XDG_DATA_HOME/nanolathe/replays, else ~/.local/share/nanolathe/replays)")
+	set.StringVar(&opts.Replay, "replay", "", "play this replay in the window")
+	set.StringVar(&opts.VerifyReplay, "verify-replay", "", "play this replay headless at full speed and check every recorded checksum; exits nonzero at the first mismatch")
+	set.StringVar(&opts.RecordReplay, "record-replay", "", "record the --headless or --shot battle to this replay file")
 	set.StringVar(&opts.Map, "map", "", "map name without extension, e.g. \"ashap plateau\"")
 	set.StringVar(&opts.LocalMPListen, "local-mp-listen", "", "host a two-human Modern play test at a numeric loopback address (requires --map)")
 	set.StringVar(&opts.LocalMPJoin, "local-mp-join", "", "join seat 2 of a local play test (requires --map)")
@@ -647,7 +661,39 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	if err := validateMetalOptions(opts); err != nil {
 		return opts, err
 	}
+	if err := validateReplayOptions(opts); err != nil {
+		fmt.Fprintln(out, err)
+		return opts, err
+	}
 	return opts, nil
+}
+
+// validateReplayOptions keeps the replay flags to the runs that take them: a
+// replay plays or verifies alone, and --record-replay records a fresh
+// --headless or --shot battle (docs/DESIGN_MULTIPLAYER.md §10).
+func validateReplayOptions(opts Options) error {
+	refuse := func(flag, expected string) error {
+		return fmt.Errorf("nanolathe: invalid replay options: logical path <command line>, providers searched [%s], expected %s", flag, expected)
+	}
+	other := opts.Map != "" || opts.Mission != "" || opts.LoadSave != "" || opts.Headless || opts.Shot != "" || opts.ShotModel != "" ||
+		opts.ShotDebris != "" || opts.ShotUnitViewer != "" || opts.Film != "" || opts.NLShot != "" || opts.WalkPreview != "" ||
+		opts.BattleBenchmark != "" || opts.LiveTrace != "" || opts.Metal || opts.multiplayerPlaytest() || opts.ListInstalls || opts.CheckInstall || opts.InstallMod != ""
+	switch {
+	case opts.Replay != "" && opts.VerifyReplay != "":
+		return refuse("replay", "one of --replay or --verify-replay")
+	case opts.Replay != "" && (other || opts.RecordReplay != ""):
+		return refuse("replay", "--replay alone: the replay names its battle")
+	case opts.VerifyReplay != "" && (other || opts.RecordReplay != ""):
+		return refuse("verify-replay", "--verify-replay alone: the replay names its battle")
+	case opts.RecordReplay == "":
+		return nil
+	case !opts.Headless && opts.Shot == "" || opts.Headless && opts.Shot != "":
+		return refuse("record-replay", "--headless or --shot")
+	case opts.Map == "" || opts.Mission != "" || opts.LoadSave != "" || opts.ShotModel != "" || opts.ShotUnitViewer != "" || opts.ShotDebris != "" ||
+		opts.Film != "" || opts.NLShot != "" || opts.WalkPreview != "" || opts.BattleBenchmark != "" || opts.Metal || opts.multiplayerPlaytest():
+		return refuse("record-replay", "a skirmish or Survival --map battle, not a mission, a save, another capture or a benchmark")
+	}
+	return nil
 }
 
 // validateMetalOptions keeps the Metal flags to the routes that read them: the

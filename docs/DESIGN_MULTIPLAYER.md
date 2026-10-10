@@ -15,7 +15,8 @@ two-window play test runs over a loopback relay (§16.4). Underneath are the
 determinism milestones: one simulation on every host (M1, §16.1),
 seat-attributed commands with complete configuration and content identities
 (M2, §16.2), and canonical checkpoints with bounded histories (M3, §16.3).
-Replays (M4) come next. §1 lists what is deliberately not built yet.
+Every skirmish and Survival battle, online or not, is recorded to a local
+replay file that plays back in the game or verifies headless (§10). §1 lists what is deliberately not built yet.
 
 This document owns the lockstep model and its determinism contract, the
 command stream and its wire form, battle configuration and identity, state
@@ -51,10 +52,13 @@ a missing number is a retired section.
    digests from every seat (§8.2, §16.7) — and a unit checksum every 30
    ticks during play (§16.4).
 4. A local two-window play test over a loopback relay (§16.4).
+5. Local replays of every skirmish and Survival battle, single-player and
+   online, played back in the game or verified headless (§10).
 
 **Designed for later.** The contracts here also cover what the design grows
 into, in the order of §16: computer players added by any human, in
-skirmish and Survival, under every gameplay mode including Strict 3.1 (§6); replays (§10); LAN and direct-IP
+skirmish and Survival, under every gameplay mode including Strict 3.1 (§6);
+replays checked across platforms (§10); LAN and direct-IP
 play through a relay embedded in the hosting client (§12.1); watchers and
 spectators (§11.4); rejoining after a disconnect (§11.2); match-wide view
 restrictions (§8.4); and eventual competitive play with verified results
@@ -62,7 +66,8 @@ restrictions (§8.4); and eventual competitive play with verified results
 
 **Not built yet.** Computer players added by a joiner; Strict 3.1 and
 Community online;
-alliance changes during a battle; watchers and spectators; replays (M4);
+alliance changes during a battle; watchers and spectators; replay rewind
+and sharing;
 reconnect, departures and removal votes; room lists, chat and display
 names; the embedded LAN relay; pause and speed changes; relay-drawn seeds;
 ranked play.
@@ -339,8 +344,8 @@ the tick at which it expires depends on how many ticks a host ran per pump.
 
 **In a lockstep battle every granted tick is its own pump**
 (`StepGranted`, §16.4.2), and the tail runs after every tick. A one-tick
-pump is an ordinary retail pump. A single-player replay will record the
-host's actual pump boundaries as pump-end entries (§10). A pump that runs
+pump is an ordinary retail pump. A single-player replay records the
+host's actual pump boundaries as pump entries (§10). A pump that runs
 no tick changes no authoritative state, so it needs no record; the clock's
 movement on such pumps is host pacing (§4.4).
 
@@ -662,6 +667,11 @@ seat is 0, the room's creator (§16.6).
   or the battle ends, which happens once every human row has latched a
   result (§6.5). Victory sweeps count a hostile computer as an opponent,
   and its elimination takes the shared CRT draw (§6.4).
+- **Cost.** Every client pays for every computer. Measured over 20 minutes
+  on The Pass, two humans and six Modern computers cost 0.4 ms a tick
+  natively and 1.5 ms in the js/wasm build under Node, at worst 8.8 ms a
+  tick over 30 ticks, well inside the 33 ms tick; single wasm ticks reach
+  about 100 ms, at the controllers' preparation and at garbage collection.
 
 While a host is out of play but not finally removed, its computers keep
 running with its perspective in every mode. At the human's final removal
@@ -1562,25 +1572,106 @@ scenario (§17).
 
 ## 10. Replays
 
-Later (M4). A replay file holds a header — format version, build identity,
-content identity, battle configuration, seed pair — and then the stream:
-commands and session events with their ticks, pump ends, pacing and
-membership notes, and digests at the digest cadence. Playback composes the
-battle exactly as battle entry does, applies entries through phase 1, runs
-each executor tail where the recording ran it (§4.5, §9.1), and checks each
-recorded digest, so a replay a build cannot reproduce says so at the first
-mismatch. A recording made in a window must play back headless, and the
-reverse (L9).
+Every fresh skirmish and Survival battle is recorded to a replay file on the
+local machine, single-player and online alike: each online player records
+the stream its own client executes. A replay holds the battle's agreed
+configuration and the inputs that reached phase 1, never the world, so
+playback recomputes the battle and checks it against the recording's unit
+checksums. Nothing a recorder does changes what a tick computes: with no
+recorder attached a battle is bit-identical, and a recorder only copies
+what the session or the relay hands it. The `internal/replay` package owns
+the format, the recorders, the composition and the player; the session
+owns the recording seams (`SetReplayRecorder`, `PrepareRecordedBattle`,
+`StepRecordedPump`, `SetPresentationPerspective`).
 
-- **Single-player** replays record the local source's entries and the
-  host's pump boundaries.
-- **Multiplayer** replays record the relay stream.
-- **Compatibility** requires a simulation that reproduces the recording;
-  build and schema provenance stay in the header (Q12, Q20).
-- **Viewing** is presentation: any seat's perspective, fog on or off, any
-  speed the host sustains, and jumps forward by fast simulation.
-- **Chat** is non-authoritative and keeps its audience metadata; an archive
-  must not bypass the live spectator embargo.
+**What is recorded.**
+
+- **Single-player.** Every local human command, converted to the
+  `SinglePlayerReplay` command form against the state it is applied to and
+  stamped with the tick that actually applies it — the paused-input
+  boundary included — and its local sequence number. A command the replay
+  form cannot express stops the recording ("recording stopped"); the battle
+  goes on. The host's pump boundaries are recorded too, because the
+  executor tail's temporary-sight expiry depends on where pumps end (§4.5);
+  a pump that runs no tick changes nothing and is not recorded.
+- **Online.** The relay stream as granted: each tick's commands with their
+  seats and stream positions. A recorder wraps the battle's
+  `lockstep.Client`, so the relay, the driver and the network overlay are
+  unchanged.
+- **Checks.** `UnitStateChecksum` every 30 ticks, the cadence the online
+  acknowledgement uses (§9.2), and the battle's initial checksum in the
+  header.
+- **Not recorded.** Campaign missions, battles continued from a saved game,
+  watched or computer-only battles, measured or staged windows, content from
+  an extra `--root` or `--mod-config`, a mod without an archive digest, the
+  loopback play test (§16.4) and `--metal` windows.
+
+**Header.** Format version, a kind byte (single-player or online,
+skirmish or Survival), the encoded battle configuration (§8.6; for
+single-player the one `MatchConfigForFreshBattle` resolves from the fresh
+battle request), the match identity of §8.2 with an advisory build digest,
+the initial unit checksum, the recording seat, the map name, the seats with
+their names, sides, colours and roles, and the start time.
+
+**File format, version 1.** The magic `NLREPLAY`, the version, the header,
+then DEFLATE chunks of about 64 KiB of entries, each opening with the
+stream state at its start so it decodes alone: command, pump run
+(run-length: count × ticks per pump), checksum, and end (final tick and
+reason: finished, left, recording stopped, room failed). Integers are the
+netproto version-1 primitives. A file that stops inside a chunk, or without
+its end entry, plays to its last whole chunk and is listed as incomplete.
+A busy single-player battle takes about 4 KB a minute, half of it
+checksums.
+
+**Files.** Replays live in `$XDG_DATA_HOME/nanolathe/replays`, else
+`~/.local/share/nanolathe/replays`, on every platform (in the browser
+under `/settings`, which persists); `--replay-dir` chooses another. A file
+is named `YYYY-MM-DD_HH-MM-SS_<map>_<skirmish|survival>[_online].nlreplay`
+in local time. It is written as `.part`, sealed and synced about once a
+minute from a host goroutine, and renamed into place when the battle ends;
+a recording that ran no tick is removed. Each new recording prunes the
+oldest finished replays to the newest 100.
+
+**Playback.** Playback refuses a file whose content, map, mod, rules or
+configuration identity differs from what this install can compose, and
+names the difference; the build digest is advisory, since the checksums
+decide. It composes the battle exactly as battle entry did — single-player
+through the admitted path, which composes the battle ordinary single-player
+entry composes, online through the online composition for the recording
+seat — then runs the recorded pumps (`StepRecordedPump`) or granted ticks
+(`EnqueueSeatCommand` and `StepGranted`), applying the recorded commands
+through phase 1. The first checksum that differs ends the playback with
+the tick it diverged at. A playback runs as the recorded seat and takes no
+commands of its own; the simulation's local and viewing seats never move.
+Viewing is presentation only (`SetPresentationPerspective`): any recorded
+human seat's view, or the full map with fog off.
+
+**Watching.** The main menu's REPLAYS button opens the Replays screen
+(DESIGN_INTERFACE_HUD_INPUT "Replays"). It lists the replay directory
+newest first — start time, map, game type, length and players — and marks a
+recording without its end entry as incomplete, the file being recorded now
+(which cannot be deleted), and a file that cannot be read, with the reason
+in plain words. Watch composes the recorded battle on a job goroutine and
+enters it as the recorded seat; a replay recorded under another installed
+mod first mounts that mod through the ordinary content reload, as an online
+join does, and a missing mod, a different copy of it or a missing map is
+named instead. Delete asks first. A playback takes no orders; its overlay
+and keys pause it, step its speed from ¼× to 8×, skip ahead a minute at a
+time, cycle the recorded human seats' views and the full map, and return
+to the Replays screen. At the recording's end, or at the first checksum
+this build computes differently, it holds there with the end or
+divergence line.
+
+**Command line.** `--verify-replay FILE` plays a replay headless as fast
+as it can, mounting the replay's own mod unless `--mod` chooses one, prints
+one summary line and exits non-zero at the first mismatch or an
+incompatibility. `--replay FILE` opens it in the window. `--record-replay
+FILE` records a `--headless` or `--shot` battle to that file.
+
+**Later.** Pacing notes, chat and session events, rewind, sharing, and a
+canonical-checkpoint digest beside the unit checksums. Compatibility
+requires a simulation that reproduces the recording; there is no
+cross-release compatibility program (Q12, Q20).
 
 ## 11. Seats over time
 
@@ -1951,13 +2042,13 @@ opaque payloads, encoded and decoded by the session that owns their type.
 | `internal/netproto` | The protocol leaf, standard library only: version-1 wire primitives, a bounded reader that refuses malformed input before allocating, and the seat `Identity`. |
 | `internal/relay` | The loopback and hosted relays: rooms and codes, the lobby, client-sequence admission, tick assignment and grants, pacing, checksum comparison, the terminal handshake, TLS and WebSocket transports and the health listener. Imports only `netproto`. |
 | `internal/lockstep` | The client drivers: grant-gated ticks, playout, acknowledgements and checksums (`NewLocalDriver`, `NewPacedDriver`). |
-| `internal/session` | Seat commands and their codec (§7), match configuration and admission (§8), perspectives and per-seat results (§6, §16.4.1), granted single-tick pumps (§4.5), the rehearsal (§16.7), and the canonical checkpoint and histories (§16.3). |
+| `internal/session` | Seat commands and their codec (§7), match configuration and admission (§8), perspectives and per-seat results (§6, §16.4.1), granted single-tick pumps (§4.5), the rehearsal (§16.7), the replay recording and playback seams (§10), and the canonical checkpoint and histories (§16.3). |
 | `internal/content` | Frozen simulation inputs and the content manifest (§8.7); effect holds in `SimArt` (L9). |
 | `internal/version` | The build manifest and its stamp (§8.7). |
 | `internal/sim/numeric`, `internal/sim/checkpoint`, `internal/effects` | The portable numeric kernel (L1); the canonical checkpoint encoder (§16.3); the authoritative effect pool (L9). |
 | `cmd/nanolathe-server` | The hosted relay; imports only `relay` and `netproto`. |
-| `cmd/nanolathe` | The MULTI entry, online screen and lobby, configuration freezing and adoption, the play-test and relay launch options, and the battle host. |
-| *(later)* `internal/replay`, `cmd/nanolathe-headless` playback | The replay file and headless playback (M4). |
+| `internal/replay` | The replay file format, the single-player and online recorders, the composition of a recorded battle and the synchronous player (§10). |
+| `cmd/nanolathe` | The MULTI entry, online screen and lobby, configuration freezing and adoption, the play-test and relay launch options, replay files, playback and `--verify-replay`, and the battle host. |
 
 Guards in `internal/architecture`:
 
@@ -2030,7 +2121,7 @@ explicitly says otherwise.
 | **M2 Commands, configuration and identity** | Seat-attributed commands, receiver-side permissions, allocation serials, local interface state, explicit wire schemas, complete content/build/configuration identities and the match policy fields. | Done (§16.2). |
 | **M3 Canonical checkpoints and digest** | The reviewed state inventory, the canonical writer and owner sub-digests, the bounded histories and the computer seats' application records. | Implemented; native cross-platform comparison pending (§16.3). |
 | **Online play** | Perspectives, lobby teams and per-seat results for 2–10 seats, computers the room host adds, and online Survival (part of M5); the loopback and hosted relays, room codes, the lobby, the rehearsal and the browser build's relay connection (part of M6). | Done (§16.4–§16.7). |
-| **M4 Replays** | Recorder, playback, pump ends, pacing notes, digest checks and a headless replay command. | Next. Long Strict and Modern replays agree across platforms and between a windowed recording and headless playback, through pauses, speed changes and late AI workers. |
+| **M4 Replays** | Recorder, playback, pump ends, pacing notes, digest checks and a headless replay command. | First step built (§10): automatic local recording, playback and `--verify-replay`. Done when long Strict and Modern replays agree across platforms and between a windowed recording and headless playback, through pauses, speed changes and late AI workers. |
 | **M5 One world per player** | The rest of §6 — alliances, sharing, watchers, per-seat option bits — and the multi-seat harness (§17). Computer seats the room host adds are built (§6.6). | The harness passes for two to four human seats with computer seats under every registered rule set; single-seat locks unchanged. |
 | **M6 LAN and room codes** | The embedded relay and LAN/direct lobby, chat, departures with removal votes and the mode's final-removal rule (§11.1), shared view restrictions (§8.4), digest exchange, desync bundles and the casual desync policy (§9), and the pacing state table (§4.4). | Mixed-platform battles finish on a LAN and through the hosted relay; hostile commands are refused; §11.1's tests pass in every reserved mode; a seeded desync in a three-seat battle leaves two seats playing; impaired-network and CPU-stall runs meet budgets declared before acceptance. |
 | **M7 Public service** | Room list, hardened rooms and queues, seat credentials and reconnect, measured fast-forward rejoin, delayed spectators and controlled archives. | Public play plus duplicate/half-open reconnect, slow-reader, digest-withholding and embargo-bypass tests pass; rejoin is advertised only within measured limits. |
@@ -6059,10 +6150,25 @@ checksum, which stops the match.
   configuration field changing identity.
 - **Checkpoints.** M3's completeness fixtures, two-ring fault localization
   and cost limits (§16.3.4, §16.3.80–§16.3.83).
+- **Computer seats.** Two clients with real Modern computers on both teams
+  and a Classic one agree every 30 ticks over 10,800 ticks, through the host
+  seat's defeat (`TestOnlineModernComputersAgreeAcrossClientsRetail`); a
+  Modern worker held late makes the simulation wait and changes nothing
+  (`TestLateModernAIWorkerChangesNothingRetail`,
+  `TestLateWorkerBatchLandsOnItsDeadline`); a two-client lobby match with a
+  Modern and a Classic computer agrees through the relay; human-only rooms
+  keep their pre-computer digests (§6.6).
+- **Replays.** Single-player recordings from the window, with pumps of one
+  to five ticks and commands at the paused-input boundary, and with Classic
+  or asynchronous Modern computers, verify headless; both seats' recordings
+  of an online match hold the same stream and verify; a changed checksum is
+  reported at its tick (§10).
 - **Fingerprint locks.** The fifteen original locks are unchanged on both
   architectures; the Strict effect-pool lock runs seed 5 at step 4,500
   (M1-C9). The locks run from amd64, arm64 and js/wasm builds on every
-  retail gate run whose host can execute them (M1-C11). M2 moved locks only
+  retail gate run whose host can execute them (M1-C11), as does the online
+  Modern AI lock (`TestOnlineModernAIFingerprintIsLocked`, which also locks
+  the rehearsal digest with the real Modern AI). M2 moved locks only
   by the interface bits that left the hashed status words, plus
   single-player changes declared under M2-C7. Later milestones move no single-seat lock
   except where §16 says so, and each move carries its reason.

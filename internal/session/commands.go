@@ -611,7 +611,7 @@ func (s *Session) applyHumanCommands(tick uint32) {
 	s.humanMu.Unlock()
 	for _, c := range cmds {
 		s.checkpointConsumedInput()
-		s.applyHumanCommand(c, tick)
+		s.applyAndRecordHumanCommand(c, tick)
 	}
 }
 
@@ -683,7 +683,7 @@ func (s *Session) applyPausedHumanCommands(tick uint32, before func()) int {
 	}
 	for _, c := range cmds {
 		s.checkpointConsumedInput()
-		s.applyHumanCommand(c, tick)
+		s.applyAndRecordHumanCommand(c, tick)
 	}
 	return n
 }

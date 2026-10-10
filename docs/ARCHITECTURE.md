@@ -175,6 +175,7 @@ simulation or presentation.
 | `internal/aikit/core`, `internal/aikit/brains/...` | The brain chassis (blackboard and four replaceable policy layers) and the brains: `utility` and `tactics` (the shipped util+tac) and `survival` (a Survival battle's computer buddies); `brains/utiltac` is the leaf that owns the three brains' parameter vocabulary check, shared by the `mods/aikit` layers and by match admission (DESIGN_MULTIPLAYER §8.6) | MODERN_AI_RESEARCH |
 | `internal/save` | The retail HAPIBANK bank container and its boxes | DESIGN_SESSIONS_AI_SAVE |
 | `internal/headless` | Composes and advances an authoritative session with no window or device and emits the report; also hosts the simulation-cost benchmark's fixture, timing and census, and the AI arena's match loop | DESIGN_SESSIONS_AI_SAVE, SIM_BENCHMARK, MODERN_AI_RESEARCH |
+| `internal/replay` | Local replay files: the versioned chunked format and its bounded reader, the single-player recorder (a `session.ReplayRecorder`) and the online recorder (a `lockstep.Client` recording the relay stream its seat executes), composition of a recorded battle from installed content, and the synchronous player that runs the recorded pumps and stops at the first unit checksum that differs. A host edge: it runs no tick of its own | DESIGN_MULTIPLAYER §10 |
 
 ### Interface and presentation
 

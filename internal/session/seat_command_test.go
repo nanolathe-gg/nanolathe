@@ -2,6 +2,7 @@ package session
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -757,7 +758,10 @@ func TestSinglePlayerReplayContext(t *testing.T) {
 }
 
 // The local adapter and a stamped single-player command reach one payload
-// implementation: the same script leaves the same queues (§7.4.4).
+// implementation: the same script leaves the same queues (§7.4.4). The replay
+// recorder's converter turns each local command into exactly the stamped one
+// (replay_convert.go); TestReplayCommandsApplyAsTheLocalCommands covers every
+// replay kind on a composed battle.
 func TestLocalAndStampedCommandsShareOneImplementation(t *testing.T) {
 	local, stamped := newSeatFixture(t, false, false), newSeatFixture(t, false, false)
 	var extra pool.Handle
@@ -793,6 +797,11 @@ func TestLocalAndStampedCommandsShareOneImplementation(t *testing.T) {
 	for _, step := range script {
 		if err := local.s.EnqueueHumanCommand(step.human); err != nil {
 			t.Fatal(err)
+		}
+		pending := local.s.PendingHumanCommands()
+		converted, err := local.s.replayCommand(pending[len(pending)-1])
+		if want := step.seat(stamped); err != nil || !reflect.DeepEqual(converted, want) {
+			t.Fatalf("kind %d converts to %+v (%v), want %+v", step.human.Kind, converted, err, want)
 		}
 		local.tick()
 		expectOutcome(t, stamped.issue(t, 0, step.seat(stamped)), CommandApplied)

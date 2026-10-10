@@ -2262,9 +2262,11 @@ records, draw order, parity rules and CRT recurrence follow `[07 §5]`; the
 field owns a private copy of that recurrence, so the menu consumes no other
 stream. A new `MAINMENU` window starts an empty field, as retail allocates it
 zeroed per window. The sparks are recorded as one-pixel fills on that
-window's layer, after its authored gadgets and before the Nanolathe-owned
-`MODS` button and status line appended to the clone, so those two and any
-window stacked above cover them. Two host choices are recorded in §5.
+window's layer, after its authored gadgets and before what Nanolathe
+appends to the clone — the `MODS` (*NANOLATHE*) and `REPLAYS` buttons, a
+pair centred at the top of the screen, and the status line under them — so
+those and any window stacked above cover them. Two host choices are
+recorded in §5.
 
 **C17 — preferences survive the process.** Retail reads its whole preference
 block once at startup, installing a per-value default for anything absent, and
@@ -4651,6 +4653,103 @@ round trip and order latency (median and 95th percentile over the match),
 the connection's traffic in and out (bytes and messages) and the stalls.
 All of these are host timings; nothing reaches the simulation.
 
+### Replays
+
+`REPLAYS`, beside *NANOLATHE* at the top of `MAINMENU` (each a copy of the
+`SINGLE` button, the pair centred), opens the Replays screen over the main
+menu. It is greyed wherever Skirmish is (§2.6 "Unavailable menu actions"),
+since every replay is a skirmish or Survival battle. What is recorded, where
+and under which names, and what a playback is, are owned by
+[DESIGN_MULTIPLAYER §10](DESIGN_MULTIPLAYER.md#10-replays); this section is
+the screen and the controls.
+
+**The screen.** The authored load dialog (`guis/loadgame.gui`) on the save
+direction's backdrop (`bitmaps/dsavegame2.pcx`), whose Delete and name-field
+frames it uses. A copy of the backdrop has its baked title and summary
+captions painted over with its own plain texture, as the Mods & Mutators
+screen does with the map-select backdrop, and the screen draws its title
+(*REPLAYS*) and captions in the label face.
+
+- **The list** holds the replay directory's files newest first, each row
+  the battle's start (*Oct 9 14:05*) and its map as the map list spells it.
+  A file that is not a readable replay lists as *(unreadable file)*, so it
+  can still be deleted.
+- **The summary** gives the game type (*Skirmish*, *Survival*, *Online
+  skirmish*, *Online Survival*), the map, the players (human and computer,
+  in slot order), the length in game time (m:ss, followed by *incomplete*
+  for a recording without its end entry, or *recording now* for the file
+  this process is writing) and when it was played. The picture frame shows
+  the map as the map selector pictures it when the map is installed.
+- **The status line**, in the name-field frame, says what the selection
+  needs: why it cannot play (*Cannot play: the file is damaged.*, a newer
+  version recorded it, the file is gone or unreadable), that its recording
+  stopped early and plays to where it stops, that it is being recorded now
+  and cannot be deleted, or the mod it was recorded with (*Recorded with
+  ProTA 4.8. Watch switches to it first.*, or why that mod cannot be
+  mounted). Otherwise it is empty.
+- **An empty directory** reads *No replays yet. Every skirmish and Survival
+  battle is recorded here.* in the list, with Watch and Delete greyed.
+
+**Watch** (the authored `LOAD`, or Enter) plays the selection. A replay
+recorded under another mod first asks the ordinary content reload to mount
+it, as an online join does: the player's own mutators stay, the mod becomes
+the saved choice, and the shell the reload builds reopens the screen and
+continues. A mod that is not installed, a different copy of it, a base
+requirement it lacks, or `--root` or `--mod-config` content is named
+instead, as is a mod that did not mount and a map the install lacks. The
+playback is then composed on a job goroutine with the optional load-time
+art, as the loading screen prepares a fresh battle, and a content reload
+waits for it. Meanwhile the status line counts *Loading the replay... n%*
+over the loading screen's six bars, Watch and Delete are greyed, and Cancel
+abandons the load. A replay this install cannot compose is reported in plain
+words (*your copy of the map differs from the recording's*, *your game files
+differ from the recording's*, *this version plays its rules differently*,
+*another version of Nanolathe recorded it*). A composed one closes the
+screen and is entered with no battle arrival. Leaving the playback, by its
+Exit or by the in-battle menu's Main Menu, returns to the screen with that
+replay selected.
+
+**Delete** asks in the message window (*Delete the replay of Ashap Plateau
+from Oct 9 14:05?*, with Delete and Cancel; Enter and Escape keep it) and
+removes the file. The file being recorded is refused with the status line's
+reason. **Cancel**, or Escape, returns to the main menu.
+
+**The playback** plays the recorded battle as the recorded seat. Orders are
+refused without a message; the camera, the minimap, selection and unit
+information work as in any battle. Saves, loads and restarts are refused
+(*Saves, loads and restarts are unavailable while watching a replay*). A
+compact overlay sits at the top left of the world view in the side's console
+face, placed as the online network overlay is: below the resource strip, the
+visible message lines and the Community weather report (§3.14) where that
+sits under the strip, and below the +fps panel where it would reach it. It
+reads *Replay:* and the map; the elapsed and total game time (m:ss / m:ss),
+the speed (1/4x to 8x) and *Paused*, *Skipping to m:ss* or *Ended*; and
+*View:* with the player or *Full map*. Its buttons are Pause (Play while
+paused), Slower, Faster, Skip 1:00 (Stop skip during a skip), View and Exit.
+A left press arms one and its release over the same button acts; a press
+elsewhere on the overlay is taken, so it never selects or orders through it.
+Hovering a button names it and its key. At its end, or where it stops, the
+playback holds, paused, with the end or divergence line under the buttons,
+red for a divergence or a damaged recording.
+
+| Key | Effect in a playback |
+|---|---|
+| Pause | pause or resume; during a skip, stop it there, paused |
+| `-` `_` / `+` `=` | slower / faster through the speeds |
+| `]` | skip ahead one minute of game time; during a skip, one minute more |
+| `[` | stop a skip where it is |
+| Home | the next view: each recorded human seat's, then the full map |
+| Backspace | leave the playback for the Replays screen |
+
+Pause and the speed keys are the single-player battle's (§3.6). A playback
+takes no pause or speed command, so they drive the playback, except the
+speed keys while the developer film runs. The other keys have no battle
+binding. The in-battle menu holds the playback while it is open and restores
+it on closing, as it pauses a single-player battle. Tab resumes a paused
+playback, as it resumes a paused battle (§5), and opens the menu on an
+ended one. Pause, speed, skip and view are the playback's host controls;
+nothing here reaches a tick.
+
 ### 3.17 The Nanolathe screen
 
 **Policy.** A Nanolathe-owned setup screen, user-authorized 2026-09-28 as a
@@ -5218,8 +5317,9 @@ ring lasts a fraction of a second.
   the gadget art; Nanolathe composes gadgets through the draw list each frame,
   so its tests read the window background plus live sparks. The two differ
   only where a spark reaches a button, and every retail `MAINMENU` button lies
-  below the 220-row spawn band `[07 §5]`. The `MODS` button does lie in that
-  band, so it is drawn above the sparks rather than beneath them.
+  below the 220-row spawn band `[07 §5]`. The `MODS` and `REPLAYS` buttons do
+  lie in that band, so they are drawn above the sparks rather than beneath
+  them.
 
 * **Alt batches factory products by twenty.** This user-requested build-menu
   extension adds twenty on Alt-left-click and subtracts twenty on

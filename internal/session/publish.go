@@ -221,7 +221,9 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 	if s.Wind != nil {
 		published.Wind = frame.WindView{Heading: s.Wind.Heading, Strength: s.Wind.Strength}
 	}
-	published.ViewingPlayer = s.ViewingOwner
+	// The playback perspective is presentation-only (replay_view.go).
+	viewer, reveal := s.publicationPerspective()
+	published.ViewingPlayer = viewer
 	if s.Rules.Visibility != nil {
 		published.MainViewRadarDots = s.Rules.Visibility.MainViewRadarDots()
 	}
@@ -275,7 +277,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				PriorHealthSample: u.PriorSample,
 				MaxHealth:         u.MaxHealth,
 				BuildRemaining:    u.Remaining,
-				Flags:             s.sensorStatus(s.ViewingOwner, u),
+				Flags:             s.sensorStatus(viewer, u),
 				Heading:           u.Move.Heading,
 				Pitch:             u.Move.Pitch,
 				Bank:              u.Move.Bank,
@@ -292,7 +294,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				// request: a unit whose owner could not pay this pass is drawn
 				// [05 R-ECO-01 §9] (WU-19-92).
 				Cloaked:    u.Hidden,
-				Decloaking: s.sensorStatus(s.ViewingOwner, u)&visibility.DecloakBit != 0,
+				Decloaking: s.sensorStatus(viewer, u)&visibility.DecloakBit != 0,
 				// The carrier link the unit painter's per-unit present needs:
 				// a carried child is drawn with its carrier, not only as its
 				// own bucket entry [03 R-RAST-01 §7][04 R-UNIT-06 §3].
@@ -387,10 +389,10 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			// The hull extents and the underwater-exemption bit of the
 			// four-point visibility gate [03 §3.2] steps 3 and 5.
 			publishHullGateInputs(vp, u)
-			vp.UnderwaterExempt = s.sensorStatus(s.ViewingOwner, u)&visibility.SonarBit != 0
+			vp.UnderwaterExempt = s.sensorStatus(viewer, u)&visibility.SonarBit != 0
 			if s.Vis != nil {
 				vp.DirectVisibilityKnown = true
-				vp.DirectlyVisible = s.Vis.IsVisible(visibility.PlayerID(s.ViewingOwner), unitVisibilityTarget(u, s.sensorStatus(s.ViewingOwner, u)))
+				vp.DirectlyVisible = reveal || s.Vis.IsVisible(visibility.PlayerID(viewer), unitVisibilityTarget(u, s.sensorStatus(viewer, u)))
 			}
 			if vm := u.GetScript(); vm != nil {
 				// CacheRevision is copied at the publication boundary; consuming or
@@ -457,7 +459,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 	// Visibility publishes immutable presentation revisions; source identity
 	// prevents a fresh service from restoring another service's retained bytes.
 	if s.Vis != nil {
-		publishVisibilityView(s.Vis, s.ViewingOwner, published)
+		publishVisibilityView(s.Vis, viewer, published)
 		// Step 3 of the gate compares against the scaled sea-level byte, never
 		// against zero [03 §3.2][03 §2.2].
 		published.Visibility.SeaLevel = publishedSeaLevel(s.World)
@@ -479,6 +481,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			}
 			published.Fog.Valid = s.Vis.FogCacheValid()
 		}
+		s.publishPerspectiveView(published, viewer, reveal)
 	} else {
 		published.Visibility = frame.VisibilityView{}
 		published.Fog = frame.FogView{}
@@ -636,7 +639,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 			if u == nil || !u.Alive {
 				continue
 			}
-			status := s.sensorStatus(s.ViewingOwner, u)
+			status := s.sensorStatus(viewer, u)
 			active := u.Activated
 			onOffable := false
 			// The contact's cloak input is the INSTANCE cloaked bit and
@@ -681,7 +684,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 				BlinkSuppress: uint8(u.BlinkSuppress),
 				Seen:          status&visibility.SeenBit != 0,
 				Friendly:      status&visibility.FriendlyMask != 0,
-				Visible:       u.Owner == s.ViewingOwner || status&visibility.SeenBit != 0,
+				Visible:       reveal || u.Owner == viewer || status&visibility.SeenBit != 0,
 				Palette:       palette, PaletteKnown: paletteKnown,
 			}
 			if contactIdx < len(existingContacts) {
@@ -739,7 +742,7 @@ func (s *Session) publishFrame(tick uint32, paused bool) {
 		published.Radar.Contacts = append(published.Radar.Contacts, frame.RadarContactView{
 			Kind: frame.RadarContactProjectile, Handle: p.Handle, Owner: owner, OwnerKnown: p.OwnerKnown, Palette: palette, PaletteKnown: paletteKnown, X: p.X, Y: p.Y, Z: p.Z,
 			Graphic: p.Graphic, AssetID: p.AssetID, Status: p.Flags, RadarArt: p.RadarArt,
-			Visible: radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
+			Visible: reveal || radarPointVisible(s, owner, p.OwnerKnown, p.X, p.Y, p.Z),
 		})
 	}
 	if s.Build != nil && s.Units != nil {
@@ -1093,15 +1096,17 @@ func projectileOwnerFromRecord(s *Session, shooter pool.Handle, side uint8) (uin
 // radarPointVisible is the minimap contacts pass's second-pass admission test
 // for a projectile candidate: the mode-selected local player visibility
 // source sampled at the candidate's own position, with owner-local identity
-// as the only bypass [03 §3.9].
+// as the only bypass [03 §3.9]. The local player is the publication's
+// viewer, which a playback perspective may override (replay_view.go).
 func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric.Fixed) bool {
 	if s == nil {
 		return false
 	}
-	if ownerKnown && owner < 10 && owner == s.ViewingOwner {
+	viewer, _ := s.publicationPerspective()
+	if ownerKnown && owner < 10 && owner == viewer {
 		return true
 	}
-	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), x, y, z)
+	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(viewer), x, y, z)
 }
 
 // publishVisibilityView copies the viewing player's visibility masks into the

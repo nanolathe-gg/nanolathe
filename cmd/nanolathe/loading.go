@@ -129,6 +129,9 @@ type loadResult struct {
 	// loader goroutine beside the session and installed at adoption
 	// (DESIGN_GPU_RENDERER §14.4). Nil is "no provider": nearest doubling.
 	detail *client.DetailArt
+	// replay is the battle's recording, attached before its first tick and
+	// handed to the battle at adoption (replay_record.go).
+	replay *replayRecording
 }
 
 // loadingState is the model behind the loading screen. The loader runs on its
@@ -427,10 +430,18 @@ func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request
 	// The authored loading picture is a 640x480 image blitted whole at (0,0)
 	// and is never scaled.
 	g.applyDisplaySize(clPtr, retailScreenW, retailScreenH)
+	target, cs := g.replayTarget(), g.cs
 	go func() {
 		authoritative, err := composeAuthoritativeBattle(request)
 		if err == nil && after != nil {
 			after(authoritative.Session)
+		}
+		// Every fresh skirmish and Survival battle is recorded; the recorder
+		// is attached here, before the battle's first tick
+		// (docs/DESIGN_MULTIPLAYER.md §10).
+		var recording *replayRecording
+		if err == nil {
+			recording = recordFreshBattle(target, request.value, cs, authoritative.Session)
 		}
 		// The load-time remaster runs here, on the loader goroutine, after the
 		// session composes and before the battle is adopted, and reports through
@@ -443,7 +454,7 @@ func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request
 		} else {
 			state.report(familyDetailArt, 100)
 		}
-		state.done <- loadResult{sess: authoritative.Session, err: err, detail: detail}
+		state.done <- loadResult{sess: authoritative.Session, err: err, detail: detail, replay: recording}
 	}()
 }
 
@@ -469,6 +480,7 @@ func (g *gameShell) stepLoading(delta float64) {
 		returnMode := g.loadingReturn
 		g.loading = nil
 		if res.err != nil {
+			res.replay.abort()
 			g.openMenu(returnMode)
 			reportRetailMessageError(g.showRetailMessage(res.err.Error()))
 			return
@@ -486,11 +498,13 @@ func (g *gameShell) stepLoading(delta float64) {
 		// client (DESIGN_GPU_RENDERER §14.3).
 		g.pendingDetail = res.detail
 		if err := g.enterBattle(res.sess, res.sess.Catalog); err != nil {
+			res.replay.abort()
 			g.loadingReturn = returnMode
 			g.openMenu(returnMode)
 			g.bindFrontendClient(clPtr)
 			reportRetailMessageError(g.showRetailMessage(err.Error()))
 		} else {
+			g.battle.adoptReplayRecording(res.replay)
 			clPtr.PrepareBattlePresentation()
 		}
 	default:

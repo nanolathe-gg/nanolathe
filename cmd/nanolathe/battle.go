@@ -35,6 +35,12 @@ import (
 // selection, order latch, and build placement.
 type battleSession struct {
 	multiplayer *battleMultiplayer
+	// replay is this single-player battle's recording, finished at teardown
+	// (replay_record.go); playback is the replay this battle plays instead
+	// of taking the clock's budget (replay_playback.go). Both are nil for an
+	// unrecorded battle.
+	replay   *replayRecording
+	playback *replayPlayback
 	// preview owns a silent, isolated Settings scene (interface design §3.17).
 	preview                                bool
 	hostPresentation                       *settings.Presentation
@@ -447,8 +453,14 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	}
 	var authoritative headless.FreshBattle
 	var identity netproto.Identity
+	var playback *replayPlayback
+	var recording *replayRecording
 	if opts.multiplayerPlaytest() {
 		authoritative, identity, err = composeLocalMultiplayer(opts, cs)
+	} else if opts.Replay != "" {
+		if playback, err = prepareReplayPlayback(opts.Replay, cs, nil); err == nil {
+			authoritative = playback.freshBattle()
+		}
 	} else if scene.Kind == "field" {
 		authoritative, err = composeLiveFieldBattle(opts, cs, scene)
 	} else {
@@ -460,6 +472,11 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 		}
 		if err == nil {
 			authoritative, err = composeAuthoritativeBattle(request)
+		}
+		// A measured or staged window is not a battle anyone plays, so it
+		// is not recorded (docs/DESIGN_MULTIPLAYER.md §10).
+		if err == nil && opts.LiveTrace == "" && opts.LiveScene == "" {
+			recording = recordFreshBattle(replayTarget{dir: opts.ReplayDir}, request.value, cs, authoritative.Session)
 		}
 	}
 	if err != nil {
@@ -482,6 +499,7 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 		if !entered {
 			shell.teardownBattle(clPtr)
 			shell.releaseAudio()
+			recording.abort()
 		}
 	}()
 	shell.applySettings(saved)
@@ -544,9 +562,15 @@ func newDirectBattleView(opts Options, cs *contentSet) (*gameShell, *client.Clie
 	// detail art before the shell adopts the completed battle.
 	sess := authoritative.Session
 	shell.pendingDetail = detailArtFor(shell.opts, cs, sess.World, nil)
-	if err := shell.enterBattle(sess, sess.Catalog); err != nil {
+	if playback != nil {
+		err = shell.enterReplayPlayback(playback)
+	} else {
+		err = shell.enterBattle(sess, sess.Catalog)
+	}
+	if err != nil {
 		return nil, nil, err
 	}
+	shell.battle.adoptReplayRecording(recording)
 	if opts.multiplayerPlaytest() {
 		if err := shell.battle.startLocalMultiplayer(opts, identity); err != nil {
 			return nil, nil, err
@@ -923,6 +947,9 @@ func (b *battleSession) teardown(cl *client.Client) {
 	}
 	// The session is retired below; its simulation goroutine goes first.
 	b.stopSimulation(cl)
+	// Closing an online driver finishes that seat's recording; a
+	// single-player battle's ends here.
+	b.finishReplayRecording()
 	b.multiplayer.summarizeOnline(b.sess)
 	b.multiplayer.close()
 	// LoadGame can leave ENDMSN through replacement rather than its Start or
@@ -990,6 +1017,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 		b.controller.battle = nil
 	}
 	b.ended = true
+	b.playback = nil
 	b.sess = nil
 	b.cat = nil
 	b.cam = nil
@@ -1138,6 +1166,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		return
 	}
 	b.pumpLocalMultiplayer(cl)
+	b.pumpReplayPlayback(cl)
 	b.followExecutor(cl.Enhanced())
 	b.syncCameraControls()
 	b.syncStrategicIcons(cl)

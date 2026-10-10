@@ -409,6 +409,9 @@ type seatCommandState struct {
 	// seat — the entry's seat, never a viewer (§7.2).
 	issuer  uint8
 	issuing bool
+	// replay is the single-player replay recorder that observes this boundary
+	// and the presentation perspective of a playback (replay.go).
+	replay replayState
 }
 
 // onlineCommandConfig is the part of an admitted EffectiveMatchConfig the

@@ -113,6 +113,7 @@ func runShot(opts Options, cs *contentSet) error {
 	}
 	var authoritative headless.FreshBattle
 	var field *headless.SimBenchScene
+	var request freshBattleRequest
 	var err error
 	if opts.BattleBenchmark != "" && opts.BenchmarkScene == "field" {
 		// Reuse the displayless benchmark's complete session and fixture rather
@@ -134,7 +135,6 @@ func runShot(opts Options, cs *contentSet) error {
 			ProfileFeatures: cs.gameplayFeatures, GameplayOverrides: opts.GameplayOverrides,
 		}, cs.fs, catalog)
 	} else {
-		var request freshBattleRequest
 		request, _, err = headlessFreshBattleRequest(opts, cs, newBattleSeedSource(opts))
 		if err == nil {
 			authoritative, err = composeAuthoritativeBattle(request)
@@ -187,10 +187,20 @@ func runShot(opts Options, cs *contentSet) error {
 	// synthesized art the window would (DESIGN_GPU_RENDERER §14.4 "When"). At
 	// scale 1 the provider is never consulted, so a native capture is
 	// unchanged by it.
+	// --record-replay records the captured battle, attached before its first
+	// tick (DESIGN_MULTIPLAYER §10).
+	var recording *replayRecording
+	if opts.RecordReplay != "" && field == nil {
+		if recording, err = startSinglePlayerReplay(replayTarget{path: opts.RecordReplay}, request.value, cs, sess); err != nil {
+			return err
+		}
+	}
 	b, err = composeBattleEntryWithDetail(sess, authoritative.Session.Catalog, cs, cl, nil, captureDetailArt(opts, cs, sess.World))
 	if err != nil {
+		recording.abort()
 		return err
 	}
+	b.adoptReplayRecording(recording)
 	defer b.teardown(cl)
 	// The battle composes its camera at the authored size; square it with the
 	// capture surface the way the windowed installation point does

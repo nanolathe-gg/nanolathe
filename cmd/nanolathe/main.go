@@ -109,6 +109,9 @@ func checkInstall(opts Options, errOut io.Writer) error {
 }
 
 func run(opts Options, out, errOut *os.File) error {
+	// A battle the window did not tear down still ends its replay
+	// (replay_record.go).
+	defer finishLiveRecordings()
 	// Installer diagnostics are host policy (DESIGN_CONTENT_VFS §5). Resolve
 	// and validate before the banner, benchmark lock, or game startup.
 	if opts.ListInstalls || opts.CheckInstall {
@@ -136,6 +139,22 @@ func run(opts Options, out, errOut *os.File) error {
 
 	if opts.InstallMod != "" {
 		return runInstallMod(opts, out)
+	}
+
+	// A replay names the content it plays: its mod, or none, unless --mod
+	// chose one.
+	if err := selectReplayContent(&opts); err != nil {
+		return err
+	}
+	// Battles record their replays to the replay directory
+	// (docs/DESIGN_MULTIPLAYER.md §10). Without one the game still plays; it
+	// records nothing.
+	if opts.ReplayDir == "" {
+		dir, err := defaultReplayDir()
+		if err != nil {
+			fmt.Fprintf(errOut, "nanolathe: warning: battles will not be recorded: %v\n", err)
+		}
+		opts.ReplayDir = dir
 	}
 
 	if opts.BattleBenchmark != "" {
@@ -196,6 +215,10 @@ func run(opts Options, out, errOut *os.File) error {
 		return &missingProductError{what: "gameplay mode is below the mod's minimum", logical: "<command line>", providers: []string{"--gameplay", "--mod"}, expected: gameplayLabel(minimum) + " or Modern for " + content.mod.Name}
 	}
 
+	if opts.VerifyReplay != "" {
+		return runVerifyReplay(opts, content, out)
+	}
+
 	if opts.WalkPreview != "" {
 		return runUnitViewerWalkPreview(opts, content)
 	}
@@ -222,6 +245,11 @@ func run(opts Options, out, errOut *os.File) error {
 
 	if opts.Metal {
 		return runMetal(opts, content)
+	}
+
+	// --replay plays one replay in the battle window, as --map plays a map.
+	if opts.Replay != "" {
+		return runBattleView(launch, opts, content)
 	}
 
 	// All runtime entry points compose the retail game shell. The shell opens

@@ -21,6 +21,17 @@ func (b *battleSession) applyBattleSchedule(intent ui.BattleScheduleIntent) {
 	if b == nil || b.sess == nil {
 		return
 	}
+	if p := b.replayPlayback(); p != nil {
+		// A playback's pause and speed are its own, which the playback
+		// presents at its next pump. Tab on an ended playback has nothing
+		// to resume, so it opens the menu instead.
+		if intent.PauseSet && !intent.Pause && !p.menuHeld && p.Ended() && b.battleState().Modal() == ui.BattleModalClosed {
+			b.openBattleMenu()
+			return
+		}
+		p.applySchedule(intent)
+		return
+	}
 	if b.onlineBattle() {
 		b.battleState().SetPauseTruth(false)
 		if b.cl != nil {
@@ -164,6 +175,10 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 	}
 	name = gui.CallbackName(name)
 	if b.onlineBattle() && (name == "SAVEGAME" || name == "LOADGAME" || name == "RESTART") {
+		if b.replayPlayback() != nil {
+			b.onlineNotice("Saves, loads and restarts are unavailable while watching a replay")
+			return
+		}
 		b.onlineNotice("Saves, loads and restarts are unavailable in multiplayer games")
 		return
 	}
@@ -235,6 +250,10 @@ func (b *battleSession) openBattleSaveLoadScreen(mode saveLoadMode) {
 		return
 	}
 	if b.onlineBattle() {
+		if b.replayPlayback() != nil {
+			b.onlineNotice("Saves and loads are unavailable while watching a replay")
+			return
+		}
 		b.onlineNotice("Saves and loads are unavailable in multiplayer games")
 		return
 	}

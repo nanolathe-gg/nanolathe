@@ -700,8 +700,12 @@ func installMainMenuModsButton(window *gui.Window) {
 	}
 	button := window.Gadgets[single]
 	button.Name, button.SourceName, button.Text, button.QuickKey = "MODS", "MODS", "NANOLATHE", 0
-	button.Rect.X, button.Rect.Y = (retailScreenW-button.Rect.W)/2, 8
+	// NANOLATHE and REPLAYS are a pair centred on the screen
+	// (DESIGN_INTERFACE_HUD_INPUT "Replays").
+	const gap = 8
+	button.Rect.X, button.Rect.Y = (retailScreenW-2*button.Rect.W-gap)/2, 8
 	window.Gadgets = append(window.Gadgets, button)
+	installMainMenuReplaysButton(window, button.Rect.X+button.Rect.W+gap)
 	if status >= 0 {
 		label := window.Gadgets[status]
 		label.Name, label.SourceName, label.Text = "MODSTATUS", "MODSTATUS", ""

@@ -99,6 +99,11 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		background = assets.background
 		page = assets.art
 	}
+	if assets := g.replaysPanelAssets(p); assets != nil {
+		// So does the Replays screen (DESIGN_INTERFACE_HUD_INPUT "Replays").
+		background = assets.background
+		page = assets.art
+	}
 	if saveLoadAssets != nil && p == saveLoadPanel {
 		// The save/load dialog is a child window with its own authored
 		// backdrop; it must not borrow the surface it was opened over
@@ -712,6 +717,11 @@ func boolInt(value bool) int {
 func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p == mapsFetchPanel && gad.Name == "CATALOGUEPIC" {
 		g.drawMapsPreview(c, r)
+		return
+	}
+	if p != nil && g.replaysPanelAssets(p) != nil && gui.CallbackName(gad.Name) == "RADAR" {
+		// The Replays screen pictures the selected replay's map there.
+		g.drawReplaysPreview(c, r)
 		return
 	}
 	if p != nil && p == saveLoadPanel && gui.CallbackName(gad.Name) == "RADAR" {

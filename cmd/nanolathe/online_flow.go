@@ -617,6 +617,9 @@ func (g *gameShell) enterOnlineBattle(p *onlinePrepared, conn lockstep.Client, c
 		return localMultiplayerError("battle", "a prepared online battle")
 	}
 	sess := p.sess
+	// Every online seat records the stream it executes (DESIGN_MULTIPLAYER
+	// §10); a battle that cannot be recorded keeps conn as it is.
+	conn = g.recordOnlineReplay(p, conn)
 	stats := newOnlineNetStats(conn, sess.LocalOwner, humans)
 	driver, err := lockstep.NewPacedDriver(sess, stats)
 	if err != nil {

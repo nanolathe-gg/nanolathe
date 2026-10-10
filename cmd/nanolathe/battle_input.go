@@ -128,6 +128,11 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	kbd := in.Kbd
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	// The playback overlay's controls take their own presses
+	// (replay_overlay.go).
+	if b.serviceReplayOverlayPointer(&mouse, mx, my) {
+		return
+	}
 	if b.serviceCommunityIncome(mouse) {
 		return
 	}
@@ -486,6 +491,11 @@ func (b *battleSession) handleBattleShortcuts(in *input.State, cl *client.Client
 	// since changed [07 R-CAM-01 §2].
 	kbd := battleShortcutKeyboard(in)
 	ctrlHeld := kbd.KeyHeld(input.KeyCtrl)
+	// A playback takes the pause and speed keys for itself, and its own keys
+	// (replay_overlay.go).
+	if b.handleReplayShortcut(in, kbd) {
+		return false
+	}
 	if !ctrlHeld {
 		// `n` (0x6E) cycles the next unvisited own unit. `N` (0x4E) is a
 		// separate character token and the dispatcher has no case for it, so

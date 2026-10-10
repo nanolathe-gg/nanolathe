@@ -204,6 +204,8 @@ type gameShell struct {
 	onlineServer string
 	// online is the open online screen and lobby, nil when closed.
 	online *onlineScreen
+	// replays is the open Replays screen, nil when closed (replays_screen.go).
+	replays *replaysScreen
 	// baseSettings is the settings file's base block as last loaded, with
 	// every mod's patch, and presets the player's saved presets
 	// (modsettings.go, docs/DESIGN_MODS_MUTATORS.md §4.6).
@@ -906,12 +908,14 @@ func (g *gameShell) openMenuWithTokenFlush(mode shellMode, flushTokens bool) {
 			// installed record and never reassign keys [07 R-WGT-01 §3].
 			if mode == modeMenuMain {
 				// The Nanolathe-owned MODS button and status line
-				// (docs/DESIGN_MODS_MUTATORS.md §8.1).
+				// (docs/DESIGN_MODS_MUTATORS.md §8.1), with REPLAYS beside
+				// it (DESIGN_INTERFACE_HUD_INPUT "Replays").
 				installMainMenuModsButton(window)
 			}
 			g.installRetailWindowButtonArt(window, p.art)
 			g.installRetailListScrollbars(window, p.art)
 			g.disableUnavailableFrontendEntries(window, mode)
+			g.disableUnavailableReplays(window, mode)
 			g.initializeRetailLabels(window)
 			panel = ui.NewPanel(window)
 			if mode == modeMenuMain {
@@ -1081,6 +1085,7 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 	g.pollModsFetch()
 	g.pollMapsFetch()
 	g.pollOnline()
+	g.pollReplays()
 	// The Nanolathe screen gets ready while the main menu idles, so it opens
 	// onto a staged scene (nlscreen.go).
 	if nlScreenInst != nil && g.frontend != nil {
@@ -1098,6 +1103,11 @@ func (g *gameShell) step(delta float64, cl *client.Client) {
 	switch g.frontend.Mode {
 	case modeBattle:
 		if battle := g.battle; battle != nil {
+			// The playback overlay's Exit leaves between steps, never inside
+			// the battle's own (replays_screen.go).
+			if g.leaveReplayPlayback(cl) {
+				return
+			}
 			battle.viewerStep(delta, cl)
 			// The sub-ticks this step released run on the simulation goroutine
 			// from here until the next step joins them (battle_sim.go).
