@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
-	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // updateCursor resolves the software-cursor shape for this frame [07 §8].
@@ -48,7 +47,7 @@ func (b *battleSession) cursorShapeAt(latch input.Latch, mx, my int32) int {
 	}
 	if hover.OverWorld && !hover.Placing {
 		var pos *orders.ResolvePos
-		_, hover.Target, pos = b.pickTarget(mx, my)
+		_, hover.Target, pos = b.pickTargetFor(latch, mx, my)
 		if hover.Target == nil {
 			_, hover.Target = b.pickRadarAttackTarget(mx, my, latch)
 			if hover.Target != nil {
@@ -174,25 +173,11 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 		return nil
 	}
 	wx, wy, wz := b.cursorWorld(sx, sy)
-	cx, cz := world.WorldToCell(wx), world.WorldToCell(wz)
-	f, ok := b.currentSnapshot()
-	if !ok {
+	v, _, hit := b.pickFeature(sx, sy, orders.ResolvePos{X: wx, Y: wy, Z: wz})
+	if !hit {
 		return nil
 	}
-	for _, v := range f.Features {
-		footX, footZ := int32(v.FootX), int32(v.FootZ)
-		if footX <= 0 {
-			footX = 1
-		}
-		if footZ <= 0 {
-			footZ = 1
-		}
-		if cx < v.CX || cx >= v.CX+footX || cz < v.CZ || cz >= v.CZ+footZ || !snapshotFeatureMappedAt(f, wx, wy, wz, f.ViewingPlayer) {
-			continue
-		}
-		return &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: v.DefName}, FootprintX: int32(v.FootX), FootprintZ: int32(v.FootZ), Height: v.Height, Reclaimable: v.Reclaimable, Geothermal: v.Geothermal, Blocking: v.Blocking}
-	}
-	return nil
+	return &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: v.DefName}, FootprintX: int32(v.FootX), FootprintZ: int32(v.FootZ), Height: v.Height, Reclaimable: v.Reclaimable, Geothermal: v.Geothermal, Blocking: v.Blocking}
 }
 
 // updateFooterHover runs the battle pointer handler's per-frame pass over the

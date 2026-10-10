@@ -88,6 +88,13 @@ A service or binding whose seam was never set answers as Strict 3.1. That
 fallback exists for fixtures and for a queue reconstructed by a restore, not
 as a second way to select a policy: a composed session always binds.
 
+The order seam also answers the host's
+[Modern submerged wreck picking](DESIGN_INTERFACE_HUD_INPUT.md#modern-submerged-wreck-picking)
+decision (`PicksSubmergedWrecks`). Strict and Community answer false, Modern
+answers true; the host asks the bound implementation at pointer-pick granularity.
+It changes command targeting only, so the seam needs no new session state or
+composition field.
+
 ## 2. The seams
 
 | Seam | Owner | Carries |

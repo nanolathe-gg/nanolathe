@@ -429,7 +429,7 @@ func nlCardEqual(c nlCard, a, b *nlDraft) bool {
 			a.pres.SidebarOrders == b.pres.SidebarOrders && a.pres.UIScale == b.pres.UIScale
 	}
 	if c.copy != nil {
-		var left, right nlDraft
+		left, right := nlDraft{gameplay: a.gameplay}, nlDraft{gameplay: a.gameplay}
 		c.copy(&left, a)
 		c.copy(&right, b)
 		return left == right
@@ -470,7 +470,13 @@ func (s *nlScreen) setCardDraft(c nlCard, next nlDraft) {
 		s.guardLocked(c, func() { s.setCardDraft(c, next) })
 		return
 	}
+	overview := s.draft.pres.Overview
 	nlCopyCard(c, &s.draft, &next)
+	if c.key == "zoomstyle" && s.draft.pres.Overview != overview {
+		// Carry the explicit Tab edit even if the player changes rules before
+		// Apply; card copying then follows the destination's new mode.
+		s.touched["tab"] = true
+	}
 	if c.key == "content" {
 		s.revealContent(s.draft.mod)
 		if g := s.shell(); g != nil {

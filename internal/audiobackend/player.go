@@ -35,6 +35,7 @@ type Backend struct {
 	statics      []staticSample
 	createPlayer func(io.Reader) (outputPlayer, error)
 	lastPump     time.Time
+	shutdownDone bool
 }
 
 // outputPlayer is the device boundary; gain stays outside immutable PCM.
@@ -710,6 +711,10 @@ func (b *Backend) Close() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.closeLocked()
+}
+
+func (b *Backend) closeLocked() {
 	var released []outputPlayer
 	releaseOnce := func(player outputPlayer) {
 		if player == nil {

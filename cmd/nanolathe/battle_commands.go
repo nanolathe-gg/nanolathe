@@ -319,15 +319,15 @@ func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) bool 
 	if code == hud.LatchToCode(input.LatchReclaim) && b.classifyPointer(sx, sy) != battlePointerMinimap && b.issueCommunityReclaimSnap(queued) {
 		return true
 	}
-	targetHandle, target, pos := b.pickTarget(sx, sy)
-	if pos == nil {
-		return false
-	}
 	// The HUD latch table is the single semantic mapping between an armed
 	// order and the session order code. Validate the caller's code by running
 	// it through that table; do not maintain a second switch here [07 §9].
 	latch := input.Latch(code)
 	if hud.LatchToCode(latch) != code {
+		return false
+	}
+	targetHandle, target, pos := b.pickTargetFor(latch, sx, sy)
+	if pos == nil {
 		return false
 	}
 	if target == nil {
@@ -354,10 +354,14 @@ func (b *battleSession) orderSelected(code int, sx, sy int32, queued bool) bool 
 	if latch != input.LatchNormal && b.cursorShapeForClick(latch, sx, sy, target) >= render.CursorRed {
 		return false
 	}
-	_ = b.DispatchOrderCommand(session.HumanOrderCommand{
+	command := session.HumanOrderCommand{
 		Code: code, Target: targetHandle,
 		Position: *pos, Queued: queued,
-	})
+	}
+	if latch == input.LatchNormal && target == nil && pos.HasFeature {
+		b.pickContextualWreckWorkers(sx, sy, &command)
+	}
+	_ = b.DispatchOrderCommand(command)
 	return true
 }
 

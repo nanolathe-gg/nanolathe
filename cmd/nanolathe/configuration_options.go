@@ -20,8 +20,8 @@ func configurationUnavailable(key string, mode gameplay.Mode, p settings.Present
 		if base == gameplay.Strict31 {
 			return "Strict 3.1 keeps legacy camera controls."
 		}
-		if base == gameplay.Community39 && p.Overview == settings.OverviewMegamap {
-			return "Select Tab: Options first."
+		if key != "zoomstyle" && base == gameplay.Community39 && p.Overview == settings.OverviewMegamap {
+			return "Enable camera zoom first."
 		}
 		// Classic still honors No zoom; Smooth and Steps both retain its
 		// native F9 scale cycle. Only the other two rows require free zoom.
@@ -61,6 +61,16 @@ func configurationUnavailable(key string, mode gameplay.Mode, p settings.Present
 		}
 	}
 	return ""
+}
+
+// Selecting camera zoom explicitly leaves Community's separate megamap. Keep
+// the selector usable even when an inherited overview preference disables its
+// current consumer (DESIGN_INTERFACE_HUD_INPUT §3.15, issue #99).
+func selectCameraZoom(p *settings.Presentation, mode gameplay.Mode, style int) {
+	p.ZoomStyle = style
+	if session.BaseModeOf(mode) == gameplay.Community39 && style != settings.ZoomNone {
+		p.Overview = settings.OverviewZoom
+	}
 }
 
 // configurationValueUnavailable handles choices which share an otherwise

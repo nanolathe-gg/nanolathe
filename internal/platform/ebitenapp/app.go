@@ -233,7 +233,7 @@ func (a *app) Update() error {
 		a.c.JoinPreRecord()
 		return err
 	}
-	if a.exitPending || a.trace.expired() {
+	if a.exitPending || a.trace.expired() || ebiten.IsWindowBeingClosed() {
 		a.c.JoinPreRecord()
 		return a.terminate()
 	}
@@ -365,6 +365,7 @@ func (a *app) terminate() error {
 	a.syncPointerCapture()
 	a.cursorClip.release()
 	a.reportPipeline()
+	shutdownAudioOutput(audio.GlobalOutput())
 	return ebiten.Termination
 }
 
@@ -1235,6 +1236,9 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 		// This is platform work, not retail behaviour — see Backend.WarmUp.
 		be.WarmUp()
 	}
+	// Also release output if setup or the window loop fails. Normal exits
+	// silence it in terminate while the window and audio pump are still live.
+	defer shutdownAudioOutput(audio.GlobalOutput())
 	trace, err := newFrameTrace(options.FrameTrace)
 	if err != nil {
 		return err
@@ -1265,6 +1269,8 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	}
 	ebiten.SetWindowSize(width, height)
+	// Native close requests use the same audio shutdown as menu/battle exits.
+	ebiten.SetWindowClosingHandled(true)
 	ebiten.SetFullscreen(options.Fullscreen)
 	if title := c.Title(); title != "" {
 		ebiten.SetWindowTitle(title)

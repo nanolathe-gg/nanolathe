@@ -3749,8 +3749,11 @@ free passage through native, settings changes, overview return and mode bypass.
   opens Options. Community 3.9 with `presentation.overview = 0` keeps Tab for
   Options and honors camera zoom preferences, F9 and explicit battle-entry
   zoom. With `1` it takes Tab for its megamap and ignores F9 and explicit
-  battle-entry zoom; Strict 3.1 retains its 1× → 2× → 0.25× F9 cycle. Classic
-  keeps its 1× ↔ 2× F9 cycle in
+  battle-entry zoom; Strict 3.1 retains its 1× → 2× → 0.25× F9 cycle.
+  The Camera zoom selector remains usable with Community's megamap selected:
+  choosing Continuous or Steps also selects Tab: Options, restoring the camera
+  consumer without changing gameplay (interface §3.15, issue #99).
+  Classic keeps its 1× ↔ 2× F9 cycle in
   Modern, Community camera zoom and Strict, and Tab's options binding in
   Modern and Community camera zoom. No zoom disables F9 in both renderers and
   retains Tab for Options.

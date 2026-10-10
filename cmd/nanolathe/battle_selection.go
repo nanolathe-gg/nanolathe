@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -90,6 +91,10 @@ func (b *battleSession) selectedCommandUnits() []*units.Unit {
 // [07 R-WGT-01 §10]; leaving it zero made every nanoframe look finished, so the
 // idle branch offered `cursorselect` over one.
 func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
+	return b.pickTargetFor(input.LatchNormal, sx, sy)
+}
+
+func (b *battleSession) pickTargetFor(latch input.Latch, sx, sy int32) (pool.Handle, *units.Unit, *orders.ResolvePos) {
 	wx, wy, wz := b.cursorWorld(sx, sy)
 	pos := &orders.ResolvePos{X: wx, Y: wy, Z: wz}
 	if b.interfaceTypeRightClick() {
@@ -101,27 +106,16 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 	// Unit and feature words coexist at a picked point. Resolve the feature
 	// once before either unit path can return: code 12 tests it first
 	// [04 R-ORD-02 §1][I6].
-	if f, ok := b.currentSnapshot(); ok {
-		cx := world.WorldToCell(wx)
-		cz := world.WorldToCell(wz)
-		for _, fv := range f.Features {
-			footX, footZ := int32(fv.FootX), int32(fv.FootZ)
-			if footX <= 0 {
-				footX = 1
-			}
-			if footZ <= 0 {
-				footZ = 1
-			}
-			if cx < fv.CX || cx >= fv.CX+footX || cz < fv.CZ || cz >= fv.CZ+footZ {
-				continue
-			}
-			if !snapshotFeatureMappedAt(f, wx, wy, wz, f.ViewingPlayer) {
-				continue
-			}
-			pos.HasFeature = fv.Reclaimable
-			pos.IsWreck = b.isCorpseName(fv.DefName)
-			pos.FeatureResurrectable = pos.IsWreck && fv.Reclaimable
-			break
+	if fv, featurePos, hit := b.pickFeature(sx, sy, *pos); hit {
+		pos.HasFeature = fv.Reclaimable
+		pos.IsWreck = b.isCorpseName(fv.DefName)
+		pos.FeatureResurrectable = pos.IsWreck && fv.Reclaimable
+		// Only armed feature work substitutes here. A contextual click must
+		// first select the actors that resolve feature work; the command
+		// producer owns that Modern gesture. Move ignores feature metadata
+		// [04 R-ORD-02 §1] and keeps its raw point.
+		if latch == input.LatchReclaim {
+			pos.X, pos.Y, pos.Z = featurePos.X, featurePos.Y, featurePos.Z
 		}
 	}
 	// Presentation picking reads only the immutable committed frame. The

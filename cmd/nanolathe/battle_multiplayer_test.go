@@ -225,10 +225,12 @@ func TestLocalMultiplayerMenusAndClockCannotAdvanceWithoutGrant(t *testing.T) {
 		t.Fatal("controller double pumped or released a wall-clock tick")
 	}
 	// Closed-world chat remains a visible refusal and never reaches local phase 1.
+	b.dispatchLocalCommand("+dev")
+	b.dispatchLocalCommand("+Now Film Chris Include Reload Assert")
 	b.dispatchLocalCommand("+atm")
 	b.dispatchLocalCommand("+spawn armcons")
 	b.dispatchLocalCommand("+armcons")
-	if len(b.sess.PendingHumanCommands()) != 0 || len(d.commands) != 0 {
+	if b.developer.authorized || len(b.sess.PendingHumanCommands()) != 0 || len(d.commands) != 0 {
 		t.Fatal("chat bypassed the network boundary")
 	}
 }

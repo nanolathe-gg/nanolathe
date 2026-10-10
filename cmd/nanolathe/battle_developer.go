@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/client"
-	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 )
 
@@ -27,9 +26,8 @@ func (b *battleSession) developerCommand(words []string) bool {
 	}
 	switch strings.ToLower(words[0]) {
 	case "dev":
-		// Modern host convenience; the historical password remains available
-		// in both modes (DESIGN_DEVELOPER_TOOLS §2.1).
-		if b.sess == nil || b.sess.Gameplay.Normalize() != gameplay.Modern || len(words) != 1 {
+		// Host convenience in every rule set (DESIGN_DEVELOPER_TOOLS §2.1).
+		if b.sess == nil || len(words) != 1 {
 			return true
 		}
 		b.developer.authorized = true

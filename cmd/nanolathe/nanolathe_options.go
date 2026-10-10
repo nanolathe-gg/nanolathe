@@ -453,7 +453,7 @@ func nanolatheConfigurationKey(name string) string {
 func nanolatheConfigurationHelp(name string) string {
 	switch name {
 	case "NZOOM":
-		return "Camera zoom: continuous, stepped, or off at 1x. Classic offers native 1x/2x or Off. Free zoom requires the Enhanced renderer. Community uses camera zoom with Tab: Options."
+		return "Camera zoom: continuous, stepped, or off at 1x. Classic offers native 1x/2x or Off. Free zoom requires the Enhanced renderer. Selecting camera zoom in Community also selects Tab: Options."
 	case "NICONS":
 		return "Modern strategic icons: generated symbols or the running content's Community 3.9 art. Missing art keeps generated symbols."
 	case "NUISCALE":
@@ -536,9 +536,14 @@ func (g *gameShell) activateNanolatheOption(name string) bool {
 			p.BuildMenuPageSize, p.SidebarOrders = 0, 1
 		}
 	case "NZOOM":
+		overview := p.Overview
 		p.ZoomStyle = g.retailOptionsStage(name, 3, p.ZoomStyle)
 		if configurationValueUnavailable("zoomstyle", p.ZoomStyle, g.configurationMode(), p) != "" {
 			p.ZoomStyle = (p.ZoomStyle + 1) % 3
+		}
+		selectCameraZoom(&p, g.configurationMode(), p.ZoomStyle)
+		if p.Overview != overview && optionsState != nil {
+			optionsState.zoomOverviewChanged = true
 		}
 	case "NICONS":
 		p.StrategicIconStyle = g.retailOptionsStage(name, 2, p.StrategicIconStyle)
@@ -627,6 +632,11 @@ func (g *gameShell) setNanolathePreferences(p settings.Presentation) {
 	next.Renderer, next.FPS, next.ExpandedSidebar = p.Renderer, p.FPS, p.ExpandedSidebar
 	next.SidebarOrders, next.BuildMenuPageSize = p.SidebarOrders, p.BuildMenuPageSize
 	next.ZoomStyle, next.StrategicIconStyle = p.ZoomStyle, p.StrategicIconStyle
+	// Community's zoom selector can leave the megamap; its linked Tab choice
+	// belongs to this page's Undo/Restore transaction too (interface §3.15).
+	if session.BaseModeOf(g.configurationMode()) == gameplay.Community39 || g.retailOptionsActive() && optionsState.zoomOverviewChanged {
+		next.Overview = p.Overview
+	}
 	next.RadarDots, next.UIScale = p.RadarDots, p.UIScale
 	for _, f := range effectFamilies {
 		f.restore(&next, p)

@@ -158,6 +158,9 @@ type retailOptionsState struct {
 	page              string // "" for the root with no page merged
 	musicPageDeparted bool   // The merged host panel may reach more than one close site.
 	snapshot          retailOptionsSnapshot
+	// The camera selector can change Tab while Community is selected. Keep
+	// ownership through later rule changes so this page's Undo restores it.
+	zoomOverviewChanged bool
 	// Sliders are keyed by their window-record index. Their display names are
 	// only for the bounded first-match lookup helpers; two records that happen
 	// to share a name retain separate knob state [07 R-WGT-02 §2].

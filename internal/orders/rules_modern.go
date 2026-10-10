@@ -16,6 +16,10 @@ import (
 // whole session and is used by pointer.
 type ModernRules struct{ CommunityRules }
 
+// Modern lets the pointer target the visible sunken wreck, independently of
+// the renderer (interface design "Modern submerged wreck picking").
+func (*ModernRules) PicksSubmergedWrecks() bool { return true }
+
 // Modern's Hold Fire keeps automatic combat off the weapon slots, because the
 // launch gate lets a slot an order holds fire through it. It closes the guard's
 // forced combat join, which retail's force flag bypasses — the guard keeps its

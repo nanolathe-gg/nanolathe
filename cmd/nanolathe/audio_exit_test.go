@@ -31,6 +31,26 @@ type exitMusicOutput struct {
 	loops, stops int
 }
 
+// MAINMENU EXIT quits without another dialog, through the window host rather
+// than terminating inside the callback [07 R-FE-01 §3].
+func TestMainMenuExitRequestsWindowTermination(t *testing.T) {
+	cl, err := client.New(client.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := clPtr
+	clPtr = cl
+	t.Cleanup(func() { clPtr = previous; cl.Close() })
+	g := &gameShell{frontend: ui.NewFrontend(modeMenuMain)}
+	g.activateGadget("EXIT")
+	if !cl.ExitRequested() {
+		t.Fatal("main menu Exit did not request window termination")
+	}
+	if g.frontend.Panels.Modal() != nil {
+		t.Fatal("main menu Exit opened a confirmation")
+	}
+}
+
 func (o *exitMusicOutput) PlaySample(*audio.Sample, float64, float64) error           { return nil }
 func (o *exitMusicOutput) PlayRegisteredSample(*audio.Sample, float64, float64) error { return nil }
 func (o *exitMusicOutput) NewMusicPlayer(io.ReadSeeker, string) (audio.MusicPlayer, error) {

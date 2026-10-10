@@ -165,8 +165,8 @@ func TestCommunityConfigurationCanLeaveMegamapForCameraZoom(t *testing.T) {
 	g.gameplay = gameplay.Community39
 	g.presentation.Overview = settings.OverviewMegamap
 	g.syncBuilderOptions()
-	if reason := configurationUnavailable("zoomstyle", g.gameplay, g.presentation); reason == "" {
-		t.Fatal("megamap offered an inactive camera preference")
+	if reason := configurationUnavailable("zoomstyle", g.gameplay, g.presentation); reason != "" {
+		t.Fatalf("megamap prevented selecting camera zoom: %s", reason)
 	}
 	clickRowGadget(t, g, panel, cl, "NOVERVIEW", input.MouseButtonLeft)
 	if g.presentation.Overview != settings.OverviewZoom || g.gameplay != gameplay.Community39 {

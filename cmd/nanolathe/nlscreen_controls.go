@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/screenkit"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
@@ -717,6 +719,8 @@ func (s *nlScreen) drawMouseRows(screen *ebiten.Image, r screenkit.Rect) {
 			bf.Draw(screen, reason, r.X+16*u, y+42*u, screenkit.Style{Size: 10.5 * u, Top: nlAmber})
 		} else if c.key == "zoomstyle" && s.draft.pres.Renderer == "classic" && v != settings.ZoomNone {
 			bf.Draw(screen, "Native 1× / 2× zoom", r.X+16*u, y+42*u, screenkit.Style{Size: 10.5 * u, Top: nlDim})
+		} else if c.key == "zoomstyle" && session.BaseModeOf(s.draft.gameplay) == gameplay.Community39 && s.draft.pres.Overview == settings.OverviewMegamap {
+			bf.Draw(screen, "Megamap active; select zoom.", r.X+16*u, y+42*u, screenkit.Style{Size: 10.5 * u, Top: nlAmber})
 		} else if len(c.subs) > v {
 			bf.Draw(screen, c.subs[v], r.X+16*u, y+42*u, screenkit.Style{Size: 10.5 * u, Top: nlDim})
 		}

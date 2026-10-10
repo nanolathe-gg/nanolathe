@@ -687,6 +687,25 @@ alias table), `SampleCache`, the music controller, the positional viewport, and
 one private CRT copy. `internal/audiobackend.Backend` is the PCM device behind
 it — keeping the Ebitengine audio import there is what lets authoritative
 packages import `internal/audio` without initialising a graphics platform [I6].
+
+**Host audio shutdown.** Main-menu Exit requests the client's existing window
+termination, preserving its no-confirmation contract [07 R-FE-01 §3]. Battle
+Exit Game and native window close reach the same platform shutdown. Before
+returning termination, the host mutes every active cue, loop, narration, music
+and movie player, leaves the sources alive for 200 ms, then releases them and
+their decoders. Oto 3.5 smooths gain changes over the next mixed buffer; its
+macOS queue at the backend's 44,100 Hz holds approximately 139 ms and one mix
+buffer approximately 35 ms. The 200 ms grace is a host margin for that ramp and
+queued output, not a retail timer or a guaranteed hardware drain query.
+Unopened and already shut-down output releases immediately. An opened device
+still gets the grace period when its players report stopped: source completion
+does not establish that the device has consumed its queued tail. A deferred
+shutdown also covers setup and loop errors. `Backend.Close` retains immediate
+disposal; battle-to-menu music keeps its existing category fade. Tests lock
+mute-before-wait-before-release, all output ownership classes, repeated cleanup
+and the main-menu exit request. Physical device transients require listening
+on the affected hardware.
+
 The music controller's `SetDesired(int32)` owns category transitions, the
 raw volume/fade state, and a private ten-slot CD timer table. The host binds
 `SetPresentationClock(func() uint32)` before commands and calls

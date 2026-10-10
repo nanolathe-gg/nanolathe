@@ -59,8 +59,8 @@ func TestDeveloperAuthorizationAndFilmLifetimes(t *testing.T) {
 	}
 }
 
-func TestModernDevShortcutPreservesHistoricalAccessAndBattleState(t *testing.T) {
-	for _, mode := range []gameplay.Mode{gameplay.Modern, gameplay.Strict31} {
+func TestDevShortcutPreservesHistoricalAccessAndBattleState(t *testing.T) {
+	for _, mode := range []gameplay.Mode{gameplay.Modern, gameplay.Community39, gameplay.Strict31} {
 		b := &battleSession{sess: &session.Session{Gameplay: mode, Econ: &economy.Service{}}}
 		b.sess.SeedSessionRNG(7, 11)
 		b.sess.Econ.Players[0].Stock = [2]float32{123, 456}
@@ -71,12 +71,20 @@ func TestModernDevShortcutPreservesHistoricalAccessAndBattleState(t *testing.T) 
 		}
 		for _, command := range []string{"+dev", "+DEV"} {
 			b.dispatchLocalCommand(command)
-			if b.developer.authorized != (mode == gameplay.Modern) || b.developer.film {
+			if !b.developer.authorized || b.developer.film {
 				t.Fatalf("shortcut authorization/film state in %v: %+v", mode, b.developer)
 			}
 		}
+		b.dispatchLocalCommand("+dev extra")
+		if !b.developer.authorized {
+			t.Fatal("invalid shortcut cleared existing access")
+		}
 		if *b.sess.SimRNG() != simBefore || *b.sess.CrtRNG() != crtBefore || !reflect.DeepEqual(*b.sess.Econ, econBefore) {
 			t.Fatal("developer shortcut changed RNG or economy")
+		}
+		b.dispatchLocalCommand("+Now film Chris Include Reload Assert")
+		if b.developer.authorized {
+			t.Fatalf("bad historical password retained access in %v", mode)
 		}
 		b.dispatchLocalCommand("+Now Film Chris Include Reload Assert")
 		if !b.developer.authorized {

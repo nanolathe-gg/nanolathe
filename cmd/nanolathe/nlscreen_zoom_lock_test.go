@@ -115,8 +115,8 @@ func TestNLScreenCommunityCanRestoreCameraZoom(t *testing.T) {
 	file.Presentation.Overview = settings.OverviewMegamap
 	g, s := settingsRegressionScreen(nil, file)
 	g.settingsWritable = true
-	if s.cardUnavailable(configurationCard(t, s, "zoomstyle")) == "" {
-		t.Fatal("megamap camera control should explain its inactive consumer")
+	if reason := s.cardUnavailable(configurationCard(t, s, "zoomstyle")); reason != "" {
+		t.Fatalf("megamap prevented selecting camera zoom: %s", reason)
 	}
 	s.setCard(configurationCard(t, s, "tab"), settings.OverviewZoom)
 	for _, key := range []string{"zoomstyle", "zoomlock", "iconstyle"} {

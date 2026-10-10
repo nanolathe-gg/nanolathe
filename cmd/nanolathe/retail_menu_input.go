@@ -4,7 +4,6 @@ package main
 // route, list clicks and the skirmish setup rows [07 §5] [07 R-FE-01 §5].
 
 import (
-	"os"
 	"strconv"
 	"strings"
 
@@ -342,13 +341,13 @@ func (g *gameShell) activateGadget(name string) {
 		case "Credits":
 			reportRetailMessageError(g.startMovieSequence(clPtr, creditsMoviePath))
 		case "EXIT":
-			// Retail MAINMENU's EXIT callback enters frontend state 8 and
-			// closes the process; it does not open the unrelated YESORNO
-			// CD-player dialog used during frontend initialization. The
-			// preferences are flushed first, since this is the process's last
-			// chance to write them.
+			// EXIT quits without confirmation [07 R-FE-01 §3]. Let the
+			// window host finish its audio shutdown before the process ends
+			// (DESIGN_PRESENTATION_CLIENT §2.6).
 			g.saveSettings()
-			os.Exit(0)
+			if clPtr != nil {
+				clPtr.RequestExit()
+			}
 		}
 	case modeMenuSingle:
 		switch name {

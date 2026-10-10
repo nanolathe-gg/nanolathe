@@ -64,6 +64,9 @@ github.com/nanolathe-gg/nanolathe/internal/orders NewQueueBinding
 github.com/nanolathe-gg/nanolathe/internal/orders NewWeaponAdapter
 github.com/nanolathe-gg/nanolathe/internal/orders NewWorkAdapter
 github.com/nanolathe-gg/nanolathe/internal/orders newMovementGoalAdapter
+github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp cappedOutput.Write
+github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp clipboardCommands
+github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp clipboardUTF16Text
 github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp presentedCursorRect
 github.com/nanolathe-gg/nanolathe/internal/pool NewUnitsSliced
 github.com/nanolathe-gg/nanolathe/internal/session CompareCheckpointHistories

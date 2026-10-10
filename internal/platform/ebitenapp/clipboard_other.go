@@ -1,4 +1,4 @@
-//go:build (!darwin && !js) || ebitenginevmguest
+//go:build (!darwin && !js && !windows && (!unix || android)) || ebitenginevmguest
 
 package ebitenapp
 

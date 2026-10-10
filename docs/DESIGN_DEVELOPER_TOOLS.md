@@ -35,13 +35,18 @@ and the Modern `+spawn` command keep their own documented contracts.
 
 ### 2.1 Reconnect dormant tools
 
-**Nanolathe Modern policy — developer shortcut.** `+dev` grants developer
-authorization in the central `gameplay.Modern` mode; it is case-insensitive,
+**Nanolathe host input policy — developer shortcut (user-authorized
+2026-10-09).** `+dev` grants developer authorization in every rule set,
+including Strict 3.1, Community 3.9 and Modern; it is case-insensitive,
 takes no arguments and is idempotent. It does not enter film controls or
-change a battle command, resource, or RNG. Strict 3.1 ignores the shortcut.
+change a battle command, resource, or RNG. The existing online command
+filter still refuses developer activation in multiplayer.
 The historical `+Now Film Chris Include Reload Assert` remains available in
-both modes with its original argument case and authorization behavior. Tests
-cover the Modern shortcut, Strict bypass, repeated use and historical access.
+every rule set with its original argument case and authorization behavior
+`[07 R-CAM-01 §9]`. `TestDevShortcutPreservesHistoricalAccessAndBattleState`
+covers all three reserved modes, repeated use, argument rejection, historical
+access and unchanged RNG/resource state. This is host input convenience and
+adds no gameplay seam.
 
 **User-authorized Nanolathe developer tooling policy.** Make the recovered
 State and Builder Probes accessible even where the researched retail image
@@ -208,8 +213,8 @@ state isolation, not a test census of every label. Required acceptance:
 
 ### Controls
 
-In Modern mode, enter `+dev` in TALK. The historical
-`+Now Film Chris Include Reload Assert` also works in either gameplay mode:
+In any rule set, enter `+dev` in TALK. The historical
+`+Now Film Chris Include Reload Assert` also works in every rule set:
 the command name is case-insensitive; the five arguments must match exactly.
 Both grant access; press F11 to enter film controls. Then:
 
@@ -1023,8 +1028,8 @@ ASCII literals compare case-insensitively and the whole name must match. All
 retained definitions are visited in catalog order, including duplicate names;
 the reserved sentinel is absent from `Catalog.UnitRecords`.
 
-Developer access is required at submission (`+Now Film Chris Include Reload
-Assert` in either mode; the Modern `+dev` convenience remains §2.1). Without
+Developer access is required at submission (`+dev` or
+`+Now Film Chris Include Reload Assert` in any rule set; see §2.1). Without
 access the Modern exact-name shorthand retains its existing contract, and
 Strict accepts no spawn shorthand. Registered commands retain priority.
 The second word uses the existing signed-decimal-prefix reader and narrows

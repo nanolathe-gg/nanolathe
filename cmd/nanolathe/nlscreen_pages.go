@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
@@ -961,6 +962,18 @@ func (s *nlScreen) controlCards() []nlCard {
 			scene: func(*nlDraft, int) string { return "controls" },
 		}
 	}
+	zoomStyle := half("zoomstyle", "Camera zoom", []string{"armfav", "armrad"}, []string{"Continuous", "Steps", "No zoom"}, []string{"Continuous with Zoom lock", "Detail, lock, tactical, map", "Fixed at 1x"},
+		func(p *settings.Presentation) *int { return &p.ZoomStyle },
+		"Continuous pinch and wheel zoom pauses at Zoom lock; Steps includes that stop alongside 2x, 0.25x and the whole map. No zoom fixes the view at 1x. Selecting Continuous or Steps in Community also selects Tab: Options. F9 shows the whole map and returns with zoom enabled. F2 opens Options. Free zoom requires the Modern renderer.")
+	zoomStyle.set = func(d *nlDraft, v int) { selectCameraZoom(&d.pres, d.gameplay, v) }
+	// Both preferences form one edit, including reselecting the stored zoom
+	// style while the megamap is active, source locks, Cancel and Restore.
+	zoomStyle.copy = func(to, from *nlDraft) {
+		to.pres.ZoomStyle = from.pres.ZoomStyle
+		if session.BaseModeOf(to.gameplay) == gameplay.Community39 {
+			to.pres.Overview = from.pres.Overview
+		}
+	}
 	return []nlCard{
 		{
 			key: "profile", label: "Profile", pics: []string{"armcom", "corcom"}, kind: nlStepper, steps: presetSteps, subs: presetSubs,
@@ -1024,9 +1037,7 @@ func (s *nlScreen) controlCards() []nlCard {
 		half("tab", "Tab key", []string{"armrad", "armmark"}, []string{"Options", "Overview"}, []string{"Opens the battle menu", "Shows the whole map"},
 			func(p *settings.Presentation) *int { return &p.Overview },
 			"Tab opens Options or the overview: whole-map zoom and back in Modern, the megamap in Strict 3.1 and Community 3.9. Community enables camera zoom with Options selected. Modern with No zoom or the Classic renderer keeps Options. F2 opens Options."),
-		half("zoomstyle", "Camera zoom", []string{"armfav", "armrad"}, []string{"Continuous", "Steps", "No zoom"}, []string{"Continuous with Zoom lock", "Detail, lock, tactical, map", "Fixed at 1x"},
-			func(p *settings.Presentation) *int { return &p.ZoomStyle },
-			"Camera controls: Continuous pinch and wheel zoom pauses at Zoom lock; Steps includes that stop alongside 2x, 0.25x and the whole map; No zoom fixes the view at 1x and disables pinch, wheel and F9 zoom. F9 shows the whole map and returns with zoom enabled. Community uses camera zoom with Tab: Options. F2 always opens Options. Free zoom requires the Modern renderer."),
+		zoomStyle,
 		{
 			key: "zoomlock", label: "Zoom lock", pics: []string{"armfav", "armrad"}, kind: nlStepper, steps: zoomLockSteps,
 			get: func(d *nlDraft) int { return d.pres.ZoomLockPercent - settings.ZoomLockMinPercent },

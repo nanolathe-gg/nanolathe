@@ -1628,11 +1628,16 @@ that retained index to the current string before each subsequent token, so an
 edit following a shorter paste cannot slice beyond Go string storage. The
 painter bounds its local prefix separately. This is host safety handling, not a
 claim about retail's later edits with an index beyond the visible text.
-macOS reads the native AppKit pasteboard only on the initial paste key transition;
-queued tokens retain
-that snapshot. Cmd+V is an authorized host shortcut alias in both gameplay modes,
-with no synthetic Ctrl held state and no other Cmd shortcuts translated into
-game keyboard tokens. The host removes any companion V character from paste.
+The host reads its clipboard only on the initial paste key transition, and
+queued tokens retain that snapshot. macOS reads the AppKit pasteboard's plain
+text and Windows `CF_UNICODETEXT`. Linux and BSD desktops have no clipboard
+the standard library reaches, so they run the session's clipboard program:
+`wl-paste` under Wayland, then `xclip` or `xsel` under X11. A read keeps at
+most 64 KiB and waits at most about a second across the programs it tries; a
+missing program, a failure or `xsel`'s empty output (which cannot be told
+from no text) reads as unavailable. Cmd+V is an authorized host shortcut alias
+in both gameplay modes, with no synthetic Ctrl held state and no other Cmd
+shortcuts translated into game keyboard tokens. The host removes any companion V character from paste.
 
 The portable text boundary currently accepts ASCII bytes unchanged, including
 control bytes, and stops at the first NUL. It rejects an entire non-ASCII payload
@@ -1640,8 +1645,10 @@ rather than guessing replacement characters. `TODO(T25): establish the host
 Unicode-to-retail-codepage conversion` remains the research gap in `[07 §2]`.
 Tests cover replacement, empty success versus failure, copy and rendered-width
 bounds, retained caret and safe subsequent edits, filter bypass, native
-private-pasteboard reads, queued snapshot ownership, and Cmd/Ctrl/Insert
-translation through the common editor.
+private-pasteboard reads, Windows UTF-16 decoding to the first NUL within the
+bound, the unix program choice from the session and PATH, its output and wait
+bounds, queued snapshot ownership, and Cmd/Ctrl/Insert translation through
+the common editor.
 
 **C5 — hit tests and greying.** Hit tests are inclusive on both edges and run
 after runtime window placement. Hidden gadgets are skipped before the hit test,
@@ -2817,6 +2824,58 @@ The consequences of that shape are the contract:
   are all typed commands; nothing in `cmd/nanolathe` writes a unit's selection
   bit directly [I6].
 
+#### Modern submerged wreck picking
+
+**Nanolathe Modern policy (user-authorized 2026-10-09, issue #108).** Retail
+resolves a pointer against `max(terrain height, sea level)` and probes the
+resulting attribute cell for a feature [07 §8]. A sinking wreck keeps its
+stamped footprint but renders at its changing instance height [05 "Feature
+sinking and water interaction"][03 R-RAST-01 §6]. Consequently its visible
+body can lie south of its clickable water-surface footprint. Strict 3.1 and
+Community 3.9 retain that ground-cell behavior.
+
+Modern additionally picks a reclaimable 3D corpse below sea level against
+the projected authored body faces at its committed position and orientation.
+The existing `orders.Rules.PicksSubmergedWrecks` decision selects the policy;
+unbound fixtures answer false. No renderer setting selects it. The model
+source, parent translations, root angles, handedness and camera projection are
+shared with drawing. Positive-area front faces include their edges; selection
+plates, attachment points, missing models and degenerate faces do not admit a
+hit. This is geometric picking, without texture-alpha or raster-edge sampling.
+
+The policy is confined to the main viewport, outside the megamap and HUD.
+A directly picked unit retains its ordinary unit and ground-feature results.
+Otherwise the first admissible wreck in committed feature order wins a model
+overlap, ahead of a different feature at the pointer's water-surface cell.
+Admission requires the existing feature display-visibility predicate and
+mapped history at the wreck's footprint centre. Hidden wrecks acquire no new
+targeting path. At or above sea level, sprite features and non-corpse scenery
+continue through the ordinary cell probe. The water-surface footprint remains
+a valid fallback when no projected wreck wins. If the ordinary probe already
+names that same wreck, it keeps its original point and command behavior.
+
+Cursor, footer and command picking use `battle_feature_pick.go`'s shared hit.
+Armed RECLAIM receives a corrected footprint centre at sea-level height. A
+contextual click whose feature point needs that correction captures only the
+selected actors whose ordinary resolver answers feature reclaim or resurrection
+and gives them the centre; other selected units retain their existing orders,
+as on a Modern area work gesture. A pure-mover contextual click and explicit
+MOVE, attack and other ground orders retain the raw ground-resolved point.
+The resulting typed command uses the existing resolver, order queue, feature
+lookup and work/payout paths; it introduces no wire fields, per-tick state,
+save state or RNG draws, and does not change costs, work cadence or rewards.
+
+**Verification.** Authored fixtures lock submerged versus surface picking in
+all reserved modes, both interface types, native/detail and fractional zoom,
+queued reclaim, cursor/dispatch agreement, unit priority, mapping/visibility
+refusal, omitted geometry, mixed contextual work selections, pure-mover clicks,
+and unchanged explicit ground orders. Geometry
+checks cover parent translations, rotated faces, selection-plate exclusion,
+edge inclusion and front-face admission. Picking and paused command admission
+preserve both RNG streams and resource stocks; ordinary completion from the
+submitted footprint point pays the feature's authored pool once. A retail
+close-up capture verifies that a rendered ship wreck is picked at its body.
+
 ### 3.8 `[F-P1-008]` — presentation-only zoom
 
 `[F-P1-008]` is `camera.Scale`, and it is not a retail concept. Retail has one
@@ -3130,12 +3189,15 @@ excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
   `[07 R-CAM-01 §9]` `[07 R-FE-02 §11]`.
   The front-end `DRDEATH` cheat sequence also lacks its token-history consumer
   `[07 R-FE-02 §10]`.
-* **Clipboard portability.** macOS Insert, Ctrl+V and the host Cmd+V alias read
-  AppKit plain text on the initial paste key transition. The browser build
-  takes the text of the page's paste event (DESIGN_BROWSER_HOST §4 contract
-  9). Other native hosts and VM guests still lack a clipboard bridge. Translating non-ASCII Unicode text
-  into the retail code page remains unresolved; an unavailable format, failed
-  read or unmapped text preserves the current editor `[07 §2]`.
+* **Clipboard portability.** Insert, Ctrl+V and the macOS Cmd+V alias read
+  the host clipboard on the initial paste key transition: AppKit plain text
+  on macOS, `CF_UNICODETEXT` on Windows, and the session's `wl-paste`,
+  `xclip` or `xsel` on Linux and BSD desktops, where a desktop with none of
+  those programs has no clipboard (§3.2). The browser build takes the text of
+  the page's paste event (DESIGN_BROWSER_HOST §4 contract 9). Android, VM
+  guests and other hosts lack a clipboard bridge. Translating non-ASCII
+  Unicode text into the retail code page remains unresolved; an unavailable
+  format, failed read or unmapped text preserves the current editor `[07 §2]`.
 * **Never-opened GUIs.** The windows retail's own code never opens are not
   implemented, and implementing one would be inventing a screen
   `[07 R-FE-01 §12]`.
@@ -3221,11 +3283,12 @@ and undocumented for ProTA's. It is not adopted: under AGENTS.md, evidence that
 a patch implements a behaviour is not authorization to enable it, so an Insert
 replay would need the user's approval as a new Modern policy.
 
-To activate replay in the current battle, open TALK with Enter, submit
-`+Now Film Chris Include Reload Assert`, then submit the command to retain
-(for example `+atm`). Press or hold `\` to repeat it. Modern also accepts
-`+dev` as the activation shorthand. Replay drains ordinary character tokens
-and adds no TALK echo. `TestBackslashReplayThroughBattleInput` locks activation,
+To activate replay in the current battle, open TALK with Enter, submit `+dev`
+or `+Now Film Chris Include Reload Assert`, then submit the command to retain
+(for example `+atm`). Press or hold `\` to repeat it. Every rule set accepts
+`+dev` as the activation shorthand (DESIGN_DEVELOPER_TOOLS §2.1).
+Replay drains ordinary character tokens and adds no TALK echo.
+`TestBackslashReplayThroughBattleInput` locks activation,
 access gating, repeat order and editor ownership across all gameplay modes.
 
 **Command history (Nanolathe host input policy, user-authorized 2026-10-08).**
@@ -4040,7 +4103,19 @@ separate megamap and disables those camera zoom bindings. ProTA's config
 recommends `1`, while Escalation declares no overview preference. A Community
 gameplay floor therefore does not impose ProTA's recommended presentation.
 Both configuration surfaces let the player return to camera zoom by selecting
-Tab: Options without changing the rules. Strict 3.1 retains the
+Tab: Options without changing the rules. They also keep Camera zoom selectable
+while the megamap is active: explicitly selecting Continuous or Steps switches
+Tab to Options in the same edit, even when reselecting the stored zoom style.
+This lets saved base or per-mod overview preferences be cleared directly from
+the zoom control (issue #99). No zoom leaves the selected overview intact.
+The front-end draft treats the two preferences as one edit for mod locks,
+Cancel, Restore and per-mod persistence, recording the actual Tab change so
+a later rules selection does not drop it at Apply. The in-battle transaction
+also remembers that the zoom selector changed Tab so Undo restores the entry
+choice after a rules change. Modern's camera card retains its independent Tab
+choice on Restore. Merely loading preferences changes
+neither. Zoom lock and icon style still require the camera consumer.
+Strict 3.1 retains the
 `presentation.overview` preference: `0` (Options, default) keeps Tab/F2 options and
 the earlier three camera presets; `1` (Overview) installs the megamap below.
 Modern with the Classic renderer keeps its earlier Tab/F9 controls.
@@ -4420,7 +4495,8 @@ and **Cancel** (or Escape).
 (`guis/tcp.gui`), captioned "Enter the room code your friend sent you", with
 **Join** and **Cancel**. Its field takes focus at once; the code may be typed
 or pasted (Ctrl+V, Cmd+V or Shift+Insert where the host has a clipboard
-bridge: macOS and the browser build, DESIGN_BROWSER_HOST §4 contract 9), is
+bridge: macOS, Windows, Linux and BSD desktops with a clipboard program
+(§3.2), and the browser build, DESIGN_BROWSER_HOST §4 contract 9), is
 shown in capitals, and ignores case,
 spaces and dashes. Enter joins. Escape clears the field and a second Escape
 cancels. Each refusal — no game with that code, a full or started game, a mod
@@ -4464,8 +4540,10 @@ click one back, past every colour another present player holds. Each arrival
 takes the lowest free colour, so every player's is their own.
 The room code is drawn beside the title in `HATT14`, in two groups of three,
 with **Copy** where the host has a clipboard bridge (macOS writes AppKit plain
-text and the browser build `navigator.clipboard.writeText` on secure pages;
-other hosts hide it).
+text, Windows `CF_UNICODETEXT`, Linux and BSD desktops hand the code on stdin
+to the first of `wl-copy`, `xclip` or `xsel` the session has, and the browser
+build uses `navigator.clipboard.writeText` on secure pages; a host without a
+bridge, or a desktop without one of those programs, hides it).
 
 The host's settings stay open until Start: the game type (Skirmish or
 Survival, in Difficulty's place), **Select Map** through the ordinary map
@@ -5022,7 +5100,14 @@ pending preset export, target-content locks and detached sidebar preferences.
 configs to lock the separate gameplay-floor and overview recommendations.
 `TestCommunityConfigurationCanLeaveMegamapForCameraZoom` and
 `TestNLScreenCommunityCanRestoreCameraZoom` lock both configuration surfaces and
-the saved host choice; camera mode/lock tests preserve Strict and megamap controls.
+the saved host choice. `TestEscalationSavedMegamapCanEnableZoomDirectly` covers
+inherited base and per-mod overview values, reselecting Continuous, selecting
+Steps, per-mod save/reload and actual camera magnification;
+`TestCommunityBattleOptionsCanEnableZoomDirectly` covers the in-battle selector.
+`TestCommunityZoomApplyAfterModeSwitch` and `TestCommunityZoomUndoAfterModeSwitch`
+lock the linked edit across later rules changes; `TestModernZoomCardRestoreKeepsIndependentTabChoice`
+preserves Modern's separate Tab preference.
+Camera mode/lock tests preserve Strict and megamap controls.
 
 **Open.** Mouse buttons are not rebindable: the Mouse tab offers the
 retail Interface Types and the existing switches. A mod's own key profile is
@@ -5270,10 +5355,10 @@ ring lasts a fraction of a second.
 
 ## 7. Not implemented and open
 
-Native event history, text code pages and clipboard bridges outside macOS remain
-marked platform gaps in the input and editor paths (§2.2 and §3.9). The other open
-questions these contracts carry follow, with the observation that would settle
-each one.
+Native event history, text code pages, and clipboard bridges for Android and
+VM guests remain marked platform gaps in the input and editor paths (§2.2 and
+§3.9). The other open questions these contracts carry follow, with the
+observation that would settle each one.
 
 * Whether the interface's non-world-click queued issues share that producer. The
   section scopes the test to "every world order the interface issues", and the

@@ -22,6 +22,9 @@ import (
 // implementation is either zero-size or a pointer to session-lifetime state.
 // Strict 3.1 draws no randomness in any of them.
 type Rules interface {
+	// PicksSubmergedWrecks lets command picking use a wreck's projected model
+	// at its committed height (interface design "Modern submerged wreck picking").
+	PicksSubmergedWrecks() bool
 	// Infection selects the original close-range takeover policy for a
 	// definition. Zero disables it; ordinary retail capture retains its own
 	// admission and timer.
@@ -156,6 +159,8 @@ type CaptureVeteranRequest struct {
 // it in a Rules interface never allocates and the retail path never reaches a
 // Modern implementation.
 type StrictRules struct{}
+
+func (StrictRules) PicksSubmergedWrecks() bool { return false }
 
 func (StrictRules) Infection(*content.UnitDef) InfectionPolicy { return InfectionPolicy{} }
 
