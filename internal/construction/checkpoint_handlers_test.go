@@ -74,11 +74,11 @@ func TestCheckpointConstructionHandlerLazySourceAndVector(t *testing.T) {
 	}
 	got := constructionHandlerBytes(t, c)
 	baseline := constructionHandlerBytes(t, constructionHandlerContext(t, &orders.Queue{}))
-	// The final queue field is the handler payload, then two empty segments;
-	// table 3 follows with no nodes. Fix actual descriptor IDs independently.
-	want := append([]byte(nil), baseline[:len(baseline)-15]...)
+	// The queue tail holds handler framing, patrol pause, then two empty
+	// segments; table 3 follows with no nodes. Fix descriptor IDs independently.
+	want := append([]byte(nil), baseline[:len(baseline)-16]...)
 	want = append(want, 1, 6, 0, 0, 0, 12, 1, 19, 2, 25, 1, 33, 1, 54, 1, 59, 1)
-	want = append(want, baseline[len(baseline)-14:]...)
+	want = append(want, baseline[len(baseline)-15:]...)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("handler payload\ngot %x\nwant %x", got, want)
 	}

@@ -52,6 +52,7 @@ type ParityUnit struct {
 	CurrentSample, PriorSample                        uint8
 	Slots                                             [3]SlotTrace
 	Orders                                            []OrderTrace
+	PatrolWorkPaused                                  bool `json:"patrolWorkPaused,omitempty"`
 	Threads                                           [8]ThreadTrace
 	Callbacks                                         []cob.LifecycleEvent
 	Pieces                                            []PieceTrace
@@ -85,7 +86,10 @@ type SlotTrace struct {
 }
 
 type OrderTrace struct {
-	WorkAssignmentOrdinal                                              int `json:"workAssignmentOrdinal,omitempty"`
+	WorkAssignmentOrdinal                                              int  `json:"workAssignmentOrdinal,omitempty"`
+	WorkReturnOrdinal                                                  int  `json:"workReturnOrdinal,omitempty"`
+	PatrolReturn                                                       bool `json:"patrolReturn,omitempty"`
+	PatrolReturnArrived                                                bool `json:"patrolReturnArrived,omitempty"`
 	ID, Target, Owner                                                  uint32
 	Phase                                                              uint8
 	DynamicGate                                                        uint32
@@ -295,6 +299,7 @@ func (s *Session) parityUnit(u *units.Unit) ParityUnit {
 		pu.Slots[i] = st
 	}
 	if q := orders.QueueOfUnit(u); q != nil {
+		pu.PatrolWorkPaused = q.PatrolWorkPaused()
 		for _, node := range append(append([]*orders.Node(nil), q.Primary()...), q.Secondary()...) {
 			if node == nil {
 				continue
@@ -303,7 +308,8 @@ func (s *Session) parityUnit(u *units.Unit) ParityUnit {
 				Phase: node.Phase, DynamicGate: node.DynamicGate, Deadline: node.Deadline, GoalX: node.GoalX.Raw(), GoalY: node.GoalY.Raw(), GoalZ: node.GoalZ.Raw(),
 				GuardX: node.GuardX, GuardY: node.GuardY, CachedX: node.CachedX, CachedY: node.CachedY, Param1: node.Param1, Param2: node.Param2, Param3: node.Param3,
 				StaticGate: node.StaticGate, CreationTick: node.CreationTick, Satisfied: node.Satisfied, Flags: node.Flags, MoveState: node.MoveState, PathStatus: node.PathStatus, BuildDefKey: node.BuildDefKey,
-				WorkAssignmentOrdinal: q.WorkAssignmentOrdinal(node)})
+				WorkAssignmentOrdinal: q.WorkAssignmentOrdinal(node), WorkReturnOrdinal: q.WorkReturnOrdinal(node),
+				PatrolReturn: node.IsPatrolReturn(), PatrolReturnArrived: node.PatrolReturnArrived()})
 		}
 	}
 	if u.GetScript() != nil {
@@ -499,9 +505,21 @@ func writeParityUnit(w func(string, ...interface{}), u ParityUnit) {
 	for i, slot := range u.Slots {
 		w("slot:%d:%d:%s:%d:%d:%d:%d:%d:%t:%t:%d:%d:%d:%d:%d|", u.Slot, i, slot.WeaponKey, slot.Reload, slot.Flags, slot.DesiredYaw, slot.DesiredPitch, slot.Ammo, slot.AimIssue, slot.AimReady, slot.TargetKind, slot.TargetUnit, slot.TargetX, slot.TargetZ, slot.MuzzlePiece)
 	}
+	if u.PatrolWorkPaused {
+		w("patrol-work-paused:%t|", u.PatrolWorkPaused)
+	}
 	for _, o := range u.Orders {
 		if o.WorkAssignmentOrdinal != 0 {
 			w("work-assignment:%d|", o.WorkAssignmentOrdinal)
+		}
+		if o.WorkReturnOrdinal != 0 {
+			w("work-return:%d|", o.WorkReturnOrdinal)
+		}
+		if o.PatrolReturn {
+			w("patrol-return:%t|", o.PatrolReturn)
+		}
+		if o.PatrolReturnArrived {
+			w("patrol-return-arrived:%t|", o.PatrolReturnArrived)
 		}
 		w("order:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%s|", o.ID, o.Owner, o.Target, o.Phase, o.DynamicGate, o.Deadline, o.GoalX, o.GoalY, o.GoalZ, o.Param1, o.Param2, o.Param3, o.StaticGate, o.CreationTick, o.Satisfied, o.Flags, o.MoveState, o.PathStatus, o.GuardX, o.GuardY, o.CachedX, o.CachedY, o.BuildDefKey)
 	}

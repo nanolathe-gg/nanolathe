@@ -89,8 +89,8 @@ func TestFactoryProductExcludedFromRepairRadius(t *testing.T) {
 						return visit(h, u)
 					})
 				})
-				// Roam keeps Community's ordinary Both work option and issues no return
-				// move; only the radius candidate-count pick can draw in this visit.
+				// Community Roam issues no return move; Modern retains its saved return.
+				// Only the baseline radius candidate-count pick draws in this visit.
 				builder.Flags = builder.Flags&^(uint32(3)<<units.StandingMoveShift) | uint32(2)<<units.StandingMoveShift
 				id := orders.Lookup("RepairPatrol")
 				q.Push(id, orders.Node{Owner: builder.Handle, Phase: 1, GoalX: builder.X, GoalZ: builder.Z})
@@ -104,7 +104,7 @@ func TestFactoryProductExcludedFromRepairRadius(t *testing.T) {
 					if s.SimRNG().Draws() != before || s.CrtRNG().Draws() != crtBefore {
 						t.Fatal("Modern work selection changed either RNG")
 					}
-					if got := s.parityUnit(builder).Orders[0].WorkAssignmentOrdinal; got != 2 {
+					if got := s.parityUnit(builder).Orders[0].WorkAssignmentOrdinal; got != 3 {
 						t.Fatalf("borrowed work lost its retained patrol identity in the parity projection: %d", got)
 					}
 				} else {

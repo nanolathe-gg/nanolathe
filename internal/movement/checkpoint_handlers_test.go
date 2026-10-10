@@ -91,9 +91,9 @@ func TestMovementCheckpointHandlersLazyPresenceVectorAndPurity(t *testing.T) {
 	if !bytes.Equal(after, want) {
 		t.Fatal("lazy handler changed bytes beyond its existing presence field")
 	}
-	// An empty queue's final fields are handler framing, primary/secondary
+	// An empty queue's final fields are handler framing, patrol pause, primary/secondary
 	// counts, then the empty node table. Row 64 is VTOL_Standby [04 §3.1].
-	queueTail := []byte{1, 1, 0, 0, 0, 64, 3, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0}
+	queueTail := []byte{1, 1, 0, 0, 0, 64, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0}
 	// Movement capture reads its own proof and cannot silently register the
 	// producer into the lower orders context.
 	unregistered := movementCheckpointContext()

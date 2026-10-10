@@ -164,6 +164,8 @@ type RectangleGoalRequest struct {
 // AirGoalRequest is the primitive air payload description. The movement
 // package owns the marker implementation; orders only supplies its stable
 // node identity and authored scalar inputs [P0-00 B][04 R-AIR-01 §4].
+// With Flags bit 0x08, Y supplies the signed whole altitude offset in 16.16
+// form and requests the marker altitude setter; otherwise Y is a position.
 type AirGoalRequest struct {
 	Owner   pool.Handle
 	Node    *Node

@@ -94,11 +94,15 @@ func TestAirUnitReclaimPreambleAndMarker(t *testing.T) {
 				t.Fatal("carrier links survived preamble")
 			}
 			marker := s.Movement.AirMarkerState(b.Handle)
-			if !marker.IsMarker || marker.ArrivalRadius != 0 || marker.AltOffset != 0 {
+			wantOffset := int16(0)
+			if tc.mode == 1 {
+				wantOffset = int16(b.Def.CruiseAlt) / 2
+			}
+			if !marker.IsMarker || marker.ArrivalRadius != 0 || marker.AltOffset != wantOffset {
 				t.Fatalf("unexpected air marker: %+v", marker)
 			}
 			if tc.mode == 1 {
-				if n.Phase != 1 || n.DynamicGate != 0xe0 || marker.Goal.X != b.X || marker.Goal.Y != b.Y+numeric.Fixed(int64(b.Def.CruiseAlt/2)<<16) {
+				if n.Phase != 1 || n.DynamicGate != 0xe0 || marker.Goal.X != b.X || marker.Flags&0x08 == 0 || marker.Goal.Y != numeric.Fixed(int64(wantOffset)<<16) {
 					t.Fatalf("grounded takeoff phase/gate/marker: %d/%#x/%+v", n.Phase, n.DynamicGate, marker)
 				}
 				n.Satisfied |= 0x20

@@ -66,7 +66,7 @@ type modernVector struct {
 }
 
 func newModernVector() modernVector {
-	b := append([]byte("NLCPAIST"), 1, 0)
+	b := append([]byte("NLCPAIST"), 2, 0)
 	b = append(b, make([]byte, 64)...)
 	b = append(b, 0, 2)
 	return modernVector{hash: sha256.Sum256(b)}
@@ -75,7 +75,7 @@ func (v *modernVector) append(t *testing.T, ordinal uint32, intent ai.ModernAppl
 	t.Helper()
 	var b bytes.Buffer
 	b.WriteString("NLCPAIAP")
-	b.Write([]byte{1, 0})
+	b.Write([]byte{2, 0})
 	b.Write(v.hash[:])
 	enc := checkpoint.NewEncoder(&b)
 	enc.U8(0)

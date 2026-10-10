@@ -10,7 +10,7 @@ import (
 )
 
 // SchemaVersion and the owner IDs are fixed by DESIGN_MULTIPLAYER §16.3.6.
-const SchemaVersion uint16 = 1
+const SchemaVersion uint16 = 2
 const OwnerCount = 13
 
 type Owner uint16

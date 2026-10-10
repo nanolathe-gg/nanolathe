@@ -51,6 +51,9 @@ type Rules interface {
 	PatrolWorkVisit(u *units.Unit, n *Node, tick uint32) (Code, bool)
 	// AutomaticWorkValid bounds a borrowed job to its retained assignment.
 	AutomaticWorkValid(u *units.Unit, n *Node) bool
+	// AutomaticWorkResult records Modern patrol work/return outcomes without
+	// changing the ordinary executor or Strict/Community result-code table.
+	AutomaticWorkResult(u *units.Unit, n *Node, satisfied uint32, code Code, tick uint32) Code
 
 	// CrowdedMoveArrival admits bounded Modern completion near a friendly crowd.
 	CrowdedMoveArrival(u *units.Unit, n *Node, tick uint32) bool
@@ -189,6 +192,9 @@ func (StrictRules) PatrolWork(PatrolWorkRequest) PatrolWorkOption { return Patro
 func (StrictRules) DefaultBuilderOptions() BuilderOptions                   { return DefaultBuilderOptions() }
 func (StrictRules) PatrolWorkVisit(*units.Unit, *Node, uint32) (Code, bool) { return 0, false }
 func (StrictRules) AutomaticWorkValid(*units.Unit, *Node) bool              { return true }
+func (StrictRules) AutomaticWorkResult(_ *units.Unit, _ *Node, _ uint32, code Code, _ uint32) Code {
+	return code
+}
 
 // HoldsFire is retail's answer: the standing-order fields are read by the
 // caller's own gates, a forced join bypasses them, and the standing-fire

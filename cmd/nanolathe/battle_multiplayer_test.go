@@ -11,7 +11,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
-	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -103,7 +102,7 @@ func TestLocalMultiplayerConfigIsCommonAndExplicit(t *testing.T) {
 	for i, s := range r.Seats {
 		wantID := session.MatchParticipantID{}
 		wantID[0] = byte(i + 1)
-		if s.Role != session.MatchRoleHuman || s.HostSeat != session.MatchHostNone || s.ComputerKind != 0 || s.Difficulty != 0 || len(s.AIParams) != 0 || s.Participant != wantID || s.BuilderOptions != orders.DefaultBuilderOptions() {
+		if s.Role != session.MatchRoleHuman || s.HostSeat != session.MatchHostNone || s.ComputerKind != 0 || s.Difficulty != 0 || len(s.AIParams) != 0 || s.Participant != wantID || s.BuilderOptions != session.RuleSetForMode(gameplay.Modern).Orders.DefaultBuilderOptions() {
 			t.Fatalf("seat %d: %+v", i, s)
 		}
 	}

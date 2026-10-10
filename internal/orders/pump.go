@@ -207,6 +207,11 @@ type Node struct {
 	// The retail save schema has no producer receipt; see DESIGN_UNITS_ORDERS_COB
 	// "Modern patrol work". The retained queue records own route geometry.
 	workAssignment *Node
+	// Modern patrol borrowing keeps an ordinary saved-position return row.
+	// Both links are transient receipts absent from the retail save schema.
+	workReturn          *Node
+	patrolReturn        bool
+	patrolReturnArrived bool
 	// Only autoEngage marks an attack; restored or direct attacks stay explicit.
 	automaticAttack         bool
 	nextAutomaticTargetTick uint32
@@ -218,6 +223,9 @@ type Queue struct {
 	secondary      []*Node
 	danger         dangerState
 	firingPosition firingPositionState
+	// Modern failed-job recovery pauses the entire retained patrol through
+	// rotation until a genuine waypoint arrival or a replacement command.
+	patrolWorkPaused bool
 
 	// detachedNode is the record currently running removal cleanup after it has
 	// already been unlinked, together with whether its retained next link was
@@ -911,6 +919,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		// normal cleanup so the original assignment and successors resume.
 		// Nanolathe Modern policy: DESIGN_UNITS_ORDERS_COB "Modern patrol work".
 		if !q.Binding().rules().AutomaticWorkValid(u, n) {
+			q.Binding().rules().AutomaticWorkResult(u, n, 0, 8, tick)
 			q.unlinkPrimary(n)
 			continue
 		}
@@ -1022,6 +1031,7 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			// needs the tick to form one.
 			code = handler(u, n, satisfied, tick)
 		}
+		code = q.Binding().rules().AutomaticWorkResult(u, n, satisfied, code, tick)
 		// [04 §3.3] codes 2 and 4 "continue walking unchanged". Continuing is
 		// the head reload of [04 R-ORD-01 §10], so a hold re-runs the record
 		// that is at the head *after* the handler returned — the same record

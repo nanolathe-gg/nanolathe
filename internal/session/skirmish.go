@@ -983,7 +983,11 @@ func composeSkirmish(entry skirmishEntry, options SkirmishEntryOptions, audio vf
 	}
 	if entry.online != nil {
 		for i, seat := range entry.online.request.Seats {
-			s.playerBuilderOptions[i] = seat.BuilderOptions
+			// Only humans carry preferences. Other wire rows contain unused
+			// padding; retain the bound rules' defaults (DESIGN_MULTIPLAYER §8.6).
+			if seat.Role == MatchRoleHuman {
+				s.playerBuilderOptions[i] = seat.BuilderOptions
+			}
 		}
 	}
 	// Construct every manager in ascending slot order before commander and map

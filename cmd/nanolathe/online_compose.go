@@ -16,7 +16,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
 	"github.com/nanolathe-gg/nanolathe/internal/netproto"
-	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/version"
 )
@@ -51,8 +50,7 @@ func onlineMatchConfig(spec onlineMatchSpec, cs *contentSet, schema uint32) (ses
 		PlayerView: view, SpectatorView: view, ReplayView: view, UnitRestrictions: spec.restrictions,
 		Policies: session.MatchPolicies{Revision: 1, Scheduling: 1, Pacing: 1, Drop: 1, Audience: 1, RejoinGraceMilliseconds: 90000}}
 	room.Participants[0][0] = 1
-	builder := orders.DefaultBuilderOptions()
-	options := session.SkirmishEntryOptions{ContentLimits: cs.limits, BuilderOptions: &builder, Mutators: spec.mutators, Restrictions: spec.restrictionSet}
+	options := session.SkirmishEntryOptions{ContentLimits: cs.limits, Mutators: spec.mutators, Restrictions: spec.restrictionSet}
 	if len(spec.community) != 0 {
 		options.CommunitySources = session.CommunitySources{Content: spec.community}
 	}
@@ -64,7 +62,7 @@ func onlineMatchConfig(spec onlineMatchSpec, cs *contentSet, schema uint32) (ses
 	second.Role, second.HostSeat = session.MatchRoleHuman, session.MatchHostNone
 	second.ComputerKind, second.Difficulty, second.AIParams = 0, 0, nil
 	second.Participant[0] = 2
-	second.BuilderOptions = builder
+	second.BuilderOptions = request.Seats[0].BuilderOptions
 	return session.ResolveMatchConfig(request)
 }
 

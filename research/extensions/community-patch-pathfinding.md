@@ -184,6 +184,11 @@ movement-behavior changes anywhere in this line.
 **Established — documented, dated release notes (ProTA 4.8 "Engine notes" and
 the maintainers' release notes).**
 
+- `v2024.3.2`: the
+  [release notes](https://github.com/tanvanman/TADR/releases/tag/v2024.3.2)
+  already document reclaim-only constructor patrol in Hold Position. The
+  September source pin's feature list also includes it in its pre-April-2024
+  history. This is dated continuing-line evidence, not an original 3.9 claim.
 - `v2025.5.18`: "Improved behaviour of con units when guarding a factory - they
   stay put after finishing a build", introduced behind a feature flag that
   `v2025.6.3` made opt-out and `v2025.7.12` changed to **opt-in**. In our

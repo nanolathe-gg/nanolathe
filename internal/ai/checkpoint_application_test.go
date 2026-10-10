@@ -152,7 +152,7 @@ func TestCheckpointControllerApplicationOwnership(t *testing.T) {
 		t.Fatalf("fresh controller history=%+v err=%v", state, err)
 	}
 	// Independently authored initial envelope, including schema version and slot.
-	envelope := append([]byte("NLCPAIST"), 1, 0)
+	envelope := append([]byte("NLCPAIST"), 2, 0)
 	envelope = append(envelope, 7)
 	envelope = append(envelope, make([]byte, 31)...)
 	envelope = append(envelope, 9)

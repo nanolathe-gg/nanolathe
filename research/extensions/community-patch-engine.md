@@ -1467,6 +1467,65 @@ bit) it sets the flag only when the search moved the site. The engine's own
 ghost is switched off while the flag is set and back on otherwise, so every
 other site keeps the engine ghost and its CP-CON-1 colours.
 
+#### Constructor changes after the September source pin
+
+**Established — version scope, verified 2026-10-09.** The
+[v2026.10.6 release](https://github.com/tanvanman/TADR/releases/tag/v2026.10.6)
+resolves to `bdd95b6d61d7fe43f1d1d8af4475401f4a945ebe`. Its
+[license](https://github.com/tanvanman/TADR/blob/bdd95b6d61d7fe43f1d1d8af4475401f4a945ebe/LICENSE)
+grants MIT for the draw component; source was read only after that check.
+The following independently worded contracts are established for that tag,
+not for this document's general `dcff5dd` pin or the 2012–2013 patch binaries.
+No binary analysis was used. The ground-to-air change's September 19 author
+date does not put it in the September 20 pin: the two commits lie on separate
+branches. Release-note ordering is not ancestry evidence.
+
+**Established — configurable resource thresholds.**
+[PatrolReclaimThreshold.cpp](https://github.com/tanvanman/TADR/blob/bdd95b6d61d7fe43f1d1d8af4475401f4a945ebe/src/DDraw/PatrolReclaimThreshold.cpp)
+keeps separate metal and energy fractions for ten player slots, resetting them
+at detected new-game entry. Defaults retain the original binary64 0.2.
+Explicit percentages choose binary64 literals for 0 through 100. A resource
+is low only when stored stock is strictly below promoted stored capacity times
+the fraction; the product has no intermediate binary32 store. Equality and
+unordered comparisons are healthy. Energy's threshold also gates assistance.
+The ground ladder retains its order. Aircraft skip feature pairing when
+neither resource is low, including Reclaim Only; skipped picker queries and
+RNG draws do not occur.
+
+The commands `+setreclaimmetal` and `+setreclaimenergy` change the active local
+slot. They accept ASCII digits and an optional trailing percent sign, clamp
+above 100, reject other forms, refuse outside gameplay or during replay, and
+report both values when the argument is absent. Thus 100 percent still holds
+at full storage and can prevent assistance below full energy; it does not
+reproduce every older aircraft outcome. The two feature gates are enabled in
+all six non-OTA profiles and disabled in OTA at this tag.
+
+**Established — explicit ground-to-air Guard.**
+[GroundToAirGuard.cpp](https://github.com/tanvanman/TADR/blob/bdd95b6d61d7fe43f1d1d8af4475401f4a945ebe/src/DDraw/GroundToAirGuard.cpp)
+permits this pairing through explicit Guard, retaining CanGuard and diplomacy
+admission; smart-click and move-click do not implicitly create it. It keeps
+ground follow, and translates a qualifying builder ward's aircraft build or
+help-build work into ground assistance and aircraft repair into ground repair.
+No production target, or another flying order, leaves ordinary follow. Guard
+admission is not restricted to constructors. The feature is enabled only in
+Escalation and Mayhem at this tag.
+
+**Established — unpaid aircraft-repair emission.**
+[VtolRepairBeamFix.cpp](https://github.com/tanvanman/TADR/blob/bdd95b6d61d7fe43f1d1d8af4475401f4a945ebe/src/DDraw/VtolRepairBeamFix.cpp)
+skips both the nano-piece callback and the beam when the repair helper returns
+zero; a nonzero verdict keeps the existing path. This is enabled only in
+Escalation and Mayhem. The callback can alter COB state, so this is not solely
+a rendering preference. Retail's unconditional aircraft caller remains
+separate [05 R-P0-06 §1].
+
+**Unknown — older artifact equivalence.** These source contracts do not settle
+which older shipped mod DLLs implement them, or the original 3.9 binaries'
+constructor behavior. Identified source/artifact correspondence or bounded
+manual observations with versioned setups would settle those targets. Research
+here does not approve adoption or change the September compatibility target;
+Nanolathe's support gaps and policy choices belong to the
+[constructor audit](../../docs/DESIGN_UNITS_ORDERS_COB.md#constructor-patrol-audit--2026-10-09).
+
 ### 5.7 Environment, visibility and climate
 
 **CP-ENV-1 (B, compile-time). Off-map aircraft margin.** Aircraft outside the

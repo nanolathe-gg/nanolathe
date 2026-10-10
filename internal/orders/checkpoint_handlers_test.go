@@ -98,11 +98,11 @@ func TestCheckpointHandlersLiteralVectorAndPosition(t *testing.T) {
 		if err := e.Err(); err != nil {
 			t.Fatal(err)
 		}
-		// ownedHandlers is immediately before the two empty sequence counts.
+		// ownedHandlers precedes the patrol pause and two empty sequence counts.
 		baseline := empty.Bytes()
-		payload := append([]byte(nil), baseline[:len(baseline)-9]...)
+		payload := append([]byte(nil), baseline[:len(baseline)-10]...)
 		payload = append(payload, want...)
-		payload = append(payload, baseline[len(baseline)-8:]...)
+		payload = append(payload, baseline[len(baseline)-9:]...)
 		if !bytes.Equal(full.Bytes(), payload) {
 			t.Fatal("handler payload changed another queue field")
 		}

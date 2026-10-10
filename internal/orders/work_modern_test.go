@@ -169,13 +169,13 @@ func TestModernPatrolPrioritizesFactoryNanoframeBeforeRepairAndReclaim(t *testin
 			if air {
 				wantID = rowVTOLHelpBuild
 			}
-			if head.ID != wantID || head.Target != product.Handle || head.workAssignment != f.patrol || len(f.q.primary) != 4 || f.q.primary[1] != f.patrol || f.q.primary[2] != f.next || f.q.primary[3] != f.successor {
+			if head.ID != wantID || head.Target != product.Handle || head.workAssignment != f.patrol || len(f.q.primary) != 5 || !f.q.primary[1].IsPatrolReturn() || f.q.primary[2] != f.patrol || f.q.primary[3] != f.next || f.q.primary[4] != f.successor {
 				t.Fatal("factory frame was not selected with original route and successors retained")
 			}
 			if f.workCalls != 0 || f.sim != random || f.resources != resources || product.Remaining != 1 || product.Health != 50 {
 				t.Fatal("selection performed construction, repair, ledger or RNG work")
 			}
-			f.q.primary = f.q.primary[1:]
+			f.q.primary = f.q.primary[2:]
 			// The factory's inter-product gap provides no allocated product.
 			production.BindTarget(0)
 			f.units = []*units.Unit{factory}
@@ -293,98 +293,18 @@ func TestModernPatrolRetainsWorkingPrecisionEnergyAdmission(t *testing.T) {
 	}
 }
 
-func TestModernWorkCircleAndCorridorFixedBoundary(t *testing.T) {
-	w := func(v int64) numeric.Fixed { return numeric.Fixed(v << 16) }
+func TestModernWorkCircleFixedBoundary(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		ax, az, bx, bz, x, z numeric.Fixed
-		radius               int32
-		want                 bool
+		ax, az, x, z numeric.Fixed
+		radius       int32
+		want         bool
 	}{
-		{"segment equal", 0, 0, w(600), 0, w(300), w(128), 128, true},
-		{"segment outside fractional", 0, 0, w(600), 0, w(300), w(128) + 1, 128, false},
-		{"endpoint equal", 0, 0, w(600), 0, w(-128), 0, 128, true},
-		{"endpoint outside fractional", 0, 0, w(600), 0, w(-128) - 1, 0, 128, false},
-		{"diagonal equal", 0, 0, w(400), w(300), w(140), w(230), 100, true},
-		{"diagonal outside", 0, 0, w(400), w(300), w(140), w(230) + 1, 100, false},
-		{"degenerate", w(20), w(20), w(20), w(20), w(148), w(20), 128, true},
-		{"world word extreme", numeric.Fixed(math.MinInt32), 0, numeric.Fixed(math.MaxInt32), 0, 0, w(128), 128, true},
-		{"world word extreme outside", numeric.Fixed(math.MinInt32), 0, numeric.Fixed(math.MaxInt32), 0, 0, w(128) + 1, 128, false},
-		{"two square carry", numeric.Fixed(math.MinInt32), numeric.Fixed(math.MinInt32), numeric.Fixed(math.MaxInt32), numeric.Fixed(math.MaxInt32), 0, 0, 128, true},
-		{"wide cross reject", numeric.Fixed(math.MinInt32), numeric.Fixed(math.MinInt32), numeric.Fixed(math.MaxInt32), numeric.Fixed(math.MaxInt32), numeric.Fixed(math.MinInt32), numeric.Fixed(math.MaxInt32), 128, false},
+		{0, 0, 128 << 16, 0, 128, true}, {0, 0, 128 << 16, 1, 128, false},
+		{0, 0, 60 << 16, 80 << 16, 100, true}, {0, 0, 60 << 16, 80<<16 + 1, 100, false},
+		{numeric.Fixed(math.MinInt32), numeric.Fixed(math.MinInt32), numeric.Fixed(math.MaxInt32), numeric.Fixed(math.MaxInt32), 128, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := modernWithinSegment(tc.ax, tc.az, tc.bx, tc.bz, tc.x, tc.z, tc.radius); got != tc.want {
-				t.Fatalf("inside=%v want%v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestModernPatrolRetainsRouteAndReleasesMovingTargetBeforeGate(t *testing.T) {
-	for _, air := range []bool{false, true} {
-		f := newModernWorkFixture(air)
-		f.u.X, f.u.Z = numeric.Fixed(300<<16), numeric.Fixed(128<<16)
-		f.u.Def.SightDistance = 128
-		patient := modernPatient(2, 300, 128, false)
-		f.units = []*units.Unit{patient}
-		f.visit(100)
-		work := f.q.Head()
-		if work == f.patrol || !f.q.binding.rules().AutomaticWorkValid(f.u, work) {
-			t.Fatal("inclusive corridor boundary refused work")
-		}
-		// A side job does not move the corridor with the builder.
-		patient.Z += 1
-		work.DynamicGate, work.Deadline = gateBuildStance, 1000
-		before := f.sim
-		f.q.Pump(f.u, 101)
-		if f.q.Head() != f.patrol || len(f.q.primary) != 3 || f.q.primary[1] != f.next || f.q.primary[2] != f.successor || f.workCalls != 0 || f.sim != before || f.patrol.GoalX != numeric.Fixed(600<<16) || f.patrol.GoalZ != 0 {
-			t.Fatal("blocked borrowed work followed target outside original corridor or lost route")
-		}
-		// At the next maintenance boundary, a visible target outside the route is
-		// still rejected even though the builder is alongside it.
-		f.visit(200)
-		if f.q.Head() != f.patrol {
-			t.Fatal("side-job position redefined corridor")
-		}
-		// Route rotation does not alter its closed segments.
-		f.q.primary = []*Node{f.next, f.successor, f.patrol}
-		if !modernPatrolCorridor(f.q, patient.X, numeric.Fixed(128<<16)) {
-			t.Fatal("queue rotation changed corridor")
-		}
-		// A non-patrol successor's goal contributes no route segment.
-		if modernPatrolCorridor(f.q, 0, numeric.Fixed(1000<<16)) {
-			t.Fatal("queued successor widened patrol route")
-		}
-	}
-}
-
-func TestModernPatrolFailureCannotRetryInTheSamePump(t *testing.T) {
-	for _, air := range []bool{false, true} {
-		f := newModernWorkFixture(air)
-		f.units = []*units.Unit{modernPatient(2, 32, 0, true)}
-		id := rowHelpBuild
-		if air {
-			id = rowVTOLHelpBuild
-		}
-		attempts := 0
-		f.q.SetOwnedHandler(id, func(*units.Unit, *Node, uint32, uint32) (Code, bool) { attempts++; return 8, true })
-		before := f.sim
-		f.q.Pump(f.u, 100)
-		deadline := uint32(160)
-		if air {
-			deadline = 145
-		}
-		if attempts != 1 || f.q.Head() != f.patrol || uint32(f.patrol.Deadline) != deadline || f.patrol.DynamicGate != gateDeadline {
-			t.Fatalf("air%v attempts%d gate%#x deadline%d", air, attempts, f.patrol.DynamicGate, f.patrol.Deadline)
-		}
-		f.q.Pump(f.u, deadline-1)
-		if attempts != 1 {
-			t.Fatal("failure retried before maintenance")
-		}
-		f.q.Pump(f.u, deadline)
-		if attempts != 2 || f.sim != before || f.q.primary[1] != f.next || f.q.primary[2] != f.successor {
-			t.Fatal("failure lost cadence, RNG or successors")
+		if got := modernWithinPoint(tc.ax, tc.az, tc.x, tc.z, tc.radius); got != tc.want {
+			t.Fatalf("circle=%v want %v for %+v", got, tc.want, tc)
 		}
 	}
 }
@@ -411,9 +331,6 @@ func TestModernRestoredWorkKeepsUnknownProvenanceAndRecoversPatrolRoute(t *testi
 	q := QueueOfUnit(f.u)
 	if q.Head().workAssignment != nil || q.Head().automaticWork || !q.binding.rules().AutomaticWorkValid(f.u, q.Head()) {
 		t.Fatal("restore inferred an automatic producer from queue adjacency")
-	}
-	if !modernPatrolCorridor(q, numeric.Fixed(300<<16), numeric.Fixed(128<<16)) || modernPatrolCorridor(q, patient.X, patient.Z) {
-		t.Fatal("restored work goal widened retained patrol route")
 	}
 	q.RemoveHead()
 	f.q, f.patrol, f.next, f.successor = q, q.primary[0], q.primary[1], q.primary[2]
@@ -569,15 +486,15 @@ func TestModernWorkAssignmentCaptureUsesDetachedQueueOrdinals(t *testing.T) {
 	f.visit(100)
 	before := f.sim
 	d := f.q.DebugSnapshot(f.u.Handle)
-	if len(d.WorkAssignments) != 1 || d.WorkAssignments[0] != (DebugWorkAssignment{1, 2}) || f.sim != before {
+	if len(d.WorkAssignments) != 2 || d.WorkAssignments[0] != (DebugWorkAssignment{1, 3}) || d.WorkAssignments[1] != (DebugWorkAssignment{2, 3}) || f.sim != before {
 		t.Fatal("capture omitted assignment or changed RNG")
 	}
 	work := f.q.Head()
-	if f.q.WorkAssignmentOrdinal(work) != 2 || f.q.WorkAssignmentOrdinal(f.patrol) != 0 {
+	if f.q.WorkAssignmentOrdinal(work) != 3 || f.q.WorkAssignmentOrdinal(f.patrol) != 0 {
 		t.Fatal("assignment fingerprint did not use a retained ordinal")
 	}
 	f.q.primary = []*Node{work, f.next, f.patrol, f.successor}
-	if f.q.WorkAssignmentOrdinal(work) != 3 || d.WorkAssignments[0] != (DebugWorkAssignment{1, 2}) {
+	if f.q.WorkAssignmentOrdinal(work) != 3 || d.WorkAssignments[0] != (DebugWorkAssignment{1, 3}) {
 		t.Fatal("capture aliases live queue bookkeeping")
 	}
 	f.q.primary = []*Node{work, f.next, f.successor}

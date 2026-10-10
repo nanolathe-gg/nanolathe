@@ -109,6 +109,17 @@ func (p *Pump) CollectCheckpointReferences(c *CheckpointContext) (added int, err
 		if field, err := validateCheckpointNode(n); err != nil {
 			return added, orderCheckpointError(fmt.Sprintf("orders.nodes[%d].%s", i, field), err)
 		}
+		// Node edges follow lexical field order, including detached continuations.
+		for _, edge := range []struct {
+			field string
+			node  *Node
+		}{{"workAssignment", n.workAssignment}, {"workReturn", n.workReturn}} {
+			count, err := addOrderCheckpointReference(&c.Nodes, edge.node)
+			added += count
+			if err != nil {
+				return added, orderCheckpointError(fmt.Sprintf("orders.nodes[%d].%s", i, edge.field), err)
+			}
+		}
 	}
 	return added, nil
 }
@@ -228,6 +239,12 @@ func (p *Pump) WriteCheckpoint(e *checkpoint.Encoder, c *CheckpointContext) erro
 			return e.Err()
 		}
 		writeNodeCheckpoint(e, n, path)
+		e.Field(path + ".patrolReturn")
+		e.Bool(n.patrolReturn)
+		e.Field(path + ".patrolReturnArrived")
+		e.Bool(n.patrolReturnArrived)
+		writeOrderCheckpointReference(e, path+".workAssignment", 3, &c.Nodes, n.workAssignment)
+		writeOrderCheckpointReference(e, path+".workReturn", 3, &c.Nodes, n.workReturn)
 	}
 	return e.Err()
 }
@@ -244,7 +261,8 @@ func writeOrderCheckpointReference[T comparable](e *checkpoint.Encoder, path str
 }
 
 // Expanded Queue fields: binding, danger, firingPosition, lastPumpTick,
-// ownedHandlers, primary, secondary. Binding carries its attested payload;
+// ownedHandlers, patrolWorkPaused, primary, secondary. Binding carries its
+// attested payload;
 // handlers retain numeric row/kind pairs; empty/all-nil storage stays absent.
 // detachedNode/detachedHasSuccessor are forbidden. diagnostics/secondaryTick
 // are excluded (DESIGN_MULTIPLAYER §16.3.5–§16.3.6).
@@ -268,6 +286,8 @@ func writeQueueCheckpoint(e *checkpoint.Encoder, c *CheckpointContext, q *Queue,
 	e.Field(path + ".lastPumpTick")
 	e.U32(q.lastPumpTick)
 	q.writeCheckpointHandlers(e, c, path+".ownedHandlers")
+	e.Field(path + ".patrolWorkPaused")
+	e.Bool(q.patrolWorkPaused)
 	for _, segment := range []struct {
 		field string
 		nodes []*Node
@@ -339,6 +359,10 @@ func writeDangerCheckpoint(e *checkpoint.Encoder, c *CheckpointContext, d *dange
 // GoalZ, GuardX, GuardY, HumanMoveSequence, ID, MoveState, Owner, Param1,
 // Param2, Param3, PathStatus, Phase, Satisfied, StaticGate, Target,
 // automaticAttack, automaticWork, crowdedArrival, nextAutomaticTargetTick.
+// The full graph writer follows these values with patrolReturn,
+// patrolReturnArrived, workAssignment and workReturn in lexical order.
+// Synchronous value receipts retain their legacy schema without lifecycle
+// provenance or graph IDs (DESIGN_MULTIPLAYER §16.3.21).
 // RetailSubtype* is reconstructed restore/save staging. GoalSupplied and
 // QueuedIssue must be consumed. All raw handles are u32, while Fixed retains
 // its int64 width (DESIGN_MULTIPLAYER §16.3.5–§16.3.6).

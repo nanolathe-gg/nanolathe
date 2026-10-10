@@ -8,6 +8,7 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/combat"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/movement"
 	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -402,6 +403,18 @@ func TestRetailFighterOnPatrolEngagesAGroundUnit(t *testing.T) {
 	ak := f.place(t, pt4AK, 1, vx, vz)
 	ak.Flags &^= units.StandingFieldMask << units.StandingFireShift
 	fx, fz := fig.X.Add((vx-fig.X)*2), fig.Z.Add((vz-fig.Z)*2)
+	// This scene locks patrol acquisition and actual weapon damage. Start the
+	// fighter at authored cruise altitude so those angular gates do not depend
+	// on grounded takeoff, whose explicit half-cruise marker is tested separately
+	// [04 R-AIR-01 §4][04 R-ORD-01 §7]. The old takeoff omitted that setter and
+	// advanced during the climb; the corrected one reaches half cruise first.
+	f.s.Movement.SetMoverMode(fig, 2)
+	if !f.s.Movement.PlaceUnit(orders.PlaceRequest{
+		Unit: fig.Handle, X: fig.X, Z: fig.Z,
+		Y: movement.CruiseAltitudeForOffset(f.s.World, fig.X, fig.Z, int32(int16(fig.Def.CruiseAlt))),
+	}) {
+		t.Fatal("fixture: airborne fighter placement failed")
+	}
 	pt4Patrol(t, f, fig, fx, fz)
 	e := pt4RunPatrolEngagement(t, f, fig, ak, 1800)
 	if e.engaged == 0 {

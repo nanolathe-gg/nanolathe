@@ -1327,9 +1327,11 @@ Each player row is positional:
 
 These bounds are protocol admission limits, not retail claims. Every
 `SkirmishEntryOptions` member is accounted for: BuilderOptions become the
-row's six values (online both seats use the defaults); CommunitySources
-become the resolved table; ContentLimits and Mutators are explicit;
-AIOverrides become the merged per-row values; Restrictions become field
+row's six values (online human rows use the selected orders rules' defaults);
+non-human rows contain canonical unused padding, and battle entry retains their
+bound orders rules' defaults. Explicit human row preferences survive entry.
+CommunitySources become the resolved table; ContentLimits and Mutators are
+explicit; AIOverrides become the merged per-row values; Restrictions become field
 12's records through `MatchUnitRestrictions` against the unrestricted
 catalog, and a set in the options must equal the set those records
 describe. AutomatedPlayers is false. Progress is local and excluded.
@@ -2745,7 +2747,7 @@ pointer is never redirected to the slot's current occupant.
 | `pool.Units`, `units.World` | Arena limit, alive/definition arrays, player slice start/end bounds; physical slots tagged never allocated/live/freed residual; live/created counters and last successful allocation serial. A freed raw record retains exactly `Handle`, `Owner`, `Kills`, `Remaining`. | `used` is validated from alive records; `slotIndex` is the identity index. Pending allocation serials must be zero. Finalized definition-index maps derive from the admitted catalog; unfinalized fixture maps are represented explicitly or refused. Iteration hints are scratch. |
 | `units.Unit` | `AllocationSerial`, `Handle`, `Owner`, `X/Y/Z`, `Health`, `MaxHealth`, last damage side/cause, `Alive`, `Dying`, death cause/hooks, `Remaining`; `Flags`, build/busy/yard/bugger-off/armour/building/group/mover/restored-mode/pending state; occupancy/sight cells, footprint, structure facing, reveal deadline; bob phase, engagement target, metal spot, activation/cloak/hidden/kills/paralysis/stun; current/prior samples and move tier; placement index/identity/name; physical piece flags. | Definition, scripts and orders are explicit edges. `LOSByte`, restored AI group and weapon target-fixup words are load staging; minimap `BlinkSuppress` and `Move.PendingHeading/PendingSpeed` are presentation/parity bookkeeping, distinct from authoritative steering. |
 | Unit nested records | Every weapon slot's `Reload`, `Flags`, desired yaw/pitch, `Ammo`, muzzle/aim-origin pieces, distance, weapon key, target and aim readiness (`IssueBit`, `Ready`, `readyWord`); target kind/raw unit/X/Z. Move mode/mirror/heading/pitch/bank/speed/velocities. Attachment carrier/piece and ordered cargo. | Script/VM/bridge aliases must agree rather than be encoded as unrelated copies. `readyWord` is restored separately and is not a Boolean. The desired-aim initialization question stays open. |
-| `orders.Queue`, `Node` | Primary/secondary order; danger and firing-position state; `lastPumpTick`. Each node's ID/phase/gates/deadline/owner/target, goal/guard/cache coordinates, parameters, creation/satisfied/flags/move/path state, build key/facing, caption flag, human move sequence, crowded-arrival and automatic-work/attack/next-target state. | No detached pump node or detached-successor context at capture. Installed nodes must have consumed `QueuedIssue`/`GoalSupplied`. Retail subtype words are save/restore staging. `secondaryTick` and diagnostics are debug-only. |
+| `orders.Queue`, `Node` | Primary/secondary order; danger and firing-position state; `lastPumpTick`, route-wide `patrolWorkPaused`. Each node's ID/phase/gates/deadline/owner/target, goal/guard/cache coordinates, parameters, creation/satisfied/flags/move/path state, build key/facing, caption flag, human move sequence, crowded-arrival and automatic-work/attack/next-target state; exact `workAssignment`/`workReturn` object references and `patrolReturn`/`patrolReturnArrived` receipts. | No detached pump node or detached-successor context at capture. Installed nodes must have consumed `QueuedIssue`/`GoalSupplied`. Retail subtype words are save/restore staging. `secondaryTick` and diagnostics are debug-only. |
 | Queue auxiliary state | Danger impacts/contacts in slot order with every validity, sector, tick, coordinate and failure-deadline field; response/resume/return nodes, anchor/withdrawal/decision/quiet/opportunity state; contacts keep allocation identity. Firing-position node/owner/target identities, active/attempt/start state. Crowded-arrival active/since/lastTick/X/Z/goal coordinates. | A node or old allocation held outside the current queue is still a graph root. Queue index is not an object identity. Attested handlers/adapters and their owner bindings replace function pointers. |
 | `cob.VM`, `Thread`, `axisAnim` | All eight thread slots, every stack cell (including cells above SP and in inactive threads), PC/status/SP/sleep/waits/signal mask; statics, pieces, animation lanes, dirty, active count, tick denominator; thread identities, next identity, last-return value/validity/identity arrays; every move/turn/spin lane target/speed/busy/acceleration/active field; piece rotations/translations. | Local allocation can reveal old stack cells. Diagnostics, drain/pose caches, cache revisions and scratch busy flags are excluded. Piece shading/visibility cache booleans are recomputed; the active render-flag store is retained because COB and debris read it. Presentation-only VMs are unsupported (`presentationInstructionLimit` must be zero). |
 | COB binding/bridge | Program/model identities; VM alias, `createInvoked`; pending gameplay return continuations, identified by VM/thread allocation identity, continuation kind/mode, target unit allocation/weapon slot and captured raw deletion key. | Program code and model data are frozen inputs; piece links derive from them. Lifecycle trace queues, link notes, last-started/last-query scratch and transform caches are excluded. A trace-only return closure is not a gameplay continuation. |
@@ -2822,6 +2824,11 @@ behaviour.
 
 #### 16.3.6 Canonical format and public API
 
+Schema 2 (2026-10-09) adds constructor patrol assignment/return references,
+return outcome receipts and the route-wide recovery pause. Ordinary scalar
+command/AI order receipts keep their existing encoding; the canonical graph
+now preserves these simulation continuations.
+
 **Leaf and files.** `internal/sim/checkpoint/{encoder,format,refs}.go` is a
 standard-library-only leaf: owners import it without pointing back to session
 or content, and it selects no rules. It does not reuse `netproto.Writer`,
@@ -2831,7 +2838,7 @@ dependencies.
 
 ```go
 // internal/sim/checkpoint
-const SchemaVersion uint16 = 1
+const SchemaVersion uint16 = 2
 const OwnerCount = 13
 
 type Owner uint16

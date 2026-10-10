@@ -267,6 +267,9 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 		marker = s.newPointMarker(u, Vec3{X: req.X, Y: req.Y, Z: req.Z})
 	}
 	marker.flags |= req.Flags
+	if req.Flags&airMarkerExplicitAlt != 0 {
+		marker.setAltitudeOffset(int16(req.Y >> 16))
+	}
 	if req.Radius > 0 {
 		marker.setArrivalRadius(uint16(req.Radius))
 	}

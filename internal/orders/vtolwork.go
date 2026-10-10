@@ -144,10 +144,9 @@ func airWorkPreamble(u *units.Unit, n *Node, stateText string) Code {
 	u.SetActivationEdge(true) // edge bit 0 [04 R-UNIT-06 §2]
 	if moverMode(u) == 1 {
 		u.Move.Mode = (u.Move.Mode &^ 0x3) | 2 // grounded -> airborne [04 R-MOV-01 §8]
-		// The takeoff marker sits over the unit's own position at half its
-		// cruise altitude; `cruisealt / 2` is a signed halving of the 16-bit
-		// definition word, folded into the Y handed to the air port.
-		if !installWorkGoal(u, n, u.X, u.Y+numeric.Fixed(int64(u.Def.CruiseAlt/2)<<16), u.Z) {
+		// Narrow the authored cruise word before signed truncating halving.
+		// The marker setter derives its terrain-relative Y [04 R-ORD-01 §7].
+		if !installAirWorkGoalWithAltitude(u, n, u.X, u.Z, int16(u.Def.CruiseAlt)/2) {
 			return 7
 		}
 		n.DynamicGate |= gateMoveOutcomes
@@ -335,7 +334,7 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		}
 		return airWorkPreamble(u, n, "Repairing")
 	case 1:
-		if !installWorkGoal(u, n, n.GoalX, n.GoalY+numeric.Fixed(int64(u.Def.CruiseAlt)<<16), n.GoalZ) {
+		if !installAirWorkGoalWithAltitude(u, n, n.GoalX, n.GoalZ, int16(u.Def.CruiseAlt)) {
 			return 7
 		}
 		n.DynamicGate = gateWorkApproach // 0xE8
@@ -357,6 +356,9 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 			if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
 				return 7
 			}
+			// Unlike ground repair, every eligible attempt queries the nano
+			// piece and submits spray, even after unpaid work [05 R-P0-06 §1].
+			emitNanolathe(u, n, tick)
 			n.DynamicGate |= pendTargetRemoved
 			return deadlineHold(n, tick, 1)
 		}
@@ -566,7 +568,7 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		if satisfied&gateMoveOutcomes != 0 {
 			return 6 // rotate: the leg is done, the next waypoint takes the head
 		}
-		if !installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ) {
+		if !installAirWorkGoalWithAltitude(u, n, n.GoalX, n.GoalZ, int16(u.Def.CruiseAlt)) {
 			return 7
 		}
 		armDeadline(n, tick, 45)
@@ -631,9 +633,14 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		}
 		// Air patrol has no ground-style both-stores hold: reached feature
 		// tournaments run even with healthy stocks [04 R-ORD-01 §7][I4].
-		if feature, ok := chooseReclaimFeature(u, 240); ok && spawnPatrolReclaim(u, feature, true, tick) {
-			n.DynamicGate = 0
-			return 3 // wait while the spawned VTOL reclaim runs at the head
+		if feature, ok := chooseReclaimFeature(u, 240); ok {
+			// Reclaim releases before allocation/head insertion; assistance's
+			// distinct retained-payload arms stay above [04 R-ORD-01 §7].
+			releaseGoalPayload(u, n)
+			if spawnPatrolReclaim(u, feature, true, tick) {
+				n.DynamicGate = 0
+				return 3 // wait while the spawned VTOL reclaim runs at the head
+			}
 		}
 		return 2 // no repair/reclaim candidate
 	default:

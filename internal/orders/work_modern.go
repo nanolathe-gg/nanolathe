@@ -45,7 +45,7 @@ func (r *ModernRules) PatrolWorkVisit(u *units.Unit, n *Node, tick uint32) (Code
 	}
 	b := bindingFor(u)
 	q := QueueOfUnit(u)
-	if b == nil || q == nil {
+	if b == nil || q == nil || q.patrolWorkPaused {
 		return 2, true
 	}
 	option := r.PatrolWork(PatrolWorkRequest{Builder: u})
@@ -55,7 +55,7 @@ func (r *ModernRules) PatrolWorkVisit(u *units.Unit, n *Node, tick uint32) (Code
 		var bestID ID
 		var bestDistance modernWide
 		b.ForEachUnit(func(h pool.Handle, target *units.Unit) bool {
-			if target == nil || !target.Alive || !repairCandidate(b, u, h, target) || !modernPatrolCandidate(u, q, target.X, target.Z) {
+			if target == nil || !target.Alive || !repairCandidate(b, u, h, target) || !modernPatrolCandidate(u, target.X, target.Z) {
 				return scanNext
 			}
 			id := Resolve(8, u, target, nil)
@@ -82,7 +82,7 @@ func (r *ModernRules) PatrolWorkVisit(u *units.Unit, n *Node, tick uint32) (Code
 	var bestDistance modernWide
 	found := false
 	b.ForEachFeature(func(feature FeatureView) bool {
-		if !feature.Reclaimable || !feature.Autoreclaimable || !modernPatrolCandidate(u, q, feature.X, feature.Z) || !modernFeatureNeeded(feature, resources) {
+		if !feature.Reclaimable || !feature.Autoreclaimable || !modernPatrolCandidate(u, feature.X, feature.Z) || !modernFeatureNeeded(feature, resources) {
 			return scanNext
 		}
 		distance := modernDistanceSquared(u.X, u.Z, feature.X, feature.Z)
@@ -118,8 +118,19 @@ func modernFeatureBefore(a, b FeatureView) bool {
 
 func modernBorrowWork(u *units.Unit, assignment *Node, work Node) {
 	releaseGoalPayload(u, assignment)
+	q := QueueOfUnit(u)
 	work.automaticWork, work.workAssignment = true, assignment
-	QueueOfUnit(u).PushHead(work.ID, work)
+	if modernWorkPatrol(assignment) {
+		id := rowMoveGround
+		if u.Def.CanFly {
+			id = Lookup("VTOL_Move")
+		}
+		back := NewNodeForOrder(id, 0, u.X, u.Y, u.Z, work.CreationTick, u.Handle, false)
+		back.workAssignment, back.patrolReturn = assignment, true
+		q.PushHead(id, back)
+		work.workReturn = q.Head()
+	}
+	q.PushHead(work.ID, work)
 	// Releasing the leg can raise a movement outcome. Retain only its existing
 	// maintenance deadline so an immediate failure cannot cascade into a retry.
 	assignment.DynamicGate = gateDeadline
@@ -141,6 +152,9 @@ func (*ModernRules) AutomaticWorkValid(u *units.Unit, n *Node) bool {
 	if q == nil || q.indexOfPrimary(assignment) < 0 {
 		return false
 	}
+	if n.patrolReturn {
+		return true
+	}
 	x, z := n.GoalX, n.GoalZ
 	if n.Target != 0 {
 		target := lookupTarget(u, n.Target)
@@ -150,7 +164,8 @@ func (*ModernRules) AutomaticWorkValid(u *units.Unit, n *Node) bool {
 		x, z = target.X, target.Z
 	}
 	if modernWorkPatrol(assignment) {
-		return modernPatrolCorridor(q, x, z)
+		return u != nil && u.Def != nil && n.workReturn != nil &&
+			q.indexOfPrimary(n.workReturn) >= 0 && modernWithinPoint(n.workReturn.GoalX, n.workReturn.GoalZ, x, z, u.Def.SightDistance)
 	}
 	ward := getLookupForWard(assignment, u)
 	return ward != nil && ward.Alive && modernWithinPoint(ward.X, ward.Z, x, z, modernWorkRadius)
@@ -177,27 +192,8 @@ func modernWorkPatrol(n *Node) bool {
 	return n != nil && (n.ID == rowRepairPatrol || n.ID == rowVTOLRepairPatrol)
 }
 
-func modernPatrolCandidate(u *units.Unit, q *Queue, x, z numeric.Fixed) bool {
-	return modernWithinPoint(u.X, u.Z, x, z, u.Def.SightDistance) && modernPatrolCorridor(q, x, z)
-}
-
-// All retained patrol waypoints, including the ordinary return-to-start tail,
-// form the closed route. Queue rotation changes the first point, not its
-// segments. Borrowed goals and non-patrol successors never redefine it.
-func modernPatrolCorridor(q *Queue, x, z numeric.Fixed) bool {
-	var first, previous *Node
-	for _, rec := range q.primary {
-		if !modernWorkPatrol(rec) || rec.Flags&FlagTombstone != 0 {
-			continue
-		}
-		if first == nil {
-			first = rec
-		} else if modernWithinSegment(previous.GoalX, previous.GoalZ, rec.GoalX, rec.GoalZ, x, z, modernWorkRadius) {
-			return true
-		}
-		previous = rec
-	}
-	return first != nil && modernWithinSegment(previous.GoalX, previous.GoalZ, first.GoalX, first.GoalZ, x, z, modernWorkRadius)
+func modernPatrolCandidate(u *units.Unit, x, z numeric.Fixed) bool {
+	return modernWithinPoint(u.X, u.Z, x, z, u.Def.SightDistance)
 }
 
 // Signed double-word intermediates preserve the full 16.16 boundary without
@@ -251,31 +247,4 @@ func modernWithinPoint(ax, az, x, z numeric.Fixed, radius int32) bool {
 	}
 	r := int64(radius) << 16
 	return !modernProduct(r, r).less(modernDistanceSquared(ax, az, x, z))
-}
-
-func modernWithinSegment(ax, az, bx, bz, x, z numeric.Fixed, radius int32) bool {
-	dx, dz := modernDelta(bx, ax), modernDelta(bz, az)
-	px, pz := modernDelta(x, ax), modernDelta(z, az)
-	length := modernProduct(dx, dx).add(modernProduct(dz, dz))
-	dot := modernProduct(px, dx).add(modernProduct(pz, dz))
-	if dot.hi < 0 || dot == (modernWide{}) || length == (modernWide{}) {
-		return modernWithinPoint(ax, az, x, z, radius)
-	}
-	if !dot.less(length) {
-		return modernWithinPoint(bx, bz, x, z, radius)
-	}
-	cross := modernProduct(px, dz).add(modernProduct(pz, dx).negate())
-	if cross.hi < 0 {
-		cross = cross.negate()
-	}
-	// With the 128-unit radius and 32-bit coordinates, a cross product that
-	// needs more than one unsigned word cannot be inside the corridor.
-	if cross.hi != 0 || radius < 0 {
-		return false
-	}
-	leftHi, leftLo := bits.Mul64(cross.lo, cross.lo)
-	r := uint64(radius) << 16
-	rightHi, rightLo := bits.Mul64(r*r, length.lo)
-	rightHi += r * r * uint64(length.hi)
-	return leftHi < rightHi || leftHi == rightHi && leftLo <= rightLo
 }

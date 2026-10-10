@@ -228,11 +228,7 @@ func (s *System) takeoffPreamble(u *units.Unit, rec *orders.Node) bool {
 // package can state the commanded climb as the preamble states it:
 // CruiseAltitudeForOffset(terrain, x, z, int32(HalfCruiseAlt(def.CruiseAlt))).
 func HalfCruiseAlt(cruiseAlt int32) int16 {
-	v := int16(cruiseAlt)
-	if v >= 0 {
-		return v / 2
-	}
-	return -((-v) / 2)
+	return int16(cruiseAlt) / 2
 }
 
 // ClimbTargetFor reports the commanded altitude of an outstanding initial-climb

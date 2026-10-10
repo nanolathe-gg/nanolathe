@@ -14,7 +14,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/community"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/netproto"
-	"github.com/nanolathe-gg/nanolathe/internal/orders"
 	"github.com/nanolathe-gg/nanolathe/internal/relay"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/survival"
@@ -123,11 +122,10 @@ type onlineFrozen struct {
 // onlineCreationFrozen freezes a new room on the host's content: its mod,
 // mutators, restriction records and set, and its own Community table.
 func onlineCreationFrozen(cs *contentSet, seeds [2]uint32, mutators content.Mutators, restrictions content.Restrictions, records []session.MatchUnitRestriction) onlineFrozen {
-	builder := orders.DefaultBuilderOptions()
 	view := session.MatchView{MinimumScale: 64, MaximumScale: 2048, FullMap: true}
 	f := onlineFrozen{
 		seeds:   seeds,
-		options: session.SkirmishEntryOptions{ContentLimits: cs.limits, BuilderOptions: &builder, Mutators: mutators, Restrictions: restrictions},
+		options: session.SkirmishEntryOptions{ContentLimits: cs.limits, Mutators: mutators, Restrictions: restrictions},
 		room: session.MatchRoomInputs{Mod: matchModOf(cs.mod), ContentProfile: cs.profile, UnitRestrictions: records,
 			PlayerView: view, SpectatorView: view, ReplayView: view,
 			Policies: session.MatchPolicies{Revision: 1, Scheduling: 1, Pacing: 1, Drop: 1, Audience: 1, RejoinGraceMilliseconds: 90000}},
@@ -140,7 +138,6 @@ func onlineCreationFrozen(cs *contentSet, seeds [2]uint32, mutators content.Muta
 
 // onlineFrozenOf is a base configuration's frozen part, as every seat reads it.
 func onlineFrozenOf(r session.MatchConfigRequest) onlineFrozen {
-	builder := orders.DefaultBuilderOptions()
 	p := r.ContentProfile
 	dirs := map[string]string{}
 	for _, d := range p.Directories {
@@ -150,8 +147,8 @@ func onlineFrozenOf(r session.MatchConfigRequest) onlineFrozen {
 	return onlineFrozen{
 		seeds: [2]uint32{r.SimulationSeed, r.CRTSeed},
 		options: session.SkirmishEntryOptions{
-			ContentLimits:  content.Limits{Units: int(p.Units), Weapons: int(p.Weapons), TNTBytes: int64(p.TNTBytes), LOSBytes: int64(p.LOSBytes)},
-			BuilderOptions: &builder, Mutators: r.Mutators,
+			ContentLimits: content.Limits{Units: int(p.Units), Weapons: int(p.Weapons), TNTBytes: int64(p.TNTBytes), LOSBytes: int64(p.LOSBytes)},
+			Mutators:      r.Mutators,
 		},
 		room: session.MatchRoomInputs{Mod: r.Mod, ContentProfile: p.Name, ContentDirectories: dirs,
 			UnitRestrictions: append([]session.MatchUnitRestriction(nil), r.UnitRestrictions...),

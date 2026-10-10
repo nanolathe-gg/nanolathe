@@ -99,9 +99,9 @@ func NotifyStatus(u *units.Unit, kind uint8, text string) {
 }
 
 // emitNanolathe asks the committed presentation adapter to publish one
-// accepted work-step emitter. Geometry remains owned by the concrete session
-// adapter; this package supplies only the acting unit, order identity and
-// tick [03 §5.5][04 R-ORD-01 §1].
+// work-visit emitter. The caller owns admission: aircraft repair emits even
+// after refused payment [05 R-P0-06 §1]. Geometry remains owned by the concrete
+// session adapter; orders supplies the acting unit, record and tick [03 §5.5].
 func emitNanolathe(u *units.Unit, n *Node, tick uint32) {
 	if u == nil || n == nil {
 		return
@@ -303,6 +303,23 @@ func installWorkGoalWithRadius(u *units.Unit, n *Node, x, y, z numeric.Fixed, ai
 	return false
 }
 
+// installAirWorkGoalWithAltitude requests the point marker's explicit signed
+// altitude setter, rather than adding cruise altitude to a supplied world Y.
+// The movement owner derives terrain height and enables vertical arrival
+// [04 R-AIR-01 §4][04 R-ORD-01 §7].
+func installAirWorkGoalWithAltitude(u *units.Unit, n *Node, x, z numeric.Fixed, offset int16) bool {
+	if u == nil || u.Def == nil || !u.Def.CanFly || n == nil {
+		return false
+	}
+	b := bindingOfUnit(u)
+	if b == nil || b.Movement == nil || b.Movement.InstallAirHook() == nil {
+		return false
+	}
+	return b.Movement.InstallAirHook()(AirGoalRequest{
+		Owner: n.Owner, Node: n, X: x, Y: numeric.Fixed(int64(offset) << 16), Z: z, Flags: 0x08,
+	})
+}
+
 func boundAssist(q *Queue, builder *units.Unit, n *Node, tick uint32) (bool, bool) {
 	if q == nil || n == nil {
 		return false, false
@@ -337,16 +354,14 @@ func boundCapture(q *Queue, captor *units.Unit, n *Node, tick uint32) (bool, boo
 	return false, false
 }
 
+// boundRepair reports payment admission. Each executor owns whether that
+// verdict gates its nano query and segment [05 R-P0-06 §1].
 func boundRepair(q *Queue, builder, patient *units.Unit, n *Node, tick uint32) (bool, bool) {
 	if q == nil || n == nil {
 		return false, false
 	}
 	if b := q.Binding(); b != nil && b.Work != nil && b.Work.RepairHook() != nil {
-		ok := b.Work.RepairHook()(builder, patient, n, tick)
-		if ok {
-			emitNanolathe(builder, n, tick)
-		}
-		return ok, true
+		return b.Work.RepairHook()(builder, patient, n, tick), true
 	}
 	return false, false
 }
@@ -528,10 +543,10 @@ func selfRepairHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 		// unit running this order — not on the repairer [04 R-ORD-01 §2]
 		// ("stamp nanolathe-active `tick + 150` on itself")[05 R-WORK-01 §3].
 		stampNanolatheActive(u, tick, nanolatheStampRepair)
-		if _, bound := boundRepair(QueueForUnit(u), repairer, u, n, tick); !bound {
+		if accepted, bound := boundRepair(QueueForUnit(u), repairer, u, n, tick); !bound {
 			return 7
-			// The bound service owns admission; the order still re-arms exactly
-			// as the ordinary work row does.
+		} else if accepted {
+			emitNanolathe(repairer, n, tick)
 		}
 		n.DynamicGate |= pendTargetRemoved
 		return deadlineHold(n, tick, 1)
@@ -643,8 +658,10 @@ func repairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Co
 		// builder's cloak deadline to `tick + 150`, calls the helper"
 		// [05 R-WORK-01 §3][04 R-ORD-01 §5].
 		stampNanolatheActive(u, tick, nanolatheStampRepair)
-		if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
+		if accepted, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
 			return 7
+		} else if accepted {
+			emitNanolathe(u, n, tick)
 		}
 		n.DynamicGate |= pendTargetRemoved
 		return deadlineHold(n, tick, 1)
@@ -701,8 +718,10 @@ func repairUnitNoMoveHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code
 		// and with only the null-target entry guard" — stamp included
 		// [05 R-WORK-01 §3][04 R-ORD-01 §5].
 		stampNanolatheActive(u, tick, nanolatheStampRepair)
-		if _, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
+		if accepted, bound := boundRepair(QueueForUnit(u), u, target, n, tick); !bound {
 			return 7
+		} else if accepted {
+			emitNanolathe(u, n, tick)
 		}
 		n.DynamicGate |= pendTargetRemoved
 		return deadlineHold(n, tick, 1)

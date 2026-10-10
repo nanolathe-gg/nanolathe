@@ -4445,6 +4445,12 @@ gate |= `0x8`, hold; else advance. Phase 3: status 10 `Unit repaired`;
 complete. Other: cancel-all. There is no reach test, no `StartBuilding`, and
 no nanolathe stamp: an aircraft repairs from wherever its marker leaves it.
 
+**Established — the spray is unconditional on repair admission.** The aircraft
+work state ignores the repair helper's verdict and still runs `QueryNanoPiece`
+and segment submission after an eligible attempt. Ground repair and self-repair
+instead test that verdict. Refused air repair changes no health but still has
+callback and effect consequences [05 R-P0-06 §1].
+
 **`VTOL_Reclaim`** (feature). Every visit resolves the feature at the goal
 as the ground twin does (none → status 7 `Reclamation failed`, abandon; not
 reclaimable → abandon). Phase 0: preamble with `Reclaiming`, plus

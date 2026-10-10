@@ -4695,9 +4695,11 @@ unit refresh call.
 
 ## Construction nano cadence and admission [R-P0-06]
 
-Retail has **no independent "nano every N ticks" presentation timer**. Nano
-output is admitted by the construction/reclaim work paths, so the visual pulse
-follows accepted work, not a free-running clock.
+**Established — nano timing belongs to the work executors.** Construction
+nano output follows accepted work. Other operations have their own gates;
+notably aircraft repair emits after an eligible attempt even when energy
+admission refuses healing. There is no independent presentation timer for
+these visits [R-P0-06 §1].
 
 ### Work-admission gating and emission producers [R-P0-06 §1]
 
@@ -4712,14 +4714,15 @@ The emission producers, their admission gates, and their cadences:
 | Unit reclaim / capture | target is valid and in range, and the operation is admitted | once for the visit | one | operation schedules the next visit two ticks later |
 | Feature reclaim | the order's work counter is still above 15 after the visit's decrement | once for the visit | **two** | operation schedules the next visit two ticks later |
 | Resurrection | the order's wait counter has not reached zero | once for the visit | one | wait state retries after **one** tick |
-| Repair | repair work helper admits the visit | once after accepted work | one | unfinished repair retries after one tick |
+| Ground repair and self-repair | repair work helper admits the visit | once after accepted work | one | unfinished repair retries after one tick |
+| Aircraft repair | eligible damaged-target work state attempts the repair helper, regardless of its admission verdict | once after the attempted work | one | unfinished repair retries after one tick |
 
 An unfinished target retries its work state one tick later, so ordinary
 construction cadence follows accepted work visits rather than a visual clock.
 **No query and no segment is emitted when the two-resource construction
-admission rejects the work step.** The presentation contract is therefore:
-publish a nano event only for an accepted work transition, carrying the
-builder/source, the target/site, the mode, and the resolved source piece.
+admission rejects the work step.** The construction presentation contract is
+therefore: publish a nano event only for an accepted construction transition,
+carrying the builder/source, target/site, mode and resolved source piece.
 
 **Established — readiness precedes ground work admission.** A new ground
 build allocates its nanoframe and arranges `StartBuilding` before its
@@ -4810,8 +4813,10 @@ selector = 6
 ```
 
 An event is emitted once per admitted segment call. A two-segment feature-
-reclaim visit emits two ordered events. A rejected work step emits none and
-must not call `QueryNanoPiece` merely to draw a speculative spray.
+reclaim visit emits two ordered events. Rejected construction and ground repair
+skip the query and segment. Aircraft repair explicitly queries and requests its
+segment after an eligible refused attempt [R-P0-06 §1]; that is a caller
+contract, not permission to query speculatively for another work family.
 
 ### Shared effect admission and lifetime boundary [R-P0-06 §5]
 
@@ -4836,7 +4841,7 @@ records that the nano record has no fade curve at all.
 
 ### Strict admission and ordering [R-P0-06 §6]
 
-The authoritative ordering is:
+Construction and admitted ground repair follow this ordering:
 
 ```text
 check operation/target/range/state
@@ -4855,13 +4860,16 @@ the remaining fraction and health in the established difference-of-truncations
 order [05 "Health gain and fractional carry"] before the presentation segment
 is requested.
 
-The query/segment path must not be moved before admission, and an
-effect-pool failure must not roll back already committed work. The visual
-event is a consumer of an accepted authoritative transition, not its gate.
+For these admitted-work paths the query/segment path must not move before
+admission, and effect-pool failure must not roll back committed work. Aircraft
+repair instead attempts its energy-gated repair, then queries and submits
+regardless of the verdict. A refused attempt has no healing transition to roll
+back; its callback and effect path still run [R-P0-06 §1]. Segment allocation
+never gates the preceding work admission.
 
-**Confidence.** Query mode/seed, accepted-work gating, ordinary construction
-cadence, selector value 6, endpoint ownership, and cap/order behavior are
-established.
+**Confidence.** Query mode/seed, construction and ground-repair accepted-work
+gating, the aircraft-repair exception, ordinary construction cadence, selector
+value 6, endpoint ownership, and cap/order behavior are established.
 
 #### R-P0-06 §5 addendum — the record constructor and allocator epilogue
 
@@ -4900,13 +4908,15 @@ are in the **feature reclaim** executor's work phase, where the counter in
 question is the order node's countdown of [R-WORK-01 §5]. Feature reclaim is
 the only two-segment producer in the engine.
 
-**Established — the complete producer census.** Each row is one accepted work
-visit. "Direction" says which end of the segment is the source.
+**Established — the complete producer census.** Each row is one emitting
+visit; ground repair requires admitted work, while aircraft repair also emits
+after an energy-refused attempt. "Direction" says which end is the source.
 
 | Producer | Segments per visit | Direction | Retry |
 |---|---:|---|---|
 | Mobile build, building/factory build, build assist, and the VTOL twins | 1 | builder nano piece → target box | 1 tick |
-| Repair (`RepairUnit`, `RepairUnitNoMove`, `SelfRepair`, `VTOL_RepairUnit`) | 1 | builder nano piece → target box | 1 tick |
+| Ground repair (`RepairUnit`, `RepairUnitNoMove`, `SelfRepair`), after admitted work | 1 | builder nano piece → target box | 1 tick |
+| Aircraft repair (`VTOL_RepairUnit`), after each eligible attempt | 1 | builder nano piece → target box | 1 tick |
 | Resurrection wait | 1 | builder nano piece → feature box | 1 tick |
 | Unit reclaim | 1 | target box → builder nano piece | 2 ticks |
 | Capture | 1 | target box → builder nano piece | 2 ticks |
@@ -4964,11 +4974,15 @@ z1 = cellZ << 20                      z2 = z1 + featureDef.footprintZ << 20
 The `<< 20` is the sixteen world units per cell folded into the 16.16
 representation; the height byte is already in world units.
 
-**Established — nothing in the emission path is authoritative.** The nano query
-and the segment submission happen after the authoritative transition in every
-producer, the submission is a silent no-op when the record pool is exhausted,
-and neither draws from the simulation stream. A rejected work step emits
-nothing and must not call `QueryNanoPiece` speculatively [R-P0-06 §6].
+**Established — segment allocation does not gate work.** Construction and
+ground repair query and submit after admitted work; aircraft repair does so
+after an eligible attempt, including a refused one. Exhausted segment storage
+silently refuses submission without rolling back work [R-P0-06 §6]. This does
+not make the whole emission path presentation-only: `QueryNanoPiece` can
+change COB state, and emitted records have the CRT-stream lifetime and update
+consequences specified in [R-P0-06 §5] and [03 §5.5]. The segment helper does
+not draw from the simulation stream. Other callers must not gain an aircraft
+repair exception that their own admission branches do not have.
 
 **Established — the work-order randomness census.** Across every handler in
 this document:
@@ -5015,10 +5029,19 @@ accepted only when energy carry is non-positive; it does not touch the metal
 subrecord. Only after admission succeeds does the helper emit the separately
 computed heal term as kind-10 healing through the ordinary damage path.
 
-**Established fact — repair nano cadence.** Repair emits one nano segment per
-accepted repair visit, and an unfinished repair target retries the work state
-one tick later, so the presentation follows accepted repair work rather than a
-free-running timer [R-P0-06 §3].
+**Established — repair nano cadence, corrected 2026-10-09.** Ground
+`RepairUnit`, `RepairUnitNoMove` and `SelfRepair` test the repair helper's
+verdict and query the nano piece and emit one segment only after admitted work.
+`VTOL_RepairUnit` instead ignores that verdict: after each eligible damaged-target
+attempt it queries the nano piece and submits one segment even when the energy
+helper refused the visit. The refusal still requests energy and does not heal.
+All four unfinished work states retry one tick later [R-P0-06 §3]
+[04 R-ORD-01 §7]. The earlier accepted-only statement incorrectly generalized
+the ground callers to the aircraft caller. This is not merely a free beam:
+`QueryNanoPiece` is synchronous COB work and can change script state
+[R-P0-06 §2]. The later community patch's profile-selected suppression belongs
+to [its extension contract](../extensions/community-patch-engine.md#constructor-changes-after-the-september-source-pin),
+not to this retail baseline.
 
 #### Repair, exactly: the helper, the executors, and the captions [R-WORK-01 §3]
 
@@ -7321,11 +7344,11 @@ preserve these invariants:
 - Repair admission is energy-only: the energy resource term is always added to
   energy requested and is added to energy accepted only when energy carry is
   non-positive, with no metal ledger effect.
-- Nano presentation has no free-running timer: build, assist and repair emit
-  one segment per accepted work visit and retry one tick later, feature
-  reclaim emits two segments per visit while its countdown sits above the 15
-  gate, and unit reclaim/capture emit one segment per visit on a two-tick
-  cadence; rejected work emits no query and no segment [R-P0-06].
+- Nano presentation follows each executor's work visits: construction and
+  ground repair emit after admitted work; aircraft repair also emits after an
+  eligible energy-refused attempt. These paths retry one tick later. Feature
+  reclaim emits two segments per visit while its countdown exceeds 15, and
+  unit reclaim/capture emit one per visit on a two-tick cadence [R-P0-06].
 - Unit reclaim's fatal payment is metal-only: `(1 - remaining fraction) ×
   metal build cost` credited to the killer's metal production bucket at death
   finalization, with no per-pulse payment and no energy credit.

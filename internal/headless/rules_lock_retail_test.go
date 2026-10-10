@@ -202,6 +202,16 @@ import (
 // The combat benchmark's Modern warm/final locks move with its changed targets
 // and shots. The pre-fix build reproduces both preceding locks; the initial
 // composition and both Modern Ashap trajectories remain unchanged.
+// The constructor patrol audit (2026-10-09) corrects the shared air preamble's
+// explicit signed half-cruise marker, full-cruise repair/patrol markers,
+// reclaim payload release, and unpaid aircraft repair spray
+// [04 R-ORD-01 §4, §7][04 R-AIR-01 §4][05 R-P0-06 §1]. All three benchmark
+// warm/final locks, the Strict effect-pool lock and the Strict/Community
+// 54,000-tick Ashap locks move with these baseline corrections. A temporary
+// diagnostic restoring only the preceding baseline implementations reproduces
+// every preceding short and long lock, including Modern. Initial and 6,000-tick
+// Ashap locks, the Modern long lock and battle end ticks remain unchanged.
+// Modern's approved sight-circle, saved-return and recovery policies remain selected.
 const (
 	lockAshapMap                   = "ashap plateau"
 	lockAshapSeed           uint32 = 7
@@ -210,8 +220,8 @@ const (
 	lockAshapStrict6000            = "partial-v1:1fc360913f7d32fb"
 	lockAshapCommunity6000         = "partial-v1:25ebe70b68b04a1a"
 	lockAshapModern6000            = "partial-v1:b574c1e0b3361b82"
-	lockAshapStrict54000           = "partial-v1:72d73a6f61165e9d"
-	lockAshapCommunity54000        = "partial-v1:588a267d3a1a7c0e"
+	lockAshapStrict54000           = "partial-v1:90887a3fc87a6486"
+	lockAshapCommunity54000        = "partial-v1:01080593bac20f0c"
 	lockAshapModern54000           = "partial-v1:954703145cb88cf6"
 	lockAshapStrictEnd      uint32 = 54000
 	lockAshapCommunityEnd   uint32 = 54000
@@ -223,12 +233,12 @@ const (
 	lockBenchStrictInitial           = "partial-v1:bf488aacf042d582"
 	lockBenchCommunityInitial        = "partial-v1:55165c066f8b6eaa"
 	lockBenchModernInitial           = "partial-v1:55165c066f8b6eaa"
-	lockBenchStrictWarm              = "partial-v1:c7460e184c2737b9"
-	lockBenchCommunityWarm           = "partial-v1:44a89fe91c0b44cb"
-	lockBenchModernWarm              = "partial-v1:fa0ffa1be5dcc8ee"
-	lockBenchStrictFinal             = "partial-v1:72b7e14bd65c2ee0"
-	lockBenchCommunityFinal          = "partial-v1:550966a31f52a311"
-	lockBenchModernFinal             = "partial-v1:94418a7be6d56e78"
+	lockBenchStrictWarm              = "partial-v1:92288be0462952a2"
+	lockBenchCommunityWarm           = "partial-v1:9ca4bb1bae72a0e7"
+	lockBenchModernWarm              = "partial-v1:0e9e5bb74740f57c"
+	lockBenchStrictFinal             = "partial-v1:4a9bfa48817da57c"
+	lockBenchCommunityFinal          = "partial-v1:a97cef8ec7ca358d"
+	lockBenchModernFinal             = "partial-v1:a5ddab18c4d13cc7"
 )
 
 // The expanded retail audit corrects active-search budget continuation
@@ -292,7 +302,7 @@ func TestStrictFingerprintIsLocked(t *testing.T) {
 const (
 	lockPoolSeed           uint32 = 5
 	lockPoolSteps                 = 4500
-	lockPoolStrictAt4500          = "partial-v1:1f9947b398e868ef"
+	lockPoolStrictAt4500          = "partial-v1:418db2765d31b38b"
 	lockPoolStrictCapacity        = 300 // retail's fixed active-effect pool [03 §1]
 )
 

@@ -303,9 +303,14 @@ func repairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		if resources, ok := playerResources(u); ok && patrolResourceAtLeastTwenty(resources.Stock[1], resources.Capacity[1]) && patrolResourceAtLeastTwenty(resources.Stock[0], resources.Capacity[0]) {
 			return 2 // both stores are healthy: keep patrolling
 		}
-		if feature, ok := chooseReclaimFeature(u, u.Def.SightDistance); ok && spawnPatrolReclaim(u, feature, false, tick) {
-			n.DynamicGate = 0
-			return 3 // wait while the spawned reclaim runs at the head
+		if feature, ok := chooseReclaimFeature(u, u.Def.SightDistance); ok {
+			// The reclaim handoff explicitly releases this leg's payload
+			// before allocating/inserting the work record [04 R-ORD-01 §4].
+			releaseGoalPayload(u, n)
+			if spawnPatrolReclaim(u, feature, false, tick) {
+				n.DynamicGate = 0
+				return 3 // wait while the spawned reclaim runs at the head
+			}
 		}
 		return 2 // no repair/reclaim candidate
 	default:

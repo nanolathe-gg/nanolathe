@@ -13,6 +13,10 @@ import (
 // arrival places") decides who goes where at the end of a move, and what a
 // unit does when the place it is making for is taken or cannot be reached.
 //
+// Patrol work returns keep their saved acquisition position; assigning or
+// exchanging their place would turn settling elsewhere into a false return
+// (DESIGN_UNITS_ORDERS_COB "Modern patrol work").
+//
 // Places. Every plain ground move's destination footprint is the unit's
 // place, reserved for as long as the order lives; a move first seen after it
 // has begun keeps the goal it was given. Units one owner orders on
@@ -266,7 +270,7 @@ func (p ArrivePilot) BeginTick(s *System, tick uint32) {
 			continue
 		}
 		n := q.Head()
-		if n == nil || n.ID != st.moveGround || n.Target != 0 {
+		if n == nil || n.ID != st.moveGround || n.Target != 0 || n.IsPatrolReturn() {
 			continue
 		}
 		row := st.row(u.Handle)
@@ -360,7 +364,7 @@ func (p ArrivePilot) GroupOrdered(s *System, owner uint8, members []pool.Handle,
 		if q == nil {
 			continue
 		}
-		if n := q.Head(); n != nil && n.ID == st.moveGround && n.Phase == 0 && n.Target == 0 {
+		if n := q.Head(); n != nil && n.ID == st.moveGround && n.Phase == 0 && n.Target == 0 && !n.IsPatrolReturn() {
 			p.adopt(s, st, h, n)
 		}
 	}
@@ -605,7 +609,7 @@ func (p ArrivePilot) nearestFree(s *System, st *arriveState, u *units.Unit, ax, 
 // Visit looks, every few ticks, at the place of a unit near it and gives the
 // unit another when its place is taken or cannot be reached.
 func (p ArrivePilot) Visit(s *System, v *Visit) {
-	if !p.Exchange || v.Head == nil || v.Unit == nil || s.Terrain == nil {
+	if !p.Exchange || v.Head == nil || v.Head.IsPatrolReturn() || v.Unit == nil || s.Terrain == nil {
 		return
 	}
 	st := p.state(s)

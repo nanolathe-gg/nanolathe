@@ -308,6 +308,7 @@ func (q *Queue) suspendDangerAssignment(u *units.Unit) {
 	// Automatic repair's patient is expendable; its underlying patrol/guard and
 	// later explicit commands are retained. Construction was rejected above.
 	for len(q.primary) > 0 && q.primary[0] != nil && q.primary[0].automaticWork {
+		q.Binding().rules().AutomaticWorkResult(u, q.primary[0], 0, 8, q.lastPumpTick)
 		q.RemoveHead()
 	}
 	if len(q.primary) > 0 {

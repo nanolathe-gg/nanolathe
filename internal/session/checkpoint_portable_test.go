@@ -197,11 +197,11 @@ func checkpointPortableCommands(command string, actor *units.Unit, x, z numeric.
 // empty; their hashes must differ from the corresponding absent section.
 func checkpointPortableHeader(t *testing.T, data []byte, id checkpoint.Identity) {
 	t.Helper()
-	want := append([]byte("NLCPSTAT\x01\x00"), id.Content[:]...)
+	want := append([]byte("NLCPSTAT\x02\x00"), id.Content[:]...)
 	want = append(want, id.Config[:]...)
 	want = append(want, 13, 0)
 	if !bytes.HasPrefix(data, want) {
-		t.Fatal("capture lacks the complete schema-1 header")
+		t.Fatal("capture lacks the complete schema-2 header")
 	}
 }
 
@@ -210,7 +210,7 @@ func checkpointPortableLog(t *testing.T, id checkpoint.Identity, record Checkpoi
 	p := record.Position
 	t.Logf("portable-v1 tick=%d boundary=%d pump=%d input=%d full=%x", p.Tick, p.Boundary, p.Pump, p.ConsumedInput, record.Digests.Full)
 	for i, digest := range record.Digests.Owners {
-		absent := append([]byte("NLCPSECT\x01\x00"), id.Content[:]...)
+		absent := append([]byte("NLCPSECT\x02\x00"), id.Content[:]...)
 		absent = append(absent, id.Config[:]...)
 		absent = binary.LittleEndian.AppendUint16(absent, uint16(i+1))
 		absent = append(absent, 0)

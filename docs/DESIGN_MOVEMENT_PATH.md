@@ -3917,7 +3917,10 @@ press toward a held cell; a move whose goal cannot be had retries for as long
 as its record is the last primary one `[04 R-ORD-01 §4]`.
 
 **Modern behavior.** Only `Move_Ground` records with no target, on finished
-grounded mobile units, are given places (`ArrivePilot`).
+grounded mobile units, are given places (`ArrivePilot`). A proven
+[constructor patrol return](DESIGN_UNITS_ORDERS_COB.md#modern-patrol-work) is
+excluded: its destination is the saved acquisition position, and settling
+elsewhere cannot establish that the helper returned.
 
 1. *Places.* At the start of a tick, before any order installs its goal,
    the plain moves ordered since the last tick are gathered by owner and
@@ -3981,7 +3984,9 @@ units keep passable, distinct places; Strict and Community keep their goals),
 the unit after twenty ticks; a friend on the move does not),
 `TestArriveSettlesShortOfASealedGoal`,
 `TestArriveSealedWaitsForAUnitThatMoves` and
-`TestArriveAdoptsAMoveThatWaited`; in the retail tier
+`TestArriveAdoptsAMoveThatWaited`;
+`session.TestModernConstructorPatrolPaidRepairRetail` locks a stock ground
+constructor whose return previously settled roughly 100 units short; in the retail tier
 `session.TestModernSealedOutUnitSettlesWhereItStands` (a unit parked units
 seal out of its free place settles outside them without sharing a cell, a
 hostile unit among them changes nothing, and Strict 3.1 keeps the retry) and
