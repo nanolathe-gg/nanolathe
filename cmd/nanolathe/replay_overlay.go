@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"image"
 
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
-	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
@@ -363,7 +363,7 @@ const (
 // else is shown there (above, the row the overlay keeps below), and below
 // the +fps panel when it would reach it. The end message wraps to the
 // overlay's width; a hint takes one more line.
-func layoutReplayOverlay(measure func(string) int, height int, lines []string, labels [replayControlCount]string, message, hint string, screenW int, fps bool, above int) replayOverlayLayout {
+func layoutReplayOverlay(measure func(string) int, height int, lines []string, labels [replayControlCount]string, message, hint string, screenW int, fps bool, above int, insets camera.ChromeInsets) replayOverlayLayout {
 	const clearance = 2
 	l := replayOverlayLayout{step: height + 1, hint: hint}
 	width, row := 0, 0
@@ -389,7 +389,7 @@ func layoutReplayOverlay(measure func(string) int, height int, lines []string, l
 	if hint != "" {
 		rows++
 	}
-	left, top := hud.ChromeRailX+2, max(hud.ChromeStripHeight+4, above+clearance)
+	left, top := int(insets.Left)+3, max(int(insets.Top)+4, above+clearance)
 	w, h := width+6, rows*l.step+buttonH+7
 	if fps && left+w+clearance > screenW-onlineFPSPanelW-onlineFPSPanelMargin {
 		top = max(top, onlineFPSPanelMargin+onlineFPSPanelH+2*clearance)
@@ -415,7 +415,7 @@ func replayWeatherBottom(b *battleSession, fontHeight uint8) int {
 	if b == nil || b.hostPreferences().WeatherReport == 0 || b.sess == nil || b.sess.Wind == nil {
 		return 0
 	}
-	return 36 + 2*int(fontHeight) + 6
+	return (36 + 2*int(fontHeight) + 6) * int(b.chromeScale())
 }
 
 // drawReplayOverlay draws the playback overlay over the world view.
@@ -447,8 +447,9 @@ func (h *retailBattleHUD) drawReplayOverlay(c *client.Client, b *battleSession) 
 		hint = replayControlHint(replayControl(hovered))
 	}
 	screenW, _ := c.Size()
+	left, top, bottom := b.cam.ChromeInset()
 	lines := v.lines()
-	l := layoutReplayOverlay(measure, int(font.Height), lines, labels, v.Message, hint, screenW, b.fpsShown(), max(c.MessageColumnBottom(), replayWeatherBottom(b, font.Height)))
+	l := layoutReplayOverlay(measure, int(font.Height), lines, labels, v.Message, hint, screenW, b.fpsShown(), max(c.MessageColumnBottom(), replayWeatherBottom(b, font.Height)), camera.ChromeInsets{Left: left, Top: top, Bottom: bottom})
 	o.buttons, o.backdrop = l.buttons, l.backdrop
 	r := l.backdrop
 	c.UIFillRect(r.Min.X, r.Min.Y, r.Dx(), r.Dy(), h.guiColor(0))

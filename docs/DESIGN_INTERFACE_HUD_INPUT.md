@@ -4726,7 +4726,10 @@ compact overlay sits at the top left of the world view in the side's console
 face, placed as the online network overlay is: below the resource strip, the
 visible message lines and the Community weather report (§3.14) where that
 sits under the strip, and below the +fps panel where it would reach it. It
-reads *Replay:* and the map; the elapsed and total game time (m:ss / m:ss),
+uses physical camera insets at every UI scale; the weather clearance follows
+the report's magnified rail coordinates. Its button rectangles use those same
+physical coordinates for input.
+It reads *Replay:* and the map; the elapsed and total game time (m:ss / m:ss),
 the speed (1/4x to 8x) and *Paused*, *Skipping to m:ss* or *Ended*; and
 *View:* with the player or *Full map*. Its buttons are Pause (Play while
 paused), Slower, Faster, Skip 1:00 (Stop skip during a skip), View and Exit.
@@ -4748,8 +4751,9 @@ red for a divergence or a damaged recording.
 Pause and the speed keys are the single-player battle's (§3.6). A playback
 takes no pause or speed command, so they drive the playback, except the
 speed keys while the developer film runs. The other keys have no battle
-binding. The in-battle menu holds the playback while it is open and restores
-it on closing, as it pauses a single-player battle. Tab resumes a paused
+binding. The in-battle menu holds normal playback and an active skip while it
+is open and restores them on closing, as it pauses a single-player battle. A
+paused playback can still skip when the menu is closed. Tab resumes a paused
 playback, as it resumes a paused battle (§5), and opens the menu on an
 ended one. Pause, speed, skip and view are the playback's host controls;
 nothing here reaches a tick.

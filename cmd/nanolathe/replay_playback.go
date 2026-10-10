@@ -285,6 +285,11 @@ func replayGameTime(tick uint32) string {
 // stretch, or the speed's accrual unless paused. It returns the ticks run and
 // whether they were a skip, whose presentation is held.
 func (p *replayPlayback) advance(now func() time.Time) (int, bool) {
+	// The battle menu holds active skips as well as normal playback
+	// (DESIGN_INTERFACE_HUD_INPUT "Replays"). A paused playback may still skip.
+	if p.menuHeld {
+		return 0, false
+	}
 	if p.Ended() {
 		p.skipTarget = 0
 		return 0, false

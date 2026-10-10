@@ -681,6 +681,15 @@ func TestReplayHeadlessRecordingPlaysInTheWindowRetail(t *testing.T) {
 		t.Fatalf("8× played %d ticks in 5 host steps", ran)
 	}
 	p.SkipTo(p.FinalTick())
+	b.applyBattleSchedule(ui.PauseIntent(true))
+	held = p.Tick()
+	for range 3 {
+		w.step(1)
+	}
+	if target, skipping := p.Skipping(); p.Tick() != held || !skipping || target != p.FinalTick() {
+		t.Fatalf("menu did not hold active skip: tick %d, held %d, target %d, skipping %v", p.Tick(), held, target, skipping)
+	}
+	b.applyBattleSchedule(ui.PauseIntent(false))
 	for i := 0; !p.Ended(); i++ {
 		if i > 200 {
 			t.Fatal("the skip did not reach the end")
