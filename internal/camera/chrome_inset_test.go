@@ -4,7 +4,7 @@ import "testing"
 
 // A widened rail moves the viewport's leading edge, the clamp floor and the
 // centring with it, so the map's column 0 still reaches the viewport's edge
-// beside a magnified sidebar (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar
+// beside a magnified sidebar (DESIGN_INTERFACE_HUD_INPUT "Modern UI
 // scale"). Zero insets stay retail's.
 func TestChromeInsetWidensTheViewport(t *testing.T) {
 	c := &Camera{ViewW: 2560, ViewH: 1440, MapW: 8192, MapH: 8192, Chrome: ChromeInsets{Left: 256}}

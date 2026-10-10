@@ -48,7 +48,7 @@ func (c *Client) DrawMinimapLayoutVersion(surf *render.RadarSurface, dst hud.Rec
 // DrawMinimapCanvasVersion samples through a side×side canvas instead of the
 // canonical one, for a radar picture built at a magnified size; layout must be
 // LayoutMinimapCanvas's for the same side (DESIGN_INTERFACE_HUD_INPUT "Modern
-// sidebar scale").
+// UI scale").
 func (c *Client) DrawMinimapCanvasVersion(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, side int32, identity, revision uint64) {
 	c.drawMinimapCanvas(surf, dst, layout, side, identity, revision)
 }

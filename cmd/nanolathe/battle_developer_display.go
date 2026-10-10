@@ -82,7 +82,9 @@ func (b *battleSession) drawDeveloperFooter(c *client.Client, f *frame.Frame, fo
 	if c == nil || f == nil || font == nil {
 		return
 	}
-	_, height := c.Size()
+	// The footer is inside the bottom strip's drawing region, including its
+	// virtual height when Modern UI scale magnifies that strip.
+	_, height := c.ChromeSize()
 	lower := height - int(font.Height) - 1
 	upper := lower - 16
 	text := func(x, y int, s string) { c.UIText(font, s, x, y, 83) }

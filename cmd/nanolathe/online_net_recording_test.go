@@ -38,7 +38,7 @@ func TestOnlineNetworkProductionRecordingClearsScaledChrome(t *testing.T) {
 				b.cl.SetEnhanced(true)
 				b.cl.SetTerrain(b.sess.World)
 				prefs := settings.DefaultPresentation()
-				prefs.SidebarScale = 0
+				prefs.UIScale = 0
 				b.hostPresentation = &prefs
 				b.fpsVisible = true
 				const tick = 5400

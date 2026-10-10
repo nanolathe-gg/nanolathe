@@ -159,5 +159,14 @@ func modLocks(m *modlibrary.Mod) []string {
 	if m == nil || m.Config == nil {
 		return nil
 	}
-	return m.Config.Locks
+	locks := slices.Clone(m.Config.Locks)
+	for i, path := range locks {
+		// The legacy preference and its lock still name the same host choice
+		// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale"). Settings patches
+		// migrate before filtering, so their locks must use the new path too.
+		if path == "presentation.sidebarScale" {
+			locks[i] = "presentation.uiScale"
+		}
+	}
+	return locks
 }

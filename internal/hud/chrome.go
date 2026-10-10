@@ -67,7 +67,7 @@ func RailGap(screenH, sideW, sideH int32) (r Rect, ok bool) {
 // both by truncating divides, at the live surface size rather than the
 // authored one [07 "Tab options menu and manual exit"][07 R-HUD-05]. The rail
 // is retail's 128 pixels unless the sidebar is magnified
-// (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 func ModalPlacement(screenW, screenH, w, h, rail int32) (x, y int32) {
 	x, y = (screenW-rail-w)/2+rail, (screenH-h)/2
 	// Beside a magnified rail a wide modal may not fit the remaining width;

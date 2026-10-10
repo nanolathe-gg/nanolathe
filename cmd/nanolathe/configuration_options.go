@@ -49,7 +49,7 @@ func configurationUnavailable(key string, mode gameplay.Mode, p settings.Present
 		if !enhanced {
 			return "Requires the Enhanced renderer."
 		}
-	case "sidebar", "sidebarscale", "builddrag", "fps", "glow", "water", "lights", "finish", "heat", "marks":
+	case "sidebar", "uiscale", "builddrag", "fps", "glow", "water", "lights", "finish", "heat", "marks":
 		if !enhanced {
 			return "Requires the Enhanced renderer."
 		}

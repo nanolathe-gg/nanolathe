@@ -178,7 +178,7 @@ type Options struct {
 	ShotSpace          bool        // hold Space for --shot captures, so the bottom slide strip is fully raised
 	RendererSet        bool        // explicit command-line override
 	FPSSet             bool        // explicit command-line override
-	SidebarScale       int         // -1 keeps the saved preference; 0 Auto, 1 or 2 fixed
+	UIScale            int         // -1 keeps the saved preference; 0 Auto, 1 or 2 fixed
 	Renderer           string      // start-up presentation executor: "classic" or "modern" (default)
 	Fullscreen         bool        // host desktop fullscreen override
 	FullscreenSet      bool        // distinguishes an omitted flag from --fullscreen=false
@@ -413,7 +413,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Renderer, "renderer", settings.DefaultPresentation().Renderer, "start-up presentation renderer (omitted uses saved preference): \"classic\" (software) or \"modern\" (GPU); any other value is classic")
 	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "desktop fullscreen (Alt+Enter toggles); omitted uses saved preference")
 	set.BoolVar(&opts.Stats, "stats", false, "print periodic presentation statistics to the terminal")
-	set.IntVar(&opts.SidebarScale, "sidebar-scale", -1, "Modern sidebar size: 0 Auto, 1 or 2 (omitted uses the saved preference); also applies to --shot")
+	set.IntVar(&opts.UIScale, "ui-scale", -1, "Modern battle UI scale: 0 Auto, 1 or 2 (omitted uses the saved preference); also applies to --shot")
 	set.IntVar(&opts.FPS, "fps", settings.DefaultPresentation().FPS, "cap presented frames per second for modern (omitted uses saved preference), rounded down to a multiple of the display's refresh (0 = the display's refresh rate)")
 	set.StringVar(&opts.ShotRenderer, "shot-renderer", "", "which executor --shot captures through: \"classic\", \"modern\", or \"both\"; omitted follows --renderer")
 	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")

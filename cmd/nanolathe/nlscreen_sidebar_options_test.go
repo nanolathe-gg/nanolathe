@@ -227,7 +227,7 @@ func TestNLSidebarPageOwnsBothChoicesAndTheirPaths(t *testing.T) {
 		}
 	}
 	paths := s.cardPaths(card, settings.Defaults())
-	for _, path := range []string{"presentation.buildMenuPageSize", "presentation.sidebarOrders", "presentation.sidebarScale"} {
+	for _, path := range []string{"presentation.buildMenuPageSize", "presentation.sidebarOrders", "presentation.uiScale"} {
 		if !slices.Contains(paths, path) {
 			t.Fatalf("Sidebar paths omitted %s: %v", path, paths)
 		}

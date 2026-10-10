@@ -34,7 +34,7 @@ func chromeCameraFixture(t *testing.T, width, height int) *battleSession {
 		cl.Step(1.0 / 30)
 	}
 	prefs := settings.DefaultPresentation()
-	prefs.SidebarScale = 1
+	prefs.UIScale = 1
 	b := &battleSession{cl: cl, cam: cam, hostPresentation: &prefs}
 	cl.SetUIStage(battleHUDUIStage{battle: b})
 	return b
@@ -46,10 +46,11 @@ func chromeWorldCenter(cam *camera.Camera) (int32, int32) {
 	return x + w/2, z + h/2
 }
 
-func assertChromeWorldMarker(t *testing.T, list *drawlist.List, width, height int, left int32) {
+func assertChromeWorldMarker(t *testing.T, list *drawlist.List, width, height int, scale int32) {
 	t.Helper()
 	spaces := list.WorldSpaces()
-	want := drawlist.Rect{X: left, Y: camera.OriginY, W: int32(width) - left, H: int32(height) - 2*camera.OriginY}
+	left, top := railInset(scale), camera.OriginY*scale
+	want := drawlist.Rect{X: left, Y: top, W: int32(width) - left, H: int32(height) - 2*top}
 	if len(spaces) == 0 || !spaces[0].Begin || spaces[0].Viewport != want {
 		t.Fatalf("first world marker = %+v, want viewport %+v", spaces, want)
 	}
@@ -57,19 +58,19 @@ func assertChromeWorldMarker(t *testing.T, list *drawlist.List, width, height in
 
 // A layout change must persist on the real host camera and take effect in the
 // first world marker, before DrawUI runs. Snapping both samples also keeps the
-// old viewport's world centre at every camera fraction (Modern sidebar scale).
+// old viewport's world centre at every camera fraction (Modern UI scale).
 func TestChromeScaleChangesBeforeBlendedWorldRecording(t *testing.T) {
 	b := chromeCameraFixture(t, 640, 480)
 	cx, cz := chromeWorldCenter(b.cam)
 	for _, k := range []int{1, 2, 1} {
-		b.hostPresentation.SidebarScale = k
+		b.hostPresentation.UIScale = k
 		for _, fraction := range []float32{0.25, 0.5, 0.75} {
 			b.cl.SetCameraFraction(fraction)
 			b.cl.BeginPresentationFrame()
 			left := railInset(int32(k))
 			wantChrome := camera.ChromeInsets{}
 			if k > 1 {
-				wantChrome.Left = left
+				wantChrome = camera.ChromeInsets{Left: left, Top: camera.OriginY * int32(k), Bottom: camera.OriginY * int32(k)}
 			}
 			if b.cam.Chrome != wantChrome {
 				t.Fatalf("%dx: retained Chrome = %+v, want %+v", k, b.cam.Chrome, wantChrome)
@@ -84,7 +85,7 @@ func TestChromeScaleChangesBeforeBlendedWorldRecording(t *testing.T) {
 				t.Fatalf("%dx: camera samples = %+v / %+v, want installed view %+v", k, d.CamPrevView, d.CamCurView, view)
 			}
 			before := *b.cam
-			assertChromeWorldMarker(t, b.cl.RecordModernFrame(), 640, 480, left)
+			assertChromeWorldMarker(t, b.cl.RecordModernFrame(), 640, 480, int32(k))
 			if *b.cam != before {
 				t.Fatalf("%dx: recording changed the retained camera", k)
 			}
@@ -95,28 +96,32 @@ func TestChromeScaleChangesBeforeBlendedWorldRecording(t *testing.T) {
 // The capture boundary and a resize that crosses Auto's threshold both prepare
 // camera insets and modal layout before their first world recording.
 func TestChromeScalePreparesFirstFrameAndAutoResize(t *testing.T) {
-	b := chromeCameraFixture(t, 640, 1440)
-	b.hostPresentation.SidebarScale = 0
+	b := chromeCameraFixture(t, 2560, 1440)
+	b.hostPresentation.UIScale = 0
 	h := &retailBattleHUD{}
 	b.cl.SetUIStage(battleHUDUIStage{hud: h, battle: b})
-	for _, height := range []int{1440, 720, 1440} {
-		b.cl.Resize(640, height)
-		b.cam.ViewH = int32(height)
+	for _, size := range [][2]int{{2560, 1440}, {2560, 720}, {1280, 1440}, {1281, 1441}, {2560, 1440}} {
+		width, height := size[0], size[1]
+		b.cl.Resize(width, height)
+		b.cam.ViewW, b.cam.ViewH = int32(width), int32(height)
 		cx, cz := chromeWorldCenter(b.cam)
 		b.cl.BeginPresentationFrame()
 		k := int32(1)
-		if height >= 1440 {
+		if height >= 1440 && width >= 1281 {
 			k = 2
 		}
-		if h.screenW != 640 || h.screenH != int32(height) || h.chromeScale != k || h.placedScale != k {
+		if h.screenW != int32(width) || h.screenH != int32(height) || h.chromeScale != k || h.placedScale != k {
 			t.Fatalf("height %d: HUD size/scale = %dx%d at %d/%d", height, h.screenW, h.screenH, h.chromeScale, h.placedScale)
+		}
+		if b.stripRegion().OffsetY != int32(height)%k {
+			t.Fatal("bottom strip did not retain the framebuffer's final row")
 		}
 		if x, z := chromeWorldCenter(b.cam); x != cx || z != cz {
 			t.Fatalf("height %d: inset change moved the world centre", height)
 		}
 		// The HUD needs no art for preparation. Leave it out of pure recording.
 		b.cl.SetUIStage(battleHUDUIStage{battle: b})
-		assertChromeWorldMarker(t, b.cl.RecordModernFrame(), 640, height, railInset(k))
+		assertChromeWorldMarker(t, b.cl.RecordModernFrame(), width, height, k)
 		b.cl.SetUIStage(battleHUDUIStage{hud: h, battle: b})
 	}
 	// A fixed-inset capture and Classic both return to retail's viewport.

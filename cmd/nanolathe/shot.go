@@ -202,9 +202,9 @@ func runShot(opts Options, cs *contentSet) error {
 	if err := b.configureDeveloperShot(opts); err != nil {
 		return err
 	}
-	if opts.SidebarScale >= 0 {
+	if opts.UIScale >= 0 {
 		p := b.hostPreferences()
-		p.SidebarScale = opts.SidebarScale
+		p.UIScale = opts.UIScale
 		p.Normalize()
 		b.hostPresentation = &p
 	}

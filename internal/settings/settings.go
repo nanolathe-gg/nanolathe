@@ -620,7 +620,7 @@ const (
 	RadarDotsAttackable = 2
 )
 
-// Chrome scale preferences (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// Chrome scale preferences (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 const (
 	ChromeScaleAuto = 0
 	MaxChromeScale  = 2
@@ -660,10 +660,15 @@ type Presentation struct {
 	// Modern gameplay (DESIGN_INTERFACE_HUD_INPUT "Modern radar dots").
 	// Visible dots is the default; zero explicitly disables them.
 	RadarDots int `json:"radarDots"`
-	// SidebarScale magnifies the Modern renderer's battle sidebar
-	// (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale"): ChromeScaleAuto,
-	// the default, follows the window height; 1 to MaxChromeScale is fixed.
-	SidebarScale int `json:"sidebarScale"`
+	// UIScale magnifies the Modern renderer's battle chrome — sidebar,
+	// minimap and the top and bottom bars (DESIGN_INTERFACE_HUD_INPUT "Modern
+	// UI scale"): ChromeScaleAuto, the default, follows the window height; 1
+	// to MaxChromeScale is fixed.
+	UIScale int `json:"uiScale"`
+	// LegacySidebarScale keeps the retired key in the schema used to validate
+	// mod configs. UnmarshalJSON migrates it before decoding, and Normalize
+	// clears it, so ordinary settings never retain or write the retired key.
+	LegacySidebarScale int `json:"sidebarScale,omitempty"`
 
 	Renderer string `json:"renderer"`
 	FPS      int    `json:"fps"`
@@ -836,10 +841,11 @@ func (p *Presentation) Normalize() {
 	if p.RadarDots < RadarDotsNone || p.RadarDots > RadarDotsAttackable {
 		p.RadarDots = RadarDotsVisible
 	}
-	if p.SidebarScale < ChromeScaleAuto {
-		p.SidebarScale = ChromeScaleAuto
+	p.LegacySidebarScale = 0
+	if p.UIScale < ChromeScaleAuto {
+		p.UIScale = ChromeScaleAuto
 	}
-	p.SidebarScale = min(p.SidebarScale, MaxChromeScale)
+	p.UIScale = min(p.UIScale, MaxChromeScale)
 	if p.NanoframePreview < 0 || p.NanoframePreview > 3 {
 		p.NanoframePreview = 0
 	}
@@ -930,8 +936,24 @@ func (p *Presentation) effectSwitches() []*int {
 }
 
 // presentationFields decodes a Presentation with the ordinary field rules;
-// UnmarshalJSON wraps it so the retired effect keys can be read beside it.
+// UnmarshalJSON wraps it so retired presentation keys can be read beside it.
 type presentationFields Presentation
+
+// migrateUIScale renames the sidebar-only key within one incoming layer,
+// before precedence or filtering (DESIGN_INTERFACE_HUD_INPUT "Modern UI
+// scale"). Presence decides which key wins, so an explicit Auto stays zero.
+// Both the typed decoder and raw layer operations use the same migration.
+func migrateUIScale[T any](fields map[string]T) bool {
+	legacy, ok := fields["sidebarScale"]
+	if !ok {
+		return false
+	}
+	if _, current := fields["uiScale"]; !current {
+		fields["uiScale"] = legacy
+	}
+	delete(fields, "sidebarScale")
+	return true
+}
 
 // UnmarshalJSON decodes the block over the values already in p — the loader
 // starts from the defaults, so an omitted key keeps its default — and then
@@ -943,6 +965,18 @@ type presentationFields Presentation
 // layer's off); any other value was "on" and changes nothing. The keys have no
 // field, so the next save does not write them.
 func (p *Presentation) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if migrateUIScale(fields) {
+		var err error
+		data, err = json.Marshal(fields)
+		if err != nil {
+			return err
+		}
+	}
+	p.LegacySidebarScale = 0
 	if err := json.Unmarshal(data, (*presentationFields)(p)); err != nil {
 		return err
 	}

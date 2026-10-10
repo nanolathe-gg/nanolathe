@@ -23,7 +23,7 @@ func LayoutMinimap(mapW, mapH int32) Minimap {
 
 // LayoutMinimapCanvas magnifies the canonical fitted rectangle into a side×side
 // canvas. Fit truncation and half-padding happen before magnification, so sharp
-// picture edges agree with input's canonical lens (Modern sidebar scale).
+// picture edges agree with input's canonical lens (Modern UI scale).
 func LayoutMinimapCanvas(mapW, mapH, side int32) Minimap {
 	if mapW <= 0 || mapH <= 0 || side <= 0 {
 		return Minimap{}

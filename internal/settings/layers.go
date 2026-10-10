@@ -166,13 +166,14 @@ func diffInto(out map[string]any, path string, ev, bv any) {
 	setPath(out, path, ev)
 }
 
-// Restrict keeps only the parts of patch that lie on the given paths.
+// Restrict migrates retired keys, then keeps only the parts of patch that lie
+// on the given paths.
 func Restrict(patch json.RawMessage, paths []string) (json.RawMessage, error) {
 	if len(patch) == 0 {
 		return nil, nil
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(patch, &doc); err != nil {
+	doc, err := layerDoc(patch)
+	if err != nil {
 		return nil, err
 	}
 	out := map[string]any{}
@@ -188,20 +189,22 @@ func Restrict(patch json.RawMessage, paths []string) (json.RawMessage, error) {
 }
 
 // Merge lays patch b over patch a: objects merge key by key, other values
-// replace. Either may be empty.
+// replace. Retired keys migrate in each layer before precedence is chosen.
+// Either may be empty.
 func Merge(a, b json.RawMessage) (json.RawMessage, error) {
-	if len(a) == 0 {
-		return b, nil
+	if len(a) == 0 && len(b) == 0 {
+		return nil, nil
 	}
-	if len(b) == 0 {
-		return a, nil
-	}
-	var da, db map[string]any
-	if err := json.Unmarshal(a, &da); err != nil {
+	da, err := layerDoc(a)
+	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal(b, &db); err != nil {
+	db, err := layerDoc(b)
+	if err != nil {
 		return nil, err
+	}
+	if da == nil {
+		da = map[string]any{}
 	}
 	mergeInto(da, db)
 	return json.Marshal(da)
@@ -219,13 +222,14 @@ func mergeInto(dst, src map[string]any) {
 	}
 }
 
-// Without removes the given paths, and everything under them, from a patch.
+// Without migrates retired keys, then removes the given paths, and everything
+// under them, from a patch.
 func Without(patch json.RawMessage, paths []string) (json.RawMessage, error) {
 	if len(patch) == 0 {
 		return nil, nil
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(patch, &doc); err != nil {
+	doc, err := layerDoc(patch)
+	if err != nil {
 		return nil, err
 	}
 	for _, path := range paths {
@@ -247,6 +251,20 @@ func Without(patch json.RawMessage, paths []string) (json.RawMessage, error) {
 		return nil, nil
 	}
 	return json.Marshal(doc)
+}
+
+func layerDoc(patch json.RawMessage) (map[string]any, error) {
+	if len(patch) == 0 {
+		return nil, nil
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(patch, &doc); err != nil {
+		return nil, err
+	}
+	if pres, ok := doc["presentation"].(map[string]any); ok {
+		migrateUIScale(pres)
+	}
+	return doc, nil
 }
 
 func toDoc(s Settings) (map[string]any, error) {

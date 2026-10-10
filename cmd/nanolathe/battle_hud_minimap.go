@@ -317,7 +317,7 @@ func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *f
 	// Drawing and input receive the same layout and destination rectangle. A
 	// magnified rail draws a picture built at its own canvas instead, so the
 	// destination is filled one picture pixel per framebuffer pixel; input
-	// keeps the canonical layout (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar
+	// keeps the canonical layout (DESIGN_INTERFACE_HUD_INPUT "Modern UI
 	// scale").
 	scale := max(h.chromeScale, 1)
 	if radar := h.detailRadar(scale); radar != nil {

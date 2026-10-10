@@ -5,7 +5,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 )
 
-// Magnified chrome (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// Magnified chrome (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 //
 // A chrome region is laid out on a smaller virtual surface and replayed by the
 // modern executor through the same affine transform the world zoom uses:
@@ -35,10 +35,13 @@ func (r ChromeRegion) Identity() bool {
 }
 
 // VirtualSize returns the virtual surface that covers a w×h framebuffer from
-// the region's origin, truncated to whole virtual pixels.
+// the region's origin. The width rounds up, so a strip stamped to the virtual
+// edge reaches the framebuffer's; the height rounds down, so a layout that
+// fits the virtual height fits the framebuffer and a bottom-aligned region
+// ends on its last row.
 func (r ChromeRegion) VirtualSize(w, h int) (int, int) {
 	k := int(max(r.Scale, 1))
-	return max((w-int(r.OffsetX))/k, 0), max((h-int(r.OffsetY))/k, 0)
+	return max((w-int(r.OffsetX)+k-1)/k, 0), max((h-int(r.OffsetY))/k, 0)
 }
 
 // ToVirtual maps a framebuffer point onto the virtual surface. Division floors,

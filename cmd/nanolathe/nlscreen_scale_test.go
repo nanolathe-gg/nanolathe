@@ -31,7 +31,7 @@ func nlScaleControl(t *testing.T, s *nlScreen) (nlCard, int) {
 
 func nlScaleFile(scale int) settings.Settings {
 	file := settings.Defaults()
-	file.Presentation.SidebarScale = scale
+	file.Presentation.UIScale = scale
 	file.Presentation.BuildMenuPageSize, file.Presentation.SidebarOrders = 10, 0
 	file.Presentation.Glint, file.Presentation.ZoomLockPercent = 0, 137
 	return file
@@ -40,7 +40,7 @@ func nlScaleFile(scale int) settings.Settings {
 // The menu has no CLI scale override; a zero-valued Options would force Auto.
 func nlScaleScreen(mod *modlibrary.Mod, file settings.Settings) (*gameShell, *nlScreen) {
 	g, s := settingsRegressionScreen(mod, file)
-	g.opts.SidebarScale = -1
+	g.opts.UIScale = -1
 	g.applySettings(file)
 	s.draft = s.freshDraft(g)
 	s.bindSource(g)
@@ -48,7 +48,7 @@ func nlScaleScreen(mod *modlibrary.Mod, file settings.Settings) (*gameShell, *nl
 }
 
 func TestNLScreenScaleOnlyEditApplySaveReload(t *testing.T) {
-	if settings.DefaultPresentation().SidebarScale != 0 {
+	if settings.DefaultPresentation().UIScale != 0 {
 		t.Fatal("scale default must remain Auto")
 	}
 	for _, scale := range []int{2, 1, 0} {
@@ -64,9 +64,9 @@ func TestNLScreenScaleOnlyEditApplySaveReload(t *testing.T) {
 			c, part := nlScaleControl(t, s)
 			s.setPart(c, part, scale)
 			want := file.Presentation
-			want.SidebarScale = scale
+			want.UIScale = scale
 			if s.draft.pres != want || g.presentation != file.Presentation || !s.touched[c.key] || s.dirty() != 1 {
-				t.Fatalf("scale-only edit: draft scale %d, live %d, touched %v, dirty %d", s.draft.pres.SidebarScale, g.presentation.SidebarScale, s.touched, s.dirty())
+				t.Fatalf("scale-only edit: draft scale %d, live %d, touched %v, dirty %d", s.draft.pres.UIScale, g.presentation.UIScale, s.touched, s.dirty())
 			}
 			composed, err := s.draftSettings()
 			if err != nil || composed.Presentation != want {
@@ -93,7 +93,7 @@ func TestNLScreenScaleCancelAndReset(t *testing.T) {
 	g.saveSettings()
 	c, part := nlScaleControl(t, s)
 	s.setPart(c, part, 1)
-	if s.draft.pres.SidebarScale != 1 || g.presentation.SidebarScale != 2 || s.dirty() != 1 {
+	if s.draft.pres.UIScale != 1 || g.presentation.UIScale != 2 || s.dirty() != 1 {
 		t.Fatal("Cancel fixture did not have a pending scale-only edit")
 	}
 	s.hide() // Back/Esc closes the draft without Apply.
@@ -110,7 +110,7 @@ func TestNLScreenScaleCancelAndReset(t *testing.T) {
 	s.setPart(c, part, 0)
 	s.apply()
 	want := file.Presentation
-	want.SidebarScale = 0
+	want.UIScale = 0
 	stored, err = settings.Load()
 	if err != nil || stored.Presentation != want || s.draft.pres != want {
 		t.Fatalf("reset to Auto lost sibling settings or failed to save: %+v, %v", stored.Presentation, err)
@@ -122,36 +122,36 @@ func TestNLScreenScaleModPresetAndRecommendation(t *testing.T) {
 		t.Run(fmt.Sprintf("locked=%v", locked), func(t *testing.T) {
 			t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
 			mod := &modlibrary.Mod{Metadata: modlibrary.Metadata{ID: "scale-mod", Name: "Scale mod",
-				Config: &modlibrary.Config{Settings: json.RawMessage(`{"presentation":{"sidebarScale":2}}`)}}}
+				Config: &modlibrary.Config{Settings: json.RawMessage(`{"presentation":{"uiScale":2}}`)}}}
 			if locked {
-				mod.Config.Locks = []string{"presentation.sidebarScale"}
+				mod.Config.Locks = []string{"presentation.uiScale"}
 			}
 			file := nlScaleFile(1)
-			other := json.RawMessage(`{"presentation":{"sidebarScale":2,"glint":1}}`)
+			other := json.RawMessage(`{"presentation":{"uiScale":2,"glint":1}}`)
 			file.ModSettings = map[string]json.RawMessage{"other-mod": other}
 			g, s := nlScaleScreen(mod, file)
-			g.opts.SidebarScale, g.settingsWritable = -1, true
+			g.opts.UIScale, g.settingsWritable = -1, true
 			c, part := nlScaleControl(t, s)
-			if s.draft.pres.SidebarScale != 2 || s.cardSource(c) != "set" {
+			if s.draft.pres.UIScale != 2 || s.cardSource(c) != "set" {
 				t.Fatal("scale-only mod recommendation was not represented by the card")
 			}
 			s.setPart(c, part, 0)
 			if locked {
-				if s.dialog != "override" || s.draft.pres.SidebarScale != 2 {
+				if s.dialog != "override" || s.draft.pres.UIScale != 2 {
 					t.Fatal("scale-only edit bypassed the mod lock")
 				}
 				s.confirmOverride()
 			}
-			if s.draft.pres.SidebarScale != 0 || s.cardSource(c) != "changed" || g.presentation.SidebarScale != 2 {
+			if s.draft.pres.UIScale != 0 || s.cardSource(c) != "changed" || g.presentation.UIScale != 2 {
 				t.Fatal("mod scale edit did not stay in the pending draft")
 			}
 			s.savePreset("Auto scale")
 			stored, err := settings.Load()
 			if err != nil || stored.Presentation != file.Presentation || len(stored.Presets) != 1 {
-				t.Fatalf("saving draft preset changed base scale %d or preset count %d: %v", stored.Presentation.SidebarScale, len(stored.Presets), err)
+				t.Fatalf("saving draft preset changed base scale %d or preset count %d: %v", stored.Presentation.UIScale, len(stored.Presets), err)
 			}
 			preset, err := settings.Layer(nlScaleFile(2), stored.Presets[0].Settings)
-			if err != nil || preset.Presentation.SidebarScale != 0 || g.presentation.SidebarScale != 2 {
+			if err != nil || preset.Presentation.UIScale != 0 || g.presentation.UIScale != 2 {
 				t.Fatalf("saved preset lost explicit Auto or changed live scale: %+v, %v", preset.Presentation, err)
 			}
 			s.apply()
@@ -160,12 +160,12 @@ func TestNLScreenScaleModPresetAndRecommendation(t *testing.T) {
 			otherErr := json.Unmarshal(stored.ModSettings["other-mod"], &keptOther)
 			_ = json.Unmarshal(other, &wantOther)
 			if err != nil || otherErr != nil || stored.Presentation != file.Presentation || !reflect.DeepEqual(keptOther, wantOther) {
-				t.Fatalf("mod Apply changed base scale %d or another mod %s: %v, %v", stored.Presentation.SidebarScale, stored.ModSettings["other-mod"], err, otherErr)
+				t.Fatalf("mod Apply changed base scale %d or another mod %s: %v, %v", stored.Presentation.UIScale, stored.ModSettings["other-mod"], err, otherErr)
 			}
 			restarted, reopened := nlScaleScreen(mod, stored)
-			restarted.opts.SidebarScale, restarted.settingsWritable = -1, true
+			restarted.opts.UIScale, restarted.settingsWritable = -1, true
 			want := file.Presentation
-			want.SidebarScale = 0
+			want.UIScale = 0
 			if restarted.presentation != want || reopened.draft.pres != want || len(stored.Presets) != 1 {
 				t.Fatal("restart lost the per-mod Auto override, sibling settings or preset")
 			}
@@ -173,14 +173,14 @@ func TestNLScreenScaleModPresetAndRecommendation(t *testing.T) {
 			reopened.setCardDraft(reopened.sidebarCard(), reopened.src.rec)
 			reopened.apply()
 			stored, err = settings.Load()
-			if err != nil || restarted.presentation.SidebarScale != 2 || stored.Presentation != file.Presentation {
-				t.Fatalf("recommendation reset did not save in the mod scope: live %d, base %d, %v", restarted.presentation.SidebarScale, stored.Presentation.SidebarScale, err)
+			if err != nil || restarted.presentation.UIScale != 2 || stored.Presentation != file.Presentation {
+				t.Fatalf("recommendation reset did not save in the mod scope: live %d, base %d, %v", restarted.presentation.UIScale, stored.Presentation.UIScale, err)
 			}
 			base, baseScreen := nlScaleScreen(nil, stored)
 			base.settingsWritable = true
 			baseScreen.applyPresetToDraft(nlPresetEntry{name: "Auto scale", patch: stored.Presets[0].Settings}, []bool{false, false, true})
 			baseScreen.apply()
-			if base.presentation.SidebarScale != 0 || base.presentation.BuildMenuPageSize != 10 || base.presentation.SidebarOrders != 0 {
+			if base.presentation.UIScale != 0 || base.presentation.BuildMenuPageSize != 10 || base.presentation.SidebarOrders != 0 {
 				t.Fatal("reapplying the saved preset lost scale or unrelated sidebar choices")
 			}
 		})
@@ -199,7 +199,7 @@ func TestNLScreenScaleAvailabilityAndPresetScope(t *testing.T) {
 			want = 2
 		}
 		s.apply()
-		if g.presentation.SidebarScale != want || g.presentation.Renderer != renderer || g.presentation.BuildMenuPageSize != 10 {
+		if g.presentation.UIScale != want || g.presentation.Renderer != renderer || g.presentation.BuildMenuPageSize != 10 {
 			t.Fatalf("%s scale availability changed: %+v", renderer, g.presentation)
 		}
 	}
@@ -207,10 +207,10 @@ func TestNLScreenScaleAvailabilityAndPresetScope(t *testing.T) {
 	for _, scopes := range [][]bool{{true, false, false}, {false, true, false}, {false, false, true}} {
 		file := nlScaleFile(1)
 		g, s := nlScaleScreen(nil, file)
-		s.applyPresetToDraft(nlPresetEntry{name: "Scale", patch: json.RawMessage(`{"presentation":{"sidebarScale":2}}`)}, scopes)
+		s.applyPresetToDraft(nlPresetEntry{name: "Scale", patch: json.RawMessage(`{"presentation":{"uiScale":2}}`)}, scopes)
 		want := file.Presentation
 		if scopes[2] {
-			want.SidebarScale = 2
+			want.UIScale = 2
 			if !s.touched["sidebar"] || s.dirty() != 1 {
 				t.Fatal("scale-only preset failed to mark the menu card changed")
 			}
@@ -227,7 +227,7 @@ func TestNLScreenScaleAvailabilityAndPresetScope(t *testing.T) {
 		}
 	}
 	s.apply()
-	if g.presentation.SidebarScale != 0 || g.presentation.BuildMenuPageSize != 10 || g.presentation.SidebarOrders != 0 || g.presentation.Glint != 0 {
+	if g.presentation.UIScale != 0 || g.presentation.BuildMenuPageSize != 10 || g.presentation.SidebarOrders != 0 || g.presentation.Glint != 0 {
 		t.Fatal("restoring the Controls preset lost Auto or changed graphics/sidebar settings")
 	}
 }

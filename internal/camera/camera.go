@@ -59,7 +59,7 @@ type Camera struct {
 
 	// Chrome is the framebuffer extent the battle chrome covers at each edge.
 	// Zero fields are retail's [03 §4.1]; the host widens them when it
-	// magnifies the chrome (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+	// magnifies the chrome (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 	Chrome ChromeInsets
 
 	// Follow is the rest of the retail camera block: the desired origin, the

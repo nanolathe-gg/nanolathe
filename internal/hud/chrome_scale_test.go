@@ -3,7 +3,7 @@ package hud
 import "testing"
 
 // Auto steps up at 1440 rows; a fixed choice is used as chosen
-// (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 func TestChromeScale(t *testing.T) {
 	cases := []struct {
 		pref    int

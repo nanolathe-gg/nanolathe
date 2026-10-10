@@ -25,10 +25,10 @@ func (s *nlScreen) sidebarCard() nlCard {
 			steps: []string{"When space permits", "Never"},
 			get:   func(d *nlDraft) int { return onOff(d.pres.SidebarOrders == 0) },
 			set:   func(d *nlDraft, v int) { d.pres.SidebarOrders = onOff(v == 0) }},
-		nlPart{key: "scale", label: "Sidebar size", sub: "Auto: 2x from 1440 rows", choices: true,
+		nlPart{key: "scale", label: "UI scale", sub: "Sidebar, minimap and bars; Auto: 2x from 1440 rows", choices: true,
 			steps: chromeScaleSteps(),
-			get:   func(d *nlDraft) int { return d.pres.SidebarScale },
-			set:   func(d *nlDraft, v int) { d.pres.SidebarScale = v }})
+			get:   func(d *nlDraft) int { return d.pres.UIScale },
+			set:   func(d *nlDraft, v int) { d.pres.UIScale = v }})
 	card.demo, card.compare = "sidebar", nil
 	card.desc = func(d *nlDraft, _ int) string {
 		v := s.nlSidebarCountChoice(d)

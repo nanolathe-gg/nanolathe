@@ -19,7 +19,7 @@ import (
 
 // A sharp radar picture may project a contact between doubled canonical
 // pixels. Every pixel of its magnified blip must remain pickable, including
-// on letterboxed maps (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// on letterboxed maps (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 // The canonical squared-distance boundary remains strict [07 R-SEL-02B2].
 func TestScaledMinimapBlipHover(t *testing.T) {
 	for _, dimensions := range [][2]int32{{512, 512}, {512, 256}, {256, 512}} {

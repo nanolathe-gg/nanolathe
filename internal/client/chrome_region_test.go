@@ -8,7 +8,7 @@ import (
 
 // Magnified chrome maps every framebuffer pixel of a virtual pixel back to it,
 // and an identity region records no marker, so unmagnified chrome keeps its
-// exact recording (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// exact recording (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 func TestChromeRegion(t *testing.T) {
 	r := ChromeRegion{Scale: 3}
 	for _, p := range [][4]int32{{0, 0, 0, 0}, {2, 2, 0, 0}, {3, 5, 1, 1}, {383, 1439, 127, 479}} {

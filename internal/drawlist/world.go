@@ -47,7 +47,7 @@ type WorldSpace struct {
 	// origin, not about this rectangle.
 	Viewport Rect
 	// Chrome marks a magnified interface region rather than the world
-	// (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale"): its text is
+	// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale"): its text is
 	// magnified with it instead of keeping native glyphs.
 	Chrome bool
 	// RecordW, RecordH are the record-space extent the world was clipped to:

@@ -51,8 +51,9 @@ type battleSession struct {
 	cam  *camera.Camera
 	// chromeK is the sidebar magnification fixed at the last draw, and
 	// chromeFixed holds it at 1 for captures that replay through the classic
-	// executor (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+	// executor (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 	chromeK     int32
+	barOffsetY  int32
 	chromeFixed bool
 	railEvents  []input.PointerEvent
 	hud         *retailBattleHUD

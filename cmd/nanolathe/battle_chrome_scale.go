@@ -8,14 +8,14 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
-// Modern sidebar scale (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+// Modern UI scale (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 // The rail is laid out on a virtual surface 1/k of the framebuffer's height
 // and magnified k times; the minimap is drawn outside that region at its
 // magnified size from a picture built at that size, so it stays sharp. The
 // top and bottom strips, and the overlays anchored to the viewport's left
-// edge, keep their scale and move right by the rail's extra width.
+// edge, take the bar scale and start at the magnified rail's edge.
 
-// resolveChromeScale fixes the sidebar magnification at the host presentation
+// resolveChromeScale fixes the sidebar and bar magnification at the host presentation
 // boundary; input until the next frame maps the pointer through the same value,
 // which is what the player sees. It is 1 wherever the classic executor may
 // replay the recording, which ignores the region markers, and for captures
@@ -25,12 +25,19 @@ func (b *battleSession) resolveChromeScale() {
 	if b == nil {
 		return
 	}
-	b.chromeK = 1
+	b.chromeK, b.barOffsetY = 1, 0
 	if b.cl == nil || !b.cl.Enhanced() || b.chromeFixed || b.preview {
 		return
 	}
-	_, h := b.cl.Size()
-	b.chromeK = hud.ChromeScale(b.hostPreferences().SidebarScale, int32(h), settings.MaxChromeScale)
+	w, h := b.cl.Size()
+	p := b.hostPreferences()
+	b.chromeK = hud.ChromeScale(p.UIScale, int32(h), settings.MaxChromeScale)
+	// Auto also leaves the bars the width their art and readouts are authored
+	// for; a chosen size applies regardless.
+	for p.UIScale == settings.ChromeScaleAuto && b.chromeK > 1 && (int32(w)-railInset(b.chromeK))/b.chromeK < hud.MinBarScaleWidth {
+		b.chromeK--
+	}
+	b.barOffsetY = int32(h) % b.chromeK
 }
 
 // chromeScale is the sidebar magnification resolveChromeScale last fixed.
@@ -46,10 +53,16 @@ func (b *battleSession) railRegion() client.ChromeRegion {
 	return client.ChromeRegion{Scale: b.chromeScale()}
 }
 
-// stripRegion moves the horizontal strips and viewport-anchored overlays right
-// by the width the magnified rail adds.
+// stripRegion is railRegion moved down by the rows a whole number of virtual
+// rows leaves over, so the bottom strip ends on the framebuffer's last row. The
+// bottom-anchored overlays draw in it too; the top strip uses railRegion, so
+// PANELTOP's column 129 meets the magnified rail.
 func (b *battleSession) stripRegion() client.ChromeRegion {
-	return client.ChromeRegion{Scale: 1, OffsetX: railInset(b.chromeScale()) - camera.OriginX}
+	r := b.railRegion()
+	if b != nil {
+		r.OffsetY = b.barOffsetY
+	}
+	return r
 }
 
 // railSize is the virtual surface the rail's windows are laid out on.
@@ -84,11 +97,6 @@ func (b *battleSession) railPointerFrame(frame ui.WidgetFrame) ui.WidgetFrame {
 	return frame
 }
 
-// stripPointer maps a framebuffer pointer onto the strips' surface.
-func (b *battleSession) stripPointer(x, y int32) (int32, int32) {
-	return b.stripRegion().ToVirtual(x, y)
-}
-
 // railInset is the camera's left inset beside a rail magnified k times: the
 // magnified PANELSIDE covers 129k columns, and retail's 128 is that less one
 // [03 §4.1][07 §6].
@@ -104,7 +112,7 @@ func (b *battleSession) syncChromeInsets() {
 	}
 	want := camera.ChromeInsets{}
 	if k := b.chromeScale(); k > 1 {
-		want.Left = railInset(k)
+		want = camera.ChromeInsets{Left: railInset(k), Top: camera.OriginY * k, Bottom: camera.OriginY * k}
 	}
 	if b.cam.Chrome == want {
 		return
@@ -116,7 +124,7 @@ func (b *battleSession) syncChromeInsets() {
 	// The new viewport is an immediate layout change, so the camera samples
 	// must frame its retained centre rather than blend from the old layout
 	// (DESIGN_GPU_RENDERER §13.5; DESIGN_INTERFACE_HUD_INPUT
-	// "Modern sidebar scale").
+	// "Modern UI scale").
 	if b.cl != nil {
 		b.cl.SnapCameraBlend()
 	}

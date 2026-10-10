@@ -269,14 +269,15 @@ func (h *retailBattleHUD) overWorld(x, y int32) bool {
 		return true
 	}
 	// The authored rail boundary, matching the PANELSIDE blit, magnified with
-	// the rail (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+	// the rail (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 	railX := railInset(max(h.chromeScale, 1)) + 1
 	if x < railX {
 		return false
 	}
+	bar := max(h.chromeScale, 1)
 	top := int32(0)
 	if h.panelTop != nil {
-		top = int32(h.panelTop.Height)
+		top = int32(h.panelTop.Height) * bar
 	}
 	// The world viewport's last row is `H-33` inclusive at every display
 	// mode, one row above the bottom strip's origin [03 §4.1][07 R-HUD-05].
@@ -284,6 +285,6 @@ func (h *retailBattleHUD) overWorld(x, y int32) bool {
 	if screenH <= 0 {
 		screenH = retailScreenH
 	}
-	bottom := hud.BottomStripY(screenH)
+	bottom := screenH - hud.ChromeStripHeight*bar
 	return y >= top && y < bottom
 }

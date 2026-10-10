@@ -325,7 +325,7 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 	}
 	// The hover radius is in canonical radar pixels, like the contact list.
 	// Invert the magnified destination before comparing it [07 R-SEL-02B2]
-	// (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+	// (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 	mx, my, ok = layout.DisplayToCanvas(mx, my, left, top, width, height)
 	if !ok {
 		return 0

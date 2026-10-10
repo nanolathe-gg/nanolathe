@@ -16,7 +16,7 @@ import (
 // incomeWidget is in strip coordinates; the widget draws inside the strip region.
 func (b *battleSession) incomeWidget() (int, int) {
 	w, h := b.surfaceSize()
-	sw, _ := b.stripRegion().VirtualSize(int(w), int(h))
+	sw, _ := b.railRegion().VirtualSize(int(w), int(h))
 	return sw - 18, 36
 }
 func (b *battleSession) serviceCommunityIncome(mouse input.MouseState) bool {
@@ -24,7 +24,7 @@ func (b *battleSession) serviceCommunityIncome(mouse input.MouseState) bool {
 		return false
 	}
 	x, y := b.incomeWidget()
-	mx, my := b.stripPointer(int32(mouse.X), int32(mouse.Y))
+	mx, my := b.railPointer(int32(mouse.X), int32(mouse.Y))
 	inside := int(mx) >= x && int(mx) < x+14 && int(my) >= y && int(my) < y+14
 	if mouse.Pressed(input.MouseButtonLeft) && inside {
 		b.incomePointerCaptured = true

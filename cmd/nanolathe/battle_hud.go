@@ -86,7 +86,7 @@ type retailBattleHUD struct {
 	screenW, screenH int32
 	// chromeScale is the last drawn rail magnification, for the pointer
 	// classification that has no session (DESIGN_INTERFACE_HUD_INPUT
-	// "Modern sidebar scale").
+	// "Modern UI scale").
 	chromeScale int32
 	placedScale int32
 	modalFont   *formats.GAFEntry
@@ -144,7 +144,7 @@ type retailBattleHUD struct {
 
 	// The magnified sidebar's radar: the same lifecycle over a picture built at
 	// the magnified canvas, created on first use at each scale and rebuilt only
-	// when the scale changes (DESIGN_INTERFACE_HUD_INPUT "Modern sidebar scale").
+	// when the scale changes (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
 	radarDetail       *render.MinimapService
 	radarDetailScale  int32
 	radarDetailFinal  render.RadarSurface
@@ -929,8 +929,8 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// the running x reaches the surface width [07 R-HUD-03 §1][07 R-HUD-03 §4].
 	// At 640x480 every stock frame reaches the edge in one stamp.
 	rail, strip := b.railRegion(), b.stripRegion()
-	c.BeginChromeRegion(strip)
-	screenW, screenH := c.ChromeSize()
+	c.BeginChromeRegion(rail)
+	screenW, _ := c.ChromeSize()
 	blitBattlePanel(c, h.panelTop, hud.ChromeRailX, 0)
 	if h.panelTop != nil && h.panelBottom != nil {
 		h.stamps = hud.StripStamps(h.stamps[:0], int32(screenW), int32(h.panelTop.Width), int32(h.panelBottom.Width))
@@ -945,6 +945,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			c.UIBlitClipped(h.panelBottom, int(x), 0, int(x), 0, int(h.panelBottom.Width), hud.ChromeStripHeight)
 		}
 	}
+	c.EndChromeRegion()
+	c.BeginChromeRegion(strip)
+	screenW, screenH := c.ChromeSize()
 	if h.panelBottom != nil {
 		bottomY := int(hud.BottomStripY(int32(screenH)))
 		h.stamps = hud.StripStamps(h.stamps[:0], int32(screenW), int32(h.panelBottom.Width), int32(h.panelBottom.Width))
@@ -973,8 +976,10 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		h.updateHoveredGadget(b, cur, int32(mouse.X), int32(mouse.Y))
 	}
 	if cur != nil {
-		c.BeginChromeRegion(strip)
+		c.BeginChromeRegion(rail)
 		h.drawResources(c, cur, presented.Resources)
+		c.EndChromeRegion()
+		c.BeginChromeRegion(strip)
 		h.drawFooter(c, b, cur)
 		c.EndChromeRegion()
 	}
@@ -1021,7 +1026,8 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// The network layout already uses physical chrome/message/FPS bounds.
 	// Record it outside affine regions (DESIGN_INTERFACE_HUD_INPUT §3.3).
 	h.drawOnlineNetwork(c, b)
-	c.BeginChromeRegion(strip)
+	// These two hang below the top strip, aligned to its resource readouts.
+	c.BeginChromeRegion(rail)
 	h.drawCommunityIncome(c, b, cur)
 	h.drawCommunityWeather(c, b, cur)
 	c.EndChromeRegion()
