@@ -229,7 +229,7 @@ func (g *gameShell) startOnlineCreate() {
 		if err != nil {
 			return onlineJobResult{err: err}
 		}
-		base, err := onlineConfig(cs, cat, settings, onlinePlaceholderSeats(), onlineCreationFrozen(cs, [2]uint32{sim, crt}, mutators, restrictions, records))
+		base, err := onlineBaseConfig(cs, cat, settings, onlineCreationFrozen(cs, [2]uint32{sim, crt}, mutators, restrictions, records))
 		if err != nil {
 			return onlineJobResult{err: err}
 		}
@@ -516,8 +516,9 @@ func (g *gameShell) setOnlineReady(ready bool) {
 }
 
 // composeOnlineReady composes the final configuration — the base plus the
-// present seats as slots with their teams and sides — prepares this seat's
-// battle at its slot and rehearses it (§16.6, §16.7).
+// present seats as slots with their teams and sides, then the base's
+// computers — prepares this seat's battle at its slot and rehearses it
+// (§16.6, §16.7).
 func composeOnlineReady(ctx context.Context, cs *contentSet, cat *content.Catalog, opts Options, base session.EffectiveMatchConfig, settings onlineSettings, seats []session.OnlineSeat, slot uint8, key onlineRoomKey) onlineReadyResult {
 	config, err := onlineConfig(cs, cat, settings, seats, onlineFrozenOf(base.Request()))
 	if err != nil {
@@ -591,10 +592,9 @@ func (g *gameShell) startOnlineBattle(state relay.HostedLobbyState) {
 		g.leaveOnlineLobby("The game started without your prepared battle. Join again.")
 		return
 	}
-	humans := len(p.config.Request().Seats)
-	if r.settings.survival {
-		humans--
-	}
+	// The players are the human rows; the host's computers and Survival's
+	// attacker are rows every client runs, not seats.
+	humans := onlineHumanCount(p.config.Request())
 	code := r.lobby.Code()
 	if err := g.enterOnlineBattle(p, conn, code, humans); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: online: %v\n", err)

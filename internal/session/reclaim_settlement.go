@@ -17,6 +17,7 @@ func (s *Session) finalizeReclaimRefund(victim *units.Unit) {
 	// The refund is discounted when the owner's record is an existing
 	// computer player's (control byte 2) that the lobby did not mark Modern;
 	// a Modern one is paid in full (DESIGN_ECONOMY_CONSTRUCTION "Modern AI
-	// full income").
-	s.Econ.CreditUnitReclaimRefund(attacker.Handle, victim.Remaining, victim.Def.BuildCostMetal, s.Econ.DiscountsCredit(attacker.Owner))
+	// full income"). The discount selects on that owner's word, its own in a
+	// battle whose computers each carry one (docs/DESIGN_MULTIPLAYER.md §6.6).
+	s.Econ.CreditUnitReclaimRefund(attacker.Handle, attacker.Owner, victim.Remaining, victim.Def.BuildCostMetal)
 }

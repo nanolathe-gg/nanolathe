@@ -12,19 +12,30 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
-// NewPlaytestSkirmish composes an online battle of human seats under Modern
-// gameplay (DESIGN_MULTIPLAYER §16.4, §16.6): a skirmish of 2..10 humans on
-// static lobby teams, or Survival with 2..3 human survivors and the attacker
-// row. The local seat selects presentation only and must be a human row.
-// Admission runs before world allocation; broader configurations — computer
-// or watcher rows, cheats, watching, Deathmatch, another rule set — remain
-// explicitly refused. The name is the first slice's; code and documents cite
-// it.
+// NewPlaytestSkirmish composes an online battle under Modern gameplay
+// (DESIGN_MULTIPLAYER §16.4, §16.6): a skirmish of 2..10 humans on static
+// lobby teams, or Survival with 2..3 human survivors and the attacker row,
+// either joined by computer rows the room host added. The rows are the human
+// seats first, in relay-slot order, then the computers, each hosted by seat 0
+// (§6.6), then Survival's attacker; a skirmish seats at most ten rows and no
+// more than the map's start positions (OnlineMapCapacity), and Survival at
+// most three survivors. The local seat selects presentation only and must be
+// a human row. Admission runs before world allocation; broader configurations
+// — watcher rows, a computer another seat hosts, cheats, watching, Deathmatch,
+// another rule set — remain explicitly refused. The name is the first slice's;
+// code and documents cite it.
+//
+// Every client runs every computer, which borrows its host's perspective as
+// retail's hosted computer borrows its machine's sensor picture (§6.2, §6.6).
+// A computer has no result row and is never removed online: it plays until it
+// is destroyed or the battle ends, and counts as an opponent in the victory
+// sweep [08 R-SKIR-01 §3].
 //
 // Teams are fixed at entry: alliances come from the ally groups and the
 // shared-victory bits from the configuration, and online seat commands
-// cannot change either (§6.7). Teammates share current sight and radar
-// through the visibility service's vision teams, as Survival's survivors do.
+// cannot change either (§6.7). Teammates, computers included, share current
+// sight and radar through the visibility service's vision teams, as
+// Survival's survivors do.
 //
 // The host's unit restrictions (field 12) are admitted since the first online
 // lobby (§16.6): admission requires them to be the set the frozen catalog was
@@ -37,30 +48,38 @@ func NewPlaytestSkirmish(inputs *content.SimulationInputs, config EffectiveMatch
 	}
 	r := admitted.request
 	refuse := func() (*Session, error) {
-		return nil, matchAdmissionError(ErrMatchConfigurationRejected, inputs, "playtest", "a Modern online skirmish of 2..10 human seats or online Survival of 2..3 human survivors, the local seat a human, with no cheats, watchers or Deathmatch (DESIGN_MULTIPLAYER §16.6)")
+		return nil, matchAdmissionError(ErrMatchConfigurationRejected, inputs, "playtest", "a Modern online skirmish of 2..10 human seats or online Survival of 2..3 human survivors, joined by computers the host added up to ten rows, the map's start positions or three survivors, the local seat a human, with no cheats, watchers or Deathmatch (DESIGN_MULTIPLAYER §16.6)")
 	}
 	if r.RuleName != string(gameplay.Modern) || r.CommanderDeath == 2 || r.CheatsAllowed || r.WatchingAllowed {
 		return refuse()
 	}
-	// The human rows lead; Survival's attacker is the last row, which
-	// configuration validation already requires.
-	humans := 0
+	// The human rows lead, then the host's computers; Survival's attacker is
+	// the last row, which configuration validation already requires.
+	humans, computers := 0, 0
 	for i, seat := range r.Seats {
 		switch {
 		case seat.Role == MatchRoleHuman && i == humans:
 			humans++
+		case seat.Role == MatchRoleComputer && i == humans+computers && seat.HostSeat == 0:
+			computers++
 		case seat.Role == MatchRoleSurvivalAttacker && r.SessionKind == MatchOnlineSurvival:
 		default:
 			return refuse()
 		}
 	}
+	players := humans + computers
 	switch r.SessionKind {
 	case MatchOnlineSkirmish:
-		if humans < matchMinSeats || humans > SkirmishMaxPlayers || len(r.Seats) != humans {
+		if humans < matchMinSeats || players > SkirmishMaxPlayers || len(r.Seats) != players {
+			return refuse()
+		}
+		// The lobby's own cap (§16.6); a map without a network schema that
+		// names start positions has none, as the lobby reads it.
+		if capacity, err := OnlineMapCapacity(inputs.Catalog(), r.MapName); err == nil && players > capacity {
 			return refuse()
 		}
 	case MatchOnlineSurvival:
-		if humans < matchMinSeats || humans > OnlineSurvivalMaxSurvivors || len(r.Seats) != humans+1 {
+		if humans < matchMinSeats || players > OnlineSurvivalMaxSurvivors || len(r.Seats) != players+1 {
 			return refuse()
 		}
 	default:
@@ -77,25 +96,62 @@ func NewPlaytestSkirmish(inputs *content.SimulationInputs, config EffectiveMatch
 	return composeSkirmish(skirmishEntry{cfg: cfg, features: r.Community, mission: admitted.mission, inputs: inputs, online: &config, localSeat: localSeat}, options, nil)
 }
 
-// setOnlineVisionTeams makes each online skirmish team of two or more seats
-// one side for sight and radar (DESIGN_MULTIPLAYER §6.7 "Allied sight"):
-// every member's coverage reaches every member's grids, and the sensor pass
-// treats teammates as its own side, the vision-team mechanism Survival's
-// survivors use (DESIGN_SURVIVAL §4.3). It is Nanolathe's online policy, not
-// retail's, which never merges an ally's current sight [03 §3.2]; teams are
-// fixed for the battle, so the coverage reference counts stay balanced. A
+// setOnlineVisionTeams applies the configuration's online seat relations to
+// a freshly composed battle, once at entry, before any coverage is published
+// or any tick runs: each computer's borrowed perspective, its host's
+// countdown attribution, and the online skirmish's vision teams.
+//
+// A computer borrows its host seat's perspective (DESIGN_MULTIPLAYER §6.2,
+// §6.6), as retail's hosted computer reads the sensor picture of the machine
+// that runs it [03 R-VIS-01 §4]: its sensor status and its Permanent LOS
+// history bit are its host's, and the host's sensor pass is the one that runs
+// pass 4 for its units. The Survival attacker is a scenario row, not a
+// computer seat, and borrows nothing (DESIGN_SURVIVAL §4.1).
+//
+// Under the Modern seat policy (SeatRules.ComputersStopWithHost false) a
+// computer outlives its defeated host, and the host's pass, which it reads,
+// stays an ordinary viewer's while the computer lives rather than marking
+// every unit friendly [03 R-VIS-01 §4] pass 1: the computer keeps normal
+// sight, and the defeated human watches with normal fog until its computers
+// are gone (DESIGN_MULTIPLAYER §6.6). Binding projects that answer onto the
+// visibility service.
+//
+// Each online skirmish team of two or more rows is one side for sight and
+// radar (§6.7 "Allied sight"): every member's coverage reaches every member's
+// grids, and the sensor pass treats teammates as its own side, the
+// vision-team mechanism Survival's survivors use (DESIGN_SURVIVAL §4.3). A
+// computer joins its team as a human does. It is Nanolathe's online policy,
+// not retail's, which never merges an ally's current sight [03 §3.2]; teams
+// are fixed for the battle, so the coverage reference counts stay balanced. A
 // vision team also stamps explored history for every member, since a cell
 // any member's perspective sees must not draw as unexplored for it; each
-// player keeps its own history bit. It runs once at entry, before any
-// coverage is published, and only for online skirmish.
+// player keeps its own history bit. A battle with no computer row makes no
+// call it did not make before, so a human-only room composes exactly as it
+// did.
 func (s *Session) setOnlineVisionTeams(r *MatchConfigRequest) {
-	if s == nil || s.Vis == nil || r == nil || r.SessionKind != MatchOnlineSkirmish {
+	if s == nil || r == nil {
+		return
+	}
+	for i := range r.Seats {
+		seat := &r.Seats[i]
+		if seat.Role != MatchRoleComputer || int(seat.HostSeat) >= len(r.Seats) {
+			continue
+		}
+		if s.Vis != nil {
+			s.Vis.SetPerspectiveHost(visibility.PlayerID(i), visibility.PlayerID(seat.HostSeat))
+		}
+		if s.onlineResults != nil && i < len(s.onlineResults.hosted) {
+			s.onlineResults.hosted[i] = int8(seat.HostSeat)
+		}
+	}
+	if s.Vis == nil || r.SessionKind != MatchOnlineSkirmish {
 		return
 	}
 	for group := uint8(0); group < SkirmishDefaultAllyGroup; group++ {
 		var team []visibility.PlayerID
 		for i := range r.Seats {
-			if r.Seats[i].Role == MatchRoleHuman && r.Seats[i].AllyGroup == group {
+			role := r.Seats[i].Role
+			if (role == MatchRoleHuman || role == MatchRoleComputer) && r.Seats[i].AllyGroup == group {
 				team = append(team, visibility.PlayerID(i))
 			}
 		}

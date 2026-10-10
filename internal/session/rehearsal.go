@@ -66,13 +66,20 @@ const (
 // runs at least as long and on until the director's first wave has spawned,
 // so the wave director is part of what it checks.
 //
+// The configuration's computer rows simply play, as they will in the match:
+// the script drives only the human seats, and every computer runs its own
+// controller from the rehearsal's own state.
+//
 // The rehearsal composes its own session through the match's constructor,
 // NewPlaytestSkirmish, and never touches another: the caller's match
 // session, composed from the same inputs, is unaffected. Sessions only read
 // their inputs — the catalog, models and animation table are immutable and
 // the sealed view locks its own lookups — so one value backs the match and
-// its rehearsal, and the rehearsal, which starts no goroutine of its own, may
-// run on the caller's goroutine of choice beside an idle or running match.
+// its rehearsal, and the rehearsal may run on the caller's goroutine of
+// choice beside an idle or running match. It starts no goroutine of its own;
+// a Modern computer's controller thinks on its own worker as in any battle,
+// joined at the tick its plan is due, and the rehearsal closes it before
+// returning.
 //
 // The digest is independent of the local seat, of local preferences and of
 // host timing: the rehearsal always composes as seat 0, a seat's commands are
@@ -196,15 +203,32 @@ func (r *rehearsal) lead(i int) *units.Unit {
 	return u
 }
 
-// issue enqueues the script's commands for tick, human seats in slot order,
-// as one stream would order them. Each command is computed from the
+// issue enqueues the script's commands for tick (commands).
+func (r *rehearsal) issue(tick uint32) error {
+	for _, c := range r.commands(tick) {
+		if err := r.s.EnqueueSeatCommand(c.stamp, c.command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rehearsalCommand is one stamped command of the script.
+type rehearsalCommand struct {
+	stamp   CommandStamp
+	command SeatCommand
+}
+
+// commands is the script's commands for tick, human seats in slot order,
+// stamped as one stream would order them. Each command is computed from the
 // rehearsal's state after the previous tick, which every replica holds
 // identically. The script is the same for every seat: move toward the map's
 // centre, build the first structure on the lead's own build list at the
 // nearest known legal site, and fire at that site with an ordinary attack
 // order. A command the session refuses or cannot carry out is refused
 // identically on every replica.
-func (r *rehearsal) issue(tick uint32) error {
+func (r *rehearsal) commands(tick uint32) []rehearsalCommand {
+	var out []rehearsalCommand
 	for i, seat := range r.seats {
 		u := r.lead(i)
 		if u == nil {
@@ -239,11 +263,9 @@ func (r *rehearsal) issue(tick uint32) error {
 			continue
 		}
 		r.position++
-		if err := r.s.EnqueueSeatCommand(CommandStamp{Seat: seat, Tick: tick, Position: r.position}, c); err != nil {
-			return err
-		}
+		out = append(out, rehearsalCommand{stamp: CommandStamp{Seat: seat, Tick: tick, Position: r.position}, command: c})
 	}
-	return nil
+	return out
 }
 
 // moveTarget is the lead's position moved rehearsalMoveDistance toward the

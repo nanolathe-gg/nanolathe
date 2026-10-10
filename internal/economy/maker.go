@@ -88,10 +88,9 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 		b.Production = float32(float64(b.Production) + contribution)
 		return
 	}
-	selector := 2
-	if s != nil && s.EconomySelector != nil {
-		selector = *s.EconomySelector
-	}
+	// The word is the destination player's: its own when the session gave it
+	// one, otherwise the battle's (selectorFor).
+	selector := s.selectorFor(p)
 	if s != nil && s.Community.AIDifficultyIncome {
 		b.Production = proTAIncomeCredit(b.Production, contribution, selector)
 		return
@@ -231,6 +230,68 @@ func (s *Service) SetEconomySelector(v int) {
 	*s.EconomySelector = v
 }
 
+// SetPlayerSelector gives player its own discount word, which every
+// discounted credit the player receives then selects on in place of the
+// battle's EconomySelector (Player.OwnSelector). The session projects it,
+// outside any tick, for a battle whose computer players each carry their own
+// difficulty (docs/DESIGN_MULTIPLAYER.md §6.6). A slot outside the ten is
+// ignored.
+func (s *Service) SetPlayerSelector(player uint8, word int) {
+	if s == nil || int(player) >= len(s.Players) {
+		return
+	}
+	p := &s.Players[player]
+	p.OwnSelector, p.Selector = true, word
+}
+
+// ClearPlayerSelector returns player to the battle's word. Clearing a player
+// that has no word of its own changes nothing.
+func (s *Service) ClearPlayerSelector(player uint8) {
+	if s == nil || int(player) >= len(s.Players) {
+		return
+	}
+	p := &s.Players[player]
+	p.OwnSelector, p.Selector = false, 0
+}
+
+// PlayerSelector reports player's own discount word and whether the session
+// gave it one. The construction refunds read it so that both consumers of a
+// player's word read one copy [05 R-ECO-01 §11].
+func (s *Service) PlayerSelector(player uint8) (int, bool) {
+	if s == nil || int(player) >= len(s.Players) || !s.Players[player].OwnSelector {
+		return 0, false
+	}
+	return s.Players[player].Selector, true
+}
+
+// globalSelector is the battle's one discount word: the installed
+// EconomySelector, or 2 — the undiscounted word — while none is installed.
+func (s *Service) globalSelector() int {
+	if s != nil && s.EconomySelector != nil {
+		return *s.EconomySelector
+	}
+	return 2
+}
+
+// selectorFor is the word the discount ladder selects on for a credit to p:
+// p's own word when it has one, otherwise the battle's [05 R-ECO-01 §3].
+func (s *Service) selectorFor(p *Player) int {
+	if p != nil && p.OwnSelector {
+		return p.Selector
+	}
+	return s.globalSelector()
+}
+
+// selectorForOwner is selectorFor of owner's record. An owner outside the ten
+// slots has no record and reads the battle's word; its credits are never
+// discounted anyway (specialPlayerSlot).
+func (s *Service) selectorForOwner(owner uint8) int {
+	if s != nil && int(owner) < len(s.Players) {
+		return s.selectorFor(&s.Players[owner])
+	}
+	return s.globalSelector()
+}
+
 // Removed (AU-6): economy.RepairResourceTerm / (*Service).AdmitRepair. They
 // were an unreferenced second copy of the repair step's two terms, and the copy
 // was wrong twice over against [R-WORK-01 §3]: it clamped a sub-unit term UP to
@@ -264,13 +325,12 @@ func (s *Service) SetEconomySelector(v int) {
 //     introduce a predicate the sites do not have;
 //   - a selector this build has not been given is the undiscounted path, which
 //     is also what the traced ladder does for any selector above one (hard).
-func creditReclaimedMaterial(s *Service, b *Bucket, contribution float64, discounted bool) {
+//
+// The caller resolves the selector: the credited player's word where it names
+// the player (selectorForOwner), the battle's where it does not.
+func creditReclaimedMaterial(b *Bucket, contribution float64, discounted bool, selector int) {
 	if b == nil {
 		return
-	}
-	selector := 2
-	if s != nil && s.EconomySelector != nil {
-		selector = *s.EconomySelector
 	}
 	// Each discount product rounds before the subtraction, as in
 	// addContribution above [05 R-ECO-01 §3][05 R-ECO-01 §11].
@@ -337,42 +397,44 @@ func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner u
 	s.ensureUnitBuckets(builderHandle)
 	b := &s.unitBuckets[builderHandle].Buckets
 	discounted := s.specialPlayerSlot(builderOwner)
+	// The ladder is gated on the BUILDER's record, so it selects on the
+	// builder owner's word [05 R-ECO-01 §11].
+	selector := s.selectorForOwner(builderOwner)
 	if discounted && s.Community.AIDifficultyIncome {
 		// The ProTA 4.8 package replaces only this helper's two credits: each
 		// takes the package's Easy/Medium/Hard 0.5/1/4 table at the same store
 		// boundary, energy before metal. The unit-reclaim refund below and
 		// every other credit keep retail's ladder
 		// (research/extensions/prota-engine.md "AI and economy evidence audit").
-		selector := 2
-		if s.EconomySelector != nil {
-			selector = *s.EconomySelector
-		}
 		b[Energy].Production = proTAIncomeCredit(b[Energy].Production, float64(energy), selector)
 		b[Metal].Production = proTAIncomeCredit(b[Metal].Production, float64(metal), selector)
 		return
 	}
-	creditReclaimedMaterial(s, &b[Energy], float64(energy), discounted)
-	creditReclaimedMaterial(s, &b[Metal], float64(metal), discounted)
+	creditReclaimedMaterial(&b[Energy], float64(energy), discounted, selector)
+	creditReclaimedMaterial(&b[Metal], float64(metal), discounted, selector)
 }
 
 // CreditUnitReclaimRefund is the death-side metal refund of a lethal cause-5
 // reclaim pulse [05 "Unit reclaim"]: `(1 - victim remaining) x victim metal
 // build cost`, paid to the killing builder's metal production accumulator, with
-// no energy counterpart. The discount applies when the killer's owner is a
-// discounted computer player (DiscountsCredit), which the caller reads from
-// the owner's record because the killer's slot may already be freed or reused.
+// no energy counterpart. The discount ladder is entered on the ATTACKER's
+// player record [05 R-ECO-01 §11]: it applies when the killer's owner is a
+// discounted computer player (DiscountsCredit) and selects on that owner's
+// word — its own when the session gave it one (docs/DESIGN_MULTIPLAYER.md
+// §6.6), otherwise the battle's. The caller names the owner from the killer's
+// record because the killer's slot may already be freed or reused.
 //
 // Remaining and cost are stored single floats, but subtraction, multiplication,
 // discount and accumulation stay at working precision until the final bucket
 // store [05 R-WORK-01 §4].
-func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal float32, discounted bool) {
+func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, killerOwner uint8, victimRemaining float32, victimBuildCostMetal float32) {
 	if s == nil || killerHandle == 0 {
 		return
 	}
 	s.ensureUnitBuckets(killerHandle)
 	refund := (1 - float64(victimRemaining)) * float64(victimBuildCostMetal)
 	b := &s.unitBuckets[killerHandle].Buckets[Metal]
-	creditReclaimedMaterial(s, b, refund, discounted)
+	creditReclaimedMaterial(b, refund, s.DiscountsCredit(killerOwner), s.selectorForOwner(killerOwner))
 }
 
 // DiscountsCredit reports whether owner's credits take the difficulty

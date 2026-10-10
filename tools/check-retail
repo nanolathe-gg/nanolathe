@@ -75,11 +75,16 @@ go test -tags retail -short="$short" -p "$NANOLATHE_TEST_P" -timeout "${NANOLATH
 # M1-C11: execute the same locked constants on amd64, not just a cross-build.
 # Keep every fingerprint lock (including the Strict pool-fill scene) in this
 # selection. Scoped package arguments must not narrow this ratchet.
+# fingerprint_packages holds every lock: the rule-set scenes in
+# internal/headless and the Modern AI's online lock in mods/aikit, the one
+# lock that runs the util+tac controller every client hosts online.
+fingerprint_packages="./internal/headless ./mods/aikit"
 run_amd64_fingerprints() {
 	set -- -tags retail -short="$short" -p "$NANOLATHE_TEST_P" \
 		-timeout "${NANOLATHE_TEST_TIMEOUT:-20m}" -run '^Test.*Fingerprint.*Locked$' "$@"
 	[ "$fresh" = false ] || set -- -count=1 "$@"
-	GOOS="$host_os" GOARCH=amd64 go test "$@" ./internal/headless
+	# shellcheck disable=SC2086 # the package list splits on spaces
+	GOOS="$host_os" GOARCH=amd64 go test "$@" $fingerprint_packages
 	echo "==> amd64 fingerprint locks: PASSED"
 }
 host_os=$(go env GOHOSTOS)
@@ -124,7 +129,8 @@ run_wasm_fingerprints() {
 		-run '^Test.*Fingerprint.*Locked$' \
 		-exec "env GOMAXPROCS=1 $(go env GOROOT)/lib/wasm/go_js_wasm_exec"
 	[ "$fresh" = false ] || set -- -count=1 "$@"
-	GOOS=js GOARCH=wasm go test "$@" ./internal/headless
+	# shellcheck disable=SC2086 # the package list splits on spaces
+	GOOS=js GOARCH=wasm go test "$@" $fingerprint_packages
 	echo "==> js/wasm fingerprint locks: PASSED"
 }
 echo "==> js/wasm fingerprint locks (short=$short)"

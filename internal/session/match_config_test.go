@@ -607,8 +607,9 @@ const (
 	matchTestOneSeatSet  = "session-test-one-seat"
 )
 
-// matchTestTwoSeats lets one human add two computers.
-type matchTestTwoSeats struct{}
+// matchTestTwoSeats lets one human add two computers; its other answers are
+// its Strict 3.1 base's.
+type matchTestTwoSeats struct{ StrictSeats }
 
 func (matchTestTwoSeats) ComputerSeatsPerHuman() int { return 2 }
 

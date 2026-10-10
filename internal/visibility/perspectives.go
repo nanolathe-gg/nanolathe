@@ -23,12 +23,16 @@ func (s *Service) EnableOwnerPerspectives() {
 // perspective's sonar exemption [03 R-VIS-01 §4 Gate]. Serial zero is still
 // inside creation, before identity commits, and must never borrow a prior
 // occupant's contact (DESIGN_MULTIPLAYER §16.4.1).
+//
+// A hosted computer reads its host's bank, sonar exemption included, so its
+// answer is always its host's (SetPerspectiveHost).
 func (s *Service) StatusForPerspective(owner PlayerID, id uint16, allocationSerial uint64, unitOwner PlayerID, fallback uint32) uint32 {
 	if s == nil || !s.ownerPerspectives {
 		return fallback
 	}
 	var status uint32
 	if validPlayer(owner) {
+		owner = s.PerspectiveOf(owner)
 		if owner == unitOwner {
 			status = SonarBit
 		}
@@ -44,11 +48,21 @@ func (s *Service) StatusForPerspective(owner PlayerID, id uint16, allocationSeri
 // settlement deadline (DESIGN_MULTIPLAYER §6.3, §16.4.1). The input status words
 // are read but never written; their sensor output belongs to this owner's
 // allocation bank. The real shared reveal deadline is still written in place.
-// The prototype has no hosted computers: only this human's units may perform
-// the locally-simulated minimum-cloak source work [03 R-VIS-01 §4 pass 4].
+// Pass 4's source gate, "simulated on this machine", is this human's units and
+// those of the computers it hosts, the rows its retail machine would have
+// simulated [03 R-VIS-01 §4 pass 4]; every other owner's units are some other
+// machine's.
+//
+// A defeated owner's pass marks every unit friendly [03 R-VIS-01 §4] pass 1,
+// unless SetDefeatedHostKeepsSight is on and a computer this owner hosts
+// still has a live unit in units: then the pass is an ordinary viewer's, so
+// the computer that reads it keeps normal sight.
 func (s *Service) SensorTickForPerspective(owner PlayerID, defeated bool, tick uint32, activePlayers int, units []SensorUnit) {
 	if s == nil || !s.ownerPerspectives || !validPlayer(owner) {
 		return
+	}
+	if defeated && s.defeatedHostKeepsSight && s.hostsLiveComputer(owner, units) {
+		defeated = false
 	}
 	if activePlayers <= 1 {
 		// Preserve both the no-write gate and the ordinary diagnostic reset.
@@ -80,7 +94,7 @@ func (s *Service) SensorTickForPerspective(owner PlayerID, defeated bool, tick u
 	s.perspectiveTransient = s.perspectiveTransient[:len(units)]
 	for i := range s.perspectiveUnits {
 		u := &s.perspectiveUnits[i]
-		u.OwnerLocallySimulated = u.OwnerLocallySimulated && u.Owner == owner
+		u.OwnerLocallySimulated = u.OwnerLocallySimulated && s.PerspectiveOf(u.Owner) == owner
 		if !u.Alive || u.Status == nil {
 			continue
 		}
@@ -99,9 +113,74 @@ func (s *Service) SensorTickForPerspective(owner PlayerID, defeated bool, tick u
 	s.sensorTick(tick, activePlayers, s.perspectiveUnits, owner, defeated)
 }
 
+// historyPlayer is the explored-history bit a query on behalf of viewer reads
+// under Permanent LOS: retail's local player's [03 §3.2] C8 step 4, which
+// online is the perspective viewer reads, its host's for a hosted computer.
 func (s *Service) historyPlayer(viewer PlayerID) PlayerID {
 	if s.ownerPerspectives {
-		return viewer
+		return s.PerspectiveOf(viewer)
 	}
 	return s.local
+}
+
+// SetPerspectiveHost makes player borrow host's perspective in an online
+// battle: its sensor status reads and its Permanent LOS history reads become
+// host's, and host's sensor pass treats player's units as locally simulated
+// for pass 4's source gate. It is retail's hosted computer, which reads the
+// sensor picture of the machine that runs it [03 R-VIS-01 §4]
+// (DESIGN_MULTIPLAYER §6.2, §6.6). Current coverage stays player's own: the
+// byte-grid sampler reads the querying record's grid [03 §3.2] C8 step 4.
+//
+// It is composition-time configuration, set before the first tick and never
+// changed. A host must be a different, valid player that borrows no
+// perspective itself; anything else is refused and changes nothing. Single-
+// player battles never set it: there every viewer already reads the local
+// slot's history bit and the unit's own status word.
+func (s *Service) SetPerspectiveHost(player, host PlayerID) bool {
+	if s == nil || !validPlayer(player) || !validPlayer(host) || player == host || s.perspectiveHost[host] != 0 {
+		return false
+	}
+	for p := range s.perspectiveHost {
+		if s.perspectiveHost[p] == uint8(player)+1 {
+			return false // player already hosts another; one level only
+		}
+	}
+	s.perspectiveHost[player] = uint8(host) + 1
+	return true
+}
+
+// SetDefeatedHostKeepsSight selects the online seat policy's sight half
+// (DESIGN_MULTIPLAYER §6.6): when on, a defeated seat whose hosted computer
+// still has a live unit runs its sensor pass as an ordinary viewer's rather
+// than a defeated one's, which would mark every unit friendly
+// [03 R-VIS-01 §4] pass 1 and hand the computer that borrows the pass the
+// whole map. Once its computers are gone the defeated marking applies as
+// before. Off is retail's machine, whose computers stop with its human; it
+// is the zero value, and a battle with no hosted computer never consults it.
+func (s *Service) SetDefeatedHostKeepsSight(on bool) {
+	if s != nil {
+		s.defeatedHostKeepsSight = on
+	}
+}
+
+// hostsLiveComputer reports whether some unit in units is alive and belongs
+// to a player that borrows owner's perspective. The pass input holds every
+// live unit, so this is "a computer owner hosts is not eliminated".
+func (s *Service) hostsLiveComputer(owner PlayerID, units []SensorUnit) bool {
+	for i := range units {
+		u := &units[i]
+		if u.Alive && u.Owner != owner && s.PerspectiveOf(u.Owner) == owner {
+			return true
+		}
+	}
+	return false
+}
+
+// PerspectiveOf is the perspective player reads: its host's when it borrows
+// one (SetPerspectiveHost), otherwise its own. An invalid player reads itself.
+func (s *Service) PerspectiveOf(player PlayerID) PlayerID {
+	if s == nil || !validPlayer(player) || s.perspectiveHost[player] == 0 {
+		return player
+	}
+	return PlayerID(s.perspectiveHost[player] - 1)
 }

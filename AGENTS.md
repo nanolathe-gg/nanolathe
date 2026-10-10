@@ -135,7 +135,13 @@ bounded increments brought forward ahead of full M3 platform acceptance and M4
 replays, each preserving the existing simulation contracts: the 2026-10-07
 two-client play-test slice (§16.4), the first hosted relay the same day (§16.5)
 and the first online lobby on 2026-10-08 (§16.6). The maintainer had all three
-landed on main on 2026-10-08.
+landed on main on 2026-10-08. On 2026-10-09 the maintainer approved computer
+players in online rooms, added by the room's host (§6.6), with one more
+Nanolathe Modern policy through the existing `SeatRules` seam: under Modern
+and Community a hosted computer keeps playing, with normal sight, after its
+host human is defeated, while Strict 3.1 keeps retail's one countdown per
+machine (Q30); and local replays, recorded for every skirmish and Survival
+battle and played back from a Replays screen (§10).
 
 **Unit restrictions are the fifth mode-independent exception (user-authorized
 2026-10-05).** A restriction is retail's multiplayer unit-restriction count,

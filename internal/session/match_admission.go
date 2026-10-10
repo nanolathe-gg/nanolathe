@@ -205,17 +205,17 @@ func admitMatch(c EffectiveMatchConfig, inputs *content.SimulationInputs) (match
 // validity first (ValidateMatchInputs) and returns that refusal before any
 // pool, world, random stream or catalog work.
 //
-// Until M5 lands per-seat perspectives and consumers, it composes only the
-// configuration a single-player battle could describe — exactly one human
-// seat, who added every computer, no watcher, and one difficulty for every
-// computer — and refuses any other with ErrMatchNeedsMultiSeat rather than
-// composing it through the single-human path (§8.6, §8.8, §16.2). That one
-// shape composes through skirmish entry's own back half from the given
-// inputs: their catalog, their sealed view and their map, with nothing
-// captured, compiled, prepared or frozen again, and with the configuration's
-// seeds, rows, options and Survival fields. The battle is the one the local
-// adapter's setup and options (NewMatchConfigRequest) compose through
-// NewSkirmishWithEntryOptions.
+// Until M5 lands per-seat perspectives, it composes only a configuration with
+// exactly one human seat, who added every computer, and no watcher, and
+// refuses any other with ErrMatchNeedsMultiSeat rather than composing it
+// through the single-human path (§8.6, §8.8, §16.2). Its computers may differ
+// in difficulty: each seat's readers take its own word (§6.6). That shape
+// composes through skirmish entry's own back half from the given inputs:
+// their catalog, their sealed view and their map, with nothing captured,
+// compiled, prepared or frozen again, and with the configuration's seeds,
+// rows, options and Survival fields. When every computer has one difficulty
+// the battle is the one the local adapter's setup and options
+// (NewMatchConfigRequest) compose through NewSkirmishWithEntryOptions.
 //
 // Design reading: the permissions, views, online policies and participant
 // identities are not composition inputs. The command boundary (U2) and the
@@ -268,13 +268,12 @@ func NewAdmittedSkirmish(inputs *content.SimulationInputs, c EffectiveMatchConfi
 }
 
 // matchSingleSeat refuses a configuration the single-player composition
-// cannot run: more than one human seat, a watcher row, or computers of
-// different difficulty, whose per-seat consumers M5 delivers (§6.6, Q23).
-// With one human, every computer is that human's: resolution requires each
-// computer's host seat to name a human row.
+// cannot run: more than one human seat or a watcher row. With one human,
+// every computer is that human's: resolution requires each computer's host
+// seat to name a human row. Computers may differ in difficulty: each seat's
+// readers take its own word (matchSkirmishSetup, §6.6).
 func matchSingleSeat(r *MatchConfigRequest, inputs *content.SimulationInputs) error {
 	humans := 0
-	difficulty := -1
 	for i, seat := range r.Seats {
 		path := fmt.Sprintf("seats[%d]", i)
 		switch seat.Role {
@@ -284,11 +283,6 @@ func matchSingleSeat(r *MatchConfigRequest, inputs *content.SimulationInputs) er
 			}
 		case MatchRoleWatcher:
 			return matchAdmissionError(ErrMatchNeedsMultiSeat, inputs, path+".role", "no watcher seat until M5 composes watcher perspectives (DESIGN_MULTIPLAYER §11.4, §16.2)")
-		case MatchRoleComputer:
-			if difficulty >= 0 && int(seat.Difficulty) != difficulty {
-				return matchAdmissionError(ErrMatchNeedsMultiSeat, inputs, path+".difficulty", fmt.Sprintf("difficulty %d, every computer's, until M5 gives each computer seat its own difficulty consumers (DESIGN_MULTIPLAYER §6.6, §15 Q23)", difficulty))
-			}
-			difficulty = int(seat.Difficulty)
 		}
 	}
 	return nil
@@ -341,18 +335,30 @@ func matchSkirmishSetup(r *MatchConfigRequest) (SkirmishConfig, SkirmishEntryOpt
 		table := r.Community
 		options.CommunitySources = CommunitySources{CommandLine: []community.Overrides{{Base: &table}}}
 	}
-	// The battle's one difficulty word is every computer's own value (§6.6,
-	// §15 Q28), which matchSingleSeat requires to be one value. Design
-	// reading: with no added computer no reader consults the word — a human
-	// consults none and the Survival attacker runs no planner and has no
-	// economy (§6.6, DESIGN_SURVIVAL §4.1) — so the setup's missing-value
-	// default stands in for it.
+	// Each computer seat's readers take its own difficulty (§6.6, §15 Q28).
+	// When every computer has one value that value is the battle's one word,
+	// which composes exactly the battle a single-player setup with that word
+	// does. When they differ, the setup carries each seat's word
+	// (SeatDifficulty) and no computer reads the battle's. Design reading:
+	// with no added computer no reader consults the word — a human consults
+	// none and the Survival attacker runs no planner and has no economy
+	// (§6.6, DESIGN_SURVIVAL §4.1) — so the setup's missing-value default
+	// stands in for it, and for those rows of a setup whose computers differ.
 	cfg.Difficulty = SkirmishDefaultDifficulty
+	first := -1
 	for _, seat := range r.Seats {
-		if seat.Role == MatchRoleComputer {
-			cfg.Difficulty = int(seat.Difficulty)
-			break
+		if seat.Role != MatchRoleComputer {
+			continue
 		}
+		switch {
+		case first < 0:
+			first = int(seat.Difficulty)
+		case int(seat.Difficulty) != first:
+			cfg.SeatDifficulty = true
+		}
+	}
+	if first >= 0 && !cfg.SeatDifficulty {
+		cfg.Difficulty = first
 	}
 	for i := range r.Seats {
 		seat := &r.Seats[i]
@@ -377,6 +383,9 @@ func matchSkirmishSetup(r *MatchConfigRequest) (SkirmishConfig, SkirmishEntryOpt
 		case MatchRoleComputer:
 			p.Controller = SkirmishControllerComputer
 			p.AI = seat.ComputerKind
+			if cfg.SeatDifficulty {
+				p.Difficulty = int(seat.Difficulty)
+			}
 			// Each computer's merged parameters as its own slot's layer; the
 			// All and difficulty layers are already merged into them. The
 			// managers of other seats, which no controller reads, get none.

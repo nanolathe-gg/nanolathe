@@ -6,8 +6,10 @@ import "github.com/nanolathe-gg/nanolathe/internal/ai"
 // (docs/DESIGN_ECONOMY_CONSTRUCTION.md "Modern AI full income"). It answers
 // the one word the ledger's computer-production discount and both
 // construction refund sites select on [05 R-ECO-01 §3][05 R-ECO-01 §11] for
-// every Classic computer player; a computer player marked Modern is paid in
-// full whatever it answers (projectComputerIncome).
+// every Classic computer player — once for the battle's word and, in a battle
+// whose computers each carry their own difficulty, once more for each
+// computer seat's (projectSeatIncome); a computer player marked Modern is
+// paid in full whatever it answers (projectComputerIncome).
 //
 // Like UnitLimitRules it is a decision no simulation package owns: neither
 // the ledger nor the construction service asks it, because both only read a
@@ -15,10 +17,10 @@ import "github.com/nanolathe-gg/nanolathe/internal/ai"
 // bound, outside any tick, and projects the one answer onto both services
 // (projectComputerIncome), so the two consumers can never disagree.
 type ComputerIncomeRules interface {
-	// DiscountWord answers the selector word for the battle's difficulty
-	// word; known reports that the difficulty word is in the vocabulary
-	// (0 easy, 1 medium, 2 hard). An answer with ok false leaves both
-	// selectors as they are.
+	// DiscountWord answers the selector word for a difficulty word — the
+	// battle's, or a computer seat's own; known reports that the difficulty
+	// word is in the vocabulary (0 easy, 1 medium, 2 hard). An answer with
+	// ok false leaves both selectors as they are.
 	DiscountWord(difficulty int, known bool) (word int, ok bool)
 }
 
@@ -79,19 +81,55 @@ func (s *Session) computerIncomeRules() ComputerIncomeRules {
 // undiscounted word a full-income set may have written is the same answer the
 // unset selector already gives, so nothing is guessed.
 //
-// It then marks the computer players paid in full (projectFullIncomePlayers).
+// It first marks the computer players paid in full (projectFullIncomePlayers),
+// and finally projects each computer seat's own word where the battle carries
+// one (projectSeatIncome).
 func (s *Session) projectComputerIncome() {
 	s.projectFullIncomePlayers()
+	rules := s.computerIncomeRules()
 	difficulty, known := sessionDifficultyWord(s)
-	word, ok := s.computerIncomeRules().DiscountWord(difficulty, known)
-	if !ok {
+	if word, ok := rules.DiscountWord(difficulty, known); ok {
+		if s.Econ != nil {
+			s.Econ.SetEconomySelector(word)
+		}
+		if s.Build != nil {
+			s.Build.ModeSelector = word
+		}
+	}
+	s.projectSeatIncome(rules)
+}
+
+// projectSeatIncome gives each computer seat of a battle whose computers carry
+// their own difficulty (sessionSeatDifficultyWord) the bound set's answer for
+// its own word, on the ledger record both the ledger's credits and the
+// construction refunds select on (economy.Service.SetPlayerSelector,
+// construction.Service.RefundSelector), so a seat's credits take its own
+// discount [05 R-ECO-01 §3][05 R-ECO-01 §11][05 R-SHARE-01 §2]
+// (docs/DESIGN_MULTIPLAYER.md §6.6). Every other record — every record of a
+// battle with one word — is cleared to the battle's word, which leaves a
+// ledger that never had a seat word exactly as it was. A computer seat marked
+// Modern carries its word too, but its full-income mark keeps every credit
+// whole. It runs outside any tick, in ascending slot order [I1].
+func (s *Session) projectSeatIncome(rules ComputerIncomeRules) {
+	if s == nil || s.Econ == nil {
 		return
 	}
-	if s.Econ != nil {
-		s.Econ.SetEconomySelector(word)
-	}
-	if s.Build != nil {
-		s.Build.ModeSelector = word
+	for p := range s.Econ.Players {
+		player := uint8(p)
+		difficulty, seat := sessionSeatDifficultyWord(s, player)
+		if !seat {
+			s.Econ.ClearPlayerSelector(player)
+			continue
+		}
+		word, ok := rules.DiscountWord(difficulty, true)
+		if !ok {
+			// No reserved answer refuses an in-vocabulary word; a set that
+			// does leaves the seat on the battle's word, as an unanswered
+			// battle word leaves the global selector alone.
+			s.Econ.ClearPlayerSelector(player)
+			continue
+		}
+		s.Econ.SetPlayerSelector(player, word)
 	}
 }
 

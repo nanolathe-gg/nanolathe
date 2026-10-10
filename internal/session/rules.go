@@ -83,17 +83,25 @@ type RuleSet struct {
 	// "Modern AI full income").
 	ComputerIncome ComputerIncomeRules
 	// Seats is the online seat policy: how many computer seats one human may
-	// add to a multiplayer battle (docs/DESIGN_MULTIPLAYER.md §6.6). No
-	// simulation package owns the question; match admission asks it.
+	// add to a multiplayer battle, and whether the computers a human hosts
+	// stop with it (docs/DESIGN_MULTIPLAYER.md §6.3, §6.6). No simulation
+	// package owns either question; match admission and the session's
+	// per-seat result block ask them, and the second is projected onto the
+	// visibility service's online sensor pass.
 	Seats SeatRules
 }
 
 // SeatRules is the seam for the online seat decisions of a multiplayer
-// battle (docs/DESIGN_MULTIPLAYER.md §6.6, §11.1). Like UnitLimitRules it is
-// session-owned, because no simulation package owns the question: match
-// admission asks it before a world exists, and no tick reads it. Strict 3.1
-// keeps retail's answer; Modern and Community 3.9 answer with the approved
-// Nanolathe online policy (§15 Q23).
+// battle (docs/DESIGN_MULTIPLAYER.md §6.3, §6.6, §11.1). Like UnitLimitRules
+// it is session-owned, because no simulation package owns the question:
+// match admission asks the cap before a world exists, the session's per-seat
+// result block asks whether computers stop with their host when a human's
+// countdown moves, and binding projects that answer's sight half onto the
+// visibility service. A single-player battle hosts no online computer, so no
+// answer changes it. Strict 3.1 keeps retail's answers; Modern and Community
+// 3.9 answer with the approved Nanolathe online policies (§15 Q23; a hosted
+// computer keeps playing, and keeps normal sight, after its host's defeat,
+// both approved 2026-10-09).
 //
 // The final-removal decision of §11.1 — whether a finally removed human's
 // units and hosted computers are destroyed or kept, which §15 Q6, Q26 and Q28
@@ -103,22 +111,49 @@ type SeatRules interface {
 	// ComputerSeatsPerHuman is the most computer seats one human seat may
 	// add, within the lobby's available seats.
 	ComputerSeatsPerHuman() int
+	// ComputersStopWithHost reports whether the computers a human seat hosts
+	// stop with it, as one retail machine's do: the human's end countdown
+	// and ending latch gate their settlement too [05 R-ECO-01 §1]
+	// [08 R-SKIR-01 §3], and the human's defeat makes its sensor pass a
+	// defeated viewer's, which marks every unit friendly [03 R-VIS-01 §4]
+	// pass 1, whatever its computers still own. When false, a hosted
+	// computer keeps settling, and so keeps playing, after its host is
+	// defeated or has won; and while it keeps a live unit, its defeated
+	// host's pass stays an ordinary viewer's, so the computer, which reads
+	// that pass, keeps normal sight and the defeated human watches with
+	// normal fog until its computers are gone.
+	ComputersStopWithHost() bool
 }
 
 // StrictSeats is retail's answer: one computer per human machine, hosted by
-// the human that added it [08 R-SKIR-01 §13]. It is zero size.
+// the human that added it [08 R-SKIR-01 §13], and one countdown per machine.
+// It is zero size.
 type StrictSeats struct{}
 
 // ComputerSeatsPerHuman is retail's one computer per machine.
 func (StrictSeats) ComputerSeatsPerHuman() int { return 1 }
 
+// ComputersStopWithHost is retail's: the machine's one countdown gates its
+// human and its hosted computers, so a computer stops settling with its host
+// [05 R-ECO-01 §1] [08 R-SKIR-01 §3], and a defeated machine's sensor pass is
+// a defeated viewer's [03 R-VIS-01 §4].
+func (StrictSeats) ComputersStopWithHost() bool { return true }
+
 // ModernSeats is the approved Nanolathe online policy for Modern and
 // Community 3.9 (docs/DESIGN_MULTIPLAYER.md §6.6, §15 Q23): a human may add
-// computers up to the available lobby seats. It is zero size.
+// computers up to the available lobby seats, and a hosted computer keeps
+// playing, with normal sight, when its host human is defeated. It is zero
+// size.
 type ModernSeats struct{}
 
 // ComputerSeatsPerHuman is bounded only by the lobby's seats.
 func (ModernSeats) ComputerSeatsPerHuman() int { return SkirmishMaxPlayers }
+
+// ComputersStopWithHost is the Nanolathe Modern policy approved on
+// 2026-10-09: a human's countdown gates only that human, so the computers it
+// hosts play on until they are destroyed or the battle ends, and a defeated
+// host's sensor pass stays an ordinary viewer's while one of them lives.
+func (ModernSeats) ComputersStopWithHost() bool { return false }
 
 // UnitLimitRules is the save/restore unit-limit policy seam
 // (DESIGN_SESSIONS_AI_SAVE "Modern save unit limits"). It is the one gameplay
@@ -504,6 +539,10 @@ func (s *Session) bindRuleServices(set RuleSet) {
 	s.projectComputerIncome()
 	if s.Vis != nil {
 		s.Vis.Rules = set.Visibility
+		// The sight half of the seat policy: a defeated host keeps an
+		// ordinary viewer's pass while a computer it hosts lives. It reads
+		// only hosted computers, which only an online battle has.
+		s.Vis.SetDefeatedHostKeepsSight(!seatRulesOf(set).ComputersStopWithHost())
 	}
 	if s.Combat != nil {
 		s.Combat.Rules = set.Combat
@@ -547,6 +586,23 @@ func (s *Session) orderRules() orders.Rules {
 		return orders.StrictRules{}
 	}
 	return s.Rules.Orders
+}
+
+// seatRules is the online seat policy of the bound set. A session that never
+// bound one answers as Strict 3.1, the fallback every seam takes.
+func (s *Session) seatRules() SeatRules {
+	if s == nil {
+		return StrictSeats{}
+	}
+	return seatRulesOf(s.Rules)
+}
+
+// seatRulesOf is set's seat policy, Strict 3.1's when the set states none.
+func seatRulesOf(set RuleSet) SeatRules {
+	if set.Seats == nil {
+		return StrictSeats{}
+	}
+	return set.Seats
 }
 
 // unitLimitRules is the save/restore policy of the bound set. A session that

@@ -162,6 +162,11 @@ type SkirmishPlayer struct {
 	// (docs/DESIGN_SESSIONS_AI_SAVE.md "Modern AI computer player",
 	// "Per-player selection").
 	AI ai.Controller
+	// Difficulty is a computer row's own difficulty word — 0 easy, 1 medium,
+	// 2 hard — read only when the setup's SeatDifficulty is set
+	// (docs/DESIGN_MULTIPLAYER.md §6.6). It means nothing on any other row
+	// or in a setup with one battle word.
+	Difficulty int
 }
 
 // SkirmishConfig is the skirmish setup discriminant per [08 "Skirmish configuration"].
@@ -205,6 +210,16 @@ type SkirmishConfig struct {
 	// Survival selects the Survival scenario (docs/DESIGN_SURVIVAL.md): the
 	// last row is the commanderless attacker. The zero value is a skirmish.
 	Survival SurvivalOptions
+
+	// SeatDifficulty gives every computer row its own difficulty word,
+	// SkirmishPlayer.Difficulty, in place of Difficulty, at each reader that
+	// concerns one computer seat: its profile's plan gate, its Modern
+	// persona and the discount of the credits it receives
+	// (docs/DESIGN_MULTIPLAYER.md §6.6). Only an admitted configuration whose
+	// computers differ sets it (matchSkirmishSetup); every other setup has
+	// one battle word, so its battle is unchanged. The Survival attacker is
+	// not a computer seat and keeps the battle word.
+	SeatDifficulty bool
 
 	// rulesDefaultsApplied distinguishes a zero-value config (missing registry
 	// values) from an explicit Easy/randomized/off choice. It is deliberately
@@ -333,6 +348,15 @@ func (c SkirmishConfig) Validate() error {
 		return fmt.Errorf("session: empty skirmish map [08 \"Skirmish configuration\"]")
 	}
 	// NumSkirmishPlayers range check is intentionally no-op [P0-05].
+	// A computer seat's own word is in the difficulty vocabulary, so every
+	// reader of it has an answer (docs/DESIGN_MULTIPLAYER.md §6.6).
+	if c.SeatDifficulty {
+		for i := 0; i < c.NumPlayers && i < len(c.Players); i++ {
+			if p := c.Players[i]; p.IsComputer() && (p.Difficulty < 0 || p.Difficulty > 2) {
+				return fmt.Errorf("session: computer seat %d difficulty %d: want 0 easy, 1 medium or 2 hard [08 R-AI-01 §12]", i+1, p.Difficulty)
+			}
+		}
+	}
 	return nil
 }
 
@@ -541,6 +565,14 @@ func (c SkirmishConfig) NormalizedBytes() []byte {
 				b = append(b, byte(c.Players[j].AI))
 			}
 			break
+		}
+	}
+	// The computer seats' own difficulty words only when the setup carries
+	// them, so a setup with one battle word keeps its existing bytes.
+	if c.SeatDifficulty {
+		b = append(b, 'D')
+		for i := 0; i < 10; i++ {
+			b = append(b, byte(c.Players[i].Difficulty))
 		}
 	}
 	return b
@@ -979,11 +1011,40 @@ func composeSkirmish(entry skirmishEntry, options SkirmishEntryOptions, audio vf
 	for i := range s.AI {
 		s.AI[i] = nil
 	}
+	// A battle whose computers each carry their own difficulty gives every
+	// computer seat's word a profile of its own, loaded from the same file,
+	// because the plan gate is one word per profile [08 R-AI-01 §12] and
+	// retail's word belongs to the machine hosting the computer
+	// [08 R-AI-01 §21] (docs/DESIGN_MULTIPLAYER.md §6.6). The other rows'
+	// managers — a human's is never dispatched, the Survival attacker's plans
+	// nothing — keep the shared profile at the battle word. Composition sets
+	// each profile's word here, before its manager is built, and
+	// initializeBattleAI then leaves it (sessionAIDifficulty); every other
+	// battle has one shared profile whose word initializeBattleAI sets.
+	// Neither loading nor setting a word reads a stream, so manager
+	// construction and its draws stay in ascending slot order.
+	var seatProfiles [3]*ai.Profile
 	for i := 0; i < nPlayers && i < 10; i++ {
 		if cfg.Players[i].IsObserver() {
 			continue
 		}
-		if err := initializeBattleAI(s, uint8(i), sharedProf, kind); err != nil {
+		prof := sharedProf
+		if word, ok := sessionSeatDifficultyWord(s, uint8(i)); ok {
+			if seatProfiles[word] == nil {
+				own, perr := loadSkirmishAIProfile(frozen, battleAIProfileName(m))
+				if perr != nil {
+					return nil, perr
+				}
+				seatProfiles[word] = own
+			}
+			prof = seatProfiles[word]
+		}
+		if sessionHasSeatDifficulty(s) {
+			if difficulty, ok := sessionAIDifficultyFor(s, uint8(i)); ok {
+				prof.SetDifficulty(difficulty)
+			}
+		}
+		if err := initializeBattleAI(s, uint8(i), prof, kind); err != nil {
 			return nil, err
 		}
 	}

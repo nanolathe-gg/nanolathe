@@ -265,8 +265,8 @@ func TestNewAdmittedSkirmishRefusesBeforeComposing(t *testing.T) {
 		Participant: matchTestID(2), HostSeat: MatchHostNone, BuilderOptions: orders.DefaultBuilderOptions()}
 	watcher := human
 	watcher.Role = MatchRoleWatcher
-	computer := MatchSeat{Role: MatchRoleComputer, Side: 0, Color: 3, AllyGroup: 4, Metal: 1000, Energy: 1000,
-		HostSeat: 0, ComputerKind: ai.ControllerModern, Difficulty: 2, BuilderOptions: orders.DefaultBuilderOptions()}
+	// Computers of different difficulty compose: each seat's readers take
+	// its own word (§6.6; TestAdmittedSeatDifficultiesRetail).
 	for _, c := range []struct {
 		name   string
 		change func(*MatchConfigRequest)
@@ -276,7 +276,6 @@ func TestNewAdmittedSkirmishRefusesBeforeComposing(t *testing.T) {
 			r.WatchingAllowed = true
 			r.Seats = append(r.Seats, watcher)
 		}},
-		{"computers of different difficulty", func(r *MatchConfigRequest) { r.Seats = append(r.Seats, computer) }},
 	} {
 		r := base.Request()
 		c.change(&r)

@@ -89,6 +89,12 @@ type Service struct {
 	perspectiveStatus    [10][]perspectiveSensorStatus
 	perspectiveUnits     []SensorUnit
 	perspectiveTransient []uint32
+	// perspectiveHost is each player's borrowed perspective: zero for its
+	// own, otherwise its host seat plus one (SetPerspectiveHost).
+	perspectiveHost [10]uint8
+	// defeatedHostKeepsSight keeps a defeated seat's pass an ordinary
+	// viewer's while a computer it hosts lives (SetDefeatedHostKeepsSight).
+	defeatedHostKeepsSight bool
 }
 
 type sensorStatus struct {

@@ -1,46 +1,45 @@
 # Nanolathe relay
 
-Small, standalone relay for Nanolathe's first hosted two-player play test.
-The clients simulate the battle; this service forwards commands and tick grants.
-No game assets, GPU, database, or game engine are needed on the server.
+Small, standalone relay for Nanolathe's online play: lobbies with room codes,
+then skirmish for 2-10 players and Survival for 2-3. The clients simulate the
+battle; this service forwards commands and tick grants. No game assets, GPU,
+database, or game engine are needed on the server.
 
 This repository is private. Its deployed endpoint is reachable publicly; room
-codes are invitations, not user accounts. This is the two-human Modern skirmish
-prototype, with no reconnect, AI, spectators or distributed room directory.
+codes are invitations, not user accounts. There is no reconnect, spectating or
+distributed room directory.
 
 ## Deploy on DigitalOcean App Platform
 
 The live service is `https://relay.nanolathe.gg` (App Platform app
-`nanolathe-relay`, region `sfo`). `.do/app.yaml` is its exact spec; keep the
-two in step by applying the file rather than editing settings in the console:
+`nanolathe-relay`, region `sfo`). Its settings live in App Platform; this
+repository holds no app spec. `doctl apps spec get APP-ID` shows them.
 
-```sh
-doctl apps list                                  # find the app ID
-doctl apps update APP-ID --spec .do/app.yaml     # spec changes redeploy
-```
-
+- **Pushing to `main` deploys.** Autodeploy is on, so every push to this
+  repository's `main` branch builds and deploys it. Confirm afterwards that
+  `curl https://relay.nanolathe.gg/healthz` returns `ok`.
 - **One always-running instance** of 1 shared vCPU / 512 MiB
-  (`apps-s-1vcpu-0.5gb`), with `GOMEMLIMIT=384MiB`. This is not a measured
+  (`apps-s-1vcpu-0.5gb`). The app sets no environment, so the image's defaults
+  apply: `GOMEMLIMIT=384MiB` and `GOMAXPROCS=1`. This is not a measured
   capacity claim. Check the displayed bill before changing the size:
   [current pricing](https://docs.digitalocean.com/products/app-platform/details/pricing/).
-- **Autodeploy is off.** Pushing a reviewed snapshot does not deploy it. Deploy
-  between play tests with `doctl apps create-deployment APP-ID`, then confirm
-  `curl https://relay.nanolathe.gg/healthz` returns `ok`.
-- **The platform health check uses port 8081**, the image's separate health
-  listener. Connections that fill the relay's connection slots on port 8080 cannot
-  fail it and restart the instance. Port 8080 keeps its own `/healthz` for
-  people checking the public URL.
-- The custom domain needs both its DNS CNAME and the domain entry in the spec
+- **The app configures no HTTP health check.** The image also answers `/healthz` on
+  port 8081, outside the relay's connection limit; CI checks it, and a
+  platform health check could use it. Port 8080 answers `/healthz` for people
+  checking the public URL.
+- The custom domain needs both its DNS CNAME and the domain entry on the app
   before App Platform issues its certificate. No certificates or secrets
   belong in this repository.
 
 **Keep instance count at 1.** Rooms live in this process's memory; a second
 instance could receive a join for a room on the first. A restart or deployment
-ends active matches. Deploy between play tests. There is no persistent disk.
+ends active matches, so push between play sessions. There is no persistent
+disk.
 
 ## Connect the local game
 
-Both players need the same game version and retail content. Players normally
+Every player needs the same retail content and mod; the lobby's rehearsal
+checks that the clients compute the same battle before Start. Players normally
 use the main menu's MULTI screen; from the command line, create a room:
 
 ```sh
@@ -48,10 +47,11 @@ use the main menu's MULTI screen; from the command line, create a room:
 ```
 
 This creates the room and prints its six-character code in the terminal and game
-message ring. Start the second client with that room code:
+message ring. Codes use only `CFHJKMNPRTVWX23456789`. Start the second client
+with that room code:
 
 ```sh
-./nanolathe --root ~/TotalAnnihilation --mod none --map 'ashap plateau' --fullscreen=false --relay-address wss://relay.nanolathe.gg/relay --relay-room ABCDEFGHJK
+./nanolathe --root ~/TotalAnnihilation --mod none --map 'ashap plateau' --fullscreen=false --relay-address wss://relay.nanolathe.gg/relay --relay-room K7MP2X
 ```
 
 Both clients may run on one Mac: their connections still travel through the real
@@ -82,8 +82,7 @@ more memory. Capacity/load tests are separate from the functional tests here.
 ## Updating the snapshot
 
 UPSTREAM.json records the engine source revision, original and exported hashes.
-All engine changes remain in the multiplayer worktree until play testing is
-accepted. Export a new **empty** staging directory from a reviewed commit:
+Export a new **empty** staging directory from a reviewed engine commit:
 
 ```sh
 # In the Nanolathe worktree:

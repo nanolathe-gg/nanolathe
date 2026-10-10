@@ -115,6 +115,18 @@ type Player struct {
 	// false everywhere is the retail ledger. It is not a save field: a load
 	// takes it again from the save's Nanolathe record.
 	FullIncome bool
+	// OwnSelector marks a player whose discounted credits select on its own
+	// word, Selector, in place of the service's EconomySelector — Nanolathe's
+	// per-computer difficulty (docs/DESIGN_MULTIPLAYER.md §6.6). Retail has
+	// the one global word [05 R-ECO-01 §3] because a computer player's economy
+	// runs only on the machine that added it, whose word it is
+	// [08 R-AI-01 §21]; a common world that runs every computer seat needs
+	// each seat's own. The session sets both outside any tick
+	// (Service.SetPlayerSelector) for a battle whose computers each carry
+	// their own difficulty; false everywhere is the one-word ledger. Neither
+	// is a save field.
+	OwnSelector bool
+	Selector    int
 	// There is no elimination flag on the player record: elimination is derived
 	// from the record's two unit counters. See PlayerEliminated below.
 	GameEnded bool // game-ended flag bit clear required [05 "Authoritative settlement order"]
@@ -159,7 +171,7 @@ type Service struct {
 	unitBuckets      []UnitEconomy
 	ReferencePlayer  int  // reference/local player for ShareTick dispatcher [05 "Allied resource and sensor sharing"] C12
 	SensorShareCalls int  // diagnostic: sensor sharing invocations at tick%450==0 [05]
-	EconomySelector  *int // difficulty selector: 0 easy, 1 medium, 2 hard [R-ECO-01 §3]
+	EconomySelector  *int // difficulty selector: 0 easy, 1 medium, 2 hard [R-ECO-01 §3]; a player's own word replaces it (Player.OwnSelector)
 	Networked        bool // networked-session gate for automatic sharing [R-SHARE-01 §3]
 	// Community is the session's projected copy of the one feature-table
 	// answer this service reads: AIDifficultyIncome, the ProTA 4.8 package's
@@ -736,6 +748,9 @@ func (s *Service) transfer(src, dst *Player, res Res, amount float32) {
 		src.Stock[res] = float32(float64(src.Stock[res]) - float64(amount))
 		src.Mirror[res].Requested = float32(float64(src.Mirror[res].Requested) + float64(amount))
 	}
+	// The credit runs the discount ladder on the RECIPIENT's record, so a
+	// computer recipient's own word applies when it has one
+	// [05 R-SHARE-01 §2][05 R-ECO-01 §11].
 	addContribution(s, dst, &dst.Mirror[res], float64(amount))
 }
 

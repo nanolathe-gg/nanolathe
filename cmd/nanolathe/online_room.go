@@ -2,10 +2,11 @@ package main
 
 // An online room's configurations (DESIGN_MULTIPLAYER §16.6). The host keeps a
 // base configuration in the relay: the map, mod, mutators, restrictions, seeds,
-// game type and the room's options. It may replace the base until Start. Every
-// seat composes the final configuration from the latest base plus the present
-// seats, in ascending seat order as slots, with their teams and sides, when it
-// presses Ready.
+// game type, the room's options and the host's computer players (§6.6). It may
+// replace the base until Start. Every seat composes the final configuration
+// from the latest base plus the present seats, in ascending seat order as
+// slots, with their teams and sides, then the base's computers in their stored
+// order, when it presses Ready.
 
 import (
 	"crypto/sha256"
@@ -44,6 +45,11 @@ type onlineSettings struct {
 	mapping        uint8
 	lineOfSight    uint8
 	losType        uint8
+	// computers are the host's computer players in their stored order
+	// (session.OnlineComputersOf), every one hosted by seat 0. Every seat
+	// composes them after its present humans. A change replaces the slice,
+	// never its elements, so a running Ready job keeps the one it read.
+	computers []session.OnlineComputer
 }
 
 // onlineSettingsFromSetup are a new room's settings: a skirmish on the host's
@@ -67,14 +73,38 @@ func onlineSettingsOf(r session.MatchConfigRequest) onlineSettings {
 		pace: r.SurvivalPace, noAir: r.SurvivalNoAir, noNaval: r.SurvivalNoNaval,
 		location: r.Location, commanderDeath: r.CommanderDeath, mapping: r.Mapping,
 		lineOfSight: r.LineOfSight, losType: r.LOSType,
+		computers: session.OnlineComputersOf(r),
 	}
 }
 
 // onlinePlaceholderSeats seat a base configuration, which no battle composes:
-// the smallest room, two players without teams on the first side, in the
-// colours a room's first two seats take, 0 and 1 (no two seats share one).
-func onlinePlaceholderSeats() []session.OnlineSeat {
-	return []session.OnlineSeat{{Color: 0}, {Color: 1}}
+// the smallest room, two players without teams on the first side, in the two
+// lowest colours none of computers holds. A computer keeps its stored colour
+// unless a human holds it (session.NewOnlineMatchRequest), so the placeholders
+// stand aside and the base stores each computer's colour as the host chose it;
+// the final configuration resolves it against the players actually present.
+// The lobby never seats more than eight computers beside them
+// (onlineMostComputers), so two colours are always free.
+func onlinePlaceholderSeats(computers []session.OnlineComputer) []session.OnlineSeat {
+	var held [relay.HostedColors]bool
+	for _, c := range computers {
+		if c.Color < relay.HostedColors {
+			held[c.Color] = true
+		}
+	}
+	seats := make([]session.OnlineSeat, 0, 2)
+	for c := range uint8(relay.HostedColors) {
+		if !held[c] && len(seats) < 2 {
+			seats = append(seats, session.OnlineSeat{Color: c})
+		}
+	}
+	return seats
+}
+
+// onlineBaseConfig is the host's base configuration for settings: the
+// placeholder seats, the computers and the frozen part.
+func onlineBaseConfig(cs *contentSet, cat *content.Catalog, settings onlineSettings, frozen onlineFrozen) (session.EffectiveMatchConfig, error) {
+	return onlineConfig(cs, cat, settings, onlinePlaceholderSeats(settings.computers), frozen)
 }
 
 // onlineFrozen is what a room keeps from its creation and never changes: the
@@ -132,11 +162,12 @@ func onlineFrozenOf(r session.MatchConfigRequest) onlineFrozen {
 }
 
 // onlineConfig resolves a room configuration on cs and its catalog: the
-// settings and seats through the session's online request, at the schema the
-// map-entry code selects for its rows, with the frozen part carried
-// unchanged.
+// settings, with their computers, and seats through the session's online
+// request, at the schema the map-entry code selects for its rows, with the
+// frozen part carried unchanged.
 func onlineConfig(cs *contentSet, cat *content.Catalog, settings onlineSettings, seats []session.OnlineSeat, frozen onlineFrozen) (session.EffectiveMatchConfig, error) {
-	setup := session.OnlineMatchSetup{Survival: settings.survival, MapName: settings.mapName, Seats: seats, SimSeed: frozen.seeds[0], CRTSeed: frozen.seeds[1], SideCount: len(session.OnlineSides(cat))}
+	setup := session.OnlineMatchSetup{Survival: settings.survival, MapName: settings.mapName, Seats: seats, Computers: settings.computers,
+		SimSeed: frozen.seeds[0], CRTSeed: frozen.seeds[1], SideCount: len(session.OnlineSides(cat))}
 	if settings.survival {
 		setup.SurvivalOptions = session.SurvivalOptions{Enabled: true, Pace: settings.pace, NoAir: settings.noAir, NoNaval: settings.noNaval}
 	}
@@ -189,18 +220,103 @@ func onlineSeatsOf(state relay.HostedLobbyState, local uint8, survival bool) ([]
 	return seats, slot, found
 }
 
-// onlineOneTeam reports a skirmish whose players all share one team, which
-// cannot start [08 R-SKIR-01 §12].
-func onlineOneTeam(seats []session.OnlineSeat) bool {
-	if len(seats) < 2 || seats[0].Team == 0 {
+// onlineOneTeam reports a skirmish whose players, the host's computers
+// included, all share one team, which cannot start [08 R-SKIR-01 §12].
+func onlineOneTeam(seats []session.OnlineSeat, computers []session.OnlineComputer) bool {
+	teams := make([]uint8, 0, len(seats)+len(computers))
+	for _, s := range seats {
+		teams = append(teams, s.Team)
+	}
+	for _, c := range computers {
+		teams = append(teams, c.Team)
+	}
+	if len(teams) < 2 || teams[0] == session.OnlineTeamNone {
 		return false
 	}
-	for _, s := range seats[1:] {
-		if s.Team != seats[0].Team {
+	for _, team := range teams[1:] {
+		if team != teams[0] {
 			return false
 		}
 	}
 	return true
+}
+
+// onlineMinHumans is how many human players any online battle needs
+// (session.NewOnlineMatchRequest).
+const onlineMinHumans = 2
+
+// onlinePlayerLimit is the most players, humans and computers together, a
+// room's battle seats: Survival's three survivors, or a skirmish's map
+// capacity (session.OnlineMapCapacity) within ten. A capacity of 0 is a map
+// the lobby could not read, held to ten.
+func onlinePlayerLimit(survival bool, capacity int) int {
+	if survival {
+		return session.OnlineSurvivalMaxSurvivors
+	}
+	if capacity <= 0 || capacity > session.SkirmishMaxPlayers {
+		return session.SkirmishMaxPlayers
+	}
+	return capacity
+}
+
+// onlineMostComputers is how many computers a base configuration holds at
+// most: the battle's limit less the two humans every battle needs, so the base
+// with its two placeholders always validates and every computer can play.
+func onlineMostComputers(survival bool, capacity int) int {
+	return onlinePlayerLimit(survival, capacity) - onlineMinHumans
+}
+
+// onlineCanAddComputer reports whether the host, with computers already and
+// humans players present, may add one more: the room must still have space
+// for the two humans every battle needs.
+func onlineCanAddComputer(survival bool, capacity, humans, computers int) bool {
+	return computers+max(humans, onlineMinHumans) < onlinePlayerLimit(survival, capacity)
+}
+
+// onlineComputerColors are the colours the computers take when every seat
+// composes the final configuration with these present seats, as
+// session.NewOnlineMatchRequest resolves them: a computer keeps its stored
+// colour when no seat, and no earlier computer keeping its own, holds it;
+// each other computer, in stored order, takes the lowest colour nobody holds.
+// The lobby shows these colours, so the rows show the battle's.
+func onlineComputerColors(seats []session.OnlineSeat, computers []session.OnlineComputer) []uint8 {
+	var held [relay.HostedColors]bool
+	for _, s := range seats {
+		if s.Color < relay.HostedColors {
+			held[s.Color] = true
+		}
+	}
+	colors := make([]uint8, len(computers))
+	kept := make([]bool, len(computers))
+	for k, c := range computers {
+		if c.Color < relay.HostedColors && !held[c.Color] {
+			held[c.Color], colors[k], kept[k] = true, c.Color, true
+		}
+	}
+	for k := range computers {
+		if kept[k] {
+			continue
+		}
+		for c := range uint8(relay.HostedColors) {
+			if !held[c] {
+				held[c], colors[k] = true, c
+				break
+			}
+		}
+	}
+	return colors
+}
+
+// onlineHumanCount is how many human rows a composed configuration seats: the
+// online players, without the host's computers or Survival's attacker.
+func onlineHumanCount(r session.MatchConfigRequest) int {
+	n := 0
+	for i := range r.Seats {
+		if r.Seats[i].Role == session.MatchRoleHuman {
+			n++
+		}
+	}
+	return n
 }
 
 // onlineIdentityDigest is a seat's configuration-identity digest for Ready:

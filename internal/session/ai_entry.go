@@ -430,10 +430,11 @@ func difficultyLayer(d ai.Difficulty) int {
 }
 
 // ControllerDifficulty is the difficulty a Modern controller plays at: the
-// battle's word as the shared AI profile's plan gate holds it after
-// initializeBattleAI, with anything but easy or hard read as medium. The
-// Modern AI picks its persona by it and battle entry picks the AIOverrides
-// difficulty layer by it, so the two always agree.
+// word its manager's AI profile's plan gate holds after initializeBattleAI —
+// the battle's, or in a battle whose computers each carry their own, its
+// seat's (docs/DESIGN_MULTIPLAYER.md §6.6) — with anything but easy or hard
+// read as medium. The Modern AI picks its persona by it and battle entry
+// picks the AIOverrides difficulty layer by it, so the two always agree.
 func ControllerDifficulty(p *ai.Profile) ai.Difficulty {
 	if p != nil && (p.Plan == ai.DifficultyEasy || p.Plan == ai.DifficultyHard) {
 		return p.Plan
@@ -520,7 +521,7 @@ func joinAIParams(params []AIParam) string {
 
 // applyAIOverrides gives every computer player's manager its effective
 // Modern AI parameters (AIOverrides.For). A fresh battle entry calls it after
-// initializeBattleAI has set the shared profile's difficulty and before the
+// initializeBattleAI has set each manager's profile difficulty and before the
 // battle-entry prime can build a controller. A restored battle takes its
 // save's record instead (restoreAIControllers).
 func applyAIOverrides(s *Session, o AIOverrides) error {

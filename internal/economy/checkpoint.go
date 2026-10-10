@@ -31,8 +31,12 @@ func (s *Service) CollectCheckpointReferences(c *CheckpointContext) (int, error)
 // WriteCheckpoint writes the economy payload only, in source-field lexical
 // order: CloakCost, CloakDue, Community, EconomySelector, EndCondition,
 // Networked, Players, ReferencePlayer, Terrain, Wind, unitBuckets. Callbacks,
-// Wind and Terrain use validated presence tags; EconomySelector is presence
-// then i64. Players is a fixed array; unitBuckets has its stored count and
+// Wind and Terrain use validated presence tags; EconomySelector is a tag byte
+// then i64 when present. The tag's bit 0 is the selector's presence and bit 1
+// says the player rows carry their own words (OwnSelector, Selector), so a
+// ledger in which no player has one writes the tag as the presence byte it
+// has always been and its player rows unchanged (docs/DESIGN_MULTIPLAYER.md
+// §6.6). Players is a fixed array; unitBuckets has its stored count and
 // includes every physical row, even unused
 // rows and slot zero. UnitEconomy is Archived then Buckets; resource pairs are
 // always Metal then Energy. No accessor grows or resets a bucket during capture
@@ -50,8 +54,16 @@ func (s *Service) WriteCheckpoint(e *checkpoint.Encoder, c *CheckpointContext) e
 	if err := s.Community.WriteCheckpoint(e); err != nil {
 		return err
 	}
+	seats := s.hasPlayerSelectors()
+	var tag uint8
+	if s.EconomySelector != nil {
+		tag |= 1
+	}
+	if seats {
+		tag |= 2
+	}
 	e.Field("economy.Service.EconomySelector")
-	e.Bool(s.EconomySelector != nil)
+	e.U8(tag)
 	if s.EconomySelector != nil {
 		e.I64(int64(*s.EconomySelector))
 	}
@@ -60,7 +72,7 @@ func (s *Service) WriteCheckpoint(e *checkpoint.Encoder, c *CheckpointContext) e
 	e.Field("economy.Service.Networked")
 	e.Bool(s.Networked)
 	for slot := range s.Players {
-		writeCheckpointPlayer(e, &s.Players[slot], fmt.Sprintf("economy.Service.Players[%d]", slot))
+		writeCheckpointPlayer(e, &s.Players[slot], fmt.Sprintf("economy.Service.Players[%d]", slot), seats)
 	}
 	e.Field("economy.Service.ReferencePlayer")
 	e.I64(int64(s.ReferencePlayer))
@@ -80,12 +92,14 @@ func (s *Service) WriteCheckpoint(e *checkpoint.Encoder, c *CheckpointContext) e
 // AutoShareEnergy, AutoShareMetal, AutoShareSensor, Capacity, CommanderKills,
 // CommanderLosses, ControllerState, EndGameCountdown, EnergyShareThreshold,
 // Exists, FullIncome, GameEnded, IsObserver, Kills, Losses, MetalShareThreshold,
-// Mirror, OptionKind, PassConsumed, PassProduced, RejectionReason,
-// ResultAuxiliary, Side, Stock, StorageBonus, StorageBonusEnabled, TotalConsumed,
-// TotalProduced, UpdateTime, Waste, Watcher. Names, logos, rank, WinLoseTime,
+// Mirror, OptionKind, OwnSelector, PassConsumed, PassProduced, RejectionReason,
+// ResultAuxiliary, Selector, Side, Stock, StorageBonus, StorageBonusEnabled,
+// TotalConsumed, TotalProduced, UpdateTime, Waste, Watcher. OwnSelector (bool)
+// and Selector (i64) are written only when seats is set, which the service's
+// EconomySelector tag announces. Names, logos, rank, WinLoseTime,
 // DisplayTimer and aiAggregatesPrepared have the reviewed exclusions; capture
 // never applies a profile or reconstructs stored accounting.
-func writeCheckpointPlayer(e *checkpoint.Encoder, p *Player, path string) {
+func writeCheckpointPlayer(e *checkpoint.Encoder, p *Player, path string, seats bool) {
 	writeCheckpointF32Pair(e, p.AIConsumption, path+".AIConsumption")
 	writeCheckpointF32Pair(e, p.AIProduction, path+".AIProduction")
 	e.FieldChild(path, "Allies")
@@ -127,12 +141,20 @@ func writeCheckpointPlayer(e *checkpoint.Encoder, p *Player, path string) {
 	writeCheckpointBuckets(e, p.Mirror, path+".Mirror")
 	e.FieldChild(path, "OptionKind")
 	e.U8(p.OptionKind)
+	if seats {
+		e.FieldChild(path, "OwnSelector")
+		e.Bool(p.OwnSelector)
+	}
 	writeCheckpointF32Pair(e, p.PassConsumed, path+".PassConsumed")
 	writeCheckpointF32Pair(e, p.PassProduced, path+".PassProduced")
 	e.FieldChild(path, "RejectionReason")
 	e.U8(p.RejectionReason)
 	e.FieldChild(path, "ResultAuxiliary")
 	e.U32(p.ResultAuxiliary)
+	if seats {
+		e.FieldChild(path, "Selector")
+		e.I64(int64(p.Selector))
+	}
 	e.FieldChild(path, "Side")
 	e.U8(p.Side)
 	writeCheckpointF32Pair(e, p.Stock, path+".Stock")
@@ -146,6 +168,17 @@ func writeCheckpointPlayer(e *checkpoint.Encoder, p *Player, path string) {
 	writeCheckpointF64Pair(e, p.Waste, path+".Waste")
 	e.FieldChild(path, "Watcher")
 	e.Bool(p.Watcher)
+}
+
+// hasPlayerSelectors reports whether any player row holds a word of its own
+// or a stored word, the state the EconomySelector tag's bit 1 announces.
+func (s *Service) hasPlayerSelectors() bool {
+	for slot := range s.Players {
+		if p := &s.Players[slot]; p.OwnSelector || p.Selector != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func writeCheckpointF32Pair(e *checkpoint.Encoder, pair [2]float32, path string) {

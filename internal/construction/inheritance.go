@@ -254,8 +254,10 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 	// interrupts"][05 R-ECO-01 §2]. Owner admission stays at this call site.
 	if s.Economy != nil && int(factory.Owner) < len(s.Economy.Players) {
 		if buckets := s.Economy.UnitBuckets(factory.Handle); buckets != nil {
+			// Gated and selected on the builder owner's record and word
+			// (RefundSelector) [05 R-ECO-01 §11].
 			isSpecial := s.IsSpecialSecondStateHook() != nil && s.IsSpecialSecondStateHook()(factory.Owner)
-			creditConstructionRefund(&buckets[economy.Metal].Production, refund, isSpecial, s.ModeSelector)
+			creditConstructionRefund(&buckets[economy.Metal].Production, refund, isSpecial, s.RefundSelector(factory.Owner))
 		}
 	}
 

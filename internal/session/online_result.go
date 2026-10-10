@@ -2,7 +2,9 @@ package session
 
 // Online results are per human seat, without watching, removal or respawn
 // (DESIGN_MULTIPLAYER §16.4.1, §16.6). Each row below is the countdown and
-// result that its owner's machine would retain [08 R-TRIG-01 §6].
+// result that its owner's machine would retain [08 R-TRIG-01 §6]. A computer
+// seat has no row: it plays until it is destroyed or the battle ends, and the
+// battle ends once every human row has latched (§6.5, §6.6).
 type onlineSeatResult struct {
 	present bool
 	latch   EndLatch
@@ -16,10 +18,18 @@ type onlineResultState struct {
 	// for members of teams of two or more and never changed online, since no
 	// seat command can clear it [08 R-SKIR-01 §3] [05 R-SHARE-01 §1].
 	sharedVictory [10]bool
+	// hosted is each computer row's host seat and -1 for every other row,
+	// written once at entry from the configuration (setOnlineVisionTeams).
+	// Under Strict 3.1 a host's countdown is mirrored onto its computers'
+	// records (SeatRules.ComputersStopWithHost).
+	hosted [10]int8
 }
 
 func newOnlineResultState(seats [10]bool) *onlineResultState {
 	state := &onlineResultState{}
+	for player := range state.hosted {
+		state.hosted[player] = -1
+	}
 	for player, present := range seats {
 		if present {
 			state.seats[player] = onlineSeatResult{present: true, latch: NewEndLatch()}
@@ -155,6 +165,7 @@ func (s *Session) advanceOnlineSeatResult(player int, tick uint32, victory bool)
 	p := &s.Econ.Players[player]
 	p.GameEnded = row.latch.IsEnding()
 	p.EndGameCountdown = int32(row.latch.Countdown)
+	s.mirrorOnlineCountdown(player)
 
 	winner, losers := s.resultTeamsForOwner(player, victory)
 	scores := s.collectScores(winner, false)
@@ -177,6 +188,27 @@ func (s *Session) advanceOnlineSeatResult(player int, tick uint32, victory bool)
 		// Each survivor's final result carries the Survival line, as the
 		// single-player ended view does (DESIGN_SURVIVAL §8).
 		row.result.Survival = s.survivalResult(tick)
+	}
+}
+
+// mirrorOnlineCountdown copies host's countdown and ending bit onto the
+// records of the computers it hosts when the bound seat policy says one
+// machine's countdown gates them all, as retail's per-machine countdown gates
+// its human and hosted computers' settlement [05 R-ECO-01 §1]
+// [08 R-SKIR-01 §3]. The copy is taken at the host's own write, inside its
+// due block, so a computer in a later row settles this tick on the new value,
+// as retail's machine-wide words are read. Under the Modern policy the host's
+// countdown is its own and its computers play on.
+func (s *Session) mirrorOnlineCountdown(host int) {
+	if !s.seatRules().ComputersStopWithHost() {
+		return
+	}
+	src := &s.Econ.Players[host]
+	for player, h := range s.onlineResults.hosted {
+		if int(h) == host {
+			p := &s.Econ.Players[player]
+			p.GameEnded, p.EndGameCountdown = src.GameEnded, src.EndGameCountdown
+		}
 	}
 }
 

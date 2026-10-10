@@ -140,7 +140,7 @@ func onlineTestBase(t *testing.T, mapName string, mod session.MatchMod, mutators
 	cs := &contentSet{profile: "retail", limits: content.RetailLimits()}
 	frozen := onlineCreationFrozen(cs, [2]uint32{1, 2}, mutators, content.Restrictions{}, nil)
 	frozen.room.Mod = mod
-	base, err := onlineConfig(cs, onlineTestCatalog(), onlineSettings{mapName: mapName, location: 1, commanderDeath: 1}, onlinePlaceholderSeats(), frozen)
+	base, err := onlineConfig(cs, onlineTestCatalog(), onlineSettings{mapName: mapName, location: 1, commanderDeath: 1}, onlinePlaceholderSeats(nil), frozen)
 	if err != nil {
 		t.Fatal(err)
 	}

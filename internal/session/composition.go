@@ -2433,18 +2433,75 @@ func sessionPathUnitLimit(s *Session) int32 {
 // lobby value, whose established missing-value default is 1, Medium
 // [08 "Skirmish configuration"]. A word outside the vocabulary is reported
 // absent rather than guessed.
+//
+// A battle whose computers each carry their own word has no battle-wide
+// plan-gate word: composition sets every profile itself before its manager
+// is built (composeSkirmish, sessionAIDifficultyFor), so this reports none
+// and initializeBattleAI leaves each profile at the word composition set.
 func sessionAIDifficulty(s *Session) (ai.Difficulty, bool) {
+	if sessionHasSeatDifficulty(s) {
+		return "", false
+	}
 	word, ok := sessionDifficultyWord(s)
 	if !ok {
 		return "", false
 	}
+	return aiDifficultyForWord(word), true
+}
+
+// sessionAIDifficultyFor is the plan-gate word for player's manager in a
+// battle whose computers each carry their own word: a computer seat's own
+// word (sessionSeatDifficultyWord), and the battle's for every other row,
+// whose manager is never dispatched or plans nothing. The Modern persona reads
+// the same word through the manager's profile (ControllerDifficulty).
+func sessionAIDifficultyFor(s *Session, player uint8) (ai.Difficulty, bool) {
+	if word, ok := sessionSeatDifficultyWord(s, player); ok {
+		return aiDifficultyForWord(word), true
+	}
+	word, ok := sessionDifficultyWord(s)
+	if !ok {
+		return "", false
+	}
+	return aiDifficultyForWord(word), true
+}
+
+// sessionHasSeatDifficulty reports a skirmish battle whose computers each
+// carry their own difficulty word (SkirmishConfig.SeatDifficulty,
+// docs/DESIGN_MULTIPLAYER.md §6.6). A campaign reads its mission's word.
+func sessionHasSeatDifficulty(s *Session) bool {
+	return s != nil && s.Skirmish.SeatDifficulty && (s.Mission == nil || s.Mission.Type != mission.TypeCampaign)
+}
+
+// sessionSeatDifficultyWord is a computer seat's own difficulty word, reported
+// only for a live computer row of a battle whose computers each carry one
+// (sessionHasSeatDifficulty). The Survival attacker is no computer seat, and a
+// word outside the vocabulary is reported absent, so such rows read the
+// battle's word as every row of every other battle does.
+func sessionSeatDifficultyWord(s *Session, player uint8) (int, bool) {
+	if !sessionHasSeatDifficulty(s) {
+		return 0, false
+	}
+	cfg := &s.Skirmish
+	if int(player) >= cfg.NumPlayers || int(player) >= len(cfg.Players) || int(player) == cfg.survivalAttacker() {
+		return 0, false
+	}
+	row := cfg.Players[player]
+	if !row.IsComputer() || row.Difficulty < 0 || row.Difficulty > 2 {
+		return 0, false
+	}
+	return row.Difficulty, true
+}
+
+// aiDifficultyForWord is the plan vocabulary's name for an in-vocabulary
+// difficulty word [08 R-AI-01 §12].
+func aiDifficultyForWord(word int) ai.Difficulty {
 	switch word {
 	case 0:
-		return ai.DifficultyEasy, true
+		return ai.DifficultyEasy
 	case 1:
-		return ai.DifficultyMedium, true
+		return ai.DifficultyMedium
 	default:
-		return ai.DifficultyHard, true
+		return ai.DifficultyHard
 	}
 }
 
@@ -2457,6 +2514,9 @@ func sessionAIDifficulty(s *Session) (ai.Difficulty, bool) {
 // (projectComputerIncome); it derives that word from this reader when it is
 // bound and keeps no copy of the difficulty of its own.
 // A word outside the vocabulary is reported absent rather than guessed.
+// In a battle whose computers each carry their own word, both consumers take
+// a computer seat's from sessionSeatDifficultyWord instead, and this word is
+// left to the rows that are no computer seat.
 func sessionDifficultyWord(s *Session) (int, bool) {
 	if s == nil {
 		return 0, false

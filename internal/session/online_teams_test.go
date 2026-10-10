@@ -202,9 +202,11 @@ func TestOnlineSurvivalHasNoVictory(t *testing.T) {
 	}
 }
 
-// Online entry admits only human rows, and only a human as the local seat
-// (DESIGN_MULTIPLAYER §16.6).
-func TestOnlineEntryRefusesComputersAndForeignLocalSeats(t *testing.T) {
+// Online entry needs at least two human seats, which a computer row cannot
+// make up, and only a human as the local seat (DESIGN_MULTIPLAYER §16.6).
+// Computers the room host adds join two or more humans
+// (TestOnlineComputerSeatsComposeAlike).
+func TestOnlineEntryNeedsTwoHumansAndAHumanLocalSeat(t *testing.T) {
 	humans := restrictionMatchConfig(t, nil, true)
 	inputs := rehearsalFixtureInputs(t, humans)
 	if _, err := NewPlaytestSkirmish(inputs, humans, 2, nil); err == nil {
@@ -220,6 +222,6 @@ func TestOnlineEntryRefusesComputersAndForeignLocalSeats(t *testing.T) {
 	}
 	computer := restrictionMatchConfig(t, nil, false)
 	if _, err := NewPlaytestSkirmish(rehearsalFixtureInputs(t, computer), computer, 0, nil); err == nil {
-		t.Fatal("a computer row was admitted online")
+		t.Fatal("one human and a computer were admitted online")
 	}
 }

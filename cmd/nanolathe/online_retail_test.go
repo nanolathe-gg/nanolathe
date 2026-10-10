@@ -150,10 +150,12 @@ func awaitOnlineShells(t *testing.T, what string, done func() bool, shells ...*g
 
 // onlineRetailRoom starts a match through a real local WebSocket relay: the
 // host creates the room with mutators and restrictions, the guests join with
-// their own different selection, each player picks its team, every seat
-// readies with its own rehearsal and the host starts. It returns the shells
-// with their battles entered. survival switches the room to Survival first.
-func onlineRetailRoom(t *testing.T, players int, survival bool, teams []uint8) []*gameShell {
+// their own different selection, each player picks its team, prepare (when
+// given) changes the room through the lobbies, every seat adopts the host's
+// latest settings and readies with its own rehearsal, and the host starts. It
+// returns the shells with their battles entered. survival switches the room
+// to Survival first.
+func onlineRetailRoom(t *testing.T, players int, survival bool, teams []uint8, prepare ...func(shells []*gameShell)) []*gameShell {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
@@ -246,10 +248,21 @@ func onlineRetailRoom(t *testing.T, players int, survival bool, teams []uint8) [
 		}
 		held[c] = true
 	}
+	for _, f := range prepare {
+		f(shells)
+	}
+	for _, g := range shells {
+		r := &g.online.room
+		awaitOnlineShells(t, "the room's latest settings", func() bool { return r.base.Digest() == host.online.room.base.Digest() }, shells...)
+	}
+	readying := time.Now()
 	for _, g := range shells {
 		g.activateGadget(lobbyReady)
 	}
 	awaitOnlineShells(t, "every seat ready", func() bool { return host.onlineCanStart() }, shells...)
+	// Each seat composes, prepares and rehearses on its own goroutine;
+	// §16.7 bounds the rehearsal at about a second.
+	t.Logf("%d seats composed, rehearsed and readied in %v", players, time.Since(readying).Round(time.Millisecond))
 	for i, g := range shells {
 		if g.online.room.prepared.identity != host.online.room.prepared.identity || g.online.room.prepared.rehearsal != host.online.room.prepared.rehearsal {
 			t.Fatalf("player %d's digests differ from the host's", i+1)
@@ -498,7 +511,7 @@ func TestOnlineScreenCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := onlineConfig(cs, cat, onlineSettingsFromSetup(shell.setup), onlinePlaceholderSeats(), onlineCreationFrozen(cs, [2]uint32{1, 2}, shell.opts.Mutators, content.Restrictions{}, nil))
+	base, err := onlineConfig(cs, cat, onlineSettingsFromSetup(shell.setup), onlinePlaceholderSeats(nil), onlineCreationFrozen(cs, [2]uint32{1, 2}, shell.opts.Mutators, content.Restrictions{}, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,5 +535,69 @@ func TestOnlineScreenCapture(t *testing.T) {
 	shell.pollOnline()
 	shell.refreshOnlineLobby()
 	capture("lobby-survival")
+	shell.leaveOnlineLobby("")
+	// The host's computers: a Modern AI on team 1 and a Classic AI on Hard
+	// on team 2 beside two players, with the Add computer row after them.
+	computerLobby := newFakeOnlineLobby(0, 0, 1)
+	computerLobby.code = "K7M2QX"
+	computerLobby.state.Seats[0].Team, computerLobby.state.Seats[1].Team, computerLobby.state.Seats[1].Side = 1, 2, 1
+	shell.openOnlineLobby(computerLobby, cat, base, "wss://relay.nanolathe.gg/relay")
+	shell.pollOnline()
+	shell.online.room.capacity = 4
+	for _, name := range []string{"Player2", "Allies2", "Player3", "Player3", "Allies3", "Allies3", "Energy3", "Side3"} {
+		shell.activateGadget(name)
+	}
+	if r := &shell.online.room; len(r.settings.computers) != 2 || r.notice != "" {
+		t.Fatalf("capture computers %+v: %q", r.settings.computers, r.notice)
+	}
+	computerLobby.state.Seats[1].Ready = true
+	shell.pollOnline()
+	shell.refreshOnlineLobby()
+	capture("lobby-computers-host")
+	// The hover help of the Classic AI's name and of its difficulty.
+	cl.Input().Mouse.SetPosition(100, 148)
+	capture("lobby-computers-host-help-name")
+	cl.Input().Mouse.SetPosition(358, 148)
+	capture("lobby-computers-host-help-difficulty")
+	cl.Input().Mouse.SetPosition(0, 0)
+	// The same room as the guest sees it.
+	computerBase := shell.online.room.base
+	shell.leaveOnlineLobby("")
+	guestLobby := newFakeOnlineLobby(1, 0, 1)
+	guestLobby.code = "K7M2QX"
+	guestLobby.state.Seats = computerLobby.state.Seats
+	guestLobby.state.Seats[0].Ready = true
+	shell.openOnlineLobby(guestLobby, cat, computerBase, "wss://relay.nanolathe.gg/relay")
+	shell.pollOnline()
+	capture("lobby-computers-guest")
+	shell.leaveOnlineLobby("")
+	// A full room: two players and eight computers on a ten-player map.
+	fullLobby := newFakeOnlineLobby(0, 0, 1)
+	fullLobby.code = "K7M2QX"
+	shell.openOnlineLobby(fullLobby, cat, base, "wss://relay.nanolathe.gg/relay")
+	shell.pollOnline()
+	shell.online.room.capacity = 10
+	for row := 2; row < 10; row++ {
+		shell.activateGadget("Player" + strconv.Itoa(row))
+		if row%2 == 1 {
+			shell.activateGadget("Player" + strconv.Itoa(row))
+		}
+	}
+	if r := &shell.online.room; len(r.settings.computers) != 8 || r.notice != "" {
+		t.Fatalf("full room computers %d: %q", len(r.settings.computers), r.notice)
+	}
+	capture("lobby-computers-full")
+	shell.leaveOnlineLobby("")
+	// Survival: one computer survivor beside two players.
+	survivalLobby := newFakeOnlineLobby(0, 0, 1)
+	survivalLobby.code = "K7M2QX"
+	shell.openOnlineLobby(survivalLobby, cat, base, "wss://relay.nanolathe.gg/relay")
+	shell.pollOnline()
+	shell.activateGadget(lobbyGameType)
+	shell.activateGadget("Player2")
+	if r := &shell.online.room; !r.settings.survival || len(r.settings.computers) != 1 || r.notice != "" {
+		t.Fatalf("Survival computers %+v: %q", r.settings.computers, r.notice)
+	}
+	capture("lobby-computers-survival")
 	shell.leaveOnlineLobby("")
 }

@@ -4538,6 +4538,32 @@ side and team to cycle them while not ready. Their own colour steps as the
 setup screen's does `[08 R-SKIR-01 §1]`: a left click one colour on, a right
 click one back, past every colour another present player holds. Each arrival
 takes the lowest free colour, so every player's is their own.
+
+The host's computer players
+([DESIGN_MULTIPLAYER §6.6](DESIGN_MULTIPLAYER.md#66-computer-seats)) follow
+the present players, in the order every seat composes them. Only the host
+sees an **Add computer** row, as the name button of the row after the last,
+while one more computer fits with room left for two humans: computers plus
+the larger of the humans present and two stay within the map's start
+positions and ten players, or Survival's three survivors. It is greyed while
+the host is ready or checking. A new computer plays the Modern AI at the
+host's skirmish difficulty, with no team, the side its row position
+alternates to and the lowest colour no player or computer holds. Its name
+button is captioned as the setup screen captions a computer row, `Modern AI`
+or `Classic AI`, numbered among the computers when there are several, and
+the host's click steps Modern AI, Classic AI, removed, as a Survival ally row
+does. Its side, team (hidden in Survival) and colour cycle with the host's
+own row controls; its colour steps past colours held by players and other
+computers, and a player's own colour steps past the computers' too. The
+energy column steps its difficulty Easy, Medium, Hard, drawn in the
+headings' face over the button under a Difficulty heading shown while the
+room has a computer; the Ready column is empty on computer rows. Each row
+shows the colour composition will give the computer. Every computer change
+replaces the base configuration and clears readiness like any host setting;
+guests see the rows read-only, with help naming the AI. Switching to
+Survival with more than one computer is refused ("Survival allows one
+computer player. Remove the others first.").
+
 The room code is drawn beside the title in `HATT14`, in two groups of three,
 with **Copy** where the host has a clipboard bridge (macOS writes AppKit plain
 text, Windows `CF_UNICODETEXT`, Linux and BSD desktops hand the code on stdin
@@ -4556,15 +4582,18 @@ greyed, and a map it lacks is named on the status line ("The host chose
 _map_, which you don't have.") with Ready greyed.
 
 **Ready** composes the final configuration from the latest base and the
-present seats in seat order, with their teams and sides, prepares this seat's
+present seats in seat order, with their teams and sides, then the base's
+computers, prepares this seat's
 battle at its slot and runs the pre-start rehearsal of DESIGN_MULTIPLAYER
 §16.7 on a job goroutine, then sends the configuration-identity and rehearsal
 digests; **Not ready** withdraws them. While the check runs the status line
 says so and Ready is greyed; a check that fails is reported. Any join, leave,
 team, side, colour or settings change clears every seat's ready, and the
 status line says which. Ready is greyed, and the status line explains, while fewer than
-two players are present, a skirmish has more players than the map's start
-positions or everyone on one team, or Survival has more than three players.
+two players are present, a skirmish has more players, computers included,
+than the map's start positions or ten, everyone — computers included — is on
+one team ("Everyone is on one team. Someone needs another team, or none."),
+or Survival has more than three players, computers included.
 **Start** is the host's, enabled when everyone present is ready and the
 digests agree; a mismatch is stated in plain words ("Your games simulate
 differently. Every player needs the same version."). Hovering a control shows

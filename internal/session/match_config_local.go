@@ -64,13 +64,14 @@ type MatchRoomInputs struct {
 // never sets it; Progress is a local load observer; SimArt belongs to frozen
 // content identity, not configuration.
 func NewMatchConfigRequest(cfg SkirmishConfig, options SkirmishEntryOptions, room MatchRoomInputs) (MatchConfigRequest, error) {
-	return newMatchConfigRequest(cfg, options, room, false)
+	return newMatchConfigRequest(cfg, options, room, nil)
 }
 
-// newMatchConfigRequest is the adapter for one local human (lobby false) or
+// newMatchConfigRequest is the adapter for one local human (lobby nil) or
 // for an online lobby's rows (NewOnlineMatchRequest), which seats several
-// humans and no added computer, each human taking its own row's participant.
-func newMatchConfigRequest(cfg SkirmishConfig, options SkirmishEntryOptions, room MatchRoomInputs, lobby bool) (MatchConfigRequest, error) {
+// humans, each taking its own row's participant, and the computers the room
+// host added, each with its own difficulty from lobby, indexed by row.
+func newMatchConfigRequest(cfg SkirmishConfig, options SkirmishEntryOptions, room MatchRoomInputs, lobby *[SkirmishMaxPlayers]uint8) (MatchConfigRequest, error) {
 	if options.AutomatedPlayers {
 		return MatchConfigRequest{}, matchFieldError("options.automatedPlayers", "false: an online battle seats its computers through the configuration")
 	}
@@ -157,15 +158,18 @@ func newMatchConfigRequest(cfg SkirmishConfig, options SkirmishEntryOptions, roo
 }
 
 // matchSeatsFromSetup writes the normalized setup's rows. Outside a lobby
-// the setup has one local human, the host of every computer row; a lobby's
-// setup has one or more humans and no computer row.
-func matchSeatsFromSetup(cfg SkirmishConfig, options SkirmishEntryOptions, room MatchRoomInputs, lobby bool) ([]MatchSeat, error) {
+// the setup has one local human, the host of every computer row, and the
+// setup's one difficulty word is every computer's. A lobby's setup has one or
+// more humans and the room host's computers: the host is the first human,
+// relay seat 0, and each computer's difficulty is its own row's in lobby
+// (§6.6, §16.6).
+func matchSeatsFromSetup(cfg SkirmishConfig, options SkirmishEntryOptions, room MatchRoomInputs, lobby *[SkirmishMaxPlayers]uint8) ([]MatchSeat, error) {
 	n := cfg.NumPlayers
 	attacker := cfg.survivalAttacker()
 	local := -1
 	for i := 0; i < n; i++ {
 		if i != attacker && cfg.Players[i].IsHuman() {
-			if local >= 0 && !lobby {
+			if local >= 0 && lobby == nil {
 				return nil, matchFieldError(fmt.Sprintf("players[%d]", i), "one local human: a lobby seating several humans builds its configuration with NewOnlineMatchRequest")
 			}
 			if local < 0 {
@@ -222,14 +226,16 @@ func matchSeatsFromSetup(cfg SkirmishConfig, options SkirmishEntryOptions, room 
 			s.Role = MatchRoleWatcher
 			s.Participant = room.Participants[i]
 		default:
-			if lobby {
-				return nil, matchFieldError(path+".controller", "a human row: an online lobby seats no computer")
-			}
 			s.Role = MatchRoleComputer
 			s.HostSeat = uint8(local)
 			s.ComputerKind = p.AI
 			s.Difficulty = difficulty
-			text, err := options.AIOverrides.For(uint8(i), matchAIDifficulty(difficulty))
+			if lobby != nil {
+				if s.Difficulty = lobby[i]; s.Difficulty > 2 {
+					return nil, matchFieldError(path+".difficulty", "0 easy, 1 medium or 2 hard")
+				}
+			}
+			text, err := options.AIOverrides.For(uint8(i), matchAIDifficulty(s.Difficulty))
 			if err != nil {
 				return nil, matchFieldError(path+".aiParams", "canonical key=value parameters: "+err.Error())
 			}

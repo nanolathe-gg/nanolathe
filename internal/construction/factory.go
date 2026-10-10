@@ -199,6 +199,9 @@ type Service struct {
 	// 1 => subtract 1/2 ... This pairing is INVERTED relative to the ledger's
 	// negative-energy-use refund site". Both halves were wrong; see the
 	// cancel-refund arm below for the trace that retires them.
+	//
+	// It is the battle's one word. A refunded owner whose ledger record
+	// carries a word of its own selects on that instead (RefundSelector).
 	ModeSelector int
 	// IsSpecialSecondState reports whether the referenced player object is in
 	// the special second state [05 C21]. nil means no player is special.
@@ -709,6 +712,19 @@ func (s *Service) CheckLimit(factory *units.Unit, defKey string) bool {
 		return true
 	}
 	return s.LimitChecker(factory, defKey)
+}
+
+// RefundSelector is the word both construction refunds select on for owner
+// [05 R-ECO-01 §11]: the owner's own word when its ledger record carries one
+// — a battle whose computer players each carry their own difficulty
+// (docs/DESIGN_MULTIPLAYER.md §6.6) — otherwise the battle's ModeSelector.
+// Reading the ledger's copy keeps one word per player for the ledger's
+// credits and these refunds alike.
+func (s *Service) RefundSelector(owner uint8) int {
+	if word, ok := s.Economy.PlayerSelector(owner); ok {
+		return word
+	}
+	return s.ModeSelector
 }
 
 // NewService creates a Service with given dependencies.

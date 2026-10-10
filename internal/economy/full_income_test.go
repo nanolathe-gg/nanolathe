@@ -32,7 +32,7 @@ func TestAFullIncomePlayerIsCreditedAsAHuman(t *testing.T) {
 			if got := s.UnitBuckets(pool.Handle(4)); got[Metal].Production != 1000 || got[Energy].Production != 250 {
 				t.Fatalf("prota=%t selector %d: feature reclaim credited %v / %v of 1000 / 250", prota, selector, got[Metal].Production, got[Energy].Production)
 			}
-			s.CreditUnitReclaimRefund(pool.Handle(5), 0, 1000, s.DiscountsCredit(3))
+			s.CreditUnitReclaimRefund(pool.Handle(5), 3, 0, 1000)
 			if got := s.UnitBuckets(pool.Handle(5))[Metal].Production; got != 1000 {
 				t.Fatalf("prota=%t selector %d: unit reclaim refunded %v of 1000", prota, selector, got)
 			}

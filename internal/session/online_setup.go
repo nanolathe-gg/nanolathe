@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/ai"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
@@ -42,14 +43,33 @@ type OnlineSeat struct {
 	Color uint8
 }
 
+// OnlineComputer is one computer row the room host added to its base
+// configuration (DESIGN_MULTIPLAYER §6.6): its lobby team (as OnlineSeat's,
+// ignored in Survival), side, stored colour, controller and difficulty, 0
+// easy, 1 medium or 2 hard. Only the host adds computers, so every one is
+// hosted by seat 0 and borrows its perspective.
+type OnlineComputer struct {
+	Team  uint8
+	Side  uint8
+	Color uint8
+	// Kind is the computer's controller: Classic plays the bound rule set's
+	// own planner, Modern the Modern AI computer player.
+	Kind       ai.Controller
+	Difficulty uint8
+}
+
 // OnlineMatchSetup is what a lobby decides beyond the host's frozen content:
-// the game type, map, seats with their teams and sides, the host's seed pair
-// and, for Survival, its options. Every seat is a human under Modern
-// gameplay.
+// the game type, map, seats with their teams and sides, the host's computers,
+// the host's seed pair and, for Survival, its options. Every seat is a human
+// under Modern gameplay.
 type OnlineMatchSetup struct {
-	Survival         bool
-	MapName          string
-	Seats            []OnlineSeat
+	Survival bool
+	MapName  string
+	Seats    []OnlineSeat
+	// Computers are the host's computer rows in their stored order, as
+	// OnlineComputersOf reads them from the room's base configuration. They
+	// follow the seats, so a human keeps its relay slot as its row.
+	Computers        []OnlineComputer
 	SimSeed, CRTSeed uint32
 	SurvivalOptions  SurvivalOptions
 	// SideCount is how many sides the frozen catalog defines,
@@ -58,36 +78,48 @@ type OnlineMatchSetup struct {
 }
 
 // Rows is the configuration's row count for the setup: one human row per
-// seat and, in Survival, the attacker row after them. It is the player count
-// the map-entry code selects the map's schema for (OnlineMapSchema).
+// seat, one computer row per computer and, in Survival, the attacker row
+// after them. It is the player count the map-entry code selects the map's
+// schema for (OnlineMapSchema); in a skirmish it is also the count the map's
+// start positions must hold (OnlineMapCapacity).
 func (s OnlineMatchSetup) Rows() int {
 	if s.Survival {
-		return len(s.Seats) + 1
+		return len(s.Seats) + len(s.Computers) + 1
 	}
-	return len(s.Seats)
+	return len(s.Seats) + len(s.Computers)
 }
 
 // NewOnlineMatchRequest builds the match configuration request for an
-// online lobby: one human row per seat in slot order and, for Survival, the
-// attacker row as SurvivalConfigFor builds it. A human row carries the
-// participant identity whose first byte is its slot plus one (room's own
-// Participants are not read), the nickname "Player n" for slot n-1, the
-// seat's side and colour, and the skirmish default resources. A skirmish
-// row's ally group is its team's (team t is group t-1, no team is the
-// unassigned group); every survivor shares the Survival team, and the
-// attacker takes the first colour no survivor holds, red when free
-// (SurvivalConfigFor, DESIGN_SURVIVAL §4.1).
+// online lobby: one human row per seat in slot order, then one computer row
+// per computer in its stored order, and, for Survival, the attacker row as
+// SurvivalConfigFor builds it. A human row carries the participant identity
+// whose first byte is its slot plus one (room's own Participants are not
+// read), the nickname "Player n" for slot n-1, the seat's side and colour,
+// and the skirmish default resources. A computer row is hosted by seat 0 and
+// carries its controller, its own difficulty, its side, an empty nickname and
+// the default resources. A skirmish row's ally group is its team's (team t is
+// group t-1, no team is the unassigned group); every survivor, computer
+// survivors included, shares the Survival team.
+//
+// Colours resolve here, for every seat alike: the humans' colours are their
+// own and must differ; a computer keeps its stored colour when no human and
+// no earlier computer keeping its own holds it, and otherwise, in stored
+// order, takes the lowest colour no row holds; the attacker then takes the
+// first colour no survivor holds, red when free (SurvivalConfigFor,
+// DESIGN_SURVIVAL §4.1). A human-only setup builds exactly the rows it always
+// has.
 //
 // The rule words and the unit limit are the single-player skirmish defaults
 // under Modern, as DirectSkirmishConfig writes them; options and room are as
 // NewMatchConfigRequest takes them. room.MapSchema must be the schema the
-// map-entry code selects for setup.Rows() players, the human count in a
-// skirmish and one more in Survival; OnlineMapSchema resolves it.
+// map-entry code selects for setup.Rows() players; OnlineMapSchema resolves
+// it.
 //
-// A skirmish seats 2..10 humans and refuses one team holding every seat
-// [08 R-SKIR-01 §12]; whether the map offers that many start positions is
-// the lobby's cap (OnlineMapCapacity). Survival seats 2..3 survivors. A
-// colour above 9, or one two seats share, is refused.
+// A skirmish seats 2..10 humans and at most ten rows, and refuses one team
+// holding every row [08 R-SKIR-01 §12]; whether the map offers that many
+// start positions is the lobby's cap (OnlineMapCapacity), which composition
+// checks again. Survival seats 2..3 human survivors and at most three
+// survivors in all. A colour above 9, or one two seats share, is refused.
 func NewOnlineMatchRequest(setup OnlineMatchSetup, options SkirmishEntryOptions, room MatchRoomInputs) (MatchConfigRequest, error) {
 	n := len(setup.Seats)
 	most := SkirmishMaxPlayers
@@ -96,6 +128,9 @@ func NewOnlineMatchRequest(setup OnlineMatchSetup, options SkirmishEntryOptions,
 	}
 	if n < matchMinSeats || n > most {
 		return MatchConfigRequest{}, matchFieldError("setup.seats", fmt.Sprintf("%d..%d seats", matchMinSeats, most))
+	}
+	if n+len(setup.Computers) > most {
+		return MatchConfigRequest{}, matchFieldError("setup.computers", fmt.Sprintf("at most %d players, seats and computers together", most))
 	}
 	if setup.SideCount < 1 || setup.SideCount > 256 {
 		return MatchConfigRequest{}, matchFieldError("setup.sideCount", "the frozen catalog's side count, len(OnlineSides(cat)), 1..256")
@@ -106,7 +141,7 @@ func NewOnlineMatchRequest(setup OnlineMatchSetup, options SkirmishEntryOptions,
 	cfg := DirectSkirmishConfig(setup.MapName)
 	cfg.Gameplay = gameplay.Modern
 	cfg.RNGSimSeed, cfg.RNGCrtSeed = setup.SimSeed, setup.CRTSeed
-	players := make([]SkirmishPlayer, n)
+	players := make([]SkirmishPlayer, n, n+len(setup.Computers))
 	for i, seat := range setup.Seats {
 		path := fmt.Sprintf("setup.seats[%d]", i)
 		if seat.Team > OnlineMaxTeam {
@@ -134,24 +169,113 @@ func NewOnlineMatchRequest(setup OnlineMatchSetup, options SkirmishEntryOptions,
 		}
 		room.Participants[i] = MatchParticipantID{byte(i + 1)}
 	}
+	var difficulties [SkirmishMaxPlayers]uint8
+	colors, err := onlineComputerColors(setup)
+	if err != nil {
+		return MatchConfigRequest{}, err
+	}
+	for k, c := range setup.Computers {
+		path := fmt.Sprintf("setup.computers[%d]", k)
+		if c.Team > OnlineMaxTeam {
+			return MatchConfigRequest{}, matchFieldError(path+".team", fmt.Sprintf("%d for none or 1..%d", OnlineTeamNone, OnlineMaxTeam))
+		}
+		if int(c.Side) >= setup.SideCount {
+			return MatchConfigRequest{}, matchFieldError(path+".side", fmt.Sprintf("a side below the catalog's %d sides", setup.SideCount))
+		}
+		if c.Kind != ai.ControllerClassic && c.Kind != ai.ControllerModern {
+			return MatchConfigRequest{}, matchFieldError(path+".kind", "Classic or Modern")
+		}
+		if c.Difficulty > 2 {
+			return MatchConfigRequest{}, matchFieldError(path+".difficulty", "0 easy, 1 medium or 2 hard")
+		}
+		difficulties[n+k] = c.Difficulty
+		players = append(players, SkirmishPlayer{
+			Controller: SkirmishControllerComputer,
+			Side:       int(c.Side),
+			Color:      int(colors[k]),
+			AllyGroup:  onlineAllyGroup(c.Team),
+			Metal:      SkirmishDefaultMetal,
+			Energy:     SkirmishDefaultEnergy,
+			AI:         c.Kind,
+		})
+	}
+	rows := len(players)
 	for i := n; i < len(room.Participants); i++ {
 		room.Participants[i] = MatchParticipantID{}
 	}
 	for i := range cfg.Players {
 		cfg.Players[i] = SkirmishPlayer{}
 	}
-	cfg.NumPlayers = n
+	cfg.NumPlayers = rows
 	if setup.Survival {
 		layout := SurvivalConfigFor(setup.MapName, players, setup.SurvivalOptions)
 		cfg.Survival = layout.Survival
-		cfg.NumPlayers = n + 1
+		cfg.NumPlayers = rows + 1
 		for i := range players {
 			players[i].AllyGroup = layout.Players[i].AllyGroup
 		}
-		cfg.Players[n] = layout.Players[n]
+		cfg.Players[rows] = layout.Players[rows]
 	}
-	copy(cfg.Players[:n], players)
-	return newMatchConfigRequest(cfg, options, room, true)
+	copy(cfg.Players[:rows], players)
+	return newMatchConfigRequest(cfg, options, room, &difficulties)
+}
+
+// onlineComputerColors resolves the computers' colours against the seats'
+// (NewOnlineMatchRequest): a stored colour no human holds, and no earlier
+// computer keeping its own, is kept; each other computer, in stored order,
+// takes the lowest colour no seat or computer holds. Ten rows at most never
+// run out of the ten colours.
+func onlineComputerColors(setup OnlineMatchSetup) ([]uint8, error) {
+	var held [onlineColors]bool
+	for _, seat := range setup.Seats {
+		if seat.Color < onlineColors {
+			held[seat.Color] = true
+		}
+	}
+	colors := make([]uint8, len(setup.Computers))
+	kept := make([]bool, len(setup.Computers))
+	for k, c := range setup.Computers {
+		if c.Color >= onlineColors {
+			return nil, matchFieldError(fmt.Sprintf("setup.computers[%d].color", k), fmt.Sprintf("0..%d", onlineColors-1))
+		}
+		if !held[c.Color] {
+			held[c.Color], colors[k], kept[k] = true, c.Color, true
+		}
+	}
+	for k := range setup.Computers {
+		if kept[k] {
+			continue
+		}
+		for c := uint8(0); c < onlineColors; c++ {
+			if !held[c] {
+				held[c], colors[k] = true, c
+				break
+			}
+		}
+	}
+	return colors, nil
+}
+
+// OnlineComputersOf reads the computer rows of a room's base configuration
+// in their stored order, the rows every seat composes after its present
+// humans (DESIGN_MULTIPLAYER §16.6): each row's team from its ally group
+// (group g is team g+1, the unassigned group no team), side, stored colour,
+// controller and difficulty. Survival's survivor team reads as no team.
+// Rows of other roles are skipped.
+func OnlineComputersOf(r MatchConfigRequest) []OnlineComputer {
+	var out []OnlineComputer
+	for i := range r.Seats {
+		seat := &r.Seats[i]
+		if seat.Role != MatchRoleComputer {
+			continue
+		}
+		team := uint8(OnlineTeamNone)
+		if r.SessionKind == MatchOnlineSkirmish && seat.AllyGroup < SkirmishDefaultAllyGroup {
+			team = seat.AllyGroup + 1
+		}
+		out = append(out, OnlineComputer{Team: team, Side: seat.Side, Color: seat.Color, Kind: seat.ComputerKind, Difficulty: seat.Difficulty})
+	}
+	return out
 }
 
 // onlineAllyGroup is a lobby team's ally group: team t is group t-1 and no

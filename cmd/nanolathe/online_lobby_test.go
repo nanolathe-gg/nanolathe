@@ -131,7 +131,7 @@ func TestOnlineLobbyColours(t *testing.T) {
 	if r.ready || !strings.Contains(lobbyText(g, lobbyStatus), "changed team, side or colour") {
 		t.Fatalf("colour change: ready %v, status %q", r.ready, lobbyText(g, lobbyStatus))
 	}
-	if next, ok := nextOnlineColor(fake.state, 2, -1); !ok || next != 0 {
+	if next, ok := nextOnlineColor(fake.state.Seats[2].Color, -1, func(c uint8) bool { return onlineColorHeld(fake.state, 2, c) }); !ok || next != 0 {
 		t.Fatalf("a freed colour is not offered: %d %v", next, ok)
 	}
 }
@@ -294,7 +294,7 @@ func TestOnlineSeatsAndFinalSetup(t *testing.T) {
 	if _, _, ok := onlineSeatsOf(state, 4, false); ok {
 		t.Fatal("an absent seat has a slot")
 	}
-	if onlineOneTeam(seats) || !onlineOneTeam([]session.OnlineSeat{{Team: 2}, {Team: 2}}) || onlineOneTeam([]session.OnlineSeat{{Team: 2}, {Team: 0}}) || onlineOneTeam([]session.OnlineSeat{{}, {}}) {
+	if onlineOneTeam(seats, nil) || !onlineOneTeam([]session.OnlineSeat{{Team: 2}, {Team: 2}}, nil) || onlineOneTeam([]session.OnlineSeat{{Team: 2}, {Team: 0}}, nil) || onlineOneTeam([]session.OnlineSeat{{}, {}}, nil) {
 		t.Fatal("one-team test wrong")
 	}
 	// The final configuration is the base's frozen part, the settings and

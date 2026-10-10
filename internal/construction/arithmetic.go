@@ -202,12 +202,12 @@ func (s *Service) sharedStep(builder, target *units.Unit, quantum float32, tick 
 	}
 	// The special-player selector credits 0.5 or 0.7 of the amount and any other
 	// value the whole of it, tied to the TARGET's owner [05 R-WORK-01 §1]
-	// [05 "Cancel-current and stop interrupts"]. With no ledger there is no
-	// bucket to credit and the refund is simply not paid; it is never diverted
-	// to another field.
+	// [05 "Cancel-current and stop interrupts"] — that owner's word, too
+	// (RefundSelector). With no ledger there is no bucket to credit and the
+	// refund is simply not paid; it is never diverted to another field.
 	special := s.IsSpecialSecondStateHook() != nil && s.IsSpecialSecondStateHook()(target.Owner)
 	if bucket != nil {
-		ReverseRefund(bucket, refund, special, s.ModeSelector)
+		ReverseRefund(bucket, refund, special, s.RefundSelector(target.Owner))
 	}
 	health := target.Health + healthGain
 	if health < 1 {

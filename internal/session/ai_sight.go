@@ -34,6 +34,13 @@ func (s *Session) computerPlayerSees(viewer uint8, target *units.Unit) bool {
 // policy for the controller's fairness boundary, not retail behaviour: the
 // retail planner keeps computerPlayerSees.
 //
+// The target's sensor status, which carries the sonar bit the underwater
+// exemption reads [03 §3.2] C8 step 3, is the one the canonical predicate
+// reads (sensorStatus): in a single-player battle the unit's own status word,
+// written by the viewing human's pass that every computer borrows, and online
+// the perspective the computer borrows from its host seat (DESIGN_MULTIPLAYER
+// §6.2, §6.6), so an online Modern computer keeps the same exemption.
+//
 // Under Permanent LOS the Community off-map aircraft substitute
 // (DESIGN_COMMUNITY_PATCH §4.4) is not applied on this path: that substitute
 // is private to the visibility service and reads the local slot's bit. It is
@@ -54,7 +61,7 @@ func (s *Session) computerPlayerSeesOwn(viewer uint8, target *units.Unit) bool {
 	w, h := s.Vis.GridDimensions()
 	bit := uint16(1) << viewer
 	var t visibility.Target
-	fillUnitVisibilityTarget(&t, target, target.Flags)
+	fillUnitVisibilityTarget(&t, target, s.sensorStatus(viewer, target))
 	return t.IsVisible(id, seaLevel, func(x, y, z numeric.Fixed) bool {
 		cell, ok := visibilityCell(w, h, x, y, z)
 		return ok && cell < len(mapped) && mapped[cell]&bit != 0

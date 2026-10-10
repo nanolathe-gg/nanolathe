@@ -5,8 +5,9 @@ simulation and only player commands travel: a relay puts them in one order,
 tells every client which tick each one runs on, and decides how far the
 battle may advance. The model is **relayed deterministic lockstep**.
 
-**What exists.** Online skirmish for 2–10 human seats and online Survival
-for 2–3 survivors under Modern gameplay, through the hosted relay at
+**What exists.** Online skirmish for 2–10 seats and online Survival for 2–3
+survivors under Modern gameplay, with computer players the room's host adds
+beside the humans (§6.6), through the hosted relay at
 `relay.nanolathe.gg` (§12, §16.5), from the native and browser builds.
 Players start a match from the main menu's MULTI entry (§16.6), or from the
 command line with `--relay-address` and `--relay-room` (§16.5.4). A local
@@ -37,10 +38,12 @@ a missing number is a retired section.
 
 **Current scope.**
 
-1. Online skirmish for 2–10 human seats with teams chosen in the lobby, and
-   online Survival for 2–3 human survivors, under Modern gameplay, by
+1. Online skirmish for 2–10 seats with teams chosen in the lobby, and
+   online Survival for 2–3 survivors, under Modern gameplay, by
    relayed lockstep through the hosted relay (§12, §16.5, §16.6), from the
-   native and browser builds.
+   native and browser builds. At least two seats are human; the room's
+   host may add Classic or Modern computer players, each with its own
+   difficulty (§6.6).
 2. The host's map, mod, mutators and unit restrictions, frozen into the
    room's configuration when it is created and adopted by every joiner
    (§8.6, §16.6).
@@ -50,15 +53,15 @@ a missing number is a retired section.
 4. A local two-window play test over a loopback relay (§16.4).
 
 **Designed for later.** The contracts here also cover what the design grows
-into, in the order of §16: two to ten seats with any mix of humans and
-computer players (Classic or Modern), in skirmish and Survival, under every
-gameplay mode including Strict 3.1 (§6); replays (§10); LAN and direct-IP
+into, in the order of §16: computer players added by any human, in
+skirmish and Survival, under every gameplay mode including Strict 3.1 (§6); replays (§10); LAN and direct-IP
 play through a relay embedded in the hosting client (§12.1); watchers and
 spectators (§11.4); rejoining after a disconnect (§11.2); match-wide view
 restrictions (§8.4); and eventual competitive play with verified results
 (§12.6).
 
-**Not built yet.** Computer seats; Strict 3.1 and Community online;
+**Not built yet.** Computer players added by a joiner; Strict 3.1 and
+Community online;
 alliance changes during a battle; watchers and spectators; replays (M4);
 reconnect, departures and removal votes; room lists, chat and display
 names; the embedded LAN relay; pause and speed changes; relay-drawn seeds;
@@ -554,13 +557,13 @@ control byte's "local human") moves to a perspective or a seat:
 
 | Work | Retail contract | Lockstep form |
 |---|---|---|
-| Sensor phase | Five unit walks write the seen, sonar, jammed and decloak-timer bits from the viewing slot inside that player's 30-tick settlement deadline; a defeated or watching viewer marks every unit friendly; the first walk also marks units of owners allied toward the viewer that share radar `[03 R-SENSOR-01]` `[03 R-VIS-01 §4]` `[03 R-VIS-01 §7]`. Fallback targeting reads the seen set `[06 §3.1]`. | One pass per perspective in that seat's deadline block, its bits held per perspective; each reader reads its acting unit's perspective. Pass 4's source gate ("simulated on this machine") becomes "this perspective's seat or a computer seat it hosts". |
+| Sensor phase | Five unit walks write the seen, sonar, jammed and decloak-timer bits from the viewing slot inside that player's 30-tick settlement deadline; a defeated or watching viewer marks every unit friendly; the first walk also marks units of owners allied toward the viewer that share radar `[03 R-SENSOR-01]` `[03 R-VIS-01 §4]` `[03 R-VIS-01 §7]`. Fallback targeting reads the seen set `[06 §3.1]`. | One pass per perspective in that seat's deadline block, its bits held per perspective; each reader reads its acting unit's perspective. Pass 4's source gate ("simulated on this machine") becomes "this perspective's seat or a computer seat it hosts". A computer seat has no pass: it reads its host's bank (§6.6). Under Modern and Community a defeated seat's pass stays an ordinary viewer's while a computer it hosts lives (§6.6). |
 | Direct-visibility predicate | Reads the local player's coverage even for a query on behalf of another record `[03 §3.2]`. | Reads the querying record's perspective, for targeting, danger, the repair-pad queue, the Classic rally sight `[08 R-AI-01 §7]` and the COB effect gate. |
 | COB effects | The effect opcode spawns strip objects — pool slots and, for sprinkle and smoke, CRT draws — only when the viewing player can see the unit `[04 R-COB-03 §6]` `[03 R-STRIP-01 §1]`; its frame event feeds the effect pool (L9). | Spawned when the unit is visible to **any** perspective, the union taken ahead of the strips and the pool, so every client holds the same records. Each client then draws only what its own seat may see, after the pool. |
 | Effect pool | Records live for their authored holds; at capacity the pool refuses shatter fragments and land-dust puffers before their draws `[03 §1]` `[06 R-WFX-01 §1]` `[04 R-COB-04 §3]` `[03 R-FX-01 §3]`. | Timed from `SimArt` on every host (M1). The events that feed it are admitted through an effect-only window independent of audio and status events (§16.4.1). |
 | Temporary sight | Recorded only for victims the viewing slot owns, at most 20 `[08 R-SESS-01 §3]`; expired in the executor tail `[01 R-PLAT-02 §5]`. | One list of 20 per perspective; expiry after every tick (§4.5). |
 | End condition | Each machine evaluates its own player in that player's deadline block; online, authored triggers are never polled `[08 R-TRIG-01 §6]` `[08 R-SKIR-01 §3]`. | Every human seat's block evaluates that seat (§6.5). |
-| End countdown | One countdown and ending latch per machine gate its human and hosted computers; won and lost share it; a false due never resets it `[05 R-ECO-01 §1]` `[08 R-SKIR-01 §3]`. | Per human perspective, gating that human and its hosted computers. The no-human site runs every tick, skips Deathmatch and ends every perspective on its sixth consecutive true tick from an unarmed countdown `[08 R-TRIG-01 §6]`. |
+| End countdown | One countdown and ending latch per machine gate its human and hosted computers; won and lost share it; a false due never resets it `[05 R-ECO-01 §1]` `[08 R-SKIR-01 §3]`. | Per human perspective. Under Strict 3.1 it gates that human and its hosted computers; under Modern and Community it gates only the human (§6.6). The no-human site runs every tick, skips Deathmatch and ends every perspective on its sixth consecutive true tick from an unarmed countdown `[08 R-TRIG-01 §6]`. |
 | Commander death | Only the owner's machine sweeps its units; a human respawns in its own block, and its visibility rebuild resets that machine's mapping history and sight grids `[08 R-SKIR-01 §3]` `[08 R-ENTRY-01 §7]`. | Sweep each owner once; respawn each eligible human in its own block; rebuild only that perspective's own and hosted-computer visibility, keeping unrelated players' history (Q24, §6.7). |
 | Watcher entry | Clears mapping and line-of-sight bits for the whole watching machine and rebuilds its grids `[08 R-SKIR-01 §3]` `[08 R-ENTRY-01 §7]`. | Changes the entering perspective and the hosted computers that borrow it (Q24). |
 | Automatic sharing | The local slot only, every 60 ticks `[05 R-SHARE-01 §3]`. | Every human seat, ascending. |
@@ -573,12 +576,14 @@ control byte's "local human") moves to a perspective or a seat:
 | Loss statistics | Requested-snapshot receipt latch `[06 §12.1]`. | File the victim owner's loss once; the single-player path keeps its separately reviewed correction. |
 | Known-site gate | The placement check consults the viewer's map knowledge `[04 R-P0-08-B §1]`. | The issuing seat's perspective. |
 
-For 2–10 human seats on static lobby teams, and for 2–3 Survival survivors,
-the session implements the sensor, predicate, COB-effect, effect-pool,
-temporary-sight, end-condition, end-countdown, known-site, builder-option and
-Survival-wave rows (§16.4.1–§16.4.2, §16.6). Only human rows are present, so
-a Survival attacker has no sensor pass, temporary sight, effect-union entry
-or result row. The other rows are M5 work.
+For online skirmish on static lobby teams — 2–10 rows, the human seats plus
+the computers the room host added — and for Survival's 2–3 survivors, the
+session implements the sensor, predicate, COB-effect, effect-pool,
+temporary-sight, end-condition, end-countdown, known-site, builder-option
+and Survival-wave rows (§16.4.1–§16.4.2, §16.6). Only human seats have
+perspectives and result rows; a computer seat reads its host's perspective
+(§6.6), and Survival's attacker has no sensor pass, temporary sight,
+effect-union entry or result row. The other rows are M5 work.
 
 ### 6.4 Session kind
 
@@ -624,8 +629,6 @@ ends the battle without a result (Q28).
 
 ### 6.6 Computer seats
 
-Not built online yet; this is the approved policy (Q4, Q23, Q26, Q28, Q29).
-
 Retail allows one computer per human machine. Its creator hosts it for the
 whole battle: only that machine runs its planner and full unit work, and
 the computer borrows that machine's sensor picture. Removing the human
@@ -633,11 +636,36 @@ removes its computer too and destroys both players' units
 `[08 R-SKIR-01 §13]` `[08 R-AI-01 §21]` `[08 R-LEAVE-01 §9]`
 `[08 R-LEAVE-01 §10]`.
 
-Every client runs every computer seat. Its **host seat** is the human that
-added it, fixed in the configuration; reconnects cannot change it. While
-that human is out of play but not finally removed, its computers keep
-running with the host's perspective in every mode. At the human's final
-removal the modes differ:
+**Online.** Every client runs every computer seat, Classic or Modern, each
+with its own difficulty, side, team and colour. Its **host seat** is the
+human that added it, fixed in the configuration; reconnects cannot change
+it. Today only the room host adds computers, so every computer row's host
+seat is 0, the room's creator (§16.6).
+
+- **Rows.** Every client composes the same order: the present humans in
+  relay-slot order, so a human's row is its relay slot, then the host's
+  computers in their stored order, then Survival's attacker. A computer
+  keeps its stored colour unless a human or an earlier computer holds it,
+  and then takes the lowest free colour; the attacker takes the first
+  colour left after them.
+- **Limits.** A skirmish holds up to ten rows within the map's start
+  positions; Survival holds up to three survivors, so a two-human room may
+  add one computer survivor. Computers are excluded from Deathmatch.
+- **Perspective.** A computer has no sensor pass of its own. It reads its
+  host's: the host's status bank, its explored-history bit under Permanent
+  LOS, and pass 4's "simulated on this machine" gate, which counts the
+  host's computers (§6.3). The Modern AI's own sight predicate reads the
+  same borrowed status, so it keeps the underwater sonar exception it has in
+  single-player. A computer on a lobby team shares that team's sight and
+  radar (§6.7).
+- **Results.** A computer has no result row. It plays until it is destroyed
+  or the battle ends, which happens once every human row has latched a
+  result (§6.5). Victory sweeps count a hostile computer as an opponent,
+  and its elimination takes the shared CRT draw (§6.4).
+
+While a host is out of play but not finally removed, its computers keep
+running with its perspective in every mode. At the human's final removal
+(§11.1, not built online yet) the modes differ:
 
 - **Strict 3.1** removes the human seat and every computer seat it hosts
   together, in ascending slot order, each through the destruction contract
@@ -651,6 +679,35 @@ removal the modes differ:
   Modern policy, selected together with the retention of the removed
   human's units by one `session.RuleSet` answer (§11.1, Q28).
 
+**Nanolathe Modern policy — a hosted computer outlives its host's defeat.**
+The session-owned `SeatRules` seam of `session.RuleSet` answers
+`ComputersStopWithHost`:
+
+- **Strict 3.1** (`StrictSeats`, true) keeps retail's machine. One
+  countdown and ending latch gate the human and its hosted computers
+  `[05 R-ECO-01 §1]` `[08 R-SKIR-01 §3]`: when the host's own due block
+  writes its countdown or ending bit, the same values are copied onto its
+  computers' records, so they stop settling with it. A defeated host's
+  sensor pass is a defeated viewer's and marks every unit friendly
+  `[03 R-VIS-01 §4]`.
+- **Modern and Community** (`ModernSeats`, false; Community composes
+  Modern's answer) gate only the human. A hosted computer keeps settling,
+  and so keeps playing, after its host is defeated or has won. While any of
+  its units lives, the defeated host's pass stays an ordinary viewer's, so
+  the computer keeps normal sight and the defeated human watches with
+  normal fog; once its computers are gone the defeated marking applies.
+  Binding projects the answer onto the visibility service
+  (`SetDefeatedHostKeepsSight`).
+
+The policy adds no random draw. Its resource effect is that the computer's
+settlement continues under Modern and Community. It reaches only online
+battles with hosted computers; single-player computers have no host seat
+and are unchanged. Tests: `TestHostedComputerOutlivesItsDefeatedHost` covers
+settlement under both answers, `TestDefeatedHostKeepsItsComputersSight` the
+borrowed picture under both, and the visibility test
+`TestDefeatedHostKeepsSightWhileHosting` the pass with and without a live
+computer.
+
 **Difficulty.** Retail difficulty belongs to the hosting machine and is not
 synchronized `[08 R-AI-01 §21]`. Online, difficulty is explicit per
 computer seat, for Classic and Modern computers in every mode, and an
@@ -662,33 +719,41 @@ reader concerns one computer seat and takes that seat's value:
 | Classic profile plan gate (`profile.SetDifficulty`) | `plan` directives `[08 R-AI-01 §12]`, effective where a planner record exists `[08 R-AI-01 §21]` | The computer whose planner it gates |
 | Modern parameter layering (`AIOverrides.For` through `ControllerDifficulty`) | Nanolathe's parameter layer | That Modern computer |
 | Modern persona selection (`personaFor`, also the Survival buddy host) | Nanolathe's persona | That Modern computer |
-| Ledger production discount (`Econ.SetEconomySelector`) | A computer's production credit `[05 R-ECO-01 §3]` `[05 R-ECO-01 §11]` | The producing computer |
-| Construction refund discount (`construction.Service.ModeSelector`) | Refund credits `[05 R-ECO-01 §11]` | The refunded computer |
+| Ledger production discount (`economy.Service.SetPlayerSelector`) | A computer's production credit `[05 R-ECO-01 §3]` `[05 R-ECO-01 §11]` | The producing computer |
+| Construction refund discount (`construction.Service.RefundSelector`) | Refund credits `[05 R-ECO-01 §11]` | The refunded computer |
 | Transfer recipient discount (`economy.Service.Transfer`) | Credit to a control-2 recipient `[05 R-SHARE-01 §2]` | The recipient computer |
-| Computer-income projection (`projectComputerIncome`, `ComputerIncomeRules`) | Projects the word onto ledger and refunds | Each computer, before its full-income mark |
+| Computer-income projection (`projectSeatIncome`, `ComputerIncomeRules`) | Projects each seat's word onto its ledger record, which refunds also read | Each computer, before its full-income mark |
 | Commander-respawn grant (dormant) | Respawned computer commander's stored resources scaled by difficulty `[08 R-SKIR-01 §3]` | The respawning computer; unreachable while computers are excluded from Deathmatch |
 
-Classic keeps its rule set's difficulty behaviour; Modern keeps its persona
-selection and full-income contract. A human seat consults no difficulty.
-The shared `*ai.Profile` and global difficulty mutation must become
-per-computer profiles before computers can play online (M5).
+A battle whose computers carry their own difficulties binds one
+`*ai.Profile` per distinct difficulty, each Classic manager to its own
+row's, and gives each computer's ledger record its own discount word
+outside any tick. A battle with one difficulty — every single-player
+battle — keeps the one profile and the battle-wide word, with its order of
+operations unchanged. Classic keeps its rule set's difficulty behaviour;
+Modern keeps its persona selection and full-income contract. A human seat
+consults no difficulty.
 
 **Nanolathe Modern policy — online computer-seat cap.** Strict 3.1 keeps one
 computer per human. Modern and Community allow a human several computers
 within the session's available lobby seats, Survival's layout constraints
-included. The session-owned `SeatRules` seam selects the cap through the
-existing `session.RuleSet` composition (`ComputerSeatsPerHuman`:
-`StrictSeats` answers one, `ModernSeats` the available seats; Community
-composes Modern's answer); the final-removal answer of §11.1 joins that seam
-in M6. Computers are excluded from Deathmatch in every online mode.
-Single-player admission and difficulty are unchanged.
+included. `SeatRules.ComputerSeatsPerHuman` selects the cap through the
+same `session.RuleSet` composition (`StrictSeats` answers one, `ModernSeats`
+the available seats; Community composes Modern's answer); the
+final-removal answer of §11.1 joins that seam in M6. Single-player
+admission and difficulty are unchanged.
 
+Online rooms run Modern rules today (§16.6), so the Strict answers of both
+policies are exercised by tests until other rule sets are offered online.
 Tests cover a second computer refused under Strict and admitted under
 Modern/Community, seat exhaustion, Deathmatch refusal, fixed host
-attribution, a configuration mismatch from one seat's difficulty, and (M5)
-every reader above using its own seat's value with two differently
-configured computers on one host. A Modern policy using a computer's own
-sensor perspective would be a separate gameplay decision.
+attribution, a configuration mismatch from one seat's difficulty, two
+differently configured computers on one host each reading its own value,
+two independent clients agreeing tick for tick with computers present, and
+human-only rooms — 2 and 3 skirmish seats, 2 and 3 Survival survivors —
+locked to the digests and checksums they had before computer seats existed.
+A computer using a sensor perspective of its own would be a separate
+gameplay decision.
 
 ### 6.7 Approved online alliance and exploration policies
 
@@ -1948,6 +2013,7 @@ finding.
 | Q27 | Final removal goes through a vote whose subject is a seat out of play; there is no vote-kick; the electorate is the connected human seats still playing; no timer removes a seat; resignation needs no vote (§11.1). |
 | Q28 | Protocol values (Nanolathe's, revisable here): a rejoining seat counts as out of play; the grace is cumulative out-of-play time; only a completed rejoin cancels a vote; an uncompleted rejoin returns to the drop state after `RejoinGraceMilliseconds`; a 30-second vote window that closes early; a 60-second cooldown after a failed or tied vote; one open vote per subject; a fixed electorate; the call casts the caller's yes and ballots cannot change; a battle with no active playing human ends without a result after the grace; a lag bound moves a connected seat that makes no progress into the drop state (M6); the client-sequence rules of §4.2 and the Refused message; one `session.RuleSet` answer for unit retention and hosted computers; at most 10,000 area entries and an actor-times-entry product of at most 1,048,576 per online command; no battle-wide difficulty word. |
 | Q29 | A finally removed seat is absent from the end-condition sweeps in every mode, as retail's cleared record is `[08 R-LEAVE-01 §3]` `[08 R-LEAVE-01 §5]`; a seat only out of play blocks victory until voted out. Under Modern and Community the removed human's per-seat block keeps running, so the perspective its computers borrow stays live (§6.5, §11.1). |
+| Q30 | Under Modern and Community a hosted computer keeps playing, with normal sight, after its host human is defeated: the host's countdown gates only the human, and the defeated host's sensor pass stays an ordinary viewer's while one of its computers lives. Strict 3.1 keeps retail's one countdown per machine (§6.6). |
 
 ## 16. Delivery plan
 
@@ -1963,9 +2029,9 @@ explicitly says otherwise.
 | **M1 One simulation on every host** | Effect holds in `SimArt` and the pool timed from them on every host (L9); the portable numeric kernel and defined conversions (L1); fingerprint locks from amd64, arm64 and js/wasm builds and a lock scene that fills the Strict effect pool. | Done (§16.1). |
 | **M2 Commands, configuration and identity** | Seat-attributed commands, receiver-side permissions, allocation serials, local interface state, explicit wire schemas, complete content/build/configuration identities and the match policy fields. | Done (§16.2). |
 | **M3 Canonical checkpoints and digest** | The reviewed state inventory, the canonical writer and owner sub-digests, the bounded histories and the computer seats' application records. | Implemented; native cross-platform comparison pending (§16.3). |
-| **Online play** | Perspectives, lobby teams and per-seat results for 2–10 human seats, and online Survival (part of M5); the loopback and hosted relays, room codes, the lobby, the rehearsal and the browser build's relay connection (part of M6). | Done (§16.4–§16.7). |
+| **Online play** | Perspectives, lobby teams and per-seat results for 2–10 seats, computers the room host adds, and online Survival (part of M5); the loopback and hosted relays, room codes, the lobby, the rehearsal and the browser build's relay connection (part of M6). | Done (§16.4–§16.7). |
 | **M4 Replays** | Recorder, playback, pump ends, pacing notes, digest checks and a headless replay command. | Next. Long Strict and Modern replays agree across platforms and between a windowed recording and headless playback, through pauses, speed changes and late AI workers. |
-| **M5 One world per player** | The rest of §6 — computer seats, alliances, sharing, watchers, per-seat option bits — and the multi-seat harness (§17). | The harness passes for two to four human seats with computer seats under every registered rule set; single-seat locks unchanged. |
+| **M5 One world per player** | The rest of §6 — alliances, sharing, watchers, per-seat option bits — and the multi-seat harness (§17). Computer seats the room host adds are built (§6.6). | The harness passes for two to four human seats with computer seats under every registered rule set; single-seat locks unchanged. |
 | **M6 LAN and room codes** | The embedded relay and LAN/direct lobby, chat, departures with removal votes and the mode's final-removal rule (§11.1), shared view restrictions (§8.4), digest exchange, desync bundles and the casual desync policy (§9), and the pacing state table (§4.4). | Mixed-platform battles finish on a LAN and through the hosted relay; hostile commands are refused; §11.1's tests pass in every reserved mode; a seeded desync in a three-seat battle leaves two seats playing; impaired-network and CPU-stall runs meet budgets declared before acceptance. |
 | **M7 Public service** | Room list, hardened rooms and queues, seat credentials and reconnect, measured fast-forward rejoin, delayed spectators and controlled archives. | Public play plus duplicate/half-open reconnect, slow-reader, digest-withholding and embargo-bypass tests pass; rejoin is advertised only within measured limits. |
 | **M8 Exact snapshots and recovery** | Full world-state readers, the controller-restart event, checkpoint transfer and continuation (§9.1, §11.3). | Byte-identical round trips and matching long continuations, computers restarted at the snapshot tick on every replica; malformed snapshots refused; late-game rejoin within a declared budget. |
@@ -5693,10 +5759,12 @@ into the private `nanolathe-relay` repository with the upstream revision and
 source-file digests; the engine tree stays the source of truth for protocol
 code. It holds the MIT license, a Linux/amd64 multi-stage Dockerfile whose
 static non-root image contains only the relay, the wire package and the
-server command (no assets or simulation), CI, deployment instructions and
-the App Platform spec `deploy/relay/.do/app.yaml`: one always-running
-512 MiB instance with `GOMEMLIMIT=384MiB`, autodeploy off, the relay on
-`:8080` and the platform health check on `:8081`. A restart or redeploy ends
+server command (no assets or simulation), CI and deployment instructions.
+The App Platform app's settings live in the platform, not in the repository:
+one always-running 512 MiB instance serving the relay on `:8080`, deployed
+on every push to the relay repository's main branch. The image defaults to
+`GOMEMLIMIT=384MiB` and `GOMAXPROCS=1`, which the app does not override, and
+the app configures no HTTP health check. A restart or redeploy ends
 active rooms; there is no cross-instance room lookup, database, autoscaling
 or reconnect. The custom hostname `relay.nanolathe.gg` needs both its DNS
 CNAME and its registration on the app before App Platform issues the
@@ -5710,10 +5778,14 @@ Create opens a lobby at once; players join with its code; the host adjusts
 the settings while everyone picks a team, side and colour; when every player
 is ready the host starts the match. The lobby's rules:
 
-- **Rooms hold up to 10 players.** A skirmish can start with 2 up to the
-  most start positions any of the map's network schemas offers; Survival
-  with 2–3 survivors, ignoring start positions (DESIGN_SURVIVAL). Gameplay
-  is Modern.
+- **Rooms hold up to 10 players, computers included.** A skirmish can
+  start with 2 up to the most start positions any of the map's network
+  schemas offers; Survival with 2–3 survivors, ignoring start positions
+  (DESIGN_SURVIVAL). At least two players are human. Gameplay is Modern.
+- **The host may add computer players** (§6.6), Classic or Modern, each
+  with its own difficulty, side, team and colour. They are rows of the base
+  configuration, hosted by seat 0, and every seat composes them after its
+  present humans.
 - **The host's settings stay open until Start.** The host chooses the game
   type (Skirmish or Survival), the map, Survival's pace and its no-air and
   no-naval options, and the standard skirmish options the configuration
@@ -5744,7 +5816,8 @@ is ready the host starts the match. The lobby's rules:
   side or colour change, join or leave clears every seat's ready, because
   it changes the configuration every seat composes. Pressing Ready composes
   the final configuration — the base configuration plus the present seats
-  in ascending seat order as slots, with their teams, sides and colours —
+  in ascending seat order as slots, with their teams, sides and colours,
+  then the base's computers —
   prepares it, runs the rehearsal (§16.7) and reports both digests.
 - **The host draws the seed pair** with `crypto/rand` when it creates the
   room; the configuration digest covers it (§8.3).
@@ -5880,6 +5953,19 @@ sides' names in index order.
   colours. The Survival attacker has no row and holds none: it takes the
   first colour no survivor holds when the battle is composed, so with the
   default 0, 1, 2 it is not red unless a survivor moves off red.
+- **Computers**: the host adds one from the Add computer row after the
+  last row, shown while one more fits with room left for two humans — at
+  most eight in a skirmish and one in Survival. A new computer plays the
+  Modern AI at the host's skirmish difficulty, with no team and the lowest
+  free colour; the host edits its kind, difficulty, side, team and colour
+  with the row's controls, and clicking its name steps Modern AI, Classic
+  AI, removed. Each change replaces the base configuration and clears
+  readiness like any host setting; guests see the rows read-only. The
+  base's two placeholder humans take the two lowest colours no computer
+  holds, so the base stores each computer's colour as the host chose it,
+  and the lobby shows the colour composition will give it. Ready and Start
+  count computers against the map's start positions, ten players and
+  Survival's three survivors, and the one-team check includes them.
 - **Started**: the client enters its prepared battle and drives it from the
   lobby's battle client. A defeated player sees their result and may leave
   while the others play on. When the battle ends or the connection fails,
@@ -5913,7 +5999,10 @@ preferences and presentation, and of host time; no wall clock enters it.
 Two honest clients of the same simulation always report the same digest.
 
 **Bound.** It runs within about a second for a ten-player map and for
-Survival up to its first wave, so readiness stays prompt.
+Survival up to its first wave, computers included, so readiness stays
+prompt: composing, rehearsing and readying a two-human, two-computer
+skirmish takes about half a second, and Survival with a computer survivor
+about 0.8 s.
 
 **What it covers.** Honest version mismatches: builds whose simulations
 differ in a way the script reaches, which the identities cannot see. This
