@@ -360,6 +360,7 @@ func TestHostedHandshakeBoundsExpiryProgressAndClose(t *testing.T) {
 	}
 	awaitHostedCapacity(t, s, 0, 0)
 	clients, _ := hostedTestPair(t, s)
+	readLocalPair(t, clients) // both direct readers consume Started
 	if err := hostedReadError(t, clients[0]); err == nil || !strings.Contains(err.Error(), "execution progress") {
 		t.Fatalf("stalled room did not expire: %v", err)
 	}
@@ -588,6 +589,22 @@ func TestHostedSlowReaderDoesNotBlockOtherRoom(t *testing.T) {
 		t.Fatalf("pending grant fence: %v", err)
 	}
 	c1, _ := dialHostedTest(t, s, code, 1)
+	// Consume only through Started, then stop reading the large grant. The
+	// other direct reader has not started yet, so the barrier keeps this
+	// fixture's receive window empty until both markers arrive.
+	for {
+		body, err := c0.readFrame(localMaxGrantFrame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body[0] == hostedStartedMessage {
+			c0.started.Store(true)
+			break
+		}
+	}
+	if err := c0.OpeningReady(); err != nil {
+		t.Fatal(err)
+	}
 	other, _ := hostedTestPair(t, s)
 	g := readLocalPair(t, other)
 	ackLocalPair(t, other, g.Tick, [32]byte{}, true)
@@ -624,7 +641,7 @@ func TestHostedVersionAndHelloFraming(t *testing.T) {
 	// version-5 hello is still served, in its own version (§12.2).
 	old := bytes.Clone(body)
 	old[1] = 1
-	if _, err := decodeHostedHello(old); err == nil || !strings.Contains(err.Error(), "version 5 or 6; this client sent version 1") {
+	if _, err := decodeHostedHello(old); err == nil || !strings.Contains(err.Error(), "version 5, 6 or 7; this client sent version 1") {
 		t.Fatalf("version mismatch: %v", err)
 	}
 	old[1] = 5
@@ -727,10 +744,12 @@ func TestHostedCancellationClosesPendingHandshake(t *testing.T) {
 	}
 }
 
-func TestHostedClientIdleBoundOnlyAfterGrants(t *testing.T) {
+func TestHostedClientIdleBoundAfterStarted(t *testing.T) {
 	// Before the battle a creator may wait for its peer; the relay's own
 	// waiting deadline reports that, not the client's idle bound.
-	s := listenHostedTest(t, HostedConfig{InsecureLoopback: true}, hostedTimeouts{10 * time.Second, 200 * time.Millisecond, 5 * time.Second, 10 * time.Second, websocketPingInterval, time.Second})
+	timeouts := hostedDefaultTimeouts
+	timeouts.waiting = 200 * time.Millisecond
+	s := listenHostedTest(t, HostedConfig{InsecureLoopback: true}, timeouts)
 	creator, _ := dialHostedTest(t, s, "", 0)
 	creator.idle = 20 * time.Millisecond
 	if _, err := creator.ReadGrant(); err == nil || !strings.Contains(err.Error(), "room wait") {
@@ -741,7 +760,8 @@ func TestHostedClientIdleBoundOnlyAfterGrants(t *testing.T) {
 	s = listenHostedTest(t, HostedConfig{InsecureLoopback: true}, hostedDefaultTimeouts)
 	clients, _ := hostedTestPair(t, s)
 	clients[0].idle = 150 * time.Millisecond
-	for tick := uint32(1); tick <= hostedMaxAhead; tick++ {
+	readLocalPair(t, clients)
+	for tick := uint32(2); tick <= hostedMaxAhead; tick++ {
 		if g, err := clients[0].ReadGrant(); err != nil || g.Tick != tick {
 			t.Fatalf("grant %d: %+v %v", tick, g, err)
 		}

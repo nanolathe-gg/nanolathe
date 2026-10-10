@@ -36,11 +36,19 @@ func TestArrivalChangesOnlyMatchingDisplayedUnitAndRetires(t *testing.T) {
 	}
 	c.SetEnhanced(true)
 	c.SetArrivalSeconds(drawlist.ArrivalImpactSeconds)
+	if c.ArrivalHolding() || !c.ArrivalActive() {
+		t.Fatal("landing must release input while effects remain active")
+	}
 	if !reflect.DeepEqual(c.arrivalUnit(original), original) {
 		t.Fatal("landing did not restore exact committed pose")
 	}
 	if !reflect.DeepEqual(buffer.Current().Units[0], original) {
 		t.Fatal("intro mutated committed unit")
+	}
+	c.SetFocused(true)
+	c.StepArrivalCooling(0.02)
+	if c.ArrivalSeconds() <= drawlist.ArrivalImpactSeconds || !c.ArrivalActive() {
+		t.Fatal("post-landing effect clock did not advance during gameplay")
 	}
 	c.SetSnapshot(frame.NewBuffer())
 	if c.ArrivalActive() {

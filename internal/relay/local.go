@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nanolathe-gg/nanolathe/internal/netproto"
@@ -340,12 +341,17 @@ func (r *LocalRelay) run() {
 }
 
 // LocalClient supports one ReadGrant reader, concurrent serialized Submit and
-// Acknowledge writers, and Close from any goroutine (DESIGN_MULTIPLAYER §16.4.2).
+// Acknowledge and OpeningReady writers, and Close from any goroutine
+// (DESIGN_MULTIPLAYER §16.4.2, §16.5.2).
 type LocalClient struct {
 	conn          net.Conn
 	idle          time.Duration // zero for the loopback prototype
 	maxCommand    int           // the hosted relay's smaller per-command bound, or zero
 	writeMu       sync.Mutex
+	version       uint16      // zero for the loopback prototype
+	started       atomic.Bool // Started consumed by the lobby or grant reader
+	autoOpening   bool        // direct streams have no presentation opening
+	openingReady  bool        // writeMu: marker already sent
 	sequence      uint64
 	readTick      uint32
 	readPosition  uint64
@@ -426,8 +432,8 @@ func (c *LocalClient) ReadGrant() (LocalGrant, error) {
 	}
 	var body []byte
 	for {
-		if c.idle > 0 && c.readTick > 0 {
-			// Once grants flow, the relay sends one, a report or a failure
+		if c.idle > 0 && c.started.Load() {
+			// After Started, the relay sends a grant, report or failure
 			// well within this bound; silence means the route is gone.
 			if err := c.conn.SetReadDeadline(time.Now().Add(c.idle)); err != nil {
 				return LocalGrant{}, err
@@ -435,7 +441,7 @@ func (c *LocalClient) ReadGrant() (LocalGrant, error) {
 		}
 		var err error
 		if body, err = c.readFrame(localMaxGrantFrame); err != nil {
-			if c.idle > 0 && c.readTick > 0 && errors.Is(err, os.ErrDeadlineExceeded) {
+			if c.idle > 0 && c.started.Load() && errors.Is(err, os.ErrDeadlineExceeded) {
 				return LocalGrant{}, fmt.Errorf("%w: %w", hostedError("relay connection", fmt.Sprintf("relay traffic within %s", c.idle)), err)
 			}
 			return LocalGrant{}, err
@@ -449,7 +455,24 @@ func (c *LocalClient) ReadGrant() (LocalGrant, error) {
 		}
 		// A hosted room without a lobby still reports its state and Started
 		// before the first grant (§16.6.1).
-		if c.readTick == 0 && (body[0] == hostedLobbyMessage || body[0] == hostedStartedMessage || body[0] == hostedConfigurationMessage) {
+		if c.readTick == 0 && body[0] == hostedStartedMessage {
+			r := netproto.NewReader(body, hostedError)
+			r.U8()
+			if r.U8() >= HostedMaxSeats {
+				r.Abort(hostedError("Started slot", "a slot below 10"))
+			}
+			if err := r.End(); err != nil {
+				return LocalGrant{}, err
+			}
+			c.started.Store(true)
+			if c.autoOpening {
+				if err := c.OpeningReady(); err != nil {
+					return LocalGrant{}, err
+				}
+			}
+			continue
+		}
+		if c.readTick == 0 && (body[0] == hostedLobbyMessage || body[0] == hostedConfigurationMessage) {
 			continue
 		}
 		break
@@ -490,6 +513,32 @@ func (c *LocalClient) ReadGrant() (LocalGrant, error) {
 	default:
 		return LocalGrant{}, localError("server message", "grant, refusal, failure or stream completion")
 	}
+}
+
+// OpeningReady reports that this seat finished its local presentation opening.
+// Hosted version-7 clients may call it after Started; it sends one marker,
+// serialized with Submit and Acknowledge. Earlier protocols and the loopback
+// prototype need no marker (DESIGN_MULTIPLAYER §16.5.2, §16.6.1).
+func (c *LocalClient) OpeningReady() error {
+	if c == nil {
+		return localError("client", "a connected client")
+	}
+	if c.version < hostedOpeningVersion {
+		return nil
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.openingReady {
+		return nil
+	}
+	if !c.started.Load() {
+		return hostedError("opening readiness", "OpeningReady after Started")
+	}
+	if err := c.writeFrame([]byte{hostedOpeningReadyMessage}); err != nil {
+		return err
+	}
+	c.openingReady = true
+	return nil
 }
 
 // writeMessage sends one envelope, serialized with Submit and Acknowledge.

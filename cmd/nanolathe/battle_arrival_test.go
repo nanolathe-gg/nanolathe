@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
@@ -19,6 +20,63 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
+
+// The relay marker follows presentation readiness, independently of local
+// effects continuing after landing (DESIGN_MULTIPLAYER §16.6.1).
+func TestOnlineOpeningReadinessAtLandingAndFailure(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		b, _ := localBatchFixture(t)
+		cl := &client.Client{}
+		cl.SetFocused(true)
+		cl.StartArrival(frame.UnitView{Slot: 1})
+		driver := &testLocalBattleDriver{}
+		calls := 0
+		b.multiplayer = &battleMultiplayer{driver: driver, openingReady: func() error {
+			calls++
+			if failure {
+				return errors.New("opening connection lost")
+			}
+			return nil
+		}}
+		b.pumpLocalMultiplayer(cl)
+		cl.SetArrivalSeconds(drawlist.ArrivalImpactSeconds - 0.001)
+		b.pumpLocalMultiplayer(cl)
+		if calls != 0 {
+			t.Fatal("readiness sent before landing")
+		}
+		cl.SetArrivalSeconds(drawlist.ArrivalImpactSeconds)
+		b.pumpLocalMultiplayer(cl)
+		b.pumpLocalMultiplayer(cl)
+		if calls != 1 {
+			t.Fatalf("readiness calls = %d", calls)
+		}
+		if failure {
+			if b.multiplayer.failure == nil || driver.closes != 1 || cl.ArrivalActive() {
+				t.Fatal("failed opening kept its connection or held the interface")
+			}
+		} else if !b.multiplayer.openingSent || !cl.ArrivalActive() {
+			t.Fatal("landing omitted readiness or retired remaining effects")
+		}
+	}
+}
+
+func TestOnlineOpeningDisabledAndBackgroundWait(t *testing.T) {
+	b, _ := localBatchFixture(t)
+	cl := &client.Client{}
+	cl.StartArrival(frame.UnitView{Slot: 1})
+	marker := 0
+	b.multiplayer = &battleMultiplayer{driver: &testLocalBattleDriver{}, openingReady: func() error { marker++; return nil }}
+	b.pumpBackground(cl)
+	if marker != 0 || cl.ArrivalSeconds() != 0 {
+		t.Fatal("hidden page skipped its unseen opening")
+	}
+	cl.ClearArrival()
+	b.pumpBackground(cl)
+	b.pumpBackground(cl)
+	if marker != 1 {
+		t.Fatal("disabled intro did not ready exactly once")
+	}
+}
 
 // Authored opening policy (GPU §36): input and the authoritative clock cannot
 // advance during the opening, and its elapsed time cannot become tick debt.
@@ -45,10 +103,10 @@ func TestArrivalHoldsGameplayAndRebasesHandoff(t *testing.T) {
 	if !cl.ArrivalActive() {
 		t.Fatal("intro ended before impact")
 	}
-	for i := 0; i < 200 && cl.ArrivalActive(); i++ {
+	for i := 0; i < 200 && cl.ArrivalHolding(); i++ {
 		b.viewerStep(1.0/60, cl)
 	}
-	if cl.ArrivalActive() || state.GlobalTick != before.GlobalTick {
+	if cl.ArrivalHolding() || !cl.ArrivalActive() || cl.ArrivalSeconds() >= drawlist.ArrivalDurationSeconds || state.GlobalTick != before.GlobalTick {
 		t.Fatal("handoff advanced simulation or never completed")
 	}
 	if state.ScaledAnchor != 300 {
@@ -56,6 +114,14 @@ func TestArrivalHoldsGameplayAndRebasesHandoff(t *testing.T) {
 	}
 	if ticks := state.AdvanceSP(301); ticks != 1 {
 		t.Fatalf("first gameplay budget = %d; intro produced catch-up debt", ticks)
+	}
+	for i := 0; i < 60 && cl.ArrivalActive(); i++ {
+		if b.stepArrival(1.0/60, cl) {
+			t.Fatal("impact tail held gameplay again")
+		}
+	}
+	if cl.ArrivalActive() || state.ScaledAnchor != 301 {
+		t.Fatal("impact tail failed to retire or rebased the gameplay clock")
 	}
 }
 

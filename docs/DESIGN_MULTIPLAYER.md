@@ -1872,19 +1872,18 @@ acknowledgements and checksums.
 
 ### 12.2 Messages
 
-The hosted protocol is **version 6**; §16.5.1–§16.5.2 and §16.6.1 hold its
+The hosted protocol is **version 7**; §16.5.1–§16.5.2 and §16.6.1 hold its
 rules. Messages are bounded, length-prefixed binary frames in `netproto`
 primitives, carried over TLS or WebSocket (§12.3).
 
-**Versions.** The relay serves versions 5 and 6 in the same rooms. It
-accepts a Hello or a Describe of either, records the version each seat's
-Hello spoke and answers that seat's Welcome in it; a Description is the
-same in both. Only version-6 seats receive Progress, so a version-5 seat
-receives exactly the version-5 stream. A Hello or Describe of any other
-version is refused naming the served versions and the client's. A client
-speaks version 6 and refuses a Welcome in any other version, naming both;
-against a version-5 relay it therefore receives that relay's version
-refusal.
+**Versions.** The relay serves versions 5, 6 and 7 in the same rooms. It
+records each seat’s Hello version and answers its Welcome in that version;
+a Description is the same in all three. Versions 6 and 7 receive Progress,
+so version 5 receives its existing stream. Version 7 adds OpeningReady;
+versions 5 and 6 are implicitly opening-ready. Other versions are refused
+naming the served versions and the client’s. A client speaks version 7 and
+refuses a Welcome in another version. The relay must be upgraded before
+version-7 clients connect; a relay restart ends its live rooms (§12.5).
 
 | Direction | Message | Content |
 |---|---|---|
@@ -1894,15 +1893,16 @@ refusal.
 | client → relay | Configuration | from the host before Start, a replacement base configuration |
 | client → relay | Ready | the ready flag, and when set the seat's configuration-identity digest and rehearsal digest (§16.7) |
 | client → relay | Start | from the host seat only |
+| client → relay | OpeningReady | version 7, after Started: no payload; the sender’s local opening is ready for gameplay (§16.6.1) |
 | client → relay | Submit | the client sequence and an opaque command payload (§4.2, §7.4) |
 | client → relay | Acknowledge | the tick executed, the unit checksum at every 30th tick, the battle-ended bit and the seat-final bit |
 | relay → client | Welcome | the room code and the assigned seat |
 | relay → client | Description | the room's base configuration bytes and size |
 | relay → client | Lobby state | the room size; per seat whether it is present and ready, its team, side and colour; and a mismatch bit when every present seat is ready but their digests differ |
 | relay → client | Configuration | the room's latest base configuration, to each joiner and after every host change |
-| relay → client | Started | the match has started, with the sender's slot; grants follow |
+| relay → client | Started | the frozen match’s local opening may start, with the sender’s slot; grants wait for every opening-ready seat |
 | relay → client | Grant | a sealed tick and its commands `{seat, sequence, position, payload}` |
-| relay → client | Progress | version 6 only, after Started: the last tick compared across playing seats, the newest sealed tick, and per slot whether it still plays, whether its result is final, its last acknowledged tick and the relay's ping round trip (§16.5.2) |
+| relay → client | Progress | versions 6 and 7, after Started: the last tick compared across playing seats, the newest sealed tick, and per slot whether it still plays, whether its result is final, its last acknowledged tick and the relay's ping round trip (§16.5.2) |
 | relay → client | Refused, Failed, Done | a refused hello, join, description or command, with its reason; a room failure with its reason; explicit normal completion |
 
 **Later messages:** a resume with seat credential and connection epoch
@@ -5605,9 +5605,9 @@ lists, computer seats, reconnect and removal votes are later work.
 
 `internal/relay` reuses the loopback relay's grant, command and
 acknowledgement payloads and identity comparison, and adds the hosted
-handshake and lobby (§16.6.1). The hosted protocol is version 6, and the
-relay also serves version-5 seats (§12.2); a hello of another version is
-refused naming the served versions and the client's.
+handshake and lobby (§16.6.1). The hosted protocol is version 7, and the
+relay also serves version-5 and version-6 seats (§12.2); a hello of another
+version is refused naming the served versions and the client's.
 
 ```go
 type HostedConfig struct {
@@ -5703,8 +5703,9 @@ frame.
 
 #### 16.5.2 Continuous grants and client playout
 
-**Relay pacing.** After Started a room seals at most 30 ticks a second
-without waiting to acknowledge every tick. Seals keep a 30 Hz phase: a
+**Relay pacing.** After every seat is opening-ready (§16.6.1), a room seals
+at most 30 ticks a second without waiting to acknowledge every tick. Seals
+keep a 30 Hz phase: a
 timer that wakes late does not delay the next seal, and only a gap of a
 whole interval or more, such as a wait at the lead bound, restarts the
 phase without a burst. Only released stream positions are sealed. A room
@@ -5722,8 +5723,8 @@ are drained without running any tick after the shared terminal state. A
 discrepancy fails the room instead of awarding a result.
 
 **Progress report.** After Started the relay sends each playing version-6
-seat a Progress message (§12.2) about once a second, and at once when a
-seat leaves or its result becomes final. It carries the agreed tick — the
+or version-7 seat a Progress message (§12.2) about once a second, and at once
+when a seat leaves or its result becomes final. It carries the agreed tick — the
 last tick whose ended bits, and at every 30th tick unit checksums, the
 relay has compared across every playing seat — the newest tick it had
 sealed, against which each seat's lag is measured, and per slot whether it
@@ -5969,7 +5970,19 @@ The relay treats configurations as opaque bytes and interprets no gameplay.
   when at least two seats are present, all of them ready, with equal
   digests; otherwise the relay repeats the lobby state. **Started** then
   goes to every seat with its slot, the rank of its seat among the present
-  seats, before the first grant; grants stamp commands with slots.
+  seats, before the local opening; grants stamp commands with slots.
+- **OpeningReady** (version-7 client to relay, after Started): a message
+  with no payload, sent once when the local opening allows gameplay. The
+  relay seals no grant until every human slot is opening-ready; computer
+  players need no marker. Versions 5 and 6 are implicitly ready. Duplicates
+  are harmless; a marker before Started, from a legacy seat, or with extra
+  bytes fails the room. The 30-minute room-wait deadline is restarted for
+  the opening, and regular Progress reports continue with sealed tick zero.
+  Only when all seats are ready does the ten-second execution-progress
+  deadline begin, from a fresh host pacing anchor, without accumulated tick
+  debt. Any unfinished seat’s disconnect fails the room. This is
+  user-authorized Nanolathe presentation/transport policy (2026-10-09),
+  available in every gameplay mode, not a retail mechanic or a tick input.
 - **During the match** acknowledgements carry the battle-ended bit and the
   seat-final bit. The relay compares every playing seat's checksum at the
   same tick and runs the terminal handshake across all of them. A seat that
@@ -5994,7 +6007,25 @@ and Started, with the local slot once started — never blocking),
 `SetSide(side)`, `SetColor(color)` (below `HostedColors`, 10),
 `SetConfiguration(config)` (host only),
 `SetReady(ready, identity, rehearsal)`, `Start()` (seat 0 only), `Battle()` (the battle client once
-Started, which then owns the connection) and `Close()`. `address` is
+Started, which then owns the connection) and `Close()`. The returned
+`*LocalClient` has `OpeningReady() error`, serialized with command and
+acknowledgement writes and idempotent after a successful send. The loopback
+prototype treats it as a no-op. Direct `DialHosted`/`DialHostedWebSocket`
+clients, which have no presentation host, automatically send it when their
+grant reader consumes Started; every seat’s reader must be running. The
+online replay wrapper forwards it and records a failed send as a transport
+failure, without adding a replay entry. The shell captures the callback after
+recording and before measurement, prepares the device and publishes the
+tick-zero opening, then sends readiness
+at the local commander’s ground contact (1.23 seconds), the scene-only reveal
+boundary, or immediately if its renderer/preference omits the opening. Input
+can issue queued commands after that local handoff while other seats finish;
+no command executes until the shared barrier releases tick one. Escape skips
+only the local opening and focus loss holds it (DESIGN_GPU_RENDERER §36).
+A hidden browser page continues processing connection failures, but does not
+mark an unseen opening ready. Opening readiness is host state, omitted from
+replay streams and authoritative checksums; post-landing effects continue
+while gameplay runs. `address` is
 `host:port` for TLS or a `wss://host/relay` URL, as for `--relay-address`.
 
 The session's lobby helpers: `session.OnlineMatchSetup{Survival, MapName,
@@ -6137,6 +6168,12 @@ checksum, which stops the match.
   playing both seats of a hosted match under Node's WebSocket against a
   native relay, with its deadlines, refusals and measured round trips; and
   a deterministic lockstep test modelling the window host at 20–240 Hz.
+- **Opening.** No grant with only one ready seat, even beyond the execution
+  progress bound; all ready releases tick one in command order. Duplicate,
+  premature and malformed readiness, disconnect and opening expiry; legacy
+  implicit readiness, direct-dial readiness and browser clients; host readiness
+  only at landing, disabled opening and failure cleanup; two retail sessions
+  held at tick zero through unequal local openings, followed by matching ticks.
 - **Lobby.** Relay tests for the lobby states, refusals, leaving, Describe,
   the protocol version, the readiness digests and the mismatch bit; session
   tests that field 12 is admitted online, applied to both seats' catalog

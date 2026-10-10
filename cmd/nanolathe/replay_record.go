@@ -438,12 +438,28 @@ func (b *battleSession) finishReplayRecording() {
 // shared end, room failed after a transport error, left otherwise.
 type onlineReplayClient struct {
 	*replay.OnlineRecorder
-	rec *replayRecording
+	rec          *replayRecording
+	openingReady func() error
 
 	mu     sync.Mutex
 	acked  uint32
 	ended  bool
 	failed bool
+}
+
+// OpeningReady forwards the presentation barrier without recording an entry.
+// A failed marker is a transport failure just like a failed acknowledgment.
+func (c *onlineReplayClient) OpeningReady() error {
+	if c.openingReady == nil {
+		return nil
+	}
+	err := c.openingReady()
+	if err != nil {
+		c.mu.Lock()
+		c.failed = true
+		c.mu.Unlock()
+	}
+	return err
 }
 
 // ReadGrant notes a transport failure; the relay's explicit completion is
@@ -532,6 +548,9 @@ func startOnlineReplay(target replayTarget, cs *contentSet, sess *session.Sessio
 		return nil, &replaySkip{reason: err.Error()}
 	}
 	client := &onlineReplayClient{OnlineRecorder: recorder, rec: rec}
+	if opening, ok := conn.(interface{ OpeningReady() error }); ok {
+		client.openingReady = opening.OpeningReady
+	}
 	rec.ending = client.ending
 	if reporter, ok := conn.(onlineReporter); ok {
 		return reportingOnlineReplayClient{onlineReplayClient: client, reporter: reporter}, nil

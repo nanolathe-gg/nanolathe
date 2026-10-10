@@ -51,12 +51,16 @@ const (
 	// hostedProgressMessage is the relay's match progress report, sent only
 	// to seats that spoke version 6 or later (§16.5.2).
 	hostedProgressMessage = hostedColorMessage + 1
+	// A version-7 seat has finished its local opening after Started. Grants
+	// wait for every seat's marker (DESIGN_MULTIPLAYER §16.5.2, §16.6.1).
+	hostedOpeningReadyMessage = hostedProgressMessage + 1
 	// hostedVersion is the protocol this build's clients speak; the relay
 	// still serves seats that speak hostedMinVersion, each in its own
 	// version, in the same rooms (§12.2).
-	hostedVersion         = 6
+	hostedVersion         = 7
 	hostedMinVersion      = 5
 	hostedProgressVersion = 6
+	hostedOpeningVersion  = 7
 	hostedMaxTeam         = 5
 	hostedCodeLength      = 6
 	// hostedAnySeat is a joiner's hello seat: the relay assigns the lowest
@@ -89,14 +93,19 @@ const (
 // These host deadlines are policy, not simulation time. Keeping them together
 // also lets socket tests exercise expiry without waiting minutes (§16.5.1–2).
 type hostedTimeouts struct {
-	handshake, waiting, write, progress time.Duration
+	handshake, waiting, opening, write, progress time.Duration
 	// ping is the WebSocket keepalive interval; report the interval between
 	// a running match's progress reports.
 	ping, report time.Duration
 }
 
-// A lobby may wait 30 minutes for both seats to start (§16.6).
-var hostedDefaultTimeouts = hostedTimeouts{10 * time.Second, 30 * time.Minute, 5 * time.Second, 10 * time.Second, websocketPingInterval, time.Second}
+// A lobby and, after Started, an unfinished opening each have a 30-minute
+// bound (DESIGN_MULTIPLAYER §16.5.1–2, §16.6.1).
+var hostedDefaultTimeouts = hostedTimeouts{
+	handshake: 10 * time.Second, waiting: 30 * time.Minute, opening: 30 * time.Minute,
+	write: 5 * time.Second, progress: 10 * time.Second,
+	ping: websocketPingInterval, report: time.Second,
+}
 
 // hostedClientIdle bounds a running client's wait for a relay message. It
 // exceeds the relay's ten-second progress abort, and replaces TCP keepalive's
@@ -360,7 +369,7 @@ func (r *hostedRoom) free() int {
 
 // hostedVersionError is the relay's refusal of a version it does not serve.
 func hostedVersionError(sent uint16) error {
-	return hostedError("handshake", fmt.Sprintf("hosted protocol version %d or %d; this client sent version %d", hostedMinVersion, hostedVersion, sent))
+	return hostedError("handshake", fmt.Sprintf("hosted protocol version 5, 6 or %d; this client sent version %d", hostedVersion, sent))
 }
 
 // hostedRelayVersionError is a client's refusal of a relay that answered in
@@ -581,6 +590,9 @@ func dialHostedStream(ctx context.Context, address, room string, hello LocalHell
 	if err != nil {
 		return nil, "", err
 	}
+	// A direct stream has no presentation host. Its reader reports opening
+	// readiness only after consuming Started, never during admission.
+	c.autoOpening = true
 	// A command-line seat runs no rehearsal; its zero digest matches only
 	// another command-line seat, and an auto-start room ignores digests.
 	if err := c.writeMessage(append([]byte{hostedReadyMessage, 1}, make([]byte, 64)...)); err != nil {
@@ -601,6 +613,7 @@ func hostedHandshake(ctx context.Context, version uint16, address string, option
 		return nil, "", 0, err
 	}
 	c := newHostedClient(conn)
+	c.version = version
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	code, assigned, err := exchangeHostedHello(conn, &c.traffic, version, body, room, seat)
 	stopped := stop()

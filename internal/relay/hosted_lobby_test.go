@@ -42,6 +42,18 @@ func openLobbyTest(t *testing.T, address, room string, seat uint8, config []byte
 	return l
 }
 
+// Existing transport tests have no local presentation opening to play.
+func openingBattleTest(t *testing.T, l *HostedLobby) *LocalClient {
+	t.Helper()
+	c := l.Battle()
+	if c != nil {
+		if err := c.OpeningReady(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return c
+}
+
 func describeTest(address, room string, options HostedDialOptions) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -100,7 +112,7 @@ func TestHostedLobbyDescribeReadyAndStart(t *testing.T) {
 			t.Fatal(err)
 		}
 		state, _ := awaitLobby(t, host, "both ready", func(s HostedLobbyState, err error) bool { return err == nil && s.Seats[0].Ready && s.Seats[1].Ready })
-		if state.Started || host.Battle() != nil {
+		if state.Started || openingBattleTest(t, host) != nil {
 			t.Fatal("an early start began the match")
 		}
 		if err := host.Start(); err != nil {
@@ -109,7 +121,7 @@ func TestHostedLobbyDescribeReadyAndStart(t *testing.T) {
 		for _, l := range []*HostedLobby{host, joiner} {
 			awaitLobby(t, l, "Started", func(s HostedLobbyState, err error) bool { return err == nil && s.Started })
 		}
-		battles := [2]*LocalClient{host.Battle(), joiner.Battle()}
+		battles := [2]*LocalClient{openingBattleTest(t, host), openingBattleTest(t, joiner)}
 		if battles[0] == nil || battles[1] == nil {
 			t.Fatal("started lobby did not hand over its connection")
 		}
@@ -188,7 +200,7 @@ func TestHostedCommandLineClientJoinsLobby(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitLobby(t, host, "Started", func(s HostedLobbyState, err error) bool { return err == nil && s.Started })
-	battle := host.Battle()
+	battle := openingBattleTest(t, host)
 	_ = battle.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if g := readLocalPair(t, [2]*LocalClient{battle, joiner}); g.Tick != 1 {
 		t.Fatalf("first grant: %+v", g)
@@ -344,7 +356,7 @@ func TestHostedLobbyThreeSeatsTeamsSidesSettingsAndSlots(t *testing.T) {
 		if int(st.Slot) != i {
 			t.Fatalf("seat %d got slot %d", l.Seat(), st.Slot)
 		}
-		battles[i] = l.Battle()
+		battles[i] = openingBattleTest(t, l)
 		_ = battles[i].conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	}
 	// Slot 2's order is stamped with its slot and reaches every slot.
@@ -475,7 +487,7 @@ func TestHostedDefeatedSeatMayLeave(t *testing.T) {
 	var battles [3]*LocalClient
 	for i, l := range []*HostedLobby{host, a, b} {
 		awaitLobby(t, l, "Started", func(s HostedLobbyState, err error) bool { return err == nil && s.Started })
-		battles[i] = l.Battle()
+		battles[i] = openingBattleTest(t, l)
 		_ = battles[i].conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	}
 	tick := uint32(0)

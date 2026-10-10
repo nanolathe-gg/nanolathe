@@ -13,6 +13,39 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
+// An explicitly retained tick-zero replay distinguishes a failed readiness
+// send from leaving the room, without inventing a gameplay pump (§16.6.1).
+func TestOnlineOpeningReplayFailure(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := startReplayRecording(replayTarget{path: filepath.Join(dir, "opening.nlreplay")},
+		fileTestHeader(replay.KindOnlineSkirmish, "Ashap Plateau", time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rec.abort)
+	recorder, err := replay.NewOnlineRecorder(rec.w, &fakeGrantStream{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := errors.New("opening connection lost")
+	client := reportingOnlineReplayClient{onlineReplayClient: &onlineReplayClient{
+		OnlineRecorder: recorder, rec: rec, openingReady: func() error { return lost },
+	}}
+	if err := client.OpeningReady(); !errors.Is(err, lost) {
+		t.Fatalf("opening error: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	list, err := listReplays(dir)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("opening replay listing: %v, %v", list, err)
+	}
+	if got := list[0]; got.Err != nil || got.End != replay.EndRoomFailed || got.FinalTick != 0 {
+		t.Fatalf("failed opening recorded as %+v", got)
+	}
+}
+
 // fileTestHeader is a header the Writer accepts; these tests never compose
 // its configuration, so its bytes are only opaque.
 func fileTestHeader(kind replay.Kind, mapName string, started time.Time) replay.Header {

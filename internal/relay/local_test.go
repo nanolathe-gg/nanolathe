@@ -62,18 +62,28 @@ func localTestPair(t *testing.T) (*LocalRelay, [2]*LocalClient) {
 
 func readLocalPair(t *testing.T, clients [2]*LocalClient) LocalGrant {
 	t.Helper()
-	a, err := clients[0].ReadGrant()
-	if err != nil {
-		t.Fatal(err)
+	// Hosted direct streams must both consume Started before either receives
+	// its first grant; each real seat has its own reader.
+	type result struct {
+		grant LocalGrant
+		err   error
 	}
-	b, err := clients[1].ReadGrant()
-	if err != nil {
-		t.Fatal(err)
+	var results [2]chan result
+	for i, c := range clients {
+		results[i] = make(chan result, 1)
+		go func() {
+			g, err := c.ReadGrant()
+			results[i] <- result{g, err}
+		}()
 	}
-	if !reflect.DeepEqual(a, b) {
-		t.Fatalf("replicas got different sealed grants: %+v / %+v", a, b)
+	a, b := <-results[0], <-results[1]
+	if a.err != nil || b.err != nil {
+		t.Fatalf("grant reads: %v / %v", a.err, b.err)
 	}
-	return a
+	if !reflect.DeepEqual(a.grant, b.grant) {
+		t.Fatalf("replicas got different sealed grants: %+v / %+v", a.grant, b.grant)
+	}
+	return a.grant
 }
 
 func ackLocalPair(t *testing.T, clients [2]*LocalClient, tick uint32, check [32]byte, end bool) {

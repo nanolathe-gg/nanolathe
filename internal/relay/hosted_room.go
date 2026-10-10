@@ -190,6 +190,8 @@ func (r *hostedRoom) run() {
 	deadline := time.NewTimer(r.server.timeouts.waiting)
 	defer deadline.Stop()
 	var started bool
+	var opening bool
+	var openingReady [HostedMaxSeats]bool // by slot; legacy seats are implicit
 	var configVersion uint32
 	stats := roomStats{created: r.created}
 
@@ -378,10 +380,30 @@ func (r *hostedRoom) run() {
 	}
 	arm := func() {
 		low, _ := progress.slowest()
-		if started && progress.playing() > 0 && ready == nil && progress.terminal == 0 && tick-low < hostedMaxAhead {
+		if started && !opening && progress.playing() > 0 && ready == nil && progress.terminal == 0 && tick-low < hostedMaxAhead {
 			seal.Reset(max(0, time.Until(lastSeal.Add(localTickInterval))))
 			ready = seal.C
 		}
+	}
+	// Finish the presentation barrier with a fresh execution-progress budget.
+	// No grant timer has run, so opening time creates no catch-up debt
+	// (DESIGN_MULTIPLAYER §16.5.2).
+	releaseOpening := func() {
+		if !opening {
+			return
+		}
+		for slot := range progress.n {
+			if !openingReady[slot] {
+				return
+			}
+		}
+		opening = false
+		now := time.Now()
+		for slot := range progress.n {
+			progress.last[slot] = now
+		}
+		deadline.Reset(r.server.timeouts.progress)
+		arm()
 	}
 	// begin starts the match: present seats become slots in ascending seat
 	// order, and each learns its slot before the first grant.
@@ -389,7 +411,7 @@ func (r *hostedRoom) run() {
 		r.server.mu.Lock()
 		r.started = true
 		r.server.mu.Unlock()
-		started = true
+		started, opening = true, true
 		stats.startedAt = time.Now()
 		r.server.recordStarted()
 		for i := range r.size {
@@ -398,6 +420,7 @@ func (r *hostedRoom) run() {
 				players[progress.n] = p
 				progress.active[progress.n] = true
 				progress.last[progress.n] = stats.startedAt
+				openingReady[progress.n] = p.version < hostedOpeningVersion
 				progress.n++
 			}
 		}
@@ -406,10 +429,10 @@ func (r *hostedRoom) run() {
 				return err
 			}
 		}
-		deadline.Reset(r.server.timeouts.progress)
+		deadline.Reset(r.server.timeouts.opening)
 		reports.Reset(r.server.timeouts.report)
 		reporting = reports.C
-		arm()
+		releaseOpening()
 		publish()
 		return nil
 	}
@@ -427,7 +450,9 @@ func (r *hostedRoom) run() {
 			finish(hostedError("server", "an open server"), finishServer)
 			return
 		case <-deadline.C:
-			if started {
+			if opening {
+				finish(hostedError("opening readiness", "every seat to finish its opening within 30 minutes"), finishExpired)
+			} else if started {
 				finish(hostedError("execution progress", "execution progress from every seat within ten seconds"), finishStalled)
 			} else {
 				finish(hostedError("room wait", "a started match within 30 minutes"), finishExpired)
@@ -553,6 +578,17 @@ func (r *hostedRoom) run() {
 			}
 			d := netproto.NewReader(e.body, hostedError)
 			switch kind := d.U8(); kind {
+			case hostedOpeningReadyMessage:
+				if err := d.End(); err != nil {
+					finish(err, finishProtocol)
+					return
+				}
+				if !started || p.version < hostedOpeningVersion {
+					finish(hostedError("opening readiness", "a version-7 OpeningReady after Started"), finishProtocol)
+					return
+				}
+				openingReady[p.slot] = true
+				releaseOpening() // a duplicate marker changes nothing
 			case hostedReadyMessage:
 				flag := d.Bool()
 				var identity, rehearsal [32]byte
@@ -735,8 +771,8 @@ func (r *hostedRoom) run() {
 					finish(err, finishProtocol)
 					return
 				}
-				if !started {
-					finish(hostedError("acknowledgment", "acknowledgments after the match starts"), finishProtocol)
+				if !started || opening {
+					finish(hostedError("acknowledgment", "acknowledgments after every seat finishes its opening"), finishProtocol)
 					return
 				}
 				now := time.Now()
@@ -769,7 +805,7 @@ func (r *hostedRoom) run() {
 				}
 				arm()
 			default:
-				finish(hostedError("client message", "ready, team, side, colour, configuration, start, submit or acknowledgment after hello"), finishProtocol)
+				finish(hostedError("client message", "ready, team, side, colour, configuration, start, opening-ready, submit or acknowledgment after hello"), finishProtocol)
 				return
 			}
 		}

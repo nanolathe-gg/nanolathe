@@ -201,14 +201,18 @@ func (l *HostedLobby) read() {
 			l.mu.Unlock()
 		case hostedStartedMessage:
 			slot := r.U8()
+			if slot >= HostedMaxSeats {
+				r.Abort(hostedError("Started slot", "a slot below 10"))
+			}
 			if err := r.End(); err != nil {
 				l.fail(err)
 				return
 			}
+			l.client.started.Store(true)
 			l.mu.Lock()
 			l.state.Started, l.state.Slot = true, slot
 			l.mu.Unlock()
-			return // grants follow; the battle client reads them
+			return // the battle client reads across the opening barrier into grants
 		case localRefusedMessage, localFailedMessage:
 			message := r.Text(localMaxErrorBytes)
 			if err := r.End(); err != nil {
@@ -324,7 +328,8 @@ func (l *HostedLobby) Start() error {
 
 // Battle returns the grant-stream client once Started, or nil before then.
 // The lobby no longer reads from the connection after it is returned, and
-// Close leaves that connection to the battle.
+// Close leaves that connection to the battle. The host calls OpeningReady
+// on the client when its local presentation opening finishes (§16.6.1).
 func (l *HostedLobby) Battle() *LocalClient {
 	l.mu.Lock()
 	started := l.state.Started && l.err == nil

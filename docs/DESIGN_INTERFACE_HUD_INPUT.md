@@ -4605,7 +4605,11 @@ returns to the chooser with its reason.
 
 Started enters the prepared battle at the slot the relay reports, which must
 be the slot this seat composed, through the paced lockstep driver, as the
-command-line play test does after its dial, with no opening arrival. A
+command-line play test does after its dial. Each seat then plays its enabled
+commander arrival (DESIGN_GPU_RENDERER §36); the relay waits for every human
+seat’s opening-ready marker before granting tick one (DESIGN_MULTIPLAYER
+§16.6.1). Readiness follows ground contact, without waiting for the impact
+tail or model cooling. A
 player's own result shows as soon as it is final, and a defeated player may
 leave while the others play on. Leaving the battle or its result returns to
 the chooser, which says whether the game ended, stopped (with the

@@ -7540,8 +7540,22 @@ holds gameplay input and the authoritative pump. Escape skips; losing focus
 holds presentation time. Its clock waits for the first submitted GPU frame,
 then holds a dim scene for 0.5 seconds before the 0.7-second map reveal. The
 commander overlaps its final quarter-second, with no intervening pause.
-Handoff rebases the host scheduler anchor so the intro
-cannot become accumulated tick debt. The ordinary pause mechanism is untouched.
+Gameplay hands off at ground contact (1.23 seconds), while the impact pass
+continues through 1.95 seconds and model heat continues cooling. Handoff
+rebases the host scheduler anchor so the intro cannot become accumulated tick
+debt. The ordinary pause mechanism is untouched.
+
+Online lobby battles use the same local opening and renderer/arrival preference
+in every gameplay mode. This is user-authorized presentation and transport
+policy (2026-10-09), not retail behavior: the relay grants no tick until every
+human seat reports opening-ready (DESIGN_MULTIPLAYER §16.6.1). A client reports
+at ground contact, at the scene-only reveal boundary, or immediately when its
+renderer/preference omits the opening. Escape skips only that client’s opening;
+focus loss holds its clock and keeps the relay waiting. Device preparation and
+first-frame submission still precede its clock. Once locally ready the player
+may issue orders or leave through the menu while another seat finishes; queued
+orders take effect only after the shared barrier releases tick one. The
+command-line transport probes have no presentation opening.
 
 `Client` stores only commander identity, position, and elapsed presentation
 seconds. The commander is hidden during the map reveal until 0.95 seconds,
@@ -7580,8 +7594,9 @@ The pass borrows the existing read surface and submits nothing when inactive.
 The falling commander starts hot, reusing wreck emission, nearby lighting and
 rising air distortion (§28) on outgoing model packets. A warm orange glow cools
 to the ordinary texture over four seconds after impact; the heat follows the
-same unit identity as it moves. Gameplay resumes at 1.95 seconds while cooling
-continues on a small presentation clock, frozen on pause or focus loss. The
+same unit identity as it moves. Gameplay resumes at 1.23 seconds while the
+remaining impact effects and cooling continue on a small presentation clock,
+frozen on pause or focus loss. The
 arrival uses both wreck parts, each under its own switch (§30): the orange glow
 and the light it gives follow **wreckGlow**, the rising air **wreckShimmer**. No texture is replaced
 and no additional model shader is needed. The shared diagnostics count this
@@ -7608,8 +7623,8 @@ impact, at 75% of the ordinary in-view cue gain and centred pan. The existing
 backend applies master mute and FX volume. Missing audio stays silent; Escape
 skips without playing the impact, and GPU redraws cannot retrigger it. No
 simulation sound event or RNG draw is introduced.
-There is no landing joint animation, terrain-specific impact treatment,
-or multiplayer start barrier in this version.
+There is no landing joint animation or terrain-specific impact treatment in
+this version.
 
 Verification locks clock/RNG preservation, handoff without catch-up, immutable
 poses and slot identity, speculative-record invalidation, one world transform,

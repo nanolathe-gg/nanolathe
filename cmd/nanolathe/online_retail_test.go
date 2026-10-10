@@ -15,6 +15,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/relay"
@@ -361,6 +362,69 @@ func TestOnlineOverlayCapture(t *testing.T) {
 // lobby with a mutator set and unit restrictions (§16.6.3, §16.7).
 func TestOnlineLobbyTwoClientsRetail(t *testing.T) {
 	onlineRetailMatch(t, 2, false, []uint8{0, 0}, 95)
+}
+
+// The real lobby transport stays at tick zero through unequal local openings.
+// Readiness survives the online replay and measurement wrappers (§16.6.1).
+func TestOnlineLobbyOpeningBarrierRetail(t *testing.T) {
+	shells := onlineRetailRoom(t, 2, false, []uint8{0, 0})
+	var clients [2]*client.Client
+	var before [2][32]byte
+	for i, g := range shells {
+		cl, err := client.New(client.Options{Buffer: g.battle.sess.Snapshot, Width: retailScreenW, Height: retailScreenH})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cl.Close() })
+		installBattleClient(cl, g.battle)
+		cl.SetFocused(true)
+		g.battle.beginBattleArrival(Options{Renderer: "modern", ArrivalSet: true, Arrival: true}, cl, false)
+		if !cl.ArrivalHolding() || !cl.ArrivalHasDrop() || g.battle.multiplayer.openingReady == nil {
+			t.Fatal("online entry omitted its commander opening or relay barrier")
+		}
+		clients[i] = cl
+		before[i] = g.battle.sess.UnitStateChecksum()
+	}
+	clients[0].SetArrivalSeconds(drawlist.ArrivalImpactSeconds)
+	// Seat 0 has landed; seat 1 has not presented a frame. Neither may tick.
+	end := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(end) {
+		for i, g := range shells {
+			g.battle.pumpLocalMultiplayer(clients[i])
+			if g.battle.multiplayer.failure != nil || g.battle.sess.Clock.GlobalTick != 0 || g.battle.sess.UnitStateChecksum() != before[i] {
+				t.Fatal("unfinished opening changed the battle or released a tick")
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !shells[0].battle.multiplayer.openingSent || shells[1].battle.multiplayer.openingSent {
+		t.Fatal("relay readiness ignored local landing")
+	}
+	clients[1].SetArrivalSeconds(drawlist.ArrivalImpactSeconds)
+	end = time.Now().Add(3 * time.Second)
+	for shells[0].battle.sess.Clock.GlobalTick == 0 || shells[1].battle.sess.Clock.GlobalTick == 0 {
+		for i, g := range shells {
+			// Stop at the first tick for an exact comparison of both seats.
+			if g.battle.sess.Clock.GlobalTick == 0 {
+				g.battle.pumpLocalMultiplayer(clients[i])
+			}
+			if g.battle.multiplayer.failure != nil {
+				t.Fatal(g.battle.multiplayer.failure)
+			}
+		}
+		if time.Now().After(end) {
+			t.Fatal("all landed clients did not release tick one")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if shells[0].battle.sess.UnitStateChecksum() != shells[1].battle.sess.UnitStateChecksum() {
+		t.Fatal("opening changed replica agreement")
+	}
+	for i, g := range shells {
+		if g.battle.stepArrival(0.02, clients[i]) || !clients[i].ArrivalActive() {
+			t.Fatal("impact tail held gameplay or disappeared at landing")
+		}
+	}
 }
 
 // Three players on teams of two and one, and two Survival survivors, through

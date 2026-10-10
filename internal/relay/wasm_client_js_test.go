@@ -91,6 +91,9 @@ func TestWasmSeats(t *testing.T) {
 		if seats[i] = l.Battle(); seats[i] == nil {
 			t.Fatal("started lobby did not hand over its connection")
 		}
+		if err := seats[i].OpeningReady(); err != nil {
+			t.Fatal(err)
+		}
 		t.Cleanup(func() { _ = seats[i].Close() })
 	}
 	if _, err := seats[1].Submit([]byte("browser order")); err != nil {

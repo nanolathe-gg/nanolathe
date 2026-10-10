@@ -69,7 +69,7 @@ func arrivalCommander(cur *frame.Frame, cat *content.Catalog) (frame.UnitView, b
 // This deliberately does not use retail pause, whose resume burst is real
 // behavior [01 §4.3]; the intro is outside that scheduler (GPU §36).
 func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
-	if !cl.ArrivalActive() {
+	if !cl.ArrivalHolding() {
 		cl.StepArrivalCooling(delta)
 		return false
 	}
@@ -90,7 +90,7 @@ func (b *battleSession) stepArrival(delta float64, cl *client.Client) bool {
 	if hasDrop && previous < drawlist.ArrivalImpactSeconds && seconds >= drawlist.ArrivalImpactSeconds && seconds < duration {
 		b.playArrivalImpact()
 	}
-	if !cl.ArrivalActive() && b.sess != nil && b.sess.Clock != nil {
+	if !cl.ArrivalHolding() && b.sess != nil && b.sess.Clock != nil {
 		if b.millisSource == nil {
 			b.millisSource = newMonotonicMillisSource()
 		}

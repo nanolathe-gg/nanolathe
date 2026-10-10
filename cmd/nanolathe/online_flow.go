@@ -607,9 +607,9 @@ func (g *gameShell) startOnlineBattle(state relay.HostedLobbyState) {
 }
 
 // enterOnlineBattle adopts a prepared online battle and drives it from conn,
-// as the command-line path does after its dial (startHostedMultiplayer). An
-// online battle has no opening arrival: the opening holds the pump, and
-// grants keep arriving (§16.4.2). The driver is made before the presentation
+// as the command-line path does after its dial (startHostedMultiplayer). The
+// relay waits for every seat's opening readiness before granting tick one
+// (§16.6.1). The driver is made before the presentation
 // so a failure closes the connection with nothing adopted.
 func (g *gameShell) enterOnlineBattle(p *onlinePrepared, conn lockstep.Client, code string, humans int) error {
 	if p == nil || p.sess == nil {
@@ -620,6 +620,10 @@ func (g *gameShell) enterOnlineBattle(p *onlinePrepared, conn lockstep.Client, c
 	// Every online seat records the stream it executes (DESIGN_MULTIPLAYER
 	// §10); a battle that cannot be recorded keeps conn as it is.
 	conn = g.recordOnlineReplay(p, conn)
+	var openingReady func() error
+	if c, ok := conn.(interface{ OpeningReady() error }); ok {
+		openingReady = c.OpeningReady
+	}
 	stats := newOnlineNetStats(conn, sess.LocalOwner, humans)
 	driver, err := lockstep.NewPacedDriver(sess, stats)
 	if err != nil {
@@ -641,11 +645,12 @@ func (g *gameShell) enterOnlineBattle(p *onlinePrepared, conn lockstep.Client, c
 	g.importedRetailBattle, g.lastBattleSurvival = false, false
 	g.pendingDetail = p.detail
 	g.commitBattleCandidate(battle)
-	battle.multiplayer = &battleMultiplayer{driver: driver, completed: driver.Completed, net: stats}
+	battle.multiplayer = &battleMultiplayer{driver: driver, completed: driver.Completed, net: stats, openingReady: openingReady}
 	battle.returnToMenu = g.returnFromOnlineBattle
 	battle.returnToSkirmish = g.returnFromOnlineBattle
 	if clPtr != nil {
 		clPtr.PrepareBattlePresentation()
+		battle.beginBattleArrival(g.opts, clPtr, false)
 	}
 	battle.onlineNotice(fmt.Sprintf("Online game %s: you are player %d of %d", code, sess.LocalOwner+1, humans))
 	return nil

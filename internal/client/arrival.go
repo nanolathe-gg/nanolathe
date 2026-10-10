@@ -59,7 +59,7 @@ func (c *Client) StartMapReveal() {
 	c.BumpPresentationEpoch()
 }
 
-// ArrivalDuration bounds input holding for the selected opening.
+// ArrivalDuration bounds the full-screen effects for the selected opening.
 func (c *Client) ArrivalDuration() float32 {
 	if c != nil && c.arrival.revealOnly {
 		return drawlist.ArrivalRevealSeconds
@@ -71,6 +71,18 @@ func (c *Client) ArrivalDuration() float32 {
 func (c *Client) ArrivalHasDrop() bool { return c != nil && !c.arrival.revealOnly }
 
 func (c *Client) ArrivalActive() bool { return c != nil && c.arrival.active }
+
+// ArrivalHolding releases gameplay when the commander touches ground. Impact
+// effects and heat continue on the presentation clock (GPU §36).
+func (c *Client) ArrivalHolding() bool {
+	if !c.ArrivalActive() {
+		return false
+	}
+	if c.arrival.revealOnly {
+		return c.arrival.seconds < drawlist.ArrivalRevealSeconds
+	}
+	return c.arrival.seconds < drawlist.ArrivalImpactSeconds
+}
 
 // MarkArrivalPresented starts the host's intro clock only after its first GPU
 // frame is submitted. Window creation must not consume the reveal (GPU §36).
@@ -153,10 +165,10 @@ func (c *Client) arrivalUnit(v frame.UnitView) frame.UnitView {
 	return v
 }
 
-// StepArrivalCooling keeps the hot model moving with gameplay after handoff.
-// This is a short presentation clock, frozen on pause/focus loss (GPU §36).
+// StepArrivalCooling advances the remaining impact effects and model heat
+// during gameplay, frozen on pause/focus loss (GPU §36).
 func (c *Client) StepArrivalCooling(delta float64) {
-	if c != nil && c.arrival.cooling && !c.arrival.active && c.IsFocused() && !c.PresentationPaused() && delta > 0 {
+	if c != nil && c.arrival.cooling && !c.ArrivalHolding() && c.IsFocused() && !c.PresentationPaused() && delta > 0 {
 		c.SetArrivalSeconds(c.arrival.seconds + float32(min(delta, 0.05)))
 	}
 }

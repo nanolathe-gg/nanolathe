@@ -36,6 +36,10 @@ type battleMultiplayer struct {
 	// dropped holds the presentation events of ticks a hidden page ran,
 	// between a background pump and the next (pumpBackground).
 	dropped []frame.EventView
+	// Opening readiness is captured after recording, before measurement.
+	// It changes relay pacing only, never a tick (DESIGN_MULTIPLAYER §16.6.1).
+	openingReady func() error
+	openingSent  bool
 }
 
 func (o Options) localMultiplayer() bool    { return o.LocalMPListen != "" || o.LocalMPJoin != "" }
@@ -236,6 +240,18 @@ func (b *battleSession) pumpLocalMultiplayer(cl *client.Client) {
 	// A browser page that stops presenting frames keeps pumping from its
 	// background step (online_browser_js.go); native hosts have none.
 	watchOnlineBackground(b.shell, cl)
+	if m := b.multiplayer; m.openingReady != nil && !m.openingSent && (cl == nil || !cl.ArrivalHolding()) {
+		if err := m.openingReady(); err != nil {
+			m.failure = err
+			m.close()
+			if cl != nil {
+				cl.ClearArrival()
+			}
+			b.onlineNotice("Multiplayer stopped: " + err.Error())
+			return
+		}
+		m.openingSent = true
+	}
 	advanced, err := b.multiplayer.driver.Pump()
 	b.multiplayer.net.observe(b.sess, time.Now())
 	for _, receipt := range b.sess.DrainCommandReceipts() {
@@ -246,6 +262,9 @@ func (b *battleSession) pumpLocalMultiplayer(cl *client.Client) {
 	if err != nil {
 		b.multiplayer.failure = err
 		b.multiplayer.close()
+		if cl != nil {
+			cl.ClearArrival()
+		}
 		b.onlineNotice("Multiplayer stopped: " + err.Error())
 	}
 	if advanced {

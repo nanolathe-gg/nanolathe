@@ -20,9 +20,13 @@ func TestHostedProgressReachesOnlyVersion6Seats(t *testing.T) {
 	s := listenWebSocketTest(t, HostedConfig{InsecureLoopback: true}, false, timeouts)
 	address := "ws://" + s.Addr() + "/relay"
 	options := HostedDialOptions{InsecureLoopback: true}
-	host := openSizedLobby(t, address, 3, []byte{1}, options)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	host, err := openHostedLobby(ctx, 6, address, "", localTestHello(0), []byte{1}, 3, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
 	// A version-5 seat is welcomed in version 5, and describes in it.
 	if d, err := describeVersion(ctx, address, host.Code(), 5); err != nil || d != hostedDescriptionMessage {
 		t.Fatalf("version-5 description: %d %v", d, err)
@@ -32,7 +36,11 @@ func TestHostedProgressReachesOnlyVersion6Seats(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = old.Close() })
-	leaver := openLobbyTest(t, address, host.Code(), 1, nil, options)
+	leaver, err := openHostedLobby(ctx, 6, address, host.Code(), localTestHello(1), nil, 0, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = leaver.Close() })
 	readyAll(t, host, host, old, leaver)
 	if err := host.Start(); err != nil {
 		t.Fatal(err)
@@ -40,7 +48,7 @@ func TestHostedProgressReachesOnlyVersion6Seats(t *testing.T) {
 	var battles [3]*LocalClient
 	for i, l := range []*HostedLobby{host, old, leaver} {
 		awaitLobby(t, l, "Started", func(s HostedLobbyState, err error) bool { return err == nil && s.Started })
-		battles[i] = l.Battle()
+		battles[i] = openingBattleTest(t, l)
 	}
 	tick := uint32(0)
 	var agreed []uint32
@@ -175,7 +183,7 @@ func TestHostedClientRefusesAnotherWelcomeVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	var traffic trafficCounter
-	if _, _, err := exchangeHostedHello(client, &traffic, hostedVersion, hello, "", 0); err == nil || !strings.Contains(err.Error(), "version 6; this relay answered version 5") {
+	if _, _, err := exchangeHostedHello(client, &traffic, hostedVersion, hello, "", 0); err == nil || !strings.Contains(err.Error(), "version 7; this relay answered version 5") {
 		t.Fatalf("welcome in another version: %v", err)
 	}
 }
