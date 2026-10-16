@@ -180,9 +180,10 @@ func (s *Service) allocateNanoframeFacing(factory *units.Unit, def *content.Unit
 		s.freeNeverExistedProduct(prod)
 		return nil, err
 	}
-	// reservePlacement files the placement record itself, before it stamps, so
-	// record and stamp agree on the yard state [04 R-COLL-01 §4].
-	initializeNanoframe(prod, def)
+	// The world seeded construction state before wake-Create. Keep the
+	// script's resulting activation/stance rather than repeating those writes
+	// after the callback [05 "Nanoframe allocation"]. reservePlacement already
+	// filed the placement before stamping [04 R-COLL-01 §4].
 	s.ensureProductSpatialState(prod)
 	return prod, nil
 }
@@ -235,6 +236,9 @@ func (s *Service) freeNeverExistedProduct(prod *units.Unit) {
 	prod.Alive = false
 }
 
+// initializeNanoframe adapts the caller-supplied Allocator fixture hook, whose
+// legacy contract can return an already-built record. Production uses the
+// world's unfinished creator instead and must retain its Create writes.
 func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	if prod == nil || def == nil {
 		return
@@ -246,19 +250,11 @@ func initializeNanoframe(prod *units.Unit, def *content.UnitDef) {
 	prod.MaxHealth = int32(def.MaxDamage)
 	prod.InBuildStance = false
 	prod.Alive = true
-	// A nanoframe is INACTIVE. The world's own allocation path no longer raises
-	// the edge for a frame (World.CreateNanoframe above), so for that path this
-	// is a no-op. It is kept because the Service.Allocator hook is
-	// caller-supplied and the fixtures behind it allocate through the
-	// already-built World.Create, which does raise; without a lowering here such
-	// a frame would reach completion already active and completion's raise would
-	// not be an edge, so `Activate` would never start [04 R-UNIT-06 §2].
-	//
-	// It goes through the edge setter, not a direct write. A raise that already
-	// happened has already started the unit's `Activate` script, and a stock
-	// extractor's `Activate` spins its arms until `Deactivate` stops it: only a
-	// real falling edge runs `Deactivate` and stops the animation. Clearing the
-	// bit by hand leaves the script running, which is the defect this replaces.
+	// Fixture allocators can return World.Create's finished record, including
+	// its activatewhenbuilt edge. Lower through the edge setter so Deactivate
+	// stops any animation that Activate started [04 R-UNIT-06 §2]. Clearing the
+	// bit directly would leave that script running. Production never uses this
+	// adapter and preserves the unfinished creator's authored state instead.
 	prod.SetActivationEdge(false)
 }
 

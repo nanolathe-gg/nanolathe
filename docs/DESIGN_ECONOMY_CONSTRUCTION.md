@@ -885,7 +885,11 @@ outcome: a permanent diagnostic, not the silent loop.
 
 **C18 — nanoframe allocation.** On success the allocator creates the unit **at
 the resolved exit transform, not at the derived anchor**, with the owner, the
-product definition, remaining fraction 1, health 0 and the build stance cleared.
+product definition, remaining fraction 1, health 0 and the build stance cleared
+before wake-`Create`. Production retains the script's resulting activation and
+stance; it must not repeat initialization after the world's unfinished-unit
+creator returns [05 "Nanoframe allocation"]. `activatewhenbuilt` remains a
+finished-only edge, distinct from a script activating its own nanoframe.
 Allocation establishes spatial and collision state for buildings as well as
 mobile products before a later order can scan nearby work. Incomplete buildings
 must already belong to the ordinary sectors used by repair patrols; a placement

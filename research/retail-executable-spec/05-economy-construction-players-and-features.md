@@ -3121,11 +3121,22 @@ validation rules rather than inventing generation-tagged handles.
 Creating an unfinished unit allocates a normal unit slot, attaches its
 definition and owner, initializes script and order state, marks the unit
 alive, sets the remaining construction fraction to one and its health to
-zero, and clears the script-owned build-stance bits. A failed allocation does
-not create a partial object; the per-definition unit limit is enforced at
-exactly this instant (below). Factory-produced units are created directly at
+zero, and clears the script-owned build-stance bits before script binding.
+A failed allocation does not create a partial object; the per-definition unit
+limit is enforced at exactly this instant (below). Factory-produced units are created directly at
 the resolved exit spot by the production state machine (below); other paths
 create the nanoframe at the requested position.
+
+**Established — initial state precedes `Create`.** The common initializer
+seeds the unfinished fraction, zero health, inactive state and cleared build
+stance before binding the model/script. Binding runs the wake-`Create` drain
+inline [04 R-CB-01 §2]. Neither the unfinished allocator's remaining tail nor
+the factory success epilogue repeats those initial writes after the script
+returns. An authored `Create` may therefore activate an unfinished unit or
+set its build stance, and that state survives allocation. Skipping the
+finished-only `activatewhenbuilt` edge [04 R-SPEC-01 §12] is not an instruction
+to lower an activation edge the script itself raised. Attachment and the
+factory's standing-order copy do not clear that script-written activation.
 
 Construction then progressively changes health and remaining fraction. The
 unit is visible to later phases according to the core tick order even while it
