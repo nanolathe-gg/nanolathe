@@ -1695,8 +1695,15 @@ changing the distance branches and their RNG effects `[08 R-AI-01 §3]`
   are rejected as empty commit paths and write nothing; empty names retain
   their existing no-op. Listing and serialization retain their existing
   contracts. This is host convenience policy, not recovered retail behavior.
-  Without the override, saves retain the existing whole-path normalization
-  beneath the installation [08 R-SAVE-02 §1].
+  The name-alone normalization applies without the override too: the default
+  directory is likewise a host absolute prefix (the resolved installation,
+  which discovery finds beneath dotted ancestors such as `~/.steam` or
+  `~/.local/share`), while retail's strip ran on its assembled relative
+  `SAVEGAME\<name>`, whose only dot-bearing part is the name [08 R-SAVE-02
+  §1]. Stripping the joined host path instead wrote the bank at a truncated
+  path the load list cannot see, while the save reported success. The typed
+  name's own strip is unchanged (`v1.2 final` still saves as `v1.SAV`), in
+  every gameplay mode; only the host prefix is excluded from the strip.
 
 * **Malformed building yard text uses the shared bounded parser.** AI placement
   applies the same occupied remainder as human placement and occupancy when a

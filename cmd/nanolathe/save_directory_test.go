@@ -9,6 +9,25 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 )
 
+// A discovered install beneath a dotted ancestor (a Steam library under
+// ~/.steam or ~/.local/share) must still save into its own savegame
+// directory: the strip-last-dot normalization applies to the typed name,
+// never to the host prefix, or the bank lands at a truncated path the
+// load list cannot see (DESIGN_SESSIONS_AI_SAVE §5).
+func TestSaveCommitPathUnderDottedInstall(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".steam", "steamapps", "common", "Total Annihilation")
+	dir := filepath.Join(root, "savegame")
+	screen := newSaveLoadScreen(saveScreenMode, dir, saveLoadFromBattle)
+	screen.SetName("slot")
+	if got, want := screen.CommitPath(), filepath.Join(dir, "slot.SAV"); got != want {
+		t.Fatalf("commit path under dotted install = %q, want %q", got, want)
+	}
+	screen.SetName("v1.2 final")
+	if got, want := screen.CommitPath(), filepath.Join(dir, "v1.SAV"); got != want {
+		t.Fatalf("dotted name under dotted install = %q, want %q", got, want)
+	}
+}
+
 func TestSaveDirectoryUsesResolvedInstall(t *testing.T) {
 	root, override := t.TempDir(), t.TempDir()
 	shell := &gameShell{cs: &contentSet{root: root}}

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rebuild and run this checkout, forwarding all arguments to the game.
+set -eu
+CDPATH= cd "$(dirname "$0")/.."
+go build -o build/dev/nanolathe ./cmd/nanolathe
+exec ./build/dev/nanolathe "$@"

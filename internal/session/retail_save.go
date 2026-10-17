@@ -405,9 +405,18 @@ const RetailSaveExt = ".SAV"
 
 // RetailSavePath assembles `<dir>/<name>.SAV` under retail's normalization:
 // the assembled path is truncated at its **last** dot and the extension is
-// appended. The strip is deliberately not path-component aware, so a dot in a
-// directory name is hit too, and a typed name of `v1.2 final` saves as
-// `v1.SAV` [08 "File naming and write policy"] [08 R-SAVE-02 §1].
+// appended, so a typed name of `v1.2 final` saves as `v1.SAV`
+// [08 "File naming and write policy"] [08 R-SAVE-02 §1].
+//
+// The strip is applied to the typed name, not to the joined host path.
+// Retail assembled the relative `SAVEGAME\<name>`, whose only dot-bearing
+// part is the name itself; `dir` here is a host absolute prefix (the
+// resolved installation, which discovery finds beneath dotted ancestors
+// such as `~/.steam` or `~/.local/share`) that retail's string never
+// contained. Stripping the joined path would truncate at a prefix dot and
+// write the bank where the load list cannot see it — the same reason the
+// installer-selected save directory normalizes the name alone
+// (DESIGN_SESSIONS_AI_SAVE §5 "Installer-selected save directory").
 //
 // An empty name yields an empty path: retail's save action does nothing at
 // all for an empty GAMENAME — no file and no message [08 R-SAVE-02 §1].
@@ -415,14 +424,14 @@ func RetailSavePath(dir, name string) string {
 	if strings.TrimSpace(name) == "" {
 		return ""
 	}
-	assembled := name
-	if dir != "" {
-		assembled = filepath.Join(dir, name)
+	stem := name
+	if dot := strings.LastIndex(stem, "."); dot >= 0 {
+		stem = stem[:dot]
 	}
-	if dot := strings.LastIndex(assembled, "."); dot >= 0 {
-		assembled = assembled[:dot]
+	if dir == "" {
+		return stem + RetailSaveExt
 	}
-	return assembled + RetailSaveExt
+	return filepath.Join(dir, stem+RetailSaveExt)
 }
 
 // WriteRetailContinuationSave writes a between-missions bank. A continuation

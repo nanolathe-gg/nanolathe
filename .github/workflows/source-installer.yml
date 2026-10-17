@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'tools/installer/**'
+      - 'tools/dev*'
       - 'cmd/nanolathe/**'
       - 'go.mod'
       - 'go.sum'
@@ -10,6 +11,7 @@ on:
   pull_request:
     paths:
       - 'tools/installer/**'
+      - 'tools/dev*'
       - 'cmd/nanolathe/**'
       - 'go.mod'
       - 'go.sum'
@@ -43,6 +45,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: Native development launcher contracts
+        run: python tools/dev_test.py
       - name: Build desktop command with Go alone
         run: go build -o nanolathe-installer-check.exe ./cmd/nanolathe
       - name: Startup and save-directory contracts

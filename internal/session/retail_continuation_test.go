@@ -2,7 +2,6 @@ package session
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -93,8 +92,18 @@ func TestRetailSavePathStripsAtTheLastDot(t *testing.T) {
 	if got, want := RetailSavePath(dir, "v1.2 final"), filepath.Join(dir, "v1")+".SAV"; got != want {
 		t.Fatalf("dotted name -> %q, want %q", got, want)
 	}
-	if got := RetailSavePath("root.d/savegame", "slot"); !strings.HasSuffix(got, ".SAV") || strings.Contains(got, "slot") {
-		t.Fatalf("a dot in the directory is not component aware: got %q", got)
+	// The strip's domain is the typed name: retail assembled the relative
+	// `SAVEGAME\<name>`, whose only dot-bearing part is the name, while this
+	// builder's dir is a host absolute prefix (a discovered Steam install
+	// under ~/.steam or ~/.local/share) retail's string never contained.
+	// A dot in that prefix must not truncate the save away
+	// (DESIGN_SESSIONS_AI_SAVE §5 "Installer-selected save directory").
+	dotted := filepath.Join("home", "u", ".steam", "steamapps", "common", "Total Annihilation", "savegame")
+	if got, want := RetailSavePath(dotted, "slot"), filepath.Join(dotted, "slot")+".SAV"; got != want {
+		t.Fatalf("dotted directory -> %q, want %q", got, want)
+	}
+	if got, want := RetailSavePath("root.d/savegame", "slot"), filepath.Join("root.d", "savegame", "slot")+".SAV"; got != want {
+		t.Fatalf("dotted relative directory -> %q, want %q", got, want)
 	}
 	if got := RetailSavePath(dir, "   "); got != "" {
 		t.Fatalf("empty name -> %q, want no path at all", got)

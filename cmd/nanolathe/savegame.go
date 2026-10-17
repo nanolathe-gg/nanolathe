@@ -334,16 +334,12 @@ func (s *saveLoadScreen) CommitPath() string {
 	}
 	if s.hostSaveDir {
 		// Reject path components rather than letting a typed name escape the
-		// installer-selected folder. Normalize only the filename, so dots in
-		// parent directories cannot truncate the save directory [I11].
+		// installer-selected folder [I11]. The filename normalization itself
+		// is the shared one: RetailSavePath strips within the typed name, so
+		// dots in parent directories cannot truncate the save directory.
 		if strings.ContainsAny(s.name, `/\`) || filepath.IsAbs(s.name) || filepath.VolumeName(s.name) != "" {
 			return ""
 		}
-		leaf := session.RetailSavePath("", s.name)
-		if leaf == "" {
-			return ""
-		}
-		return filepath.Join(s.dir, leaf)
 	}
 	return session.RetailSavePath(s.dir, s.name)
 }

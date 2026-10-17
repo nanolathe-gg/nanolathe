@@ -120,6 +120,19 @@ go build -o nanolathe ./cmd/nanolathe
 On Windows, `tools\build.cmd` builds every command into `build\`; start the
 game with `build\nanolathe.exe`.
 
+For day-to-day development, `./tools/dev` (Mac/Linux) or `tools\dev.cmd`
+(Windows) rebuilds this checkout and immediately runs it. All arguments go to the
+game, for example `./tools/dev --root "/path/to/Total Annihilation"` or
+`tools\dev.cmd --root "C:\Games\Total Annihilation"`. You can invoke the script
+by its path from any directory; the game runs with the repository as its working
+directory, so relative argument paths are relative to the repository.
+
+The launchers require Go on `PATH`, reuse Go's build cache, and write only their
+executable under the ignored `build/dev/` directory. A failed build never starts
+an older executable; otherwise they return the game's exit status. They do not
+install, update, or change asset discovery or settings. Use these launchers to
+play your current source; use the installer shortcut to play an installed version.
+
 With no `--root`, the engine looks in registered and common installation
 locations, including GOG, Steam libraries and Wine installations, then nearby
 game folders and finally `~/TotalAnnihilation`. It mounts the first installation
