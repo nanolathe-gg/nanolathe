@@ -6105,8 +6105,9 @@ TLS, so the relay also speaks WebSocket for the same hosted hello, rooms,
 commands, grants and acknowledgements; nothing about the simulation,
 command schema, pacing or admission changes. Sources:
 [App Platform routing](https://docs.digitalocean.com/products/app-platform/how-to/manage-internal-routing/),
-[deployment limits](https://docs.digitalocean.com/products/app-platform/details/limits/)
-and [WebSocket RFC 6455](https://www.rfc-editor.org/rfc/rfc6455).
+[deployment limits](https://docs.digitalocean.com/products/app-platform/details/limits/),
+[WebSocket RFC 6455](https://www.rfc-editor.org/rfc/rfc6455) and
+[Cloudflare error diagnostic headers](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-error-headers/).
 
 The server adds `ListenHostedWebSocket(address string, config HostedConfig,
 behindTLSProxy bool) (*HostedServer, error)` and the client
@@ -6132,7 +6133,12 @@ platform's TLS terminator; public plaintext is permitted only with the
 proxy flag, and standalone WebSocket TLS and loopback test mode remain. The
 client accepts `wss://host/relay` and refuses credentials, fragments,
 queries and other paths; `ws://` needs the numeric-loopback test switch.
-Certificate verification is always on.
+Certificate verification is always on. A rejected native upgrade reports the
+HTTP status and which validation failed. It includes only quoted diagnostic
+headers, truncated after 128 bytes per value: Date, Server, Cf-Ray,
+Cf-Mitigated, Cf-Error-Type, Cf-Error-Origin and X-Do-Orig-Status. Cookies,
+arbitrary headers and response bodies are omitted. The parsed response is a `relay.WebSocketHandshakeError`
+whose `StatusCode` distinguishes an HTTP refusal from an invalid 101 upgrade.
 
 **Deployment.** `deploy/relay` is exported as a reproducible source snapshot
 into the private `nanolathe-relay` repository (the sibling checkout
@@ -6155,8 +6161,14 @@ certificate.
 the candidate build's client and command schema against
 `wss://relay.nanolathe.gg/relay`. It creates a two-seat lobby, describes it,
 joins it, verifies that both clients see both seats, and closes its own
-connections without starting a battle. It loads no game assets. Connection
-failures, refusals and incomplete handshakes fail the bounded check; a
+connections without starting a battle. It loads no game assets. An HTTP
+502, 503 or 504 during any upgrade retries the complete check up to three
+attempts, waiting one then two seconds; every failed attempt closes its own
+clients first. All attempts and waits share the original 30-second deadline.
+Each retry prints the failed stage and HTTP diagnostics with a UTC timestamp,
+including when a later attempt succeeds. Other HTTP responses, invalid 101
+upgrades, TLS failures, hosted compatibility refusals and connection errors
+fail immediately. Persistent gateway failures also fail the check; a
 healthy HTTP endpoint alone is insufficient. Run it before landing changes
 to the hosted protocol or command schema and after deploying the relay.
 The tool extracts only the probe and relay dependencies from the exact

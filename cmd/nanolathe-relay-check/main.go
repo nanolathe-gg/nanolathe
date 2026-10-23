@@ -42,7 +42,7 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("nanolathe: relay compatibility check failed: logical path arguments, providers searched [command line], expected flags only")
 	}
-	if err := checkRelay(ctx, *address, relay.HostedDialOptions{InsecureLoopback: *insecure}); err != nil {
+	if err := checkRelay(ctx, *address, relay.HostedDialOptions{InsecureLoopback: *insecure}, out, time.Second); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(out, "Relay compatible: command schema %d at %s (create, describe, join; both seats present)\n", netproto.CommandSchemaVersion, *address)
@@ -52,9 +52,45 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 // Exercise the production lobby path with the build's own command schema
 // (DESIGN_MULTIPLAYER §8.2, §12.2, §16.6.1). The configuration is opaque to
 // the relay; neither client readies or starts a battle.
-func checkRelay(ctx context.Context, address string, options relay.HostedDialOptions) error {
+func checkRelay(ctx context.Context, address string, options relay.HostedDialOptions, out io.Writer, retryDelay time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	const attempts = 3
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return checkError(address, "deadline", err)
+		}
+		err := checkRelayAttempt(ctx, address, options)
+		if err == nil {
+			return nil
+		}
+		var handshake *relay.WebSocketHandshakeError
+		if attempt == attempts || !errors.As(err, &handshake) {
+			return err
+		}
+		// Retry only explicit gateway/service failures. Invalid upgrades, TLS
+		// failures and hosted refusals still block release (DESIGN_MULTIPLAYER §16.5.6).
+		switch handshake.StatusCode {
+		case 502, 503, 504: // Bad Gateway, Service Unavailable, Gateway Timeout.
+		default:
+			return err
+		}
+		delay := time.Duration(attempt) * retryDelay
+		if _, writeErr := fmt.Fprintf(out, "Relay check attempt %d/%d failed at %s: %v; retrying in %s\n", attempt, attempts, time.Now().UTC().Format(time.RFC3339), err, delay); writeErr != nil {
+			return writeErr
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%w: %w", err, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// Each failed attempt closes its own clients before another creates a room.
+func checkRelayAttempt(ctx context.Context, address string, options relay.HostedDialOptions) error {
 	config := []byte("nanolathe relay compatibility check")
 	hello := relay.LocalHello{Identity: netproto.Identity{
 		Protocol: netproto.CommandSchemaVersion,

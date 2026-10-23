@@ -55,6 +55,32 @@ func websocketToken(h http.Header, field, token string) bool {
 	return false
 }
 
+// WebSocketHandshakeError reports an HTTP response that did not establish the
+// native WebSocket connection. StatusCode lets the release probe distinguish a
+// gateway failure from invalid protocol negotiation (DESIGN_MULTIPLAYER §16.5.6).
+type WebSocketHandshakeError struct {
+	StatusCode int
+	detail     string
+}
+
+func (e *WebSocketHandshakeError) Error() string {
+	return fmt.Sprintf("%v; received HTTP %d %s: %s", hostedError("WebSocket handshake", "a matching relay upgrade without extensions"), e.StatusCode, http.StatusText(e.StatusCode), e.detail)
+}
+
+func websocketHandshakeError(response *http.Response, problem string) error {
+	// Keep only bounded diagnostic headers, quoted to escape control characters.
+	// Never echo cookies, the response body or arbitrary proxy headers.
+	for _, field := range []string{"Date", "Server", "Cf-Ray", "Cf-Mitigated", "Cf-Error-Type", "Cf-Error-Origin", "X-Do-Orig-Status"} {
+		if value := response.Header.Get(field); value != "" {
+			if len(value) > 128 {
+				value = value[:128] + "..."
+			}
+			problem += fmt.Sprintf("; %s=%q", field, value)
+		}
+	}
+	return &WebSocketHandshakeError{StatusCode: response.StatusCode, detail: problem}
+}
+
 // Read only the bounded header block. The original buffered reader retains
 // pipelined WebSocket bytes, and HTTP body framing is never allowed to consume
 // them. Both sides share this limit (DESIGN_MULTIPLAYER §16.5.6).
@@ -196,8 +222,27 @@ func dialWebSocketUpgrade(conn net.Conn, host string) (*websocketConn, error) {
 		return nil, hostedError("WebSocket HTTP response", "a valid upgrade response")
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusSwitchingProtocols || response.ProtoMajor != 1 || response.ProtoMinor != 1 || !websocketToken(response.Header, "Connection", "upgrade") || !websocketToken(response.Header, "Upgrade", "websocket") || len(response.Header.Values("Sec-WebSocket-Accept")) != 1 || response.Header.Get("Sec-WebSocket-Accept") != websocketAccept(key) || len(response.Header.Values("Sec-WebSocket-Protocol")) != 1 || response.Header.Get("Sec-WebSocket-Protocol") != websocketProtocol || len(response.Header.Values("Sec-WebSocket-Extensions")) != 0 || response.ContentLength > 0 || len(response.TransferEncoding) != 0 {
-		return nil, hostedError("WebSocket handshake", "a matching relay upgrade without extensions")
+	var problem string
+	switch {
+	case response.StatusCode != http.StatusSwitchingProtocols:
+		problem = "HTTP upgrade refused"
+	case response.ProtoMajor != 1 || response.ProtoMinor != 1:
+		problem = "expected HTTP/1.1"
+	case !websocketToken(response.Header, "Connection", "upgrade"):
+		problem = "missing Connection: Upgrade"
+	case !websocketToken(response.Header, "Upgrade", "websocket"):
+		problem = "missing Upgrade: websocket"
+	case len(response.Header.Values("Sec-WebSocket-Accept")) != 1 || response.Header.Get("Sec-WebSocket-Accept") != websocketAccept(key):
+		problem = "invalid Sec-WebSocket-Accept"
+	case len(response.Header.Values("Sec-WebSocket-Protocol")) != 1 || response.Header.Get("Sec-WebSocket-Protocol") != websocketProtocol:
+		problem = "invalid Sec-WebSocket-Protocol"
+	case len(response.Header.Values("Sec-WebSocket-Extensions")) != 0:
+		problem = "unsolicited Sec-WebSocket-Extensions"
+	case response.ContentLength > 0 || len(response.TransferEncoding) != 0:
+		problem = "unexpected HTTP body framing"
+	}
+	if problem != "" {
+		return nil, websocketHandshakeError(response, problem)
 	}
 	return newWebSocketConn(conn, r, true, localMaxGrantFrame+5, hostedDefaultTimeouts.write, 0), nil
 }

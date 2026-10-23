@@ -420,8 +420,57 @@ func TestWebSocketClientRefusesBadUpgradeAndHonorsCancellation(t *testing.T) {
 				_ = c.Close()
 				t.Fatal("accepted invalid upgrade")
 			}
+			if bad != "oversized" && bad != "cancel" {
+				var handshake *WebSocketHandshakeError
+				if !errors.As(err, &handshake) || handshake.StatusCode != http.StatusSwitchingProtocols {
+					t.Fatalf("invalid 101 upgrade lost its HTTP status: %v", err)
+				}
+				field := map[string]string{
+					"accept": "Sec-WebSocket-Accept", "duplicate-accept": "Sec-WebSocket-Accept",
+					"protocol": "Sec-WebSocket-Protocol", "extension": "Sec-WebSocket-Extensions",
+				}[bad]
+				if !strings.Contains(err.Error(), field) {
+					t.Fatalf("invalid upgrade lost the failing field %s: %v", field, err)
+				}
+			}
 			<-finished
 		})
+	}
+}
+
+func TestWebSocketClientReportsHTTPFailureWithoutReadingBody(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	finished := make(chan error, 1)
+	go func() {
+		request, err := http.ReadRequest(bufio.NewReader(server))
+		if err == nil {
+			_ = request.Body.Close()
+			// No body follows: refusal must use only the bounded header block.
+			_, err = fmt.Fprintf(server, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 1000000000\r\nServer: %s\r\nCf-Ray: authored\ttrace\r\nCf-Error-Type: 503\r\nCf-Error-Origin: proxy\r\nX-Do-Orig-Status: 503\r\nSet-Cookie: private-cookie\r\nX-Private: private-header\r\n\r\n", strings.Repeat("a", 256))
+		}
+		finished <- err
+	}()
+	_, err := dialWebSocketUpgrade(client, "relay.example.invalid")
+	var handshake *WebSocketHandshakeError
+	if !errors.As(err, &handshake) || handshake.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("HTTP refusal lost its status: %v", err)
+	}
+	for _, want := range []string{"HTTP 503 Service Unavailable", "HTTP upgrade refused", `Cf-Ray="authored\ttrace"`, `Cf-Error-Type="503"`, `Cf-Error-Origin="proxy"`, `X-Do-Orig-Status="503"`, `Server="` + strings.Repeat("a", 128) + `..."`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("HTTP refusal %v, want %q", err, want)
+		}
+	}
+	for _, forbidden := range []string{"private-cookie", "private-header", "\t", "\n", strings.Repeat("a", 129)} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Errorf("HTTP refusal leaked %q: %v", forbidden, err)
+		}
+	}
+	if err := <-finished; err != nil {
+		t.Fatal(err)
 	}
 }
 
