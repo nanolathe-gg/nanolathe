@@ -48,6 +48,7 @@ func sameCheckpointInputUnit(a, b *UnitDef) bool {
 		a.PreviewObject3D == b.PreviewObject3D &&
 		a.NanolatheInfector == b.NanolatheInfector &&
 		a.BuilderSpeed == b.BuilderSpeed &&
+		a.SmartMaker == b.SmartMaker &&
 		checkpointInputF32(a.BuildCostEnergy, b.BuildCostEnergy) &&
 		checkpointInputF32(a.BuildCostMetal, b.BuildCostMetal) &&
 		checkpointInputF64(a.EnergyMake, b.EnergyMake) &&

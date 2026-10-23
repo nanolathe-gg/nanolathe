@@ -227,3 +227,81 @@ func TestGeneratedMapIsRequiredExtension20(t *testing.T) {
 		t.Fatalf("Builder speed and a generated map did not round-trip together: %v", err)
 	}
 }
+
+// Smart makers is a switch, which field 11's frozen step indices cannot
+// spell, so it travels as required extension 21 with the single byte 1,
+// omitted when off (docs/DESIGN_MODS_MUTATORS.md "Smart makers"). A
+// configuration without it keeps its exact bytes, and with Builder speed the
+// two records follow field 16 in ID order.
+func TestSmartMakersTravelsAsExtension21(t *testing.T) {
+	r := validMatchRequest(t)
+	base := encodeMatchForTest(t, resolveMatch(t, r))
+	r.Mutators.SmartMakers = content.Factor{Num: 1, Den: 1}
+	if got := encodeMatchForTest(t, resolveMatch(t, r)); !bytes.Equal(got, base) {
+		t.Fatal("off spelled 1/1 wrote an extension")
+	}
+	if resolveMatch(t, r).Request().Mutators.SmartMakers != (content.Factor{}) {
+		t.Fatal("off did not resolve to the zero factor")
+	}
+	r.Mutators.SmartMakers = content.SwitchOn()
+	c := resolveMatch(t, r)
+	payload := withMatchTailForTest(base, append(extensionRecordForTest(21, 1, []byte{1}), 0))
+	if !bytes.Equal(encodeMatchForTest(t, c), payload) {
+		t.Fatal("Smart makers did not follow field 16 as extension 21")
+	}
+	back, err := DecodeMatchConfig(payload)
+	if err != nil || back.Digest() != c.Digest() || back.Request().Mutators.SmartMakers != content.SwitchOn() {
+		t.Fatalf("Smart makers did not round-trip: %v", err)
+	}
+	q := validMatchRequest(t)
+	q.Extensions = []MatchConfigExtension{{ID: 21, Required: true, Data: []byte{1}}}
+	if got := resolveMatch(t, q); got.Digest() != c.Digest() || !reflect.DeepEqual(got.Request(), c.Request()) {
+		t.Fatal("the raw record did not project into the typed switch")
+	}
+	// Both spellings must agree.
+	q.Mutators.SmartMakers = content.SwitchOn()
+	if got := resolveMatch(t, q); got.Digest() != c.Digest() {
+		t.Fatal("an agreeing typed switch and raw record did not resolve to one value")
+	}
+	q.Mutators.SmartMakers = content.Factor{Num: 3, Den: 1}
+	if _, err := ResolveMatchConfig(q); err == nil {
+		t.Fatal("a typed Smart makers step off its switch beside the raw record resolved")
+	}
+	r.Mutators.BuilderSpeed = content.Factor{Num: 5, Den: 1}
+	both := withMatchTailForTest(base, append(append(extensionRecordForTest(19, 1, []byte{3}), extensionRecordForTest(21, 1, []byte{1})...), 0))
+	if !bytes.Equal(encodeMatchForTest(t, resolveMatch(t, r)), both) {
+		t.Fatal("Builder speed and Smart makers did not follow field 16 in ID order")
+	}
+	q = validMatchRequest(t)
+	q.Mutators.SmartMakers = content.Factor{Num: 3, Den: 1}
+	if _, err := ResolveMatchConfig(q); err == nil {
+		t.Fatal("a Smart makers step off its switch resolved")
+	}
+	q.Mutators.SmartMakers = content.SwitchOn()
+	if _, err := resolveMatchConfig(q, 1); err == nil {
+		t.Fatal("a version 1 configuration carried Smart makers")
+	}
+	survival := validSurvivalRequest(t)
+	survival.Mutators.SmartMakers = content.SwitchOn()
+	if _, err := ResolveMatchConfig(survival); err != nil {
+		t.Fatalf("Survival refused Smart makers: %v", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		flags byte
+		data  []byte
+	}{
+		{"optional", 0, []byte{1}},
+		{"explicit off", 1, []byte{0}},
+		{"not one", 1, []byte{2}},
+		{"short", 1, nil},
+		{"extra", 1, []byte{1, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := withMatchTailForTest(base, append(extensionRecordForTest(21, tc.flags, tc.data), 0))
+			if c, err := DecodeMatchConfig(payload); err == nil || c.Digest() != ([32]byte{}) {
+				t.Fatalf("malformed Smart makers extension accepted: %v", err)
+			}
+		})
+	}
+}

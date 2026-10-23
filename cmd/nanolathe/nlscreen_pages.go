@@ -332,12 +332,13 @@ var nlMutatorPics = map[string][]string{
 	"fireRate":     {"armpw", "armllt"},
 	"unitSpeed":    {"armflash", "armfast"},
 	"builderSpeed": {"armck", "armcv"},
+	"smartMakers":  {"armmmkr", "armmakr"},
 	"sight":        {"armrad", "armpeep"},
 	"radar":        {"armarad", "armrad"},
 }
 
 var nlMutatorScene = map[string]string{
-	"buildSpeed": "construct", "buildCost": "construct", "income": "construct", "salvage": "salvage",
+	"buildSpeed": "construct", "buildCost": "construct", "income": "construct", "salvage": "salvage", "smartMakers": "construct",
 	"health": "armor", "damage": "armor", "fireRate": "armor", "areaOfEffect": "blast",
 	"unitSpeed": "march", "builderSpeed": "construct", "sight": "sight", "radar": "sight",
 }
@@ -351,10 +352,16 @@ func (s *nlScreen) mutatorCards() []nlCard {
 		labels := make([]string, len(steps))
 		identity := 0
 		for i, f := range steps {
-			labels[i] = "×" + f.String()
+			labels[i] = info.Value(f)
 			if f.IsIdentity() {
 				identity = i
 			}
+		}
+		// Compare sets the factor beside ×1: two scenes, side by side. A
+		// switch changes no scene the preview can show, so it has none.
+		compare := func(d *nlDraft, v int) (int, bool) { return identity, v != identity }
+		if info.IsSwitch() {
+			compare = nil
 		}
 		cards = append(cards, nlCard{
 			key: "mut-" + info.Key, label: info.Label, pics: nlMutatorPics[info.Key], kind: nlStepper, steps: labels,
@@ -367,9 +374,8 @@ func (s *nlScreen) mutatorCards() []nlCard {
 				}
 				return identity
 			},
-			set: func(d *nlDraft, v int) { _ = d.mutators.SetFactor(info.Key, steps[v]) },
-			// Compare sets the factor beside ×1: two scenes, side by side.
-			compare: func(d *nlDraft, v int) (int, bool) { return identity, v != identity },
+			set:     func(d *nlDraft, v int) { _ = d.mutators.SetFactor(info.Key, steps[v]) },
+			compare: compare,
 			desc: func(*nlDraft, int) string {
 				return info.Description + " Mutators apply under every rule set, Strict 3.1 included."
 			},

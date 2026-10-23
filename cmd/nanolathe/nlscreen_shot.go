@@ -242,8 +242,9 @@ func nlShotSteps(s *nlScreen, only string) []nlShotStep {
 				}
 			}
 			if card.usesMutators {
-				// Raised two steps and compared against ×1, as twin scenes.
-				steps = append(steps, nlShotStep{name: base + "-raised", page: pi, card: ci, compare: true, draft: func(d *nlDraft) {
+				// Raised two steps and compared against ×1, as twin scenes. A
+				// switch has no comparison, so it is captured switched on.
+				steps = append(steps, nlShotStep{name: base + "-raised", page: pi, card: ci, compare: card.compare != nil, draft: func(d *nlDraft) {
 					card.set(d, min(len(card.steps)-1, card.get(d)+2))
 				}})
 			}

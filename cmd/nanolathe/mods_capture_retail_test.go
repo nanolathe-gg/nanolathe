@@ -90,8 +90,9 @@ func TestModsScreenCapture(t *testing.T) {
 		shell.selectModsRow(1)
 	}
 	// Drive the Mutators dialog the way a player would: Build speed up twice,
-	// Build cost down twice, Sight up once, then Builder speed up three steps
-	// of its own list, to ×5.
+	// Build cost down twice, Sight up once, Builder speed up three steps of
+	// its own list, to ×5, then Smart makers raised twice, which switches it
+	// on and stays there.
 	shell.activateModsGadget("MUTEDIT")
 	if mutatorsUI == nil {
 		t.Fatal("Change... opened no Mutators dialog")
@@ -113,6 +114,10 @@ func TestModsScreenCapture(t *testing.T) {
 	press("builderSpeed", "MUTRAISE", 3)
 	if f, _ := modsUI.mutators.Factor("builderSpeed"); f != (content.Factor{Num: 5, Den: 1}) {
 		t.Fatalf("three raises took Builder speed to %s, want its own list's ×5", f)
+	}
+	press("smartMakers", "MUTRAISE", 2)
+	if f, _ := modsUI.mutators.Factor("smartMakers"); f != content.SwitchOn() {
+		t.Fatalf("two raises left Smart makers at %s, want on", f)
 	}
 	capture("mutators")
 	if os.Getenv("NANOLATHE_MODS_ALL") != "" {

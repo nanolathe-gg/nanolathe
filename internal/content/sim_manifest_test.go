@@ -141,7 +141,7 @@ func TestSimulationDigestClassifiesEveryDefinitionField(t *testing.T) {
 			"SelfDestructCountdown", "SelfDestructCountdownPresent", "Unknown"},
 		"explicit": {"ModelTop", "ModelTopFixed", "BuildPageCount", "HasPageZeroGUI", "UnitLimit", "LimitEnabled", "Limit", "Weapon1Def", "Weapon2Def", "Weapon3Def", "ExplodeAsDef", "SelfDestructAsDef", "TransportedExplodeAsDef", "TransportedSelfDestructAsDef",
 			"Rotations", "VeterancyThresholds", "VeterancyAccuracyBuffRate", "TransportedExplodeAs", "TransportedSelfDestructAs", "PreviewPieces", "PreviewPiecesS", "PreviewPiecesE", "PreviewPiecesN", "PreviewPiecesW", "PreviewFaceOpponent", "PreviewObject3D",
-			"BuilderSpeed"},
+			"BuilderSpeed", "SmartMaker"},
 		"cob":        {"Script"},
 		"diagnostic": {"DiscoveryProvenance", "ScriptProvenance"},
 		// Derived only from the canonical Category string, which already

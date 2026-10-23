@@ -1378,13 +1378,15 @@ records with typed validation and application through the existing owning
 | 18. Allied sight | One `u8`: 1 separate or 2 shared. Omit for the inherited default: online skirmish teams share, single-player teams do not. Survival always shares and carries no choice. `SeatRules.AlliedSightChoice` must permit the record (DESIGN_SESSIONS_AI_SAVE "Modern allied sight"). |
 | 19. Builder speed | One `u8`: the Builder speed step index 1..5 for ×2, ×3, ×5, ×8, ×20. Omit it for the identity; index 0 is refused. Field 11's eleven indices are frozen, so this mutator's own step list travels here; a typed request must agree with the record. Mutators apply in every mode, Strict 3.1 included, so no `RuleSet` answer gates it ([DESIGN_MODS_MUTATORS §6.7](DESIGN_MODS_MUTATORS.md)). |
 | 20. Generated map | The recipe of the generated map the battle is played on, as the host wrote it: at most 64 KiB, never empty; omit the record for any other map. It is no gameplay choice and changes nothing a tick computes, since the map's own files are the content identity's; it is what reproducing the battle needs. The configuration carries it as opaque bytes; the host playing the battle reads it, makes the map again when it is not mounted, and refuses rather than play another map of that name. Skirmish and Survival alike (DESIGN_MAP_GENERATOR §10). |
+| 21. Smart makers | One `u8` that must be 1, for on. Omit it when off; 0 and any other value are refused. Field 11's eleven indices are frozen and cannot spell a switch, so it travels here; a typed request on yields the same record. Mutators apply in every mode, Strict 3.1 included, so no `RuleSet` answer gates it ([DESIGN_MODS_MUTATORS §6.8](DESIGN_MODS_MUTATORS.md)). |
 
-All four require flag bit 0, and an optional spelling is refused. Records
-17–19 also refuse a malformed payload, trailing payload bytes or an explicit
-default; record 20's payload is opaque here, so only an empty one is refused,
-and the host validates the recipe when it reads it. The local API exposes
-`MatchSeat.Start`, `MatchConfigRequest.AlliedSight`,
-`MatchConfigRequest.Mutators.BuilderSpeed` and
+All five require flag bit 0, and an optional spelling is refused. Records
+17–19 and 21 also refuse a malformed payload, trailing payload bytes or an
+explicit default; record 20's payload is opaque here, so only an empty one is
+refused, and the host validates the recipe when it reads it. The local API
+exposes `MatchSeat.Start`, `MatchConfigRequest.AlliedSight`,
+`MatchConfigRequest.Mutators.BuilderSpeed`,
+`MatchConfigRequest.Mutators.SmartMakers` and
 `MatchConfigRequest.GeneratedMap`; recognized raw records are projected into
 those fields during resolution and removed from the opaque `Extensions`
 slice. Supplying both spellings requires equal values. Encoding
@@ -1395,7 +1397,7 @@ through the existing `SeatRules` answers.
 
 No battle choice may reuse field 16, which names room content, or be marked
 optional so an older simulation silently ignores it. Main builds that do not
-implement these records refuse required IDs 17–20 explicitly. Readers from
+implement these records refuse required IDs 17–21 explicitly. Readers from
 before the extension contract refuse any nonempty tail; later readers can
 skip future optional metadata without a configuration-version bump. Existing
 v1 and original-v2 recordings keep their original bytes, identity domain and
@@ -4454,7 +4456,7 @@ shakeOffsetX i32; shakeOffsetY i32; shakeRemaining i32.
 | Skirmish | CommanderDeath i64; Difficulty i64; Gameplay string; LOSType i64; LineOfSight i64; Location i64; MapName string; Mapping i64; NumPlayers i64; Players [10]SkirmishPlayer; RNGCrtSeed u32; RNGSimSeed u32; Survival options; UnitLimit i64 |
 | SkirmishPlayer | AI u8; AllyGroup i64; Controller i64; Energy i64; Metal i64; Side i64 |
 | Survival options | Enabled bool; NoAir bool; NoNaval bool; Pace u8 |
-| Mutators | AreaOfEffect, BuildCost, BuildSpeed, BuilderSpeed, Damage, FireRate, Health, Income, Radar, Salvage, Sight, UnitSpeed; each Factor has Den u8 then Num u8 |
+| Mutators | AreaOfEffect, BuildCost, BuildSpeed, BuilderSpeed, Damage, FireRate, Health, Income, Radar, Salvage, Sight, SmartMakers, UnitSpeed; each Factor has Den u8 then Num u8 |
 | Restrictions | u32 entry count, then each Count u8, Unit string in the canonical order returned by Entries |
 
 Community and EntryCommunity use `community.Features.WriteCheckpoint`; Wind

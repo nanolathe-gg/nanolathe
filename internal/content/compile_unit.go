@@ -158,6 +158,13 @@ type UnitDef struct {
 	// builder starts placement once in reach
 	// (docs/DESIGN_MODS_MUTATORS.md "Builder speed").
 	BuilderSpeed Factor
+	// SmartMaker marks a metal maker that the Smart makers mutator manages,
+	// recorded only on a mutated per-battle clone. Like BuilderSpeed it is
+	// Nanolathe policy rather than an authored key, and engine code reads it:
+	// the economy switches a human player's finished makers that carry it on
+	// and off with the player's energy after each settlement pass
+	// (docs/DESIGN_MODS_MUTATORS.md "Smart makers").
+	SmartMaker bool
 
 	// Economy [02 "Unit record"].
 	BuildCostEnergy float32 // integer parsed, single-float store, default 0 [02 R-KEYS-01 §5]

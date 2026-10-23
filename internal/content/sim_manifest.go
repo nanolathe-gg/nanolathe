@@ -409,6 +409,12 @@ func unitSemanticDigest(u *UnitDef) [32]byte {
 		d.u8(u.BuilderSpeed.Num)
 		d.u8(u.BuilderSpeed.Den)
 	}
+	// Smart makers' mark drives the economy's maker switching, and likewise is
+	// encoded only when present (docs/DESIGN_MODS_MUTATORS.md "Smart makers").
+	if u.SmartMaker {
+		d.text("smartMaker")
+		d.boolean(true)
+	}
 	for _, link := range [...]*WeaponDef{
 		u.Weapon1Def, u.Weapon2Def, u.Weapon3Def, u.ExplodeAsDef, u.SelfDestructAsDef,
 		u.TransportedExplodeAsDef, u.TransportedSelfDestructAsDef,
@@ -621,11 +627,13 @@ func mutatorStepIndex(f Factor) (uint8, bool) {
 }
 
 // mutatorVector is the eleven shared-list step indices in the published
-// field order, followed by Builder speed's index on its own list
-// (BuilderSpeedStepIndex), 0 for the identity. The manifest writes that last
-// index only when it is not zero, so every digest made before Builder speed
-// existed, and every one made without it, is unchanged.
-func mutatorVector(m Mutators) ([11]uint8, uint8, bool) {
+// field order, then the tail the manifest appends after them: nothing when
+// neither Builder speed nor Smart makers is set; Builder speed's index on its
+// own list (BuilderSpeedStepIndex) when only it is; and that index, 0 for the
+// identity, followed by 1 when Smart makers is on. The tail's length tells the
+// three apart, and every digest made without the two, before or since they
+// existed, is unchanged.
+func mutatorVector(m Mutators) ([11]uint8, []uint8, bool) {
 	var out [11]uint8
 	for i, f := range [...]Factor{
 		m.BuildSpeed, m.BuildCost, m.Health, m.Damage, m.AreaOfEffect, m.Sight,
@@ -633,12 +641,21 @@ func mutatorVector(m Mutators) ([11]uint8, uint8, bool) {
 	} {
 		step, ok := mutatorStepIndex(f)
 		if !ok {
-			return out, 0, false
+			return out, nil, false
 		}
 		out[i] = step
 	}
 	builder, ok := BuilderSpeedStepIndex(m.BuilderSpeed)
-	return out, builder, ok
+	if !ok || !m.SmartMakers.validIn(SwitchSteps) {
+		return out, nil, false
+	}
+	switch {
+	case !m.SmartMakers.IsIdentity():
+		return out, []uint8{builder, 1}, true
+	case builder != 0:
+		return out, []uint8{builder}, true
+	}
+	return out, nil, true
 }
 
 // BuilderSpeedStepIndex maps a Builder speed factor to its index on

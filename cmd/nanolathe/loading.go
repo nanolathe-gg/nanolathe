@@ -256,6 +256,11 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	}
 	var selection sidecarSelection
 	var modPlan sidecarModPlan
+	// Smart makers follows the player's current selection on every load, a
+	// save without a sidecar included; every other mutator is the save's
+	// own (docs/DESIGN_MODS_MUTATORS.md §6.8, §7.3). recorded keeps the
+	// save's set for the integrity check.
+	var recorded content.Mutators
 	if hasSidecar {
 		if modPlan, err = g.planSidecarMod(sidecar); err != nil {
 			return err
@@ -266,6 +271,8 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		if selection, err = resolveSidecarSelection(sidecar); err != nil {
 			return err
 		}
+		recorded = selection.mutators
+		selection.mutators.SmartMakers = g.opts.Mutators.SmartMakers
 		if modPlan.addons != nil && modPlan.switchTo == "" {
 			// Only the add-ons differ: reload onto the running mod with the
 			// recorded add-ons (§5.7).
@@ -307,6 +314,7 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	deps := session.RetailLoadDeps{
 		BuilderOptions: sessionBuilderOptions(g.builderOptions),
 		FS:             g.cs.fs, ContentLimits: g.cs.limits, CommunitySources: communitySources(g.opts, g.cs), SimSeed: sim, CRTSeed: crt, UnitLimit: g.setup.UnitLimit, Gameplay: g.gameplay,
+		Mutators: content.Mutators{SmartMakers: g.opts.Mutators.SmartMakers},
 	}
 	if hasSidecar {
 		// The recorded rule set, Community sources and entry table, unit
@@ -361,7 +369,8 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		return fmt.Errorf("nanolathe: retail save load returned no battle candidate")
 	}
 	sess := loaded.Battle.Session
-	survivalBest, err := restoreSurvivalBest(sidecar.SurvivalBest, sess, g.cs.fs)
+	smartMakersChanged := recorded.SmartMakers.IsIdentity() != sess.Mutators.SmartMakers.IsIdentity()
+	survivalBest, err := restoreSurvivalBest(sidecar.SurvivalBest, sess, g.cs.fs, smartMakersChanged)
 	if err != nil {
 		return err
 	}
@@ -400,7 +409,7 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 		g.setup.UnitLimit = sidecar.UnitLimit
 		// A different base install or different mod bytes produce another
 		// catalog; the game still loads, with a warning (§7.3 step 7, P8).
-		if sidecar.Catalog != "" && sess.Catalog != nil && sess.Catalog.Hash != sidecar.Catalog {
+		if sidecar.Catalog != "" && sess.Catalog != nil && content.MutatedHash(loaded.Battle.BaseCatalog, recorded) != sidecar.Catalog {
 			selection.warnings = append(selection.warnings, "This game was saved with different content and may not play the same")
 		}
 	}

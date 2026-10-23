@@ -234,7 +234,13 @@ func (g *gameShell) refreshSaveLoadPanel() {
 	}
 	line := ""
 	if entry, has := saveLoadUI.SelectedEntry(); has {
-		line = g.fitDetail(saveSidecarLine(entry.Path), saveSidecarLineWidth, 1)
+		// A load runs under the selected Smart makers (§7.3); the Save
+		// dialog shows what the file records.
+		var loadSmartMakers *content.Factor
+		if saveLoadUI.Mode() != saveScreenMode {
+			loadSmartMakers = &g.opts.Mutators.SmartMakers
+		}
+		line = g.fitDetail(saveSidecarLine(entry.Path, loadSmartMakers), saveSidecarLineWidth, 1)
 	}
 	panel.SetText(saveSidecarLineGadget, line)
 }

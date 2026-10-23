@@ -245,7 +245,7 @@ func (i *SimulationInputs) Restrictions() Restrictions {
 func canonicalMutators(m Mutators) Mutators {
 	for _, f := range []*Factor{
 		&m.BuildSpeed, &m.BuildCost, &m.Health, &m.Damage, &m.AreaOfEffect, &m.Sight,
-		&m.Radar, &m.Income, &m.Salvage, &m.FireRate, &m.UnitSpeed, &m.BuilderSpeed,
+		&m.Radar, &m.Income, &m.Salvage, &m.FireRate, &m.UnitSpeed, &m.BuilderSpeed, &m.SmartMakers,
 	} {
 		if f.IsIdentity() {
 			*f = Factor{}
@@ -286,7 +286,7 @@ func FreezeSimulationInputs(sources *SimulationSources, r SimulationInputRequest
 	if r.Catalog == nil {
 		return nil, fmt.Errorf("nanolathe: simulation input freeze failed: logical path <catalog>, providers searched [none], expected a catalog compiled from the capture")
 	}
-	vector, builderStep, ok := mutatorVector(r.Mutators)
+	vector, tail, ok := mutatorVector(r.Mutators)
 	if !ok {
 		return nil, fmt.Errorf("nanolathe: simulation input freeze failed: logical path <mutators>, providers searched [none], expected factors on the mutator step list, got %q", r.Mutators.String())
 	}
@@ -323,11 +323,11 @@ func FreezeSimulationInputs(sources *SimulationSources, r SimulationInputRequest
 	for _, step := range vector {
 		mutators.u8(step)
 	}
-	if builderStep != 0 {
-		// Builder speed's own index follows the eleven fixed bytes only when
-		// set, so the field order stays unambiguous and every earlier digest
-		// holds (docs/DESIGN_MODS_MUTATORS.md "Builder speed").
-		mutators.u8(builderStep)
+	// Builder speed's own index, then Smart makers' switch, follow the eleven
+	// fixed bytes only when set, so every earlier digest holds
+	// (docs/DESIGN_MODS_MUTATORS.md "Builder speed", "Smart makers").
+	for _, step := range tail {
+		mutators.u8(step)
 	}
 	f.entries = append(f.entries,
 		SimulationInput{Family: SimulationFamilyExtension, Presence: SimulationInputPresent, Key: "community", SemanticDigest: community.sum()},

@@ -712,6 +712,15 @@ resource; apply back; clamp and accrue waste. Old carry is settled **before**
 newly accepted work `[05 "Authoritative settlement order"]`
 `[05 "Two-stage settlement algorithm"]`.
 
+Under the Smart makers mutator, a settled human player's pass is followed by
+the maker controller: from the committed stock, capacity and the pass's
+produced and requested energy, it switches the player's marked metal makers
+on at or above 80% of storage and off below 40% through the one activation
+writer, so the change bills from the next pass. It is a mode-independent
+mutator, not retail behaviour; without it no definition is marked and the
+block ends at the clamp
+([DESIGN_MODS_MUTATORS "Smart makers"](DESIGN_MODS_MUTATORS.md#68-smart-makers--nanolathe-mutator-policy-user-authorized-2026-10-22)).
+
 ### 3.2 Admission and stocks — C8…C14
 
 **C8 — two stages, two independent resources.** There is no combined shortage

@@ -750,7 +750,9 @@ func (u *Unit) applyOperationalTransition(mask uint8, set bool, vm *cob.VM) {
 // cannot drift: the `Activate`/`Deactivate` order handlers [04 R-ORD-01 §2],
 // the COB port-1 write arm [04 §4.7], construction's `activatewhenbuilt`
 // completion and pre-built creation sites [04 R-SPEC-01 §12], and the
-// per-player settlement-pass activation toggles [04 R-UNIT-06 §2].
+// per-player settlement-pass activation toggles [04 R-UNIT-06 §2], among them
+// the Smart makers mutator's maker switching (docs/DESIGN_MODS_MUTATORS.md
+// "Smart makers").
 func (u *Unit) SetActivationEdge(on bool) {
 	u.setActivationEdge(on, nil)
 }

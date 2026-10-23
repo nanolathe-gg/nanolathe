@@ -685,6 +685,11 @@ func TestMutatedCatalogIdentity(t *testing.T) {
 	if all.Digest() == HashDefinition([]byte("mutators/1\n"+all.String()+"\n")) || all.Digest() == (Mutators{}).Digest() {
 		t.Fatal("digest must carry the current identity tag and follow the set")
 	}
+	// MutatedHash names the identity ApplyMutators gives, and the zero set
+	// leaves the base, so a load can compute a save's recorded identity.
+	if MutatedHash(base.Hash, all) != apply(all) || MutatedHash(base.Hash, Mutators{}) != base.Hash {
+		t.Fatal("MutatedHash must be the identity ApplyMutators gives")
+	}
 }
 
 // TestParseMutatorsRoundTrip walks every key through every step via Map,
@@ -773,21 +778,27 @@ func TestMutatorCatalogDescribesTheClosedSet(t *testing.T) {
 			t.Fatalf("%s description %q is not one sentence", info.Key, info.Description)
 		}
 	}
-	if got := strings.Join(keys, ","); got != "buildSpeed,buildCost,income,salvage,health,damage,areaOfEffect,fireRate,unitSpeed,builderSpeed,sight,radar" {
+	if got := strings.Join(keys, ","); got != "buildSpeed,buildCost,income,salvage,smartMakers,health,damage,areaOfEffect,fireRate,unitSpeed,builderSpeed,sight,radar" {
 		t.Fatalf("catalog order = %s", got)
 	}
-	if got := strings.Join(groups, ","); got != "Economy,Economy,Economy,Economy,Combat,Combat,Combat,Combat,Movement,Builders,Vision,Vision" {
+	if got := strings.Join(groups, ","); got != "Economy,Economy,Economy,Economy,Economy,Combat,Combat,Combat,Combat,Movement,Builders,Vision,Vision" {
 		t.Fatalf("catalog groups = %s", got)
 	}
 	// Every mutator shares the step list but Builder speed, which has its
-	// own (docs/DESIGN_MODS_MUTATORS.md §6.4).
+	// own, and the Smart makers switch (docs/DESIGN_MODS_MUTATORS.md §6.4).
 	for _, info := range infos {
 		want := MutatorSteps
-		if info.Key == "builderSpeed" {
+		switch info.Key {
+		case "builderSpeed":
 			want = []Factor{{1, 1}, {2, 1}, {3, 1}, {5, 1}, {8, 1}, {20, 1}}
+		case "smartMakers":
+			want = []Factor{{1, 1}, {2, 1}}
 		}
 		if !reflect.DeepEqual(info.Steps, want) {
 			t.Fatalf("%s steps = %v, want %v", info.Key, info.Steps, want)
+		}
+		if info.IsSwitch() != (info.Key == "smartMakers") {
+			t.Fatalf("%s IsSwitch = %v", info.Key, info.IsSwitch())
 		}
 	}
 	infos[0].Label = "changed"
@@ -795,8 +806,9 @@ func TestMutatorCatalogDescribesTheClosedSet(t *testing.T) {
 	if MutatorCatalog()[0].Label == "changed" || MutatorSteps[0] != (Factor{1, 4}) {
 		t.Fatal("MutatorCatalog must return a copy")
 	}
-	infos[9].Steps[1] = Factor{9, 1}
-	if BuilderSpeedSteps[1] != (Factor{2, 1}) {
+	infos[10].Steps[1] = Factor{9, 1}
+	infos[4].Steps[1] = Factor{9, 1}
+	if BuilderSpeedSteps[1] != (Factor{2, 1}) || SwitchSteps[1] != (Factor{2, 1}) {
 		t.Fatal("MutatorCatalog must copy Builder speed's own list")
 	}
 
@@ -805,11 +817,16 @@ func TestMutatorCatalogDescribesTheClosedSet(t *testing.T) {
 		if f, ok := m.Factor(info.Key); !ok || f != (Factor{}) {
 			t.Fatalf("Factor(%s) on the zero set = %+v, %v", info.Key, f, ok)
 		}
+		// The step below the top, which for a two-step switch is its identity,
+		// so a switch takes its on step instead.
 		step := info.Steps[len(info.Steps)-2]
+		if info.IsSwitch() {
+			step = info.Steps[1]
+		}
 		if err := m.SetFactor(info.Key, step); err != nil {
 			t.Fatal(err)
 		}
-		if f, _ := m.Factor(info.Key); f != step || !strings.Contains(m.String(), info.Key+"="+step.String()) {
+		if f, _ := m.Factor(info.Key); f != step || !strings.Contains(m.String(), info.Key+"="+info.Spell(step)) {
 			t.Fatalf("SetFactor(%s) did not store %s: %q", info.Key, step, m.String())
 		}
 	}
@@ -1001,5 +1018,101 @@ func TestBuilderSpeedComposesWithUnitSpeed(t *testing.T) {
 	}
 	if g := c.Units["armbuilder"]; g.Acceleration != math.MaxInt32 || g.BrakeRate != -7 {
 		t.Fatalf("saturation: accel %d brake %d, want %d and the negative value kept", g.Acceleration, g.BrakeRate, int32(math.MaxInt32))
+	}
+}
+
+// TestSmartMakersIsASwitch locks the switch's spellings
+// (docs/DESIGN_MODS_MUTATORS.md "Smart makers"): it parses only "on" and
+// "off", prints "smartMakers=on" in the canonical string, is named alone in
+// the player lists, shows On and Off as its value, cycles between its two
+// steps, and refuses any multiplier spelling or factor.
+func TestSmartMakersIsASwitch(t *testing.T) {
+	on, err := ParseMutators(map[string]string{"smartMakers": "on", "buildSpeed": "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.SmartMakers != SwitchOn() || on.String() != "buildSpeed=2,smartMakers=on" || on.Map()["smartMakers"] != "on" {
+		t.Fatalf("on parsed to %+v, %q", on.SmartMakers, on.String())
+	}
+	if got := strings.Join(on.Describe(), "; "); got != "Build speed ×2; Smart makers" {
+		t.Fatalf("Describe = %q", got)
+	}
+	if got := strings.Join(on.DescribeASCII(), "; "); got != "Build speed x2; Smart makers" {
+		t.Fatalf("DescribeASCII = %q", got)
+	}
+	off, err := ParseMutators(map[string]string{"smartMakers": "off"})
+	if err != nil || !off.IsZero() || off.String() != "" {
+		t.Fatalf("off parsed to %+v, %v", off, err)
+	}
+	for _, bad := range []string{"On", "ON", "1", "2", "true", "x2", ""} {
+		if _, err := ParseMutators(map[string]string{"smartMakers": bad}); err == nil || !strings.Contains(err.Error(), "off, on") {
+			t.Errorf("smartMakers=%q: %v", bad, err)
+		}
+	}
+	if _, err := ParseMutators(map[string]string{"health": "on"}); err == nil {
+		t.Error("a scaled mutator accepted the switch's spelling")
+	}
+	var m Mutators
+	if err := m.SetFactor("smartMakers", Factor{3, 1}); err == nil || !m.IsZero() {
+		t.Fatal("SetFactor accepted a switch step off its list")
+	}
+	var info MutatorInfo
+	for _, i := range MutatorCatalog() {
+		if i.Key == "smartMakers" {
+			info = i
+		}
+	}
+	if info.Value(Factor{}) != "Off" || info.Value(SwitchOn()) != "On" || info.ValueASCII(SwitchOn()) != "On" || info.Spell(Factor{}) != "off" {
+		t.Fatalf("switch values %q %q %q %q", info.Value(Factor{}), info.Value(SwitchOn()), info.ValueASCII(SwitchOn()), info.Spell(Factor{}))
+	}
+	if (Factor{}).NextIn(info.Steps) != SwitchOn() || SwitchOn().NextIn(info.Steps) != SwitchOn() || SwitchOn().PrevIn(info.Steps) != (Factor{1, 1}) {
+		t.Fatal("the switch must cycle between off and on")
+	}
+}
+
+// TestSmartMakersMarksOnlySwitchableMakers: the switch changes no authored
+// field and marks exactly the definitions the economy's maker arm runs and a
+// player can switch — a building with a makesmetal byte, no extractsmetal
+// ahead of it, positive upkeep and onoffable [05 R-ECO-01 §2]
+// [04 R-ORD-01 §2] — and it moves the catalog identity only when on.
+func TestSmartMakersMarksOnlySwitchableMakers(t *testing.T) {
+	maker := func(name string, makes int32, use float64) *UnitDef {
+		return &UnitDef{UnitName: name, CanonicalKey: name, Hash: "authored-" + name, MakesMetal: makes, EnergyUse: use, OnOffable: true}
+	}
+	units := map[string]*UnitDef{
+		"maker":     maker("maker", 1, 60),
+		"moho":      maker("moho", 16, 800),
+		"byte":      maker("byte", 256, 60), // the 8-bit store wraps 256 to zero
+		"extractor": maker("extractor", 1, 60),
+		"fixed":     maker("fixed", 1, 60),
+		"mobile":    maker("mobile", 1, 60),
+		"solar":     maker("solar", 1, -20),
+		"radar":     maker("radar", 0, 20),
+	}
+	units["extractor"].ExtractsMetal = 0.002
+	units["fixed"].OnOffable = false
+	units["mobile"].BMCode = 1
+	base := &Catalog{Units: units, Hash: "base"}
+	off := base.Clone()
+	if err := off.ApplyMutators(Mutators{}); err != nil || !reflect.DeepEqual(off, base) {
+		t.Fatalf("the zero set changed the catalog: %v", err)
+	}
+	c := base.Clone()
+	if err := c.ApplyMutators(Mutators{SmartMakers: SwitchOn()}); err != nil {
+		t.Fatal(err)
+	}
+	for key, u := range c.Units {
+		want := key == "maker" || key == "moho"
+		if u.SmartMaker != want {
+			t.Errorf("%s SmartMaker = %v, want %v", key, u.SmartMaker, want)
+		}
+		got := unitValue(u)
+		got.SmartMaker = false
+		if !reflect.DeepEqual(got, unitValue(base.Units[key])) {
+			t.Errorf("%s changed beyond its mark", key)
+		}
+	}
+	if c.Hash == base.Hash || base.Units["maker"].SmartMaker {
+		t.Fatal("the switch must move the clone's identity and leave the base unmarked")
 	}
 }

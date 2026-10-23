@@ -408,6 +408,15 @@ func TestFrozenInputsRecordFallbacksAndExtensions(t *testing.T) {
 	if builder.Digest() == base.Digest() {
 		t.Fatal("Builder speed did not change the identity")
 	}
+	// The Smart makers switch follows it in the tail, so each combination is
+	// its own identity and off is the base (docs/DESIGN_MODS_MUTATORS.md
+	// "Smart makers").
+	smart := f.freeze(t, SimulationInputRequest{AIProfile: "Missing.TXT", Mutators: Mutators{SmartMakers: SwitchOn()}})
+	both := f.freeze(t, SimulationInputRequest{AIProfile: "Missing.TXT", Mutators: Mutators{BuilderSpeed: Factor{Num: 5, Den: 1}, SmartMakers: SwitchOn()}})
+	off := f.freeze(t, SimulationInputRequest{AIProfile: "Missing.TXT", Mutators: Mutators{SmartMakers: Factor{Num: 1, Den: 1}}})
+	if smart.Digest() == base.Digest() || smart.Digest() == builder.Digest() || both.Digest() == builder.Digest() || both.Digest() == smart.Digest() || off.Digest() != base.Digest() {
+		t.Fatal("the Smart makers tail must give each combination its own identity and off the base")
+	}
 	prepared := f.catalog(t).Clone()
 	if err := prepared.ApplyMutators(Mutators{BuildSpeed: Factor{Num: 2, Den: 1}}); err != nil {
 		t.Fatal(err)
@@ -428,6 +437,10 @@ func TestFrozenInputsRecordFallbacksAndExtensions(t *testing.T) {
 	sources, _ = CaptureSimulationSources(f.fs, "test")
 	if _, err := FreezeSimulationInputs(sources, SimulationInputRequest{Catalog: f.catalog(t), Mutators: Mutators{BuilderSpeed: Factor{Num: 4, Den: 1}}}); err == nil {
 		t.Fatal("a Builder speed factor off its own list was frozen")
+	}
+	sources, _ = CaptureSimulationSources(f.fs, "test")
+	if _, err := FreezeSimulationInputs(sources, SimulationInputRequest{Catalog: f.catalog(t), Mutators: Mutators{SmartMakers: Factor{Num: 3, Den: 1}}}); err == nil {
+		t.Fatal("a Smart makers step off its switch was frozen")
 	}
 }
 

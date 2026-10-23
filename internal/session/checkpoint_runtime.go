@@ -265,9 +265,10 @@ func writeCheckpointMeteor(e *checkpoint.Encoder, keys *content.CheckpointKeys, 
 
 // The factor fields are lexical. Den precedes Num and raw zero factors are
 // retained: content normalization is entry work, not capture (§16.3.39).
-// BuilderSpeed sorts after BuildSpeed (DESIGN_MODS_MUTATORS "Builder speed").
+// BuilderSpeed sorts after BuildSpeed (DESIGN_MODS_MUTATORS "Builder speed")
+// and SmartMakers after Sight ("Smart makers").
 func writeCheckpointMutators(e *checkpoint.Encoder, m content.Mutators) {
-	for _, factor := range [...]content.Factor{m.AreaOfEffect, m.BuildCost, m.BuildSpeed, m.BuilderSpeed, m.Damage, m.FireRate, m.Health, m.Income, m.Radar, m.Salvage, m.Sight, m.UnitSpeed} {
+	for _, factor := range [...]content.Factor{m.AreaOfEffect, m.BuildCost, m.BuildSpeed, m.BuilderSpeed, m.Damage, m.FireRate, m.Health, m.Income, m.Radar, m.Salvage, m.Sight, m.SmartMakers, m.UnitSpeed} {
 		e.U8(factor.Den)
 		e.U8(factor.Num)
 	}

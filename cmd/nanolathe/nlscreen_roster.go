@@ -43,6 +43,7 @@ const (
 	nlWaterTower
 	nlSonar
 	nlCommander
+	nlMetalMaker
 )
 
 func nlRole(name string) nlUnitRole {
@@ -63,6 +64,8 @@ func nlRole(name string) nlUnitRole {
 		return nlRadar
 	case "armmex", "armmoho", "cormex":
 		return nlExtractor
+	case "armmakr", "armmmkr", "cormakr", "cormmkr":
+		return nlMetalMaker
 	case "armuwms":
 		return nlWaterMetalStore
 	case "armuwes":
@@ -255,6 +258,8 @@ func (r *nlRoster) fits(u *content.UnitDef, role nlUnitRole) bool {
 		return u.BMCode == 0 && wet && nlWeapon(u, func(w *content.WeaponDef) bool { return w.WaterWeapon })
 	case nlSonar:
 		return u.BMCode == 0 && wet && u.SonarDistance > 0
+	case nlMetalMaker:
+		return structure && content.SmartMakerCandidate(u)
 	}
 	return false
 }
@@ -406,7 +411,7 @@ func (st *nlStage) names(preferred []string) []string {
 }
 
 func nlRoleLabel(role nlUnitRole) string {
-	return [...]string{"ground combat vehicles", "upright combat units", "armed hovercraft", "surface warships", "armed submarines", "combat aircraft", "mobile beam or lightning weapons", "beam or lightning towers", "ground weapon towers", "ballistic splash artillery", "mobile constructors with build products", "factories with build products", "power structures", "metal storage", "energy storage", "radar structures", "metal extractors", "underwater metal storage", "underwater energy storage", "underwater extractors", "underwater weapon towers", "sonar structures", "commanders"}[role]
+	return [...]string{"ground combat vehicles", "upright combat units", "armed hovercraft", "surface warships", "armed submarines", "combat aircraft", "mobile beam or lightning weapons", "beam or lightning towers", "ground weapon towers", "ballistic splash artillery", "mobile constructors with build products", "factories with build products", "power structures", "metal storage", "energy storage", "radar structures", "metal extractors", "underwater metal storage", "underwater energy storage", "underwater extractors", "underwater weapon towers", "sonar structures", "commanders", "metal makers"}[role]
 }
 
 func (st *nlStage) limit(message string) {

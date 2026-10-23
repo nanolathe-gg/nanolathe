@@ -2691,10 +2691,13 @@ func (s *nlScreen) drawCarousel(screen *ebiten.Image, page nlPage, focus int, dt
 	goal = clamp(goal, 0, math.Max(0, total-visible))
 	s.scroll += (goal - s.scroll) * min(1, dt*10)
 	s.scroll = clamp(s.scroll, 0, math.Max(0, total-visible))
+	// Cards arrive with a short stagger when a page opens. A long page
+	// shortens it so its last card has landed when the page has opened
+	// (pageT 1): 1.6 - stagger·(n-1) must reach 1.
+	stagger := min(0.08, 0.6/float64(max(1, len(page.cards)-1)))
 	for i := range page.cards {
 		c := &page.cards[i]
-		// Cards arrive with a short stagger when a page opens.
-		appear := clamp(s.pageT*1.6-float64(i)*0.08, 0, 1)
+		appear := clamp(s.pageT*1.6-float64(i)*stagger, 0, 1)
 		appear = 1 - math.Pow(1-appear, 3)
 		x := left + float64(i%cols)*(cw+gap) - s.scroll
 		if x+cw < 0 || x > s.w() {

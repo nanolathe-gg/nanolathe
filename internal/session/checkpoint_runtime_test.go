@@ -80,7 +80,7 @@ func TestCheckpointRuntimeVector(t *testing.T) {
 		"03 ffffffff feffffff 78563412", // boundary, campaign, tick
 		"01 ffffffffffffffff", zero(135), "01 09", "00 0200000000000000", zero(135), "01000000 67 2381 feff 02 03",
 		zero(52),                                          // Meteor: 3 bools, eleven i32/u32, absent weapon, empty name
-		zero(24),                                          // twelve raw factors
+		zero(26),                                          // thirteen raw factors
 		"ffffffffffffffff", zero(24), "aa", zero(9), "bb", // Progress
 		"44332211 ddccbbaa 02000000 00 01000000 61 05 01000000 7a 01000000 62 01000000 4e", // seeds, restrictions, Rules
 		zero(16), "00000000", zero(24), "00000000", zero(16), // Skirmish before Players
@@ -138,11 +138,11 @@ func TestCheckpointRuntimeNestedVectors(t *testing.T) {
 		}
 	})
 	t.Run("raw factors", func(t *testing.T) {
-		m := content.Mutators{AreaOfEffect: content.Factor{Num: 1, Den: 2}, BuildCost: content.Factor{Num: 3, Den: 4}, BuildSpeed: content.Factor{Num: 5, Den: 6}, Damage: content.Factor{Num: 7, Den: 8}, FireRate: content.Factor{Num: 9, Den: 10}, Health: content.Factor{Num: 11, Den: 12}, Income: content.Factor{Num: 13, Den: 14}, Radar: content.Factor{Num: 15, Den: 16}, Salvage: content.Factor{Num: 17, Den: 18}, Sight: content.Factor{Num: 19, Den: 20}, UnitSpeed: content.Factor{Num: 21, Den: 22}, BuilderSpeed: content.Factor{Num: 23, Den: 24}}
+		m := content.Mutators{AreaOfEffect: content.Factor{Num: 1, Den: 2}, BuildCost: content.Factor{Num: 3, Den: 4}, BuildSpeed: content.Factor{Num: 5, Den: 6}, Damage: content.Factor{Num: 7, Den: 8}, FireRate: content.Factor{Num: 9, Den: 10}, Health: content.Factor{Num: 11, Den: 12}, Income: content.Factor{Num: 13, Den: 14}, Radar: content.Factor{Num: 15, Den: 16}, Salvage: content.Factor{Num: 17, Den: 18}, Sight: content.Factor{Num: 19, Den: 20}, UnitSpeed: content.Factor{Num: 21, Den: 22}, BuilderSpeed: content.Factor{Num: 23, Den: 24}, SmartMakers: content.Factor{Num: 25, Den: 26}}
 		var out bytes.Buffer
 		e := checkpoint.NewEncoder(&out)
 		writeCheckpointMutators(e, m)
-		want := runtimeCheckpointHex(t, "0201 0403 0605 1817 0807 0a09 0c0b 0e0d 100f 1211 1413 1615")
+		want := runtimeCheckpointHex(t, "0201 0403 0605 1817 0807 0a09 0c0b 0e0d 100f 1211 1413 1a19 1615")
 		if e.Err() != nil || !bytes.Equal(out.Bytes(), want) {
 			t.Fatalf("factors=%x err=%v", out.Bytes(), e.Err())
 		}
@@ -164,6 +164,7 @@ func TestCheckpointRuntimeMutationsAndExclusions(t *testing.T) {
 		{"meteor initialized", func(s *Session) { s.Meteor.Initialized = true }},
 		{"raw identity factor", func(s *Session) { s.Mutators.Health = content.Factor{Num: 1, Den: 1} }},
 		{"builder speed", func(s *Session) { s.Mutators.BuilderSpeed = content.Factor{Num: 5, Den: 1} }},
+		{"smart makers", func(s *Session) { s.Mutators.SmartMakers = content.SwitchOn() }},
 		{"builder fallback", func(s *Session) { s.builderOptionsReady = true }},
 		{"pending draw", func(s *Session) { s.resultPendingDraw = true }},
 		{"removed seat", func(s *Session) { s.seatCommands.removed[9] = true }},

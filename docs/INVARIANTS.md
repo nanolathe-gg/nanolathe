@@ -466,11 +466,14 @@ multipliers applied once to the per-battle catalog clone at battle entry: a
 transform of content, not a rule, with no seam, no RNG and no per-tick state.
 They are owned by [DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) §6. The
 retail baseline is Strict 3.1 *with no mutators*, and every fingerprint lock
-runs with none. Builder speed (user-authorized 2026-10-22) is the one mutator
-whose recorded factor engine code reads: a builder's script VM runs its
+runs with none. Two mutators record a value that engine code reads. Under
+Builder speed (user-authorized 2026-10-22) a builder's script VM runs its
 build-animation functions faster and its mobile build starts once in reach
-(DESIGN_MODS_MUTATORS §6.7). It still adds no seam, no RNG and no per-tick
-state, and the identity factor leaves every path exactly retail's.
+(DESIGN_MODS_MUTATORS §6.7). Under Smart makers (user-authorized 2026-10-22)
+the economy switches a human player's marked metal makers with the player's
+energy storage after each settlement pass (DESIGN_MODS_MUTATORS §6.8). Both
+still add no seam, no RNG and no per-tick state, and with them off every path
+is exactly retail's.
 
 **Survival** (user-authorized 2026-09-23) is likewise available in every mode.
 It is a scenario — a skirmish session with a commanderless attacker slot and a

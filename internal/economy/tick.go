@@ -144,6 +144,10 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	// algorithm dead code: the sums degenerate to the player mirror, both
 	// ratios come out wrong, and C6's slot-order consumption never happens.
 	s.Settle(player, tick, w)
+	// The Smart makers mutator switches a human player's metal makers on the
+	// pass just settled (docs/DESIGN_MODS_MUTATORS.md "Smart makers"); without
+	// the mutator no definition is marked and nothing changes.
+	s.manageSmartMakers(player, w)
 	return
 }
 

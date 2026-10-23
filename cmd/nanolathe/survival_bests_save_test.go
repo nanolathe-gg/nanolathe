@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
@@ -16,13 +17,18 @@ import (
 // used cheats or changed rules into an eligible new attempt (DESIGN_SURVIVAL
 // §8.1, §11). The current host's best is reread rather than saved in the bank.
 func TestSurvivalBestSurvivesSaveAndLoad(t *testing.T) {
+	smartOn := content.SwitchOn()
 	for _, tc := range []struct {
-		name    string
-		command session.HumanCommandKind
+		name        string
+		command     session.HumanCommandKind
+		smartMakers bool
 	}{
 		{name: "eligible"},
 		{name: "cheated", command: session.HumanATM},
 		{name: "changed rules", command: session.HumanGameplay},
+		// Loaded under another Smart makers selection than the save
+		// recorded (docs/DESIGN_MODS_MUTATORS.md D26).
+		{name: "Smart makers changed", smartMakers: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g, b, _, _ := startAutosaveBattle(t, true)
@@ -44,6 +50,10 @@ func TestSurvivalBestSurvivesSaveAndLoad(t *testing.T) {
 			// A different attempt can improve the record after this save.
 			if _, _, err := settings.StoreSurvivalBest(key, settings.SurvivalBest{Score: 50}); err != nil {
 				t.Fatal(err)
+			}
+			if tc.smartMakers {
+				g.opts.Mutators.SmartMakers = smartOn
+				excluded = "Smart makers changed at load"
 			}
 			g.quickload()
 			if g.battle == b {
@@ -78,13 +88,13 @@ func TestSurvivalSaveDoesNotInventBestEligibility(t *testing.T) {
 		{name: "missing"},
 		{name: "excluded", raw: json.RawMessage(`{"version":1,"excluded":"cheats used"}`)},
 	} {
-		run, err := restoreSurvivalBest(tc.raw, b.sess, g.cs.fs)
+		run, err := restoreSurvivalBest(tc.raw, b.sess, g.cs.fs, false)
 		if err != nil || run == nil || run.excluded == "" {
 			t.Fatalf("%s: run %+v, err %v", tc.name, run, err)
 		}
 	}
 	for _, raw := range []string{`null`, `{`, `{"version":2}`, `{"version":1}`, `{"version":1,"key":"bad","excluded":"cheats used"}`} {
-		if _, err := restoreSurvivalBest(json.RawMessage(raw), b.sess, g.cs.fs); err == nil {
+		if _, err := restoreSurvivalBest(json.RawMessage(raw), b.sess, g.cs.fs, false); err == nil {
 			t.Errorf("accepted malformed eligibility %s", raw)
 		}
 	}
@@ -95,9 +105,16 @@ func TestSurvivalSaveDoesNotInventBestEligibility(t *testing.T) {
 	}
 	rec.Content = strings.Repeat("00", 32)
 	raw, _ := json.Marshal(rec)
-	run, err := restoreSurvivalBest(raw, b.sess, g.cs.fs)
+	run, err := restoreSurvivalBest(raw, b.sess, g.cs.fs, false)
 	if err != nil || run == nil || run.excluded != "content changed since save" {
 		t.Fatalf("changed content eligibility: %+v, %v", run, err)
+	}
+	// A load under another Smart makers selection than the save recorded
+	// leaves the original key too, and says why
+	// (docs/DESIGN_MODS_MUTATORS.md D26).
+	run, err = restoreSurvivalBest(b.recordSurvivalBest(), b.sess, g.cs.fs, true)
+	if err != nil || run == nil || run.excluded != "Smart makers changed at load" {
+		t.Fatalf("Smart makers changed at load: %+v, %v", run, err)
 	}
 	// Invalid host metadata fails while the existing battle remains usable.
 	path := filepath.Join(dir, "bad.SAV")

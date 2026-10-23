@@ -99,6 +99,8 @@ To keep the two apart, code for this feature never uses the bare identifier
 | D21 | (2026-10-16) Third-party factions are add-ons the player enables in any combination beside ARM and CORE, each independent of the others and of the mod slot, never replacing another's content or identities (§5.8). |
 | D22 | (2026-10-18) Nanolathe hosts Switeck's TA Bugfix 1.7b6 as the fix add-on `switecks-bugfix`, listed under the add-on catalogue's `fixes` key. A fix add-on replaces the base patch archive and mounts after the content add-ons and before faction add-ons; it may repair the Cavedog content it replaces (§5.7). |
 | D24 | (2026-10-22) Builder speed: a mutator on its own step list (1, 2, 3, 5, 8, 20) that makes builders turn and accelerate faster, runs their build-animation script functions faster and starts a mobile build once in reach. Its factor is recorded on each builder definition and read by engine code, a further mode-independent exception the maintainer accepted for it (§6.7). |
+| D25 | (2026-10-22) Smart makers: a switch, off or on, under which a human player's metal makers switch themselves on at or above 80% of energy storage and off below 40%, as many as the measured surplus or shortfall needs, the least efficient off first and the most efficient on first. Its mark is recorded on each metal-maker definition and read by the economy after each of the player's settlement passes, a further mode-independent exception the maintainer requested (§6.8). |
+| D26 | (2026-10-22) Smart makers follows the player's current selection on every save load, a save without a sidecar and a campaign continuation included, while every other recorded mutator still applies and is selected (P6). The integrity warning compares the recorded catalog identity with the restored content's identity under the recorded set, so a different Smart makers selection is not reported as different content; a Survival run loaded under a different selection leaves its personal-best key (§6.8, §7.3). |
 | D23 | (2026-10-19) Nanolathe packages the Evolva models as `evolva-models`: UH40 supplies a model whenever present, with missing filenames filled from 2004, then 2003, then 2002. Model-only add-ons mount after content and fix add-ons and before factions and the selected mod; they replace models without occupying the mod slot (§5.7). |
 
 D9–D13 were proposed in review and accepted with the rest of the design
@@ -109,7 +111,8 @@ settings (§4.3). D15 supersedes D12's content profile: a mod's config is its
 own, so no preference can apply one mod's table to another. D17–D19 are the
 user's decisions for unit restrictions, recorded in §15. D22 is the user's
 decision to host the fix add-on, recorded in §5.7. D24 is the user's
-decision for Builder speed, recorded in §6.7.
+decision for Builder speed, recorded in §6.7, and D25 and D26 for Smart
+makers, recorded in §6.8 and §7.3.
 
 ## 3. The match selection
 
@@ -1399,9 +1402,10 @@ orthogonal to the gameplay mode in the same way content profiles are (D1).
 A mutator is not a gameplay rule. It adds no seam, draws no random numbers,
 keeps no per-tick state and is never consulted inside a tick. The retail
 arithmetic that consumes a mutated value is unchanged in every mode. Builder
-speed is the one exception the maintainer accepted (D24): the factor it
-records on each builder definition is read by engine code, under the
-boundaries of §6.7. **Strict
+speed and Smart makers are the two exceptions the maintainer accepted (D24,
+D25): the factor Builder speed records on each builder definition, and the
+mark Smart makers records on each metal-maker definition, are read by engine
+code, under the boundaries of §6.7 and §6.8. **Strict
 3.1 with no mutators is the retail baseline**; every fingerprint lock runs
 with no mutators. A variation that data cannot express, such as a
 resource-sharing or fog rule, is not a mutator. It is a Community
@@ -1420,6 +1424,7 @@ type Factor struct{ Num, Den uint8 }
 
 var MutatorSteps []Factor      // the shared list, 0.25 .. 4
 var BuilderSpeedSteps []Factor // Builder speed's own list, 1 .. 20
+var SwitchSteps []Factor       // a switch's off (the identity) and on, spelled "off" and "on"
 
 // Mutators is the closed set of global multipliers one battle runs under.
 // The zero value changes nothing.
@@ -1436,10 +1441,13 @@ type Mutators struct {
 	FireRate     Factor // shown as "Fire rate"
 	UnitSpeed    Factor // shown as "Unit speed"
 	BuilderSpeed Factor // shown as "Builder speed", on BuilderSpeedSteps (§6.7)
+	SmartMakers  Factor // shown as "Smart makers", on SwitchSteps (§6.8)
 }
 
 // MutatorInfo is one row a front end builds from: Key, Label, Group,
-// Description and the mutator's own ascending Steps.
+// Description and the mutator's own ascending Steps. Spell, Value and
+// ValueASCII give a step's canonical spelling and player-facing value:
+// "2" and "×2", or "on" and "On" for a switch (IsSwitch).
 func MutatorCatalog() []MutatorInfo
 func (f Factor) NextIn(steps []Factor) Factor
 func (f Factor) PrevIn(steps []Factor) Factor
@@ -1452,8 +1460,10 @@ func (m Mutators) Digest() string
 // RestrictToCreatable, it is never called on a shared compiled catalog.
 func (c *Catalog) ApplyMutators(m Mutators) error
 
-// On UnitDef, written only by ApplyMutators on a builder (§6.7):
+// On UnitDef, written only by ApplyMutators on a builder (§6.7) and on a
+// metal maker a player can switch (§6.8):
 BuilderSpeed Factor
+SmartMaker   bool
 ```
 
 The type is closed. A new mutator is a new field, a row in §6.5 and its
@@ -1466,7 +1476,8 @@ mission entry (after `RestrictToCreatable`) and save restore
 (`internal/session` staging). Mutators travel in the battle-entry request
 beside the unit limit and the gameplay selection. Nothing can change them
 during a battle. The setting has two writers, the Mods & Mutators screen and a
-save load (§7.3), and both act in the front end before a battle starts.
+save load (§7.3), which writes every mutator but Smart makers (D26), and both
+act in the front end before a battle starts.
 
 Mutators apply to campaign missions as well as skirmish. The
 campaign progress bank does not record them; each save's sidecar does.
@@ -1522,6 +1533,7 @@ switched to `buildtime`, and to 3 when Sight began extending raster inputs).
 Adding Builder speed left it at 3: no set string written before it names its
 key, and with the key absent every transform, Unit speed's included, is
 unchanged, so no earlier identity can be taken for a Builder speed one.
+Adding Smart makers left it at 3 for the same reason.
 
 **The step list** (initial): 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4. Each step is
 an exact rational (a whole number of quarters), and its one spelling, in the
@@ -1540,6 +1552,15 @@ off it, the shared steps included for Builder speed. The exactness argument
 holds: every step is still an exact rational, every product is formed once
 in 64-bit integers, and the closed lists keep the test matrix finite.
 
+**Switches.** Smart makers is switched rather than scaled. Its closed list,
+`SwitchSteps`, holds off (the identity) and on, spelled `off` and `on` in
+settings, flags, sidecars and reports (`smartMakers=on`) and shown as *Off*
+and *On*; any other spelling, `On` and `1` included, is refused. The on
+step's stored value, 2/1, carries no arithmetic: nothing multiplies by it.
+The player lists name a switch that is on alone (*Smart makers*), and the
+Nanolathe screen's card has no side-by-side comparison, since the switch
+changes nothing a preview scene can show.
+
 ### 6.5 The mutators
 
 | Mutator | Fields | Effect | Couplings (retail arithmetic unchanged) |
@@ -1556,6 +1577,7 @@ in 64-bit integers, and the closed lists keep the test matrix finite.
 | Fire rate | every weapon's `ReloadTime`, from its stored unsigned 16-bit value, scaled by the **inverse** factor as Build speed scales `buildtime` | every weapon fires k× as often | The slot fires when its countdown reaches zero ([06 §4.2]), at most once per tick per slot, so short stock reloads round unevenly at ×4 (5 ticks becomes 1). Zero stays zero and the minimum of one never creates a free round ([06 R-WPN-05 §2]). `energypershot` and `metalpershot` are billed per shot, so drain grows k-fold at the same cost per shot ([06 §4.2]). A stockpile round advances five progress per visit up to `reloadtime` and bills in proportion to progress, so nukes and anti-nukes build rounds in 1/k of the time at the same total cost, demanding k× per visit ([06 §11.1]); the stock 3,600–5,400-tick rounds (2–3 minutes) take 30–45 s at ×4. `burstrate` spaces shots within a burst on its own schedule and is untouched; a burst longer than the scaled reload overlaps the next ([06 §4.3]). The veteran reload is an integer percentage of `reloadtime`, so the bonus flattens at the smallest reloads ([06 §4.2]). `SetMaxReloadTime` hands scripts the scaled value ([06 R-WPN-05 §3]). Weapons with no reload — meteor, burn and death weapons — are unaffected. The Classic AI does not read reload; the Modern AI's damage-rate estimates scale. |
 | Unit speed | unit `MaxVelocity`, `TurnRate` (from its stored unsigned 16-bit value), `MoveRate1` and `MoveRate2` by k; `Acceleration` by k²; `BrakeRate` by k² for a unit that does not fly and by k for one that does | every unit moves and turns k× as fast along paths of the same shape | The mover chooses the ground or flight integrator on the definition's `canfly` bit alone ([04 R-MOV-01 §1]). The ground mover accelerates only while the lookahead is beyond twice its turning distance `|err|·speed/turnrate` and the point two ahead is beyond its braking distance `speed²/(2·brakerate)` ([04 R-MOV-01 §4]); both are unchanged, as is the distance to reach top speed, and the time to reach it is 1/k. The flight integrator compares horizontal speed with `brakerate` itself and turns the excess toward the heading, so there `brakerate` is a speed ([04 §10.1]); the loss term `acceleration/maxvelocity` of its decay grows k-fold, and so do the approach speed `sqrt(2·a·d)` and the terminal speed. The movement-rate tiers compare speed with the two thresholds, so a unit changes tier at the same fraction of its speed ([04 R-MOV-01 §6]). No COB port sets a speed ([04 R-COB-03 §1]). Fixed distances do not scale — the waypoint capture radius, the lookahead, the air service radii — so a unit whose step outgrows the capture radius can pass a waypoint and loop back to it, and the collision validator tests only the proposed rectangle ([04 R-COLL-01 §1]); the maintainer accepts overshoot at high factors (P18). Tick cadences (repath, air order deadlines) and weapons — projectile speed, turret turn rate — are unchanged, so fast units outrun more fire. `cruisealt` and the bank and pitch gains are untouched. The Modern AI's absolute speed thresholds (fast, scout) see the scaled speeds. |
 | Builder speed | every `builder` definition: a mobile one's (bmcode 1) `TurnRate` by k, from its stored unsigned 16-bit value; a ground one's `Acceleration` and `BrakeRate` by k as well; and the recorded `BuilderSpeed` factor on every builder. On its own step list, 1–20 | builders turn and reach their unchanged top speed k× as fast, deploy and stow their nanolathe k× as fast, and start a mobile build once in reach | The only mutator whose compiled value engine code reads (§6.7). Top speed is untouched: `maxvelocity` and the movement-rate thresholds are not scaled, so the ground mover's turning and braking distances shrink rather than keep their shape ([04 R-MOV-01 §4]). A flying builder gains turn rate only, because the flight integrator turns `acceleration` and `brakerate` into speed terms ([04 §10.1]). With Unit speed each field is scaled once by k_u·k_b, k_u²·k_b and, for a ground builder's `brakerate`, k_u²·k_b, a flying one's k_u, then saturated at 65,535 and 2³¹−1. The script and approach effects, and their boundaries, are §6.7's. Both computer players' builders are affected, because the catalog is every player's (D7). |
+| Smart makers | no field is scaled; every definition `content.SmartMakerCandidate` accepts — a building whose `makesmetal` byte is non-zero with no `extractsmetal` ahead of it, a positive `energyuse` and `onoffable` — records `SmartMaker`. A switch on `SwitchSteps` | a human player's metal makers switch on at or above 80% of energy storage and off below 40%, most efficient first on and least efficient first off, as many as the pass's surplus or shortfall needs | The second mutator whose recorded value engine code reads (§6.8). The six stock makers qualify — ARMMAKR, CORMAKR, ARMFMKR, CORFMKR (1 metal for 60 energy), ARMMMKR (16 for 800) and CORMMKR (12 for 625) — and no other stock definition does. Conversion, upkeep and the maker stall gate are retail's ([05 R-ECO-01 §2], [05 R-PROD-01 §5]); only who presses the switch changes. Computer players keep their own maker logic. With Income, makers run on the scaled surplus. |
 
 **Expanded sight data — Nanolathe mutator policy (issue #94, user-authorized
 2026-10-05).** Above ×1, enlarge the per-battle compiled inputs in every mode,
@@ -1653,6 +1675,16 @@ rasters continue selecting those inputs from the live definition ([03 §3.2]).
   (DESIGN_MULTIPLAYER §8.6). The simulation manifest's mutator record appends
   the same index after its eleven bytes only when set, and a builder's
   definition digest gains its recorded factor only when set.
+- Smart makers travels the same way: `smartMakers=on` in the canonical
+  string, identity, settings key, sidecar and replays, and required
+  extension 21 in the battle configuration, one `u8` that must be 1, omitted
+  when off. The manifest's tail after the eleven bytes is empty with neither
+  Builder speed nor Smart makers, Builder speed's index alone with only it,
+  and Builder speed's index (0 for the identity) followed by 1 with Smart
+  makers on, so the tail's length tells the three apart. A maker's
+  definition digest gains its mark only when set, and the runtime
+  checkpoint's Mutators record keeps the raw factor after Sight in lexical
+  order.
 
 ### 6.7 Builder speed — Nanolathe mutator policy (user-authorized 2026-10-22)
 
@@ -1778,6 +1810,141 @@ and the unchanged walk without the factor.
 `cob.TestStockStateRequestLoopIsABuildAnimation` (retail tier) lock the
 stock relationships and the stock loop's membership.
 
+### 6.8 Smart makers — Nanolathe mutator policy (user-authorized 2026-10-22)
+
+A retail metal maker converts energy whenever it is switched on and its
+upkeep is admitted ([05 R-ECO-01 §2], [05 R-PROD-01 §5]). A player either
+switches makers by hand as income changes or leaves them on, so storage
+overflows and its energy is wasted at the settlement clamp
+([05 R-ECO-01 §6]), or the makers drain the energy construction needs. The
+Classic computer player has its own eco toggle ([08 R-AI-01 §2]). The
+maintainer asked for an opt-in switch that manages a player's makers: on
+when energy reaches 80% of storage, off when it falls below 40%, not all at
+once but according to how many the player has, least efficient off first.
+
+**A second engine-read mutator.** Like Builder speed (§6.7), Smart makers
+records a value on definitions of the battle's catalog clone and engine code
+reads it: the economy, after a player's settlement pass. It changes no
+authored field and no retail arithmetic. It adds no seam, no RNG stream, no
+per-tick state and no save or checkpoint field beyond the mutator set
+itself, and nothing consults the mutator set during a tick. The maintainer
+accepted this as a further mode-independent exception (D25).
+
+**Strict baseline.** Without the mutator no definition is marked and the
+controller switches nothing, in every mode. Strict 3.1 with no mutators
+remains the retail baseline, and every fingerprint lock runs with none.
+
+**Scope.** Every definition `content.SmartMakerCandidate` accepts: a
+building (`bmcode` zero) whose `makesmetal` byte is non-zero, with no
+positive `extractsmetal` ahead of it in the generator chain, whose single
+store of `energyuse` is positive, and which authors `onoffable`, the ON/OFF
+handlers' own gate ([05 R-ECO-01 §2], [04 R-ORD-01 §2]). On the reference
+install these are exactly the six stock makers of §6.5. Only a human
+player is managed: control byte 1 and not an observer, which is the local
+player and every online human seat on every machine, in skirmish, Survival
+and campaign alike. A computer player keeps its own maker logic — the
+Classic player's eco toggle, and none for the Modern AI — so the two never
+contend for one switch.
+
+**When.** Inside the player's deadline block, immediately after a
+settlement pass ([05 "Authoritative settlement order"]), so about once a
+second, and only on a pass that actually settles. A player whose upkeep is
+paused under the Modern activity holds is skipped, so the controller never
+restarts what the pause shut down; the hold's own restoration applies on
+release ([DESIGN_ECONOMY_CONSTRUCTION](DESIGN_ECONOMY_CONSTRUCTION.md#modern-economy-explanation-and-temporary-activity-holds)).
+Under the Generation hold a maker makes no metal but still bills its
+upkeep, so the controller switches none on, while it still sheds makers
+below 40%.
+
+**The decision.** From the settled pass, `E` is stored energy, `C` its
+capacity, and `net` the pass's produced energy minus its requested energy,
+which already includes every switched-on maker's upkeep. A player with no
+capacity is skipped. The managed makers are the player's live, finished
+units of marked definitions, ordered most efficient first — metal made per
+energy used, the `makesmetal` byte over `energyuse`, compared by
+cross-multiplication — with equal makers in slot order.
+
+1. *At or above 80%* (`5E ≥ 4C`): the budget is `net + (E − 0.8C)`. While it
+   is positive, each switched-off maker in order whose upkeep fits in what
+   remains is switched on and its upkeep subtracted. A maker that does not
+   fit is passed over for a smaller one.
+2. *Below 40%* (`5E < 2C`): the shortfall is `(0.4C − E) − net`. While it is
+   positive, the switched-on makers are switched off in the reverse order,
+   least efficient first, each subtracting its upkeep.
+3. *Otherwise* nothing changes. The 40–80% band is the hysteresis that keeps
+   a maker from toggling every pass.
+
+Spending at most the surplus plus the energy above 80% keeps the next pass at
+or above 80% by this pass's rates, so switching on never by itself takes the
+player below 40%, and a Moho waits until storage can carry its 800. Switching
+off covers only the measured shortfall plus the gap to 40%, so the makers
+that stay on are the efficient ones. How many makers run therefore follows
+the energy, not a fixed count: a larger surplus runs more of them, and over
+time the efficient makers stay on while the small ones absorb what is left.
+
+**Arithmetic.** Each stored single is converted once to whole energy units
+through the defined truncating conversion ([01 R-DET-01 §1], I3), saturated
+at 2³⁰, and NaN reads as zero. Thresholds are compared in fifths of a unit,
+and the efficiency order compares `makes·upkeep` products, all in 64-bit
+integers; an upkeep below one unit counts as one. No division or
+floating-point state is added, and no threshold is decided by a floating
+comparison (I2).
+
+**The switch.** A change goes through the unit's one activation writer, as
+the ON/OFF orders and the Classic eco toggle do ([04 R-UNIT-06 §2]): the
+`Activate` or `Deactivate` script callback runs, the viewing player hears
+the activate or deactivate cue, at most one per 60 ticks
+([03 R-AUD-01 §7]), and the new state bills from the next pass
+([05 R-ECO-01 §2]). A maker the player switches by hand keeps that state
+until the controller next acts, on a pass in the top band with budget to
+spend or the bottom band with a shortfall; the controller keeps no memory
+of who switched what. A queued ON/OFF order still executes as an order.
+
+**Saves** (D26, user-authorized 2026-10-22). Smart makers is the one mutator
+a load does not take from the save. It changes no authored value and no unit
+or resource state, only who presses the makers' ON/OFF switch, so taking it
+up or dropping it at a load is like the player starting or ceasing to work
+those switches by hand. Every load — a save with a sidecar or without
+one, and a campaign continuation — runs under the player's current Smart
+makers selection beside the save's other recorded mutators, and the
+selection keeps it; the next save records what the battle then ran under.
+For a save with a sidecar the load dialog's line names that set (§8.4), and
+the integrity check compares identities under the recorded set, so turning
+Smart makers on or off for a load is not mistaken for different content
+(§7.3). A Survival run loaded under another Smart makers selection than it
+was saved with no longer counts toward the personal best its key names, since
+that key includes the mutators (DESIGN_SURVIVAL §8.1).
+
+**Shared stock.** The controller reads the pass it has just settled, and
+its `net` stands for the pass to come. Resources shared with allies go
+through the ledger ([05 R-SHARE-01 §2]): an automatic share or a gift
+debits the giver's stock at once and counts as the giver's requested energy
+on its next pass, and the recipient's next pass counts it as produced. So
+the controller reads a share as if it would recur: a giver switches on
+fewer makers or sheds more, and a recipient switches on more. Survival's
+split of the survivors' income instead moves stock outside the pass: on the
+next tick it hands a survivor's teammates their share of the pass's
+production (DESIGN_SURVIVAL §4.3), so a survivor's controller sees the
+pass's whole production and may switch on more than the split leaves room
+for. The two bands correct both on later passes, at the cost of more
+switching than a lone player sees.
+
+**Not included.** A per-maker exemption, adjustable thresholds, and managing
+computer players' makers.
+
+**Known hazard.** The controller acts on settled passes only, so a sudden
+demand can take storage up to one pass's drain below 40% before makers are
+shed, and a maker switched on with storage above 80% bills its upkeep on the
+next pass, not at once. The controller reads energy only: with metal
+storage full it still switches makers on, and the metal they make beyond
+capacity is wasted at the settlement clamp ([05 R-ECO-01 §6]).
+
+**Measured on the reference install** (Strict 3.1, the retail-tier session
+test): 7,000 storage, a fusion plant, two Mohos and four small makers whose
+upkeep exceeds the income. Over 120 passes storage stayed at or above 2,110,
+the makers switched 13 times, and they made 2,540 metal, about the fusion
+plant's output at the Moho rate.
+
 ## 7. The save sidecar
 
 The sidecar is `save.Sidecar` (read and written by `internal/save`); the
@@ -1890,7 +2057,8 @@ the previous checkpoint (DESIGN_SESSIONS_AI_SAVE §5).
 
 1. **No sidecar**, as with retail saves and older Nanolathe saves: behave
    exactly as today. Use the current selection, the existing unit-limit rules
-   and no mutators, and infer nothing from the loaded content
+   and no mutators but the selected Smart makers (D26), and infer nothing
+   from the loaded content
    ([DESIGN_GAMEPLAY_RULES §6](DESIGN_GAMEPLAY_RULES.md#6-save-interaction)).
 2. **Mod.** If the recorded mod differs from the running one and that
    version is installed, switch to it (§4.4) carrying the recorded mutators
@@ -1928,14 +2096,21 @@ the previous checkpoint (DESIGN_SESSIONS_AI_SAVE §5).
    first. Retail's post-load carry of `Summary.maxunits` into the configured
    word is kept.
 6. **Mutators.** Apply the recorded mutators to the restore clone and make
-   them the selected mutators (P6). The settings, the chip, a restart of the
-   battle and the next new battle then all match the game that was loaded.
+   them the selected mutators (P6), with Smart makers as the player has
+   selected it rather than as recorded (D26, §6.8). The settings, the chip, a
+   restart of the battle and the next new battle then all match the game that
+   was loaded.
    A skirmish save's recorded unit restrictions are checked and applied to
    the clone before the mutators, before the terrain, the pool and every
    unit, and become the running content's restriction setting (§15.5).
-7. **Integrity.** Compare the recorded `catalog` hash with the restored
-   catalog's. A mismatch (a different base install, different mod bytes) loads
-   with a warning on the battle message line rather than refusing.
+7. **Integrity.** Compare the recorded `catalog` hash with the identity the
+   restored content has under the recorded mutators: `content.MutatedHash`
+   of the restored catalog's identity before mutators (after any unit
+   restrictions) and the recorded set. That is the restored catalog's own
+   identity unless Smart makers differs from the record, and the comparison
+   then still tests the content rather than the selection. A mismatch (a
+   different base install, different mod bytes) loads with a warning on the
+   battle message line rather than refusing.
 
 **After a package update.** The sidecar keeps the archive SHA-256 from the
 install receipt; it is provenance, not a separate installed-version selector.
@@ -1954,12 +2129,13 @@ loading-screen lines (§8.3).
 
 **Continuation saves.** A between-missions save starts the next mission
 fresh, so what it takes from its sidecar is the selection that mission is
-entered under: the mod (step 2), the mutators, the rule set, the unit limit
-and the recorded Community sources. The loaded briefing's Start action
-resolves those sources under the recorded current rule set, rather than
-reusing the previous mission's entry table. Strict still projects a zero
-table. This Nanolathe save policy keeps the Load Game difficulty label and
-the next mission's AI tier consistent (DESIGN_COMMUNITY_PATCH §4.8).
+entered under: the mod (step 2), the mutators (Smart makers as selected,
+D26), the rule set, the unit limit and the recorded Community sources. The
+loaded briefing's Start action resolves those sources under the recorded
+current rule set, rather than reusing the previous mission's entry table.
+Strict still projects a zero table. This Nanolathe save policy keeps the Load
+Game difficulty label and the next mission's AI tier consistent
+(DESIGN_COMMUNITY_PATCH §4.8).
 The sources belong only to that briefing; they do not overwrite the host's
 Community preferences. Leaving it and opening a fresh briefing, or loading
 a continuation without a sidecar, uses the host's current sources.
@@ -2052,7 +2228,7 @@ has no X and cannot be removed.
 from the mutator catalogue (`content.MutatorCatalog`), so a new mutator needs
 no layout work: a scrolling list with a heading row per group (Economy,
 Combat, Movement, Builders, Vision), each row showing the mutator and its
-factor; the selected mutator's description beneath; *Raise*, *Lower*,
+factor, or *On* or *Off* for a switch; the selected mutator's description beneath; *Raise*, *Lower*,
 *Default* and *Reset all* in the right-hand column, *Raise* and *Lower*
 stepping through the selected mutator's own list (§6.4); *OK* keeps the changes for the screen's
 *Apply*, and *Cancel* restores the set the dialog opened with.
@@ -2104,8 +2280,10 @@ loading screen, so §7.3's warnings go to the battle message line instead.
 ### 8.4 The load dialog
 
 The selected save's summary panel gains one line with the sidecar's mod and
-mutators, and the count of its unit restrictions when it has any (§15.5),
-so the player knows before loading that it will switch. It is a
+the mutators the load will run under — the recorded ones, with Smart makers
+as selected (D26) — and the count of its unit restrictions when it has any
+(§15.5), so the player knows before loading that it will switch. The Save
+dialog's line shows the recorded mutators as they are. It is a
 Nanolathe label (`NLSIDECAR`) beneath the authored `TIME` field; a mod the
 library lacks is marked *(not installed)*, and a save without a sidecar
 leaves the line empty (DESIGN_INTERFACE_HUD_INPUT §2.6).
@@ -2163,7 +2341,9 @@ dependencies.
 | Under Strict 3.1 with Build speed ×2, a fixed construction finishes in half the ticks and bills the same total resources (a relationship, not a census) | `session` |
 | Under Strict 3.1, Income scales a generator's and a solar collector's settlement production k-fold and leaves a self-powered unit neutral; Unit speed shortens a straight move to about 1/k of the ticks; Fire rate builds a stockpile round in 1/k of the ticks at the authored cost (relationships) | `session.TestStrictIncomeScalesSettlementProduction`, `session.TestStrictUnitSpeedShortensAStraightMove`, `session.TestFireRateStockpilesAtEqualCost` |
 | At the extreme steps on the stock catalog: no aircraft's flight decay reaches zero under Unit speed with Builder speed ×20 beside it, and no metal deposit is scaled | `session.TestStockCatalogUnderExtremeSteps` (retail tier) |
+| Smart makers: the switch's spellings, refusals and cycling; exactly the switchable makers marked, no field changed and only the clone's identity moved; the manifest tail and the unit digest only when set; the controller's two bands, budget, efficiency order and exclusions (computer, observer, no storage, paused upkeep, unfinished, unmarked), and under the Generation hold no switch-on but still the shed; switches only on settled passes, the storage bound and continued conversion; online extension 21 and the version-1 refusal; the stock run of §6.8 | `content.TestSmartMakersIsASwitch`, `content.TestSmartMakersMarksOnlySwitchableMakers`, `content.TestFrozenInputsRecordFallbacksAndExtensions`, `economy.TestSmartMakers*`, `session.TestSmartMakersTravelsAsExtension21`, `session.TestSmartMakersRunStockMakers` (retail tier) |
 | Builder speed: per-key step lists; agility transform, saturation and the 64-bit product with Unit speed; the build-animation function set, scaled script timing and the unchanged identity path; the in-reach start and the unchanged walk without it; online extension 19; stock readiness relationships | the tests of §6.7 |
+| Smart makers on load: a save made without it restores with it when it is selected, its makers marked and with no different-content warning; one made with it restores without it when it is not; a save without a sidecar takes it from the selection; the load dialog's line names the set the load runs under; other content still warns; `MutatedHash` is the identity `ApplyMutators` gives; the Save dialog's line shows the recorded set; a campaign continuation enters the next mission under the recorded mutators with Smart makers as selected; a Survival run loaded under another selection leaves its personal-best key and says why (D26) | `main.TestLoadingAnySaveFollowsSmartMakers`, `main.TestContinuationFollowsSmartMakers`, `main.TestSurvivalBestSurvivesSaveAndLoad` (retail tier), `content.TestMutatedCatalogIdentity`, `main.TestSurvivalSaveDoesNotInventBestEligibility` |
 | Sidecar round trip; a load without one behaves as today; a load restores rule set, Community sources and entry table, unit limit and mutators, and selects the recorded mod and mutators (P6); bank bytes unchanged | `save.TestSidecarRoundTripsEveryModSpelling`, `save.TestSidecarRefusesAnotherSchemaAndMalformedFiles`, `main.TestSaveSidecarRestoresTheRecordedSelection` (retail tier) |
 | A Survival director selects schema 4 even with restrictions or add-ons; schemas 1–3 reject a Survival field, schema 4 requires a non-null director, and personal-best eligibility requires that director; ordinary save schemas are unchanged | `save.TestSidecarSchemaFollowsSurvival`, `save.TestSidecarRefusesUnsupportedSurvivalCombinations`, `save.TestWriteSidecarRefusesInvalidSurvivalCombinations` |
 | A generated map's recipe selects schema 5 with or without the other records; schema 5 requires the recipe and earlier schemas refuse one | `save.TestSidecarSchemaFollowsGeneratedMap` |
@@ -2190,6 +2370,11 @@ The applicable gates are those in [ARCHITECTURE §6](ARCHITECTURE.md#6-verificat
   lines.
 - [PROTA_SUPPORT](PROTA_SUPPORT.md): the Mods & Mutators screen as the
   ordinary route, with manual roots as the alternative.
+- For Smart makers (§6.8): AGENTS.md's mutator exception, INVARIANTS I11,
+  [DESIGN_MULTIPLAYER](DESIGN_MULTIPLAYER.md) §8.6's extension table
+  (required ID 21) and §16.3's Mutators record, and
+  [DESIGN_ECONOMY_CONSTRUCTION](DESIGN_ECONOMY_CONSTRUCTION.md) C7 (done with
+  this unit).
 - For Builder speed (§6.7): AGENTS.md's mutator exception and
   [DESIGN_ECONOMY_CONSTRUCTION](DESIGN_ECONOMY_CONSTRUCTION.md) "The approach"
   (done with this unit); [DESIGN_MULTIPLAYER](DESIGN_MULTIPLAYER.md) §8.6's
@@ -2220,7 +2405,7 @@ that a save selects its mutators as well as its mod.
 | P3 | Radar also scales the two jamming distances | §6.5 |
 | P4 | Initial step list 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, spelled as decimals | §6.4 |
 | P5 | Mutators apply to campaign missions as well as skirmish | §6.3 |
-| P6 | Loading a save selects both the mod and the mutators its sidecar records | §7.3 |
+| P6 | Loading a save selects both the mod and the mutators its sidecar records, Smart makers excepted (D26) | §7.3 |
 | P7 | An unselectable recorded rule set loads under its base, with a warning | §7.3 |
 | P8 | A catalog hash mismatch on load warns and does not refuse | §7.3 |
 | P9 | Older versions stay installed until removed | §4.1 |
@@ -2272,6 +2457,9 @@ fingerprint. Units 1–8 are implemented.
 12. **Builder speed.** The mutator, its own step list, the script timing, the
    in-reach start and online extension 19 (§6.7, D24). Implemented
    2026-10-22.
+13. **Smart makers.** The switch, the maker mark, the economy's controller,
+   online extension 21 (§6.8, D25) and its load rule (§7.3, D26).
+   Implemented 2026-10-22.
 
 ## 14. Research map
 

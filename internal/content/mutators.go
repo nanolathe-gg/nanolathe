@@ -3,7 +3,9 @@
 // content, not a gameplay rule: it adds no seam, draws no random number, keeps
 // no per-tick state and is never consulted inside a tick, so it applies in
 // every gameplay mode, Strict 3.1 included (INVARIANTS I11). Strict 3.1 with
-// no mutators is the retail baseline.
+// no mutators is the retail baseline. Builder speed and Smart makers are the
+// two the maintainer accepted whose recorded value engine code reads (§6.7,
+// §6.8).
 
 package content
 
@@ -33,14 +35,46 @@ var MutatorSteps = []Factor{{1, 4}, {1, 2}, {3, 4}, {1, 1}, {3, 2}, {2, 1}, {3, 
 // (docs/DESIGN_MODS_MUTATORS.md §6.4, "Builder speed").
 var BuilderSpeedSteps = []Factor{{1, 1}, {2, 1}, {3, 1}, {5, 1}, {8, 1}, {20, 1}}
 
-// parseFactorIn reads one step of steps in its canonical decimal spelling:
-// "0.25", "0.5", "0.75", "1", "1.5", "2", "3" or "4" on the shared list, and
-// "2", "3", "5", "8" or "20" on Builder speed's. Any other text, including an
-// equal value spelled differently ("1/2", ".5", "2.0"), is an error.
+// SwitchSteps is the closed list of a mutator that is switched on or off
+// rather than scaled: off, the identity, then on. Its steps are spelled "off"
+// and "on" (MutatorInfo.Spell), and the on step's value carries no
+// arithmetic; Smart makers is the one such mutator
+// (docs/DESIGN_MODS_MUTATORS.md §6.4, "Smart makers"). A list is a switch
+// when it equals this one, so a scaled mutator must not use the steps ×1 and
+// ×2 alone; TestMutatorCatalogDescribesTheClosedSet fails if one does.
+var SwitchSteps = []Factor{{1, 1}, {2, 1}}
+
+// SwitchOn is a switch mutator's on step, SwitchSteps[1]. The online
+// configuration's Smart makers record and the simulation manifest name it.
+func SwitchOn() Factor { return SwitchSteps[1] }
+
+// isSwitchList reports whether steps is SwitchSteps, compared by value
+// because MutatorCatalog hands out copies.
+func isSwitchList(steps []Factor) bool {
+	return len(steps) == len(SwitchSteps) && steps[0] == SwitchSteps[0] && steps[1] == SwitchSteps[1]
+}
+
+// spellIn is f's canonical spelling on steps: "off" or "on" on a switch's
+// list, and the factor's decimal on every other list.
+func spellIn(steps []Factor, f Factor) string {
+	if isSwitchList(steps) {
+		if f.IsIdentity() {
+			return "off"
+		}
+		return "on"
+	}
+	return f.String()
+}
+
+// parseFactorIn reads one step of steps in its canonical spelling:
+// "0.25", "0.5", "0.75", "1", "1.5", "2", "3" or "4" on the shared list,
+// "2", "3", "5", "8" or "20" on Builder speed's, and "off" or "on" on a
+// switch's. Any other text, including an equal value spelled differently
+// ("1/2", ".5", "2.0", "On"), is an error.
 func parseFactorIn(s string, steps []Factor) (Factor, error) {
 	text := strings.TrimSpace(s)
 	for _, step := range steps {
-		if step.String() == text {
+		if spellIn(steps, step) == text {
 			return step, nil
 		}
 	}
@@ -50,7 +84,7 @@ func parseFactorIn(s string, steps []Factor) (Factor, error) {
 func stepSpellings(steps []Factor) string {
 	names := make([]string, len(steps))
 	for i, step := range steps {
-		names[i] = step.String()
+		names[i] = spellIn(steps, step)
 	}
 	return strings.Join(names, ", ")
 }
@@ -251,6 +285,14 @@ type Mutators struct {
 	// builder definition (UnitDef.BuilderSpeed), where its script VM and its
 	// mobile-build approach read it. Shown as "Builder speed".
 	BuilderSpeed Factor
+	// SmartMakers is a switch on SwitchSteps, not a multiplier: when on,
+	// every metal-maker definition records UnitDef.SmartMaker, and after each
+	// of a human player's settlement passes the economy switches that
+	// player's finished makers on above 80% of energy storage and off below
+	// 40%, as many as the measured surplus or shortfall needs, most efficient
+	// first on and least efficient first off. Shown as "Smart makers"
+	// (docs/DESIGN_MODS_MUTATORS.md "Smart makers").
+	SmartMakers Factor
 }
 
 // MutatorInfo describes one mutator for a front end, so a screen builds its
@@ -261,6 +303,38 @@ type Mutators struct {
 type MutatorInfo struct {
 	Key, Label, Group, Description string
 	Steps                          []Factor
+}
+
+// IsSwitch reports whether the mutator is switched on and off (SwitchSteps)
+// rather than scaled.
+func (i MutatorInfo) IsSwitch() bool { return isSwitchList(i.Steps) }
+
+// Spell is f's canonical spelling on the mutator's list, the text settings,
+// flags and ParseMutators read: "2", "0.5", or "on" and "off" for a switch.
+func (i MutatorInfo) Spell(f Factor) string { return spellIn(i.Steps, f) }
+
+// Value is the player-facing value: "×2", or "On" and "Off" for a switch.
+func (i MutatorInfo) Value(f Factor) string {
+	if i.IsSwitch() {
+		return switchValue(f)
+	}
+	return f.Label()
+}
+
+// ValueASCII is Value spelled for the retail fonts, which have no
+// multiplication sign: "x2", or "On" and "Off".
+func (i MutatorInfo) ValueASCII(f Factor) string {
+	if i.IsSwitch() {
+		return switchValue(f)
+	}
+	return "x" + f.String()
+}
+
+func switchValue(f Factor) string {
+	if f.IsIdentity() {
+		return "Off"
+	}
+	return "On"
 }
 
 // mutatorField is one row of the closed set: its descriptor and its field.
@@ -280,6 +354,7 @@ var mutatorFields = []mutatorField{
 	{MutatorInfo{"buildCost", "Build cost", "Economy", "Multiplies unit costs and the value of their wrecks.", MutatorSteps}, func(m *Mutators) *Factor { return &m.BuildCost }},
 	{MutatorInfo{"income", "Income", "Economy", "Multiplies production beyond each unit's upkeep.", MutatorSteps}, func(m *Mutators) *Factor { return &m.Income }},
 	{MutatorInfo{"salvage", "Salvage", "Economy", "Multiplies the value of wrecks, rocks and trees.", MutatorSteps}, func(m *Mutators) *Factor { return &m.Salvage }},
+	{MutatorInfo{"smartMakers", "Smart makers", "Economy", "Your metal makers switch on at 80 percent energy, off below 40 percent.", SwitchSteps}, func(m *Mutators) *Factor { return &m.SmartMakers }},
 	{MutatorInfo{"health", "Health", "Combat", "Multiplies every unit's hit points.", MutatorSteps}, func(m *Mutators) *Factor { return &m.Health }},
 	{MutatorInfo{"damage", "Damage", "Combat", "Multiplies the damage of every weapon and explosion.", MutatorSteps}, func(m *Mutators) *Factor { return &m.Damage }},
 	{MutatorInfo{"areaOfEffect", "Blast size", "Combat", "Multiplies every blast radius; direct hits are unchanged.", MutatorSteps}, func(m *Mutators) *Factor { return &m.AreaOfEffect }},
@@ -299,7 +374,7 @@ var mutatorFieldsByKey = func() []mutatorField {
 }()
 
 // MutatorCatalog returns the descriptors in the design table's order, grouped:
-// Economy (build speed, build cost, income, salvage), Combat (health, damage,
+// Economy (build speed, build cost, income, salvage, smart makers), Combat (health, damage,
 // blast size, fire rate), Movement (unit speed), Builders (builder speed),
 // Vision (sight, radar). The slice and each step list are copies.
 func MutatorCatalog() []MutatorInfo {
@@ -320,7 +395,7 @@ func mutatorKeys() string {
 }
 
 // ParseMutators reads the settings and flag form, key to canonical factor
-// spelling. Keys are walked in sorted order, so the first error reported is
+// spelling ("on" and "off" for a switch). Keys are walked in sorted order, so the first error reported is
 // deterministic (I1). An unknown key or a factor off that key's step list is
 // an error naming it. An identity factor parses to the zero value.
 func ParseMutators(values map[string]string) (Mutators, error) {
@@ -389,7 +464,7 @@ func (m Mutators) Map() map[string]string {
 	out := make(map[string]string)
 	for _, field := range mutatorFieldsByKey {
 		if f := *field.get(&m); !f.IsIdentity() {
-			out[field.Key] = f.String()
+			out[field.Key] = field.Spell(f)
 		}
 	}
 	return out
@@ -407,21 +482,22 @@ func (m Mutators) IsZero() bool {
 }
 
 // String is the canonical form, "key=factor" pairs in ascending key order
-// joined by commas, e.g. "buildCost=0.5,buildSpeed=2"; "" when zero. It is
-// the value reports print and the catalog identity hashes.
+// joined by commas, e.g. "buildCost=0.5,buildSpeed=2,smartMakers=on"; ""
+// when zero. It is the value reports print and the catalog identity hashes.
 func (m Mutators) String() string {
 	parts := make([]string, 0, len(mutatorFieldsByKey))
 	for _, field := range mutatorFieldsByKey {
 		if f := *field.get(&m); !f.IsIdentity() {
-			parts = append(parts, field.Key+"="+f.String())
+			parts = append(parts, field.Key+"="+field.Spell(f))
 		}
 	}
 	return strings.Join(parts, ",")
 }
 
 // Describe is the player-facing list, one line per active mutator in the
-// design table's order, e.g. {"Build speed ×2", "Build cost ×0.5"}. It is
-// empty when the set is zero.
+// design table's order, e.g. {"Build speed ×2", "Build cost ×0.5", "Smart
+// makers"}: a switch that is on is named alone. It is empty when the set is
+// zero.
 func (m Mutators) Describe() []string {
 	return m.describe(Factor.Label)
 }
@@ -436,6 +512,10 @@ func (m Mutators) describe(label func(Factor) string) []string {
 	var out []string
 	for _, field := range mutatorFields {
 		if f := *field.get(&m); !f.IsIdentity() {
+			if field.IsSwitch() {
+				out = append(out, field.Label)
+				continue
+			}
 			out = append(out, field.Label+" "+label(f))
 		}
 	}
@@ -454,7 +534,8 @@ func (m Mutators) describe(label func(Factor) string) []string {
 // Tag 3: Sight above identity extends the per-battle visibility inputs.
 // Builder speed, added under tag 3, likewise left it: it has a key of its own
 // that no earlier string names, and with it absent every other transform —
-// Unit speed's motion fields included — is unchanged.
+// Unit speed's motion fields included — is unchanged. Smart makers left it for
+// the same reason: its key is new and it changes no other transform.
 const mutatorIdentityTag = "mutators/3"
 
 // Digest is a stable identity of the set: a hash of mutatorIdentityTag and the
@@ -753,6 +834,12 @@ const (
 // builder starts placement once retail's reach test passes instead of walking
 // to the footprint border (docs/DESIGN_MODS_MUTATORS.md "Builder speed").
 //
+// Smart makers is a switch, not a scale: it changes no authored field, and
+// every metal maker a player can switch (SmartMakerCandidate) records
+// SmartMaker. The economy reads that mark after a human player's settlement
+// pass to switch the player's makers with its energy
+// (docs/DESIGN_MODS_MUTATORS.md "Smart makers").
+//
 // The only compile-time values derived from a mutated field are the moverate1
 // and moverate2 defaults, twice maxvelocity; Unit speed scales them by the
 // same k, so they stay twice the scaled velocity to within one 16.16 unit.
@@ -805,6 +892,9 @@ func (c *Catalog) ApplyMutators(m Mutators) error {
 		}
 		if !m.UnitSpeed.IsIdentity() || (u.Builder && !m.BuilderSpeed.IsIdentity()) {
 			scaleMotion(u, m.UnitSpeed, m.BuilderSpeed)
+		}
+		if !m.SmartMakers.IsIdentity() && SmartMakerCandidate(u) {
+			u.SmartMaker = true
 		}
 	}
 	if m.Sight.Num > m.Sight.Den {
@@ -877,10 +967,21 @@ func (c *Catalog) ApplyMutators(m Mutators) error {
 			}
 		}
 	}
-	// The mutated identity composes the base identity with the set's digest,
-	// which hashes the identity tag and the canonical String (§6.6).
-	c.Hash = HashDefinition([]byte("catalog+mutators\n" + c.Hash + "\n" + m.Digest() + "\n"))
+	c.Hash = MutatedHash(c.Hash, m)
 	return nil
+}
+
+// MutatedHash is the identity ApplyMutators gives a catalog whose identity is
+// base: base itself for the zero set, otherwise the base identity composed
+// with the set's digest, which hashes the identity tag and the canonical
+// String (§6.6). A save load compares a save's recorded identity with the one
+// its recorded set gives the restored content, when Smart makers runs as the
+// player selects rather than as recorded (docs/DESIGN_MODS_MUTATORS.md §7.3).
+func MutatedHash(base string, m Mutators) string {
+	if m.IsZero() {
+		return base
+	}
+	return HashDefinition([]byte("catalog+mutators\n" + base + "\n" + m.Digest() + "\n"))
 }
 
 // scaleMotion applies Unit speed k_u and Builder speed k_b to one unit's
@@ -925,6 +1026,19 @@ func scaleMotion(u *UnitDef, unitSpeed, builderSpeed Factor) {
 	if stored := int64(uint16(u.TurnRate)); stored > 0 {
 		u.TurnRate = int32(turn.scale(stored, mutatorTurnRateLimit))
 	}
+}
+
+// SmartMakerCandidate reports whether Smart makers manages a definition: a
+// metal maker the settlement runs through its maker arm and a player can
+// switch. That is a building (bmcode zero) whose makesmetal byte is non-zero
+// with no extractsmetal ahead of it in the generator chain, whose upkeep is a
+// positive energyuse, and which authors onoffable, the handlers' own gate
+// [05 R-ECO-01 §2][04 R-ORD-01 §2]. The stock metal makers, Moho and floating
+// makers included, all qualify, and no other stock definition does
+// (docs/DESIGN_MODS_MUTATORS.md "Smart makers").
+func SmartMakerCandidate(u *UnitDef) bool {
+	return u != nil && u.BMCode == 0 && uint8(u.MakesMetal) != 0 && !(u.ExtractsMetal > 0) &&
+		float32(u.EnergyUse) > 0 && u.OnOffable
 }
 
 // mutatorWeapons returns every weapon record once, in sorted catalog-name

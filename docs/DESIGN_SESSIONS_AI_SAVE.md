@@ -2401,7 +2401,7 @@ ticks:
 - *No record.* A retail save, or a sidecar without the record, loads as
   before: each controller starts from the load's own entry seed, so its style
   and opening variation are drawn again, and plays the brain's defaults (as
-  a save without a sidecar takes no mutators). A record written before
+  a save without a sidecar takes no recorded mutators). A record written before
   `overrides` existed restores no parameters, which is how its game played.
 - *Where it lives.* `session.SaveSidecar` writes the record as the
   sidecar's `ai` value (`save.Sidecar.AI`, raw JSON), and the desktop load

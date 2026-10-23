@@ -100,6 +100,13 @@ type RetailBattleStage struct {
 	Image      *save.BattleImage
 	Session    *Session
 	StableUnit map[uint16]pool.Handle
+	// BaseCatalog is the restored catalog's identity before the mutators,
+	// after any unit restrictions: content.MutatedHash of it and a mutator
+	// set is the identity the restore would have under that set. A load
+	// compares the save's recorded identity under the save's recorded set,
+	// since Smart makers follows the player's selection rather than the
+	// record (docs/DESIGN_MODS_MUTATORS.md §7.3).
+	BaseCatalog string
 
 	featuresRestored bool
 	burnSounds       [][3]numeric.Fixed
@@ -221,6 +228,10 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// discard the mutated identity, and it decides which corpse chains the
 	// build-cost mutator reaches. Applying them in the same order makes a
 	// restored battle's catalog the one its fresh entry built.
+	baseCatalog := ""
+	if cat != nil {
+		baseCatalog = cat.Hash
+	}
 	cat, err = applyEntryMutators(cat, deps.Mutators)
 	if err != nil {
 		return nil, err
@@ -352,7 +363,7 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err := restoreSurvival(s, deps.Survival); err != nil {
 		return nil, fmt.Errorf("session: retail restore: %w", err)
 	}
-	stage := &RetailBattleStage{Image: image, Session: s}
+	stage := &RetailBattleStage{Image: image, Session: s, BaseCatalog: baseCatalog}
 	// Ignition draws before the unit allocator, whose new bob phase is not
 	// overwritten by any save field [08 R-SAVE-02 §11][04 R-MOV-01 §5c].
 	if err := stage.restoreFeatures(); err != nil {

@@ -726,7 +726,11 @@ content identity and its sticky eligibility exclusion in `survivalBest`.
 Loading rereads the current host's best for that key; a cached score is not
 saved. Restores read live sources, so entry's capture and preparation compute
 their content identity again without composing or stepping another battle.
-Changed or unavailable content excludes the resumed run from the old key.
+Changed or unavailable content excludes the resumed run from the old key, and
+so does a load under another Smart makers selection than the save recorded,
+which a load follows instead of the record
+([DESIGN_MODS_MUTATORS](DESIGN_MODS_MUTATORS.md) D26); the result names that
+reason.
 A save without eligibility information remains playable but cannot establish
 an eligible attempt. Malformed or unsupported eligibility records refuse the
 load. Cheats and rule changes remain excluded across any number of saves.
