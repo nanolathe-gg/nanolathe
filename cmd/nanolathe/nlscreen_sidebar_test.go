@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // The demonstration uses the battle's approved host layout, including its
@@ -54,6 +55,44 @@ func TestNLSidebarPreviewPagePolicies(t *testing.T) {
 	names := (&nlPicNames{sidebar: &nlSidebarPreview{sidebarProductCatalog: c}}).order(nil)
 	if slices.Contains(names, "wrong") || !slices.Contains(names, "product0") || !slices.Contains(names, "product17") {
 		t.Fatalf("preview pictures came from membership: %v", names)
+	}
+}
+
+// The demonstration lays the rail out on the rows the battle gives it at the
+// draft's resolution, UI scale and renderer, so above 1080 rows it shows the
+// magnified rail's pages rather than the whole screen height's (issue #181;
+// DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+func TestNLSidebarPreviewUsesTheBattleUIScale(t *testing.T) {
+	cases := []struct {
+		w, h, pref int
+		renderer   string
+		rows, k    int
+	}{
+		{1920, 1080, settings.ChromeScaleAuto, "modern", 1080, 1},
+		{2560, 1440, settings.ChromeScaleAuto, "modern", 720, 2},
+		{3840, 2160, settings.ChromeScaleAuto, "modern", 1080, 2},
+		{1280, 1440, settings.ChromeScaleAuto, "modern", 1440, 1},
+		{1920, 1080, 2, "modern", 540, 2},
+		{3840, 2160, 1, "modern", 2160, 1},
+		{2560, 1440, settings.ChromeScaleAuto, "classic", 1440, 1},
+	}
+	for _, c := range cases {
+		d := nlDraft{pres: settings.DefaultPresentation(), resolution: retailDisplayMode{W: c.w, H: c.h}}
+		d.pres.UIScale, d.pres.Renderer = c.pref, c.renderer
+		rows, k := nlDraftSidebarRows(&d)
+		if rows != c.rows || k != c.k {
+			t.Errorf("%dx%d scale %d %s: preview rail %d rows at %dx, want %d at %dx", c.w, c.h, c.pref, c.renderer, rows, k, c.rows, c.k)
+		}
+	}
+	b, _, _ := sidebarRowsFixture(t, 720)
+	def, _ := b.cat.Unit("armfav")
+	f, _ := b.currentSnapshot()
+	c := b.hud.sidebarProductCatalog(b.cat, def, int(f.CommandPage.PageCount))
+	d := nlDraft{pres: settings.DefaultPresentation(), resolution: retailDisplayMode{W: 2560, H: 1440}}
+	d.pres.Renderer = "modern"
+	rows, _ := nlDraftSidebarRows(&d)
+	if _, got := nlSidebarPageStarts(c, false, rows, 0, false); got.capacity != c.sidebarLayout(720, 0, false).capacity {
+		t.Fatalf("2560x1440 preview holds %d build slots, the battle's 2x rail %d", got.capacity, c.sidebarLayout(720, 0, false).capacity)
 	}
 }
 

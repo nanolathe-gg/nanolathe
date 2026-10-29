@@ -2279,7 +2279,8 @@ to one (When space permits); zero selects Never. Legacy `expandedSidebar: 0`
 loads as `expandedSidebar: 1`, six items and Never, including through presets.
 Classic retains its authored/fitted layout. Apply, Cancel, Undo and Restore include both
 preferences, and the preview uses the resolved content recommendation and the
-selected game's logical resolution.
+rail the selected game's logical resolution gives it: the rows left after the
+draft's UI scale (see "Modern UI scale"; Classic is always 1x).
 
 Verification locks six-slot boundary comparisons, whole-row capacity, hiding
 orders before reducing a fixed count, cross-source pagination, explicit Free flow
@@ -2330,7 +2331,9 @@ stock page and the side panel art are authored for, and Auto also stays at 1x
 when 2x would leave the bars fewer than the 512 columns right of the rail
 their art and readouts are authored for (`hud.MinBarScaleWidth`). A fixed 2x
 applies as chosen even when it leaves less; the bottom of a page may then fall
-off the rail (`hud.ChromeScale`), and a centred modal too wide for the space
+off the rail (`hud.ChromeScale`; the whole-surface rule including the bar
+width is `hud.SurfaceChromeScale`, which the Nanolathe screen's sidebar
+demonstration also uses), and a centred modal too wide for the space
 beside the rail is kept on the surface. The scale is resolved at the joined
 host presentation boundary, before camera blending and world recording.
 Input until the next draw maps the pointer through that value, which is what
@@ -5377,8 +5380,9 @@ the bloom layer, and the separate source amounts multiply their own families.
 12 per page, Free flow) and Orders below build as independent named
 choices on one card. Sidebar and Fullscreen draw a small demonstration over
 the preview (`nlscreen_demo.go`). The sidebar shows the draft's actual
-resolved capacity and orders visibility at the selected logical game resolution.
-Twelve combines authored pages; Free flow reserves at least six slots before
+resolved capacity and orders visibility at the selected logical game resolution,
+laid out on the rows the draft's UI scale leaves the rail, as in the battle;
+the caption names the scale when it magnifies (issue #181). Twelve combines authored pages; Free flow reserves at least six slots before
 orders. Fullscreen scaling and world zoom do not alter that logical space.
 The common command rows always appear; the optional panel contains the
 supplementary Orders-page controls above them. Fixed counts put the native
@@ -5395,7 +5399,8 @@ stored build count. Missing or unsafe pages show no demonstration.
 Oversized authored/fitted pages show a layout description rather than a
 normalized grid with an inaccurate page count. The worker honours retirement
 between nested GUI and art reads. `TestNLSidebarPreviewPagePolicies` locks the
-partitions and fitted boundary; `TestNLSidebarLoaderStopsBetweenAssetReads`
+partitions and fitted boundary; `TestNLSidebarPreviewUsesTheBattleUIScale`
+locks the rail rows and scale against the battle's; `TestNLSidebarLoaderStopsBetweenAssetReads`
 locks cancellation, and the retail builder sweep compares preview cells with
 the live HUD.
 The demonstration code also places marks on the
