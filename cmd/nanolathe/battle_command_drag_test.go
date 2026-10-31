@@ -652,12 +652,36 @@ func TestCommandDragWheelSetsBuildGap(t *testing.T) {
 	if b.buildDragWheelOwned() || b.buildDragGap != 2 {
 		t.Fatal("the wheel stays owned after release, or the gap was lost")
 	}
-	b.stepBuildDragGap(-100)
+	b.stepBuildDragGap(-100, 0)
 	if b.buildDragGap != 0 {
 		t.Fatalf("gap below zero: %d", b.buildDragGap)
 	}
-	b.stepBuildDragGap(100)
+	b.stepBuildDragGap(100, 0)
 	if b.buildDragGap != dragBuildGapMax {
 		t.Fatalf("gap above the bound: %d", b.buildDragGap)
+	}
+}
+
+// Precise scrolling (trackpad, Magic Mouse) has no notch count: its vertical
+// travel steps the gap, and the camera does not pan while a build drag owns it.
+func TestCommandDragPreciseScrollSetsBuildGapWithoutPanning(t *testing.T) {
+	b, cl, _, _ := resourceFixture(t, false)
+	b.armPlacement(b.cat.Units["armsolar"])
+	dragInput(b, cl, 300, 250, input.MouseButtonLeft, "press", input.Modifiers{})
+	wheel := input.NewState()
+	wheel.Mouse.SetPosition(492, 250)
+	wheel.Mouse.SetButton(input.MouseButtonLeft, true)
+	wheel.Mouse.ResetEdges()
+	wheel.Mouse.PanY = dragBuildGapPanStep * 1.5 // one notch now, half carried
+	b.handleInput(wheel, cl)
+	wheel.Mouse.PanY = dragBuildGapPanStep * 0.5
+	b.handleInput(wheel, cl)
+	if b.buildDragGap != 2 {
+		t.Fatalf("gap = %d, want 2", b.buildDragGap)
+	}
+	x, z := b.cam.X, b.cam.Z
+	b.applyTrackpadGestures(&input.MouseState{PanX: 200, PanY: 200}, true, 492, 250)
+	if b.cam.X != x || b.cam.Z != z {
+		t.Fatalf("camera panned during a build drag: %v,%v -> %v,%v", x, z, b.cam.X, b.cam.Z)
 	}
 }

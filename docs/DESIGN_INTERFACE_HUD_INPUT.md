@@ -3887,15 +3887,18 @@ adds (wheel up) or removes (wheel down) one free map cell between neighbouring
 sites, from 0 (touching, the behaviour above) to 16. A row then advances by
 the footprint plus the gap on its dominant axis, and a grid by the footprint
 plus the gap on both axes; axis choice compares spans measured in these
-steps. Trackpad travel uses the zoom wheel's precise-scroll-free value and
-accumulates fractions until it makes a notch. During the gesture the wheel
-does not zoom; the Community snap-override wheel, which rotates the
+steps. Precise scrolling (a trackpad or Magic Mouse) carries no notch count,
+so its vertical travel counts one notch per `dragBuildGapPanStep` (30) logical
+pixels, a feel knob; fractions accumulate until they make a notch. During the
+gesture the wheel does not zoom and precise scrolling does not pan the camera
+(DESIGN_GPU_RENDERER §16.6); the Community snap-override wheel, which rotates the
 structure while its modifier is held, still takes the wheel first. The
 preview shows `gap N` beside the pointer. The gap is kept for the rest of
 the battle, so later rows reuse it, and is not saved. Validation, reservation
 skipping and Shift cancellation are unchanged; the gap only moves the
-candidate anchors. `TestDragBuildGap` and `TestCommandDragWheelSetsBuildGap`
-cover the geometry, the wheel's ownership, the bound and the released row.
+candidate anchors. `TestDragBuildGap`, `TestCommandDragWheelSetsBuildGap` and
+`TestCommandDragPreciseScrollSetsBuildGapWithoutPanning` cover the geometry,
+the wheel's ownership, precise scrolling, the bound and the released row.
 
 **Cancelling queued sites with a Shift row (requested input policy,
 2026-09-28).** A player sweeps a row over queued sites to take them off, as

@@ -182,7 +182,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 	state.PointerX, state.PointerY = mx, my
 	state.ShiftHeld = modifiers.Shift
 	if d.product != "" {
-		b.stepBuildDragGap(mouse.ZoomScrollY)
+		b.stepBuildDragGap(mouse.ZoomScrollY, mouse.PanY)
 	}
 	b.updateCommandDrag(cl, mx, my, modifiers)
 	if mouse.Held(d.button) {
@@ -361,13 +361,15 @@ func (b *battleSession) buildDragWheelOwned() bool {
 }
 
 // stepBuildDragGap spends the wheel on the build-drag gap, one free cell per
-// whole notch, wheel up widening. A trackpad's fractional travel accumulates
-// until it makes a notch. The gap stays for the rest of the battle.
-func (b *battleSession) stepBuildDragGap(wheel float32) {
-	if wheel == 0 {
+// whole notch, wheel up widening. Precise scrolling (a trackpad or a Magic
+// Mouse) carries no notch count, so its vertical travel counts one notch per
+// dragBuildGapPanStep logical pixels. Fractions accumulate until they make a
+// notch. The gap stays for the rest of the battle.
+func (b *battleSession) stepBuildDragGap(wheel float32, panY float64) {
+	if wheel == 0 && panY == 0 {
 		return
 	}
-	b.buildDragWheel += wheel
+	b.buildDragWheel += wheel + float32(panY/dragBuildGapPanStep)
 	steps := int32(b.buildDragWheel)
 	if steps == 0 {
 		return

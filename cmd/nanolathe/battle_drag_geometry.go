@@ -19,6 +19,11 @@ const dragBuildSiteLimit = 1024
 // footprint cells. It is a UI bound, not a retail constant.
 const dragBuildGapMax = 16
 
+// dragBuildGapPanStep is the precise-scroll travel, in logical pixels, that
+// counts as one wheel notch of build-drag gap. It is a feel knob, not a
+// retail constant.
+const dragBuildGapPanStep = 30.0
+
 // dragBuildCells starts at the press anchor and stops before a footprint step
 // would pass the release anchor. Each step is the footprint plus gap free
 // cells on its axis. Grid rows walk X first, then Z, in drag order.
