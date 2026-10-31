@@ -182,7 +182,13 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 	state.PointerX, state.PointerY = mx, my
 	state.ShiftHeld = modifiers.Shift
 	if d.product != "" {
-		b.stepBuildDragGap(mouse.ZoomScrollY, mouse.PanY)
+		wheel, travel := mouse.ZoomScrollY, mouse.PanY
+		if modifiers.Shift {
+			// macOS reports a wheel turned with Shift held, as when queueing
+			// a row, on the horizontal axis.
+			wheel, travel = wheel+mouse.ZoomScrollX, travel+mouse.PanX
+		}
+		b.stepBuildDragGap(wheel, travel)
 	}
 	b.updateCommandDrag(cl, mx, my, modifiers)
 	if mouse.Held(d.button) {

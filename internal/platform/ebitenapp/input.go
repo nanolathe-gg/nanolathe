@@ -19,6 +19,7 @@ type sampledInput struct {
 	wheelX     float32
 	wheelY     float32
 	zoomWheelY float32
+	zoomWheelX float32
 	panX, panY float64
 	pinches    []input.PinchEvent
 	keys       [input.KeyCount]bool
@@ -116,7 +117,7 @@ func (sample *sampledInput) applyScroll(scroll scrollBatch) {
 		sample.x, sample.y = scroll.pointerX, scroll.pointerY
 	}
 	sample.wheelX, sample.wheelY = float32(scroll.x), float32(scroll.y)
-	sample.zoomWheelY = float32(scroll.zoomY)
+	sample.zoomWheelX, sample.zoomWheelY = float32(scroll.zoomX), float32(scroll.zoomY)
 	sample.panX, sample.panY, sample.pinches = scroll.panX, scroll.panY, scroll.pinches
 }
 
@@ -189,7 +190,7 @@ func applyInputWith(in *input.State, sample sampledInput, clicks *doubleClickRec
 	wasRight := m.Held(input.MouseButtonRight)
 	m.SetPosition(float32(sample.x), float32(sample.y))
 	m.SetWheel(sample.wheelX, sample.wheelY)
-	m.ZoomScrollY = sample.zoomWheelY
+	m.ZoomScrollX, m.ZoomScrollY = sample.zoomWheelX, sample.zoomWheelY
 	m.PanX, m.PanY = sample.panX, sample.panY
 	m.Pinches = append([]input.PinchEvent(nil), sample.pinches...)
 	// Middle has no semantic pointer record, but remains an independent held

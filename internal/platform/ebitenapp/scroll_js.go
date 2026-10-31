@@ -25,7 +25,7 @@ func startNativeScrollMonitor() (func(), error) {
 			if e.Get("pixels").Bool() {
 				batch.panX, batch.panY = batch.x, batch.y
 			} else {
-				batch.zoomY = batch.y
+				batch.zoomX, batch.zoomY = batch.x, batch.y
 			}
 		case "pan":
 			batch.panX, batch.panY = e.Get("x").Float(), e.Get("y").Float()

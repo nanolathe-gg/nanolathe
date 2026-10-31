@@ -3889,7 +3889,10 @@ the footprint plus the gap on its dominant axis, and a grid by the footprint
 plus the gap on both axes; axis choice compares spans measured in these
 steps. Precise scrolling (a trackpad or Magic Mouse) carries no notch count,
 so its vertical travel counts one notch per `dragBuildGapPanStep` (30) logical
-pixels, a feel knob; fractions accumulate until they make a notch. During the
+pixels, a feel knob; fractions accumulate until they make a notch. macOS
+reports a wheel turned with Shift held (as when queueing a row) on the
+horizontal axis, so while Shift is held horizontal notches and travel count
+as vertical. During the
 gesture the wheel does not zoom and precise scrolling does not pan the camera
 (DESIGN_GPU_RENDERER §16.6); the Community snap-override wheel, which rotates the
 structure while its modifier is held, still takes the wheel first. The
@@ -3897,8 +3900,9 @@ preview shows `gap N` beside the pointer. The gap is kept for the rest of
 the battle, so later rows reuse it, and is not saved. Validation, reservation
 skipping and Shift cancellation are unchanged; the gap only moves the
 candidate anchors. `TestDragBuildGap`, `TestCommandDragWheelSetsBuildGap` and
-`TestCommandDragPreciseScrollSetsBuildGapWithoutPanning` cover the geometry,
-the wheel's ownership, precise scrolling, the bound and the released row.
+`TestCommandDragPreciseScrollSetsBuildGapWithoutPanning` and
+`TestCommandDragShiftWheelSetsBuildGap` cover the geometry, the wheel's
+ownership, precise scrolling, the Shift wheel, the bound and the released row.
 
 **Cancelling queued sites with a Shift row (requested input policy,
 2026-09-28).** A player sweeps a row over queued sites to take them off, as

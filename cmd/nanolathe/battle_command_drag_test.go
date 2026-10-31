@@ -685,3 +685,27 @@ func TestCommandDragPreciseScrollSetsBuildGapWithoutPanning(t *testing.T) {
 		t.Fatalf("camera panned during a build drag: %v,%v -> %v,%v", x, z, b.cam.X, b.cam.Z)
 	}
 }
+
+// macOS turns a wheel sideways while Shift is held; a Shift row still steps
+// its gap from the horizontal notch, and an unmodified sideways wheel does not.
+func TestCommandDragShiftWheelSetsBuildGap(t *testing.T) {
+	b, cl, _, _ := resourceFixture(t, false)
+	b.armPlacement(b.cat.Units["armsolar"])
+	shift := input.Modifiers{Shift: true}
+	dragInput(b, cl, 300, 250, input.MouseButtonLeft, "press", shift)
+	wheel := input.NewState()
+	wheel.Mouse.SetPosition(492, 250)
+	wheel.Mouse.SetButton(input.MouseButtonLeft, true)
+	wheel.Mouse.ResetEdges()
+	wheel.Mouse.SetWheel(1, 0)
+	b.handleInput(wheel, cl)
+	if b.buildDragGap != 0 {
+		t.Fatalf("unmodified sideways wheel set gap %d", b.buildDragGap)
+	}
+	wheel.Kbd.SetKey(input.KeyShift, true)
+	wheel.Kbd.ResetEdges()
+	b.handleInput(wheel, cl)
+	if b.buildDragGap != 1 {
+		t.Fatalf("Shift wheel gap = %d, want 1", b.buildDragGap)
+	}
+}
