@@ -616,3 +616,48 @@ func TestCommandDragAreaReclaimWalksNearestFirstPerWorker(t *testing.T) {
 		t.Fatalf("commands name %v, want %v", handles, want)
 	}
 }
+
+// The wheel during a build row widens the steps between its sites instead of
+// zooming, and the gap stays for the next row of the battle.
+func TestCommandDragWheelSetsBuildGap(t *testing.T) {
+	b, cl, _, _ := resourceFixture(t, false)
+	solar := b.cat.Units["armsolar"]
+	b.armPlacement(solar)
+	dragInput(b, cl, 300, 250, input.MouseButtonLeft, "press", input.Modifiers{})
+	if !b.buildDragWheelOwned() {
+		t.Fatal("a build drag must own the wheel")
+	}
+	wheel := input.NewState()
+	wheel.Mouse.SetPosition(492, 250)
+	wheel.Mouse.SetButton(input.MouseButtonLeft, true)
+	wheel.Mouse.ResetEdges()
+	wheel.Mouse.SetWheel(0, 1.5) // one notch now, half a notch carried
+	b.handleInput(wheel, cl)
+	wheel.Mouse.SetWheel(0, 0.5)
+	b.handleInput(wheel, cl)
+	if b.buildDragGap != 2 {
+		t.Fatalf("gap = %d, want 2", b.buildDragGap)
+	}
+	dragInput(b, cl, 492, 250, input.MouseButtonLeft, "release", input.Modifiers{})
+	got := resourceBuildCommands(b.sess)
+	if len(got) < 2 {
+		t.Fatalf("row too short: %+v", got)
+	}
+	step := numeric.FixedFromInt(int64((solar.FootprintX + 2) * 16))
+	for i := 1; i < len(got); i++ {
+		if got[i].WX-got[i-1].WX != step || got[i].WZ != got[0].WZ {
+			t.Fatalf("site %d at %v,%v after %v: want an X step of %v", i, got[i].WX, got[i].WZ, got[i-1].WX, step)
+		}
+	}
+	if b.buildDragWheelOwned() || b.buildDragGap != 2 {
+		t.Fatal("the wheel stays owned after release, or the gap was lost")
+	}
+	b.stepBuildDragGap(-100)
+	if b.buildDragGap != 0 {
+		t.Fatalf("gap below zero: %d", b.buildDragGap)
+	}
+	b.stepBuildDragGap(100)
+	if b.buildDragGap != dragBuildGapMax {
+		t.Fatalf("gap above the bound: %d", b.buildDragGap)
+	}
+}

@@ -32,7 +32,34 @@ func TestDragBuildFootprintSpacing(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := dragBuildCells(tt.start, tt.end, tt.foot.x, tt.foot.z, tt.grid)
+			got := dragBuildCells(tt.start, tt.end, tt.foot.x, tt.foot.z, 0, tt.grid)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("cells = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The wheel gap adds free cells to every step, on both grid axes; a gap of
+// zero is the touching row above.
+func TestDragBuildGap(t *testing.T) {
+	tests := []struct {
+		name       string
+		start, end dragPoint
+		foot       dragPoint
+		gap        int32
+		grid       bool
+		want       []dragPoint
+	}{
+		{"row", dragPoint{3, 4}, dragPoint{14, 4}, dragPoint{3, 2}, 2, false, []dragPoint{{3, 4}, {8, 4}, {13, 4}}},
+		{"reverse row", dragPoint{3, 4}, dragPoint{3, -6}, dragPoint{3, 2}, 1, false, []dragPoint{{3, 4}, {3, 1}, {3, -2}, {3, -5}}},
+		{"short of a step", dragPoint{}, dragPoint{4, 0}, dragPoint{3, 2}, 2, false, []dragPoint{{0, 0}}},
+		{"grid", dragPoint{1, 2}, dragPoint{9, 9}, dragPoint{2, 3}, 1, true, []dragPoint{{1, 2}, {4, 2}, {7, 2}, {1, 6}, {4, 6}, {7, 6}}},
+		{"negative rejected", dragPoint{}, dragPoint{9, 0}, dragPoint{3, 2}, -1, false, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dragBuildCells(tt.start, tt.end, tt.foot.x, tt.foot.z, tt.gap, tt.grid)
 			if !slices.Equal(got, tt.want) {
 				t.Fatalf("cells = %v, want %v", got, tt.want)
 			}
@@ -42,7 +69,7 @@ func TestDragBuildFootprintSpacing(t *testing.T) {
 
 func TestDragBuildBoundAndWideCoordinates(t *testing.T) {
 	for _, grid := range []bool{false, true} {
-		got := dragBuildCells(dragPoint{math.MinInt32, math.MinInt32}, dragPoint{math.MaxInt32, math.MaxInt32}, 1, 1, grid)
+		got := dragBuildCells(dragPoint{math.MinInt32, math.MinInt32}, dragPoint{math.MaxInt32, math.MaxInt32}, 1, 1, 0, grid)
 		if len(got) != dragBuildSiteLimit || got[0] != (dragPoint{math.MinInt32, math.MinInt32}) {
 			t.Fatalf("grid %v: limit or press anchor lost: %v", grid, got)
 		}
@@ -56,7 +83,7 @@ func TestDragBuildBoundAndWideCoordinates(t *testing.T) {
 			}
 		}
 	}
-	got := dragBuildCells(dragPoint{math.MinInt32, math.MinInt32}, dragPoint{math.MaxInt32, math.MaxInt32}, math.MaxInt32, math.MaxInt32, false)
+	got := dragBuildCells(dragPoint{math.MinInt32, math.MinInt32}, dragPoint{math.MaxInt32, math.MaxInt32}, math.MaxInt32, math.MaxInt32, 0, false)
 	want := []dragPoint{{math.MinInt32, math.MinInt32}, {-1, -1}, {math.MaxInt32 - 1, math.MaxInt32 - 1}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("wide interpolation = %v, want %v", got, want)

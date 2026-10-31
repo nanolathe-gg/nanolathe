@@ -273,6 +273,8 @@ type battleSession struct {
 	interfaceType         int
 	resourceQueueFeedback *resourceQueueFeedback // transient modern queue overlay; DESIGN_INTERFACE_HUD_INPUT §3.10
 	modernDrag            *battleCommandDrag     // modern command capture; DESIGN_INTERFACE_HUD_INPUT §3.11
+	buildDragGap          int32                  // wheel-chosen free cells between build-drag sites, kept for the battle (§3.11)
+	buildDragWheel        float32                // wheel travel not yet spent on a whole gap step
 	resourceClick         *resourceClick         // modern resource gesture receipt; DESIGN_INTERFACE_HUD_INPUT §3.10
 	economyPanel          economyPanelState      // Enhanced resource explanation and pointer capture
 	smartMakers           smartMakersState       // local input assistance; never serialized
@@ -1642,7 +1644,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// present a free factor.
 		cameraInput := cl.Enhanced() && focused && !talkActive && !talkOwned && !modalActive &&
 			!overMinimap && !b.megamapShown() && !b.palettePointerOwned && !radialOwnsPointer && !unitInfoOpen() && b.overBattleViewport(mx, my)
-		wheelInput := cameraInput && !b.megamapTakesWheel() && !b.communityPlacementWheelOwned(in)
+		wheelInput := cameraInput && !b.megamapTakesWheel() && !b.communityPlacementWheelOwned(in) && !b.buildDragWheelOwned()
 		if wheelInput && mouse.ZoomScrollY != 0 {
 			b.wheelZoom(mx, my, float64(mouse.ZoomScrollY))
 		} else if !wheelInput {
