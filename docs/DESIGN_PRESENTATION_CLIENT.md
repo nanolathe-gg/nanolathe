@@ -399,8 +399,10 @@ changing that identity. Ebitengine provides no persistent hardware ID, so
 identically named monitors can exchange identity when their order changes.
 A missing choice falls back to primary without overwriting the saved choice;
 reconnecting restores it on the next launch or selection. The list refreshes
-when the settings screen opens. Labels show device-independent display sizes,
-not the game's render resolution. No simulation or gameplay mode changes.
+when the settings screen opens. That snapshot invalidates the cached cards,
+including those prepared by main-menu warmup before display discovery. Labels
+show device-independent display sizes, not the game's render resolution.
+No simulation or gameplay mode changes.
 
 **Fullscreen pointer confinement (host presentation policy).** Retail's
 exclusive display mode makes the whole display the canvas, so its pointer can
