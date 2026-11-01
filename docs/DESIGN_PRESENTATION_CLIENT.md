@@ -385,6 +385,23 @@ Manual resizing scales the selected logical canvas with aspect preserved and
 does not change the saved resolution. The adapter only reapplies host size
 when the selected resolution changes.
 
+**Screen selection (host presentation policy).** Nanolathe → Graphics → Screen
+selects System primary or an attached display. At startup the adapter explicitly
+selects Ebitengine's first (primary) monitor before entering fullscreen: relying
+on the initial window position can instead select the laptop panel on Linux
+even with an external primary. Apply moves the running window, including
+fullscreen; returning to windowed mode reapplies the selection because the host
+may restore an old position on another display. Back discards pending edits.
+The top-level `monitor` string is global, not mod-scoped; empty means System
+primary. Named choices use the display name and its zero-based occurrence among
+identically named displays. Other display names can disappear or reorder without
+changing that identity. Ebitengine provides no persistent hardware ID, so
+identically named monitors can exchange identity when their order changes.
+A missing choice falls back to primary without overwriting the saved choice;
+reconnecting restores it on the next launch or selection. The list refreshes
+when the settings screen opens. Labels show device-independent display sizes,
+not the game's render resolution. No simulation or gameplay mode changes.
+
 **Fullscreen pointer confinement (host presentation policy).** Retail's
 exclusive display mode makes the whole display the canvas, so its pointer can
 never leave it [03 §4.2]. Desktop fullscreen aspect-fits the logical canvas

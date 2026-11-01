@@ -20,6 +20,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/screenkit"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
@@ -55,11 +56,12 @@ type nlScreen struct {
 	preview       *nlPreview
 	hits          screenkit.Hits
 
-	page    int
-	focus   [5]int
-	draft   nlDraft
-	touched map[string]bool
-	mods    []modlibrary.Mod
+	page     int
+	focus    [5]int
+	draft    nlDraft
+	touched  map[string]bool
+	mods     []modlibrary.Mod
+	monitors []ebitenapp.DisplayMonitor
 
 	compare       bool
 	wipe          float64
@@ -171,6 +173,7 @@ func (g *gameShell) openNLScreen() bool {
 }
 
 func (s *nlScreen) show(g *gameShell) {
+	s.monitors = ebitenapp.DisplayMonitors()
 	s.bindShell(g)
 	s.readResolutionModes()
 	s.capture, s.ctlGroup, s.ctlRow, s.ctlScroll = nlCapture{}, 0, 0, 0
@@ -362,6 +365,7 @@ func (s *nlScreen) snapshot(g *gameShell) nlDraft {
 		mutators:      g.opts.Mutators,
 		unitLimit:     g.savedUnitLimit,
 		fullscreen:    g.fullscreen,
+		monitor:       g.monitor,
 		resolution:    retailDisplayMode{g.display.Width, g.display.Height},
 		switchAlt:     g.switchAlt,
 		override:      g.lockOverridden(g.cs.mod),
@@ -628,6 +632,10 @@ func (s *nlScreen) applyDraft(g *gameShell, draft nlDraft, touched map[string]bo
 		g.setGameplay(next.gameplay)
 	}
 	g.enforceModGameplayMinimum()
+	if next.monitor != g.monitor {
+		g.monitor = next.monitor
+		ebitenapp.SelectMonitor(next.monitor)
+	}
 	if next.fullscreen != g.fullscreen {
 		g.fullscreen = next.fullscreen
 		ebiten.SetFullscreen(next.fullscreen)

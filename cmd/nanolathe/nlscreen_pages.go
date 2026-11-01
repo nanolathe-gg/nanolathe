@@ -32,6 +32,7 @@ type nlDraft struct {
 	unitLimit               int
 	resolution              retailDisplayMode
 	fullscreen              bool
+	monitor                 string
 	switchAlt               bool
 	controls                int // index into nlControlsPresets; 0 keeps the current rows
 	// keys is the draft keyboard map the Controls page edits; Apply hands a
@@ -562,6 +563,7 @@ var nlFPS = []int{30, 60, 120, 144, 0}
 func (s *nlScreen) graphicsCards() []nlCard {
 	return []nlCard{
 		s.resolutionCard(),
+		s.monitorCard(),
 		{
 			key: "renderer", label: "Renderer", pics: []string{"armrad", "armarad"}, kind: nlHalves,
 			steps: []string{"Classic", "Enhanced"}, subs: []string{"8-bit · 30 fps · pixel-exact", "True colour · smooth · effects"},
