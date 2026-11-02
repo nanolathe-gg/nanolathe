@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -291,10 +292,43 @@ func (s *nlScreen) gameCards() []nlCard {
 		},
 		s.sidebarCard(),
 		s.languageCard(),
+		{
+			key: "autosave", label: "Autosave interval", pics: []string{"armcom", "corcom"}, kind: nlStepper,
+			steps: []string{"Off", "5 min", "10 min", "15 min", "30 min", "60 min"},
+			get: func(d *nlDraft) int {
+				for i, m := range nlAutosaveMinutes {
+					if m == d.pres.AutosaveMinutes {
+						return i
+					}
+				}
+				return slices.Index(nlAutosaveMinutes, settings.DefaultAutosaveMinutes)
+			},
+			set: func(d *nlDraft, v int) { d.pres.AutosaveMinutes = nlAutosaveMinutes[v] },
+			// A hand-edited interval no step names is kept until a step is
+			// chosen, as the frame rate keeps an arbitrary cap.
+			copy: func(to, from *nlDraft) { to.pres.AutosaveMinutes = from.pres.AutosaveMinutes },
+			valueText: func(d *nlDraft) string {
+				if d.pres.AutosaveMinutes == settings.AutosaveOff {
+					return "Off"
+				}
+				return fmt.Sprintf("%d min", d.pres.AutosaveMinutes)
+			},
+			desc: func(d *nlDraft, v int) string {
+				if nlAutosaveMinutes[v] == settings.AutosaveOff {
+					return "No autosave during a battle, so no pause for one. Leaving a battle still writes the Autosave slot, and Ctrl+F11 still quick saves."
+				}
+				return "How often a battle is written to the Autosave slot, in minutes of game time. Each autosave briefly pauses the game. Leaving a battle always writes it too."
+			},
+			scene: func(*nlDraft, int) string { return "armor" },
+		},
 	}
 }
 
 var nlUnitLimits = []int{0, 250, 500, 1000, 1500, 2000, 3000}
+
+// nlAutosaveMinutes are the Autosave interval card's choices
+// (DESIGN_SESSIONS_AI_SAVE §5, "Autosave, quick save and quick load").
+var nlAutosaveMinutes = []int{settings.AutosaveOff, 5, settings.DefaultAutosaveMinutes, 15, 30, 60}
 
 // nlRuleDetails is what each rule layer changes: DESIGN_COMMUNITY_PATCH §2–§4
 // and the Modern policies listed in CLAUDE.md, in player terms.

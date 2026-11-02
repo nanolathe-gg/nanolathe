@@ -344,11 +344,11 @@ type gameShell struct {
 	battle *battleSession
 
 	// pendingQuick is a quick save or load the battle's keys asked for, and
-	// autosaveBattle and autosaveDue the periodic autosave's clock
+	// autosaveBattle and autosaveFrom the periodic autosave's clock
 	// (autosave.go).
 	pendingQuick   quickAction
 	autosaveBattle *battleSession
-	autosaveDue    uint32
+	autosaveFrom   uint32
 }
 
 func (g *gameShell) widgetTimerAdvanced(p *ui.Panel) bool {
