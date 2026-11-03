@@ -164,6 +164,9 @@ func (e *missingProductError) Error() string {
 type savedModError struct {
 	mod modlibrary.Mod
 	err error
+	// baseRoots are the base install this mount resolved, which the start
+	// without the mod mounts again rather than resolving it a second time.
+	baseRoots []string
 }
 
 func (e *savedModError) Error() string { return e.err.Error() }
@@ -187,7 +190,7 @@ func openContent(opts Options) (*contentSet, error) {
 	}
 	set, err := mountContent(opts, roots, selection)
 	if err != nil && selection.saved {
-		return nil, &savedModError{mod: *selection.mod, err: err}
+		return nil, &savedModError{mod: *selection.mod, err: err, baseRoots: roots}
 	}
 	return set, err
 }
@@ -328,11 +331,15 @@ func mountContent(opts Options, baseRoots []string, selection modSelection) (*co
 	// so a content set that ships `gamedata` under another name satisfies it.
 	for _, required := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
 		if _, err := set.fs.Stat(required); err != nil {
+			// The providers are listed before the close, which empties the
+			// mount: listed after it, every such failure read "[none]"
+			// (issue #186).
+			providers := fileSystem.ProviderIDs()
 			set.Close()
 			return nil, &missingProductError{
 				what:      "required content is missing",
 				logical:   required,
-				providers: fileSystem.ProviderIDs(),
+				providers: providers,
 				expected:  "a mounted archive or loose file supplying it",
 			}
 		}

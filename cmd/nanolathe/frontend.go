@@ -579,7 +579,7 @@ func startWindowedShell(launch, opts Options, cs *contentSet, cl *client.Client)
 // reason) and runs start once more on that set
 // (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"). It returns
 // the set start succeeded on, which the caller owns; a replaced cs is closed.
-// launch is the command line as given.
+// launch is the command line as given; the remount mounts cs's base roots.
 func startWithSavedModFallback[T any](launch, opts Options, cs *contentSet, start func(Options, *contentSet) (T, error)) (T, *contentSet, error) {
 	result, err := start(opts, cs)
 	if err == nil || !cs.savedMod || cs.mod == nil {
@@ -587,7 +587,7 @@ func startWithSavedModFallback[T any](launch, opts Options, cs *contentSet, star
 	}
 	var zero T
 	remountStarted := time.Now()
-	fresh, err := startWithoutSavedMod(launch, *cs.mod, err)
+	fresh, err := startWithoutSavedMod(launch, cs.baseRoots, *cs.mod, err)
 	if err != nil {
 		return zero, cs, err
 	}

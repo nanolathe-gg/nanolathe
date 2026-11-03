@@ -187,7 +187,7 @@ func run(opts Options, out, errOut *os.File) error {
 		if !errors.As(err, &saved) {
 			return err
 		}
-		if content, err = startWithoutSavedMod(opts, saved.mod, saved.err); err != nil {
+		if content, err = startWithoutSavedMod(opts, saved.baseRoots, saved.mod, saved.err); err != nil {
 			return err
 		}
 	}
