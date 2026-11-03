@@ -3,7 +3,9 @@ package session
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
 // PlacementSnapSample is a read-only command-time projection for CP-CON-6.
@@ -31,9 +33,11 @@ func (s *Session) PlacementSnapSample(cx, cz, footX, footZ int32) PlacementSnapS
 	if threshold, err := battleSurfaceMetal(s); err == nil && footX > 0 && footZ > 0 {
 		for dx := -footX / 2; dx <= (footX-1)/2; dx++ {
 			for dz := -footZ / 2; dz <= (footZ-1)/2; dz++ {
-				if tile := s.World.PlotAt(cx+dx, cz+dz); tile != nil && int32(tile.Metal()) > threshold {
-					out.MetalAboveSurface++
+				tile := s.World.PlotAt(cx+dx, cz+dz)
+				if tile == nil || s.snapCellHeldByStructure(tile) || int32(tile.Metal()) <= threshold {
+					continue
 				}
+				out.MetalAboveSurface++
 			}
 		}
 	}
@@ -48,4 +52,16 @@ func (s *Session) PlacementSnapSample(cx, cz, footX, footZ int32) PlacementSnapS
 	mean := (int32(cell.MinHeight()) + int32(cell.MaxHeight())) / 2
 	out.WY = numeric.Fixed(max(mean, int32(s.World.SeaLevel))) << 16
 	return out
+}
+
+func (s *Session) snapCellHeldByStructure(cell *world.PlotCell) bool {
+	if s == nil || s.Units == nil || cell == nil {
+		return false
+	}
+	occupant := cell.OccupantA()
+	if occupant == 0 {
+		return false
+	}
+	u := s.Units.Unit(pool.Handle(uint16(occupant)))
+	return u != nil && u.Def != nil && u.Def.BMCode == 0
 }
