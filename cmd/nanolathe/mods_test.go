@@ -237,10 +237,10 @@ func TestSavedModThatFailsToOpenStartsWithoutIt(t *testing.T) {
 	}
 	saveModChoice(t, settings.ModSelection{ID: mod.ID, Version: mod.Version}, nil, "")
 	_, err := openContent(Options{Root: base})
-	if !errors.As(err, &saved) || saved.mod.ID != mod.ID {
+	if !errors.As(err, &saved) || saved.mod.ID != mod.ID || len(saved.baseRoots) != 1 || saved.baseRoots[0] != base {
 		t.Fatalf("the saved mod's failure = %v, want a savedModError", err)
 	}
-	cs, err := startWithoutSavedMod(Options{Root: base}, saved.mod, saved.err)
+	cs, err := startWithoutSavedMod(Options{Root: base}, saved.baseRoots, saved.mod, saved.err)
 	if err != nil {
 		t.Fatalf("the start without the saved mod failed: %v", err)
 	}

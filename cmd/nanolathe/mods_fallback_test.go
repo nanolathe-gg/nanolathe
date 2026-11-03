@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -79,5 +81,61 @@ func TestCheckInstallWarnsAboutTheSavedModOnly(t *testing.T) {
 	code, _, errOut = installerRun(t, "--check-install", "--root", t.TempDir())
 	if code != 1 || !strings.Contains(errOut, "gamedata/moveinfo.tdf") {
 		t.Fatalf("broken base with a saved mod: exit %d, stderr %q", code, errOut)
+	}
+}
+
+// Issue #186: a saved mod whose config moves gamedata (as TA: Escalation's
+// does) can be the only supplier of the required products, so the base
+// install starts with it and not without it. When the mod's shell then fails
+// to build, the remount without it fails too, and that error must keep the
+// saved mod's own failure and name the providers it searched rather than
+// "[none]". The remount mounts the base install the first mount resolved,
+// not a second resolution of the host.
+func TestSavedModFallbackFailureKeepsTheModsCause(t *testing.T) {
+	base, lib := modFixture(t)
+	for _, name := range []string{"gamedata/moveinfo.tdf", "gamedata/sidedata.tdf"} {
+		if err := os.Remove(filepath.Join(base, filepath.FromSlash(name))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeModFixtureFile(t, base, "units/base.fbi", "[UNITINFO] { }\n")
+	dir := filepath.Join(t.TempDir(), "moved")
+	for _, name := range []string{"gamedatE/moveinfo.tdf", "gamedatE/sidedata.tdf"} {
+		writeModFixtureFile(t, dir, name, "// authored startup fixture\n")
+	}
+	writeModFixtureFile(t, dir, modlibrary.MetadataFile, `{"schema":2,"id":"moved","name":"Moved","version":"3","content":{"layout":{"gamedata":"gamedatE"}}}`)
+	mod, err := lib.InstallDirectory(dir, modlibrary.InstallOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	buildFailure := errors.New("nanolathe: shell bind failed: logical path guiE/mainmenu.gui, providers searched [moved], expected a menu")
+	start := func(_ Options, cs *contentSet) (string, error) {
+		if cs.mod != nil {
+			return "", buildFailure
+		}
+		return "started", nil
+	}
+
+	saveModChoice(t, settings.ModSelection{ID: mod.ID}, nil, "")
+	t.Setenv("NANOLATHE_TA_ROOT", base)
+	launch := Options{}
+	cs, err := openContent(launch)
+	if err != nil || cs.mod == nil || !cs.savedMod {
+		t.Fatalf("the saved mod did not mount: %v", err)
+	}
+	t.Setenv("NANOLATHE_TA_ROOT", t.TempDir())
+	_, running, err := startWithSavedModFallback(launch, launch, cs, start)
+	if running != nil {
+		_ = running.Close()
+	}
+	if err == nil {
+		t.Fatal("the start without the mod succeeded on a base that lacks gamedata")
+	}
+	text := err.Error()
+	if !errors.Is(err, buildFailure) || !strings.Contains(text, "moved@3") || !strings.Contains(text, "guiE/mainmenu.gui") {
+		t.Fatalf("fallback failure %q does not carry the saved mod's cause", text)
+	}
+	if strings.Contains(text, "providers searched [none]") || !strings.Contains(text, base) {
+		t.Fatalf("fallback failure %q does not name the base install it searched", text)
 	}
 }
