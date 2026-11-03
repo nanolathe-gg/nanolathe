@@ -421,7 +421,11 @@ the target; `GlideTo`/`StepGlide` are the message-source and next-unit glides;
 jump family's table; `StoreBookmark`/`RecallBookmark` are Ctrl+F5..F8 and
 F5..F8 `[07 R-CAM-01 §12]` `[07 R-CAM-01 §14]`. The `n` and F3 glide
 writers preserve the tracked object; its next follow pass can replace the
-desired origin written by the glide `[07 R-CAM-01 §12]`.
+desired origin written by the glide `[07 R-CAM-01 §12]`. The non-retail
+pans — middle-drag and trackpad pan — call `ClearFollow` whenever the
+player pans, as the scroll pass does, so a Ctrl+C or `t` follow never pulls a
+panned view back (issue #183). Middle-drag is pointer input, so it also
+re-latches the follow sample as the drag-scroll entry does.
 
 The `t`/`T` input adapter scans selected slots relative to the tracked slot,
 even when that unit has been deselected. Its inclusive owner range comes
