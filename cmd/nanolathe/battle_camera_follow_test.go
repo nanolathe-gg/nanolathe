@@ -162,3 +162,40 @@ func TestBigBrotherFollowsEveryControllerTick(t *testing.T) {
 		t.Fatal("zero-tick pump advanced camera")
 	}
 }
+
+// A middle-drag pan is a host writer that moves the view, so it breaks a
+// follow exactly as the scroll pass and drag-scroll entry do: retail's every
+// player-driven camera move except a drag step clears the tracked object
+// [07 R-CAM-01 §12]. Before issue #183 it moved only the current origin and
+// left Ctrl+C's or `t`'s tracked unit in place, so each later follow step
+// pulled the view back toward that unit.
+func TestMiddleDragPanBreaksFollow(t *testing.T) {
+	b, cl, _, builder := resourceFixture(t, false)
+	b.cam.MapW, b.cam.MapH = 4096, 4096
+	b.cam.JumpTo(1000, 1000)
+	b.cam.SetTracked(builder)
+	b.pendingFollowInput = func() { b.cam.SetTracked(builder) }
+	mouse := cl.Input().Mouse
+	mouse.SetPosition(384, 240)
+	mouse.SetButton(input.MouseButtonMiddle, true)
+	b.viewerStep(0, cl)
+	mouse.ResetEdges()
+	mouse.SetPosition(484, 240)
+	b.viewerStep(0, cl)
+	if got := b.cam.Tracked(); got != 0 {
+		t.Fatalf("tracked object after a middle-drag pan = %d, want none", got)
+	}
+	if b.pendingFollowInput != nil {
+		t.Fatal("a follow request deferred past the pan survived it")
+	}
+	// Later completed sub-ticks' follow steps must leave the view where the
+	// pan put it [01 §4.4].
+	x, z := b.cam.X, b.cam.Z
+	for range 3 {
+		b.stepFollowCamera()
+		b.applyPublishedCamera(b.sess.Snapshot.Current())
+	}
+	if b.cam.X != x || b.cam.Z != z {
+		t.Fatalf("camera moved from (%d,%d) to (%d,%d) after the pan: the follow is still pulling", x, z, b.cam.X, b.cam.Z)
+	}
+}

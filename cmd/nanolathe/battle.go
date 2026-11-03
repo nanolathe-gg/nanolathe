@@ -1621,6 +1621,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			dy := int32(mouse.Y - b.battleState().Input.PrevMouseY)
 			if dx != 0 || dy != 0 {
 				b.cam.Drag(dx, dy)
+				// A pan the player drives breaks a follow, as the scroll pass
+				// above and retail's drag-scroll entry do [07 R-CAM-01 §12];
+				// otherwise every later follow step pulls the view back to
+				// Ctrl+C's or `t`'s tracked unit (issue #183).
+				b.cam.ClearFollow()
+				b.pendingFollowInput = nil
 			}
 		}
 		// The wheel over the battle viewport is smooth zoom
