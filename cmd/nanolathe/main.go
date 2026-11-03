@@ -92,8 +92,13 @@ func checkInstall(opts Options, errOut io.Writer) error {
 	var saved *savedModError
 	if errors.As(err, &saved) {
 		fmt.Fprintf(errOut, "nanolathe: warning: the saved mod %s does not start, so the game would start without it: %v\n", modSelectorOf(saved.mod.ID, saved.mod.Version), saved.err)
+		// The base install the failed mount resolved, as the start's own
+		// fallback mounts it (startWithoutSavedMod).
 		without := opts
 		without.Mod, without.ModSet = "none", true
+		if len(saved.baseRoots) > 0 {
+			without.Root, without.Roots, without.modBaseRoots = saved.baseRoots[0], append([]string(nil), saved.baseRoots...), true
+		}
 		content, err = openContent(without)
 	}
 	if err != nil {
