@@ -38,6 +38,7 @@ func windowOptionsFor(current func() *gameShell) ebitenapp.RunOptions {
 	options := windowRunOptions(g.opts)
 	g.fullscreen = startupFullscreen(g.opts, g.fullscreen)
 	options.Fullscreen = g.fullscreen
+	options.Monitor = g.monitor
 	options.IdleAllowed = func() bool {
 		g := current()
 		return g.frontend != nil && g.frontend.Mode == modeBattle && g.battle != nil && g.battle.postBattle == nil
@@ -77,6 +78,11 @@ func windowOptionsFor(current func() *gameShell) ebitenapp.RunOptions {
 	options.FullscreenChanged = func(value bool) {
 		g := current()
 		g.fullscreen = value
+		if !value {
+			// The host can restore the pre-fullscreen position on another
+			// display; keep the selected screen when returning to a window.
+			ebitenapp.SelectMonitor(g.monitor)
+		}
 		if g.settingsWritable {
 			saveFullscreenSetting(value)
 		}

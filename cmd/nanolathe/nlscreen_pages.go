@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
@@ -33,6 +34,7 @@ type nlDraft struct {
 	unitLimit               int
 	resolution              retailDisplayMode
 	fullscreen              bool
+	monitor                 string
 	switchAlt               bool
 	controls                int // index into nlControlsPresets; 0 keeps the current rows
 	// keys is the draft keyboard map the Controls page edits; Apply hands a
@@ -134,15 +136,13 @@ func onOff(v bool) int {
 }
 
 // pages is the catalogue, built once and kept: Update, Draw and the change
-// count read it every frame. A builder reads exactly one input when it runs —
-// the installed mods' names and versions, which are the Content card's steps;
-// everything else (the draft, the shell, the part a grouped card compares) is
-// read by the cards' closures when they are called. So the catalogue is
-// rebuilt when that list differs from the one it was built from, or optional
-// glyphs become available and the language card can name Chinese in Chinese.
+// count read it every frame. Builders capture installed mod names/versions and
+// the display snapshot refreshed when the screen opens; both invalidate the
+// cached cards. Optional glyph availability also refreshes the language card.
+// Other values are read by the cards' closures when they are called.
 func (s *nlScreen) pages() []nlPage {
-	if !s.catalogue.builtFrom(s.mods) {
-		s.catalogue = nlCatalogue{pages: s.buildPages(), mods: make([]nlModName, len(s.mods)), cjk: film.CJKReady()}
+	if !s.catalogue.builtFrom(s.mods, s.monitors) {
+		s.catalogue = nlCatalogue{pages: s.buildPages(), mods: make([]nlModName, len(s.mods)), monitors: slices.Clone(s.monitors), cjk: film.CJKReady()}
 		for i, m := range s.mods {
 			s.catalogue.mods[i] = nlModName{m.Name, m.Version}
 		}
@@ -150,17 +150,18 @@ func (s *nlScreen) pages() []nlPage {
 	return s.catalogue.pages
 }
 
-// nlCatalogue is the built pages and the mod names they captured.
+// nlCatalogue is the built pages and the snapshots their builders captured.
 type nlCatalogue struct {
-	pages []nlPage
-	mods  []nlModName
-	cjk   bool
+	pages    []nlPage
+	mods     []nlModName
+	monitors []ebitenapp.DisplayMonitor
+	cjk      bool
 }
 
 type nlModName struct{ name, version string }
 
-func (c *nlCatalogue) builtFrom(mods []modlibrary.Mod) bool {
-	if c.pages == nil || len(c.mods) != len(mods) || c.cjk != film.CJKReady() {
+func (c *nlCatalogue) builtFrom(mods []modlibrary.Mod, monitors []ebitenapp.DisplayMonitor) bool {
+	if c.pages == nil || len(c.mods) != len(mods) || c.cjk != film.CJKReady() || !slices.Equal(c.monitors, monitors) {
 		return false
 	}
 	for i := range mods {
@@ -596,6 +597,7 @@ var nlFPS = []int{30, 60, 120, 144, 0}
 func (s *nlScreen) graphicsCards() []nlCard {
 	return []nlCard{
 		s.resolutionCard(),
+		s.monitorCard(),
 		{
 			key: "renderer", label: "Renderer", pics: []string{"armrad", "armarad"}, kind: nlHalves,
 			steps: []string{"Classic", "Enhanced"}, subs: []string{"8-bit · 30 fps · pixel-exact", "True colour · smooth · effects"},

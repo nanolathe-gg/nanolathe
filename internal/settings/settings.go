@@ -582,6 +582,9 @@ type Settings struct {
 	// Fullscreen is Nanolathe's desktop presentation preference, independent of
 	// retail display options. Absent in older settings files means windowed.
 	Fullscreen bool `json:"fullscreen"`
+	// Monitor identifies a host display by name and same-name occurrence.
+	// Empty selects the system primary; disconnected choices are retained.
+	Monitor string `json:"monitor,omitempty"`
 	// Language is the interface language (internal/i18n, docs/DESIGN_I18N.md): a language
 	// code such as `ukrainian`, or empty for English, the language the
 	// interface is written in. It is presentation only. Normalize keeps it

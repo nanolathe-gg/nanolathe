@@ -220,6 +220,8 @@ type RunOptions struct {
 	// logical menu/battle canvas. Nil follows the client's logical size.
 	WindowSize func() (int, int)
 	Fullscreen bool
+	// Monitor is a saved host display identity; empty selects the system primary.
+	Monitor string
 	// FullscreenChanged persists an observed platform change, including native
 	// window controls. It runs on the game loop, never on a simulation tick.
 	FullscreenChanged func(bool)
@@ -1352,6 +1354,7 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	// The close button is the game's to answer (serviceWindowClose); the exit
 	// it ends in runs terminate's audio shutdown, as menu and battle exits do.
 	ebiten.SetWindowClosingHandled(true)
+	SelectMonitor(options.Monitor)
 	ebiten.SetFullscreen(options.Fullscreen)
 	if title := c.Title(); title != "" {
 		ebiten.SetWindowTitle(title)

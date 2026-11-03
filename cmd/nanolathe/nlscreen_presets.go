@@ -275,6 +275,7 @@ func (s *nlScreen) applyPresetToDraft(e nlPresetEntry, scopes []bool) {
 	before := s.draftOf(current)
 	before.mod, before.controls, before.override = s.draft.mod, s.draft.controls, s.draft.override
 	before.fullscreen, before.mutators = s.draft.fullscreen, s.draft.mutators
+	before.monitor = s.draft.monitor
 	before.restrictions = s.draft.restrictions
 	next, err := settings.Layer(current, patch)
 	if err != nil {
