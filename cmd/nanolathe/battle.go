@@ -1624,9 +1624,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 				// A pan the player drives breaks a follow, as the scroll pass
 				// above and retail's drag-scroll entry do [07 R-CAM-01 §12];
 				// otherwise every later follow step pulls the view back to
-				// Ctrl+C's or `t`'s tracked unit (issue #183).
+				// Ctrl+C's or `t`'s tracked unit (issue #183). Like the
+				// drag-scroll entry, it refreshes the sample the host took
+				// before pointer dispatch, so a sub-tick batch already in
+				// flight does not step toward the old unit either
+				// [07 R-CAM-01 §1][07 R-CAM-01 §11].
 				b.cam.ClearFollow()
-				b.pendingFollowInput = nil
+				b.cam.LatchTracked()
 			}
 		}
 		// The wheel over the battle viewport is smooth zoom

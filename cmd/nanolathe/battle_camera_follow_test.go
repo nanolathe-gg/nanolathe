@@ -164,33 +164,46 @@ func TestBigBrotherFollowsEveryControllerTick(t *testing.T) {
 }
 
 // A middle-drag pan is a host writer that moves the view, so it breaks a
-// follow exactly as the scroll pass and drag-scroll entry do: retail's every
-// player-driven camera move except a drag step clears the tracked object
-// [07 R-CAM-01 §12]. Before issue #183 it moved only the current origin and
-// left Ctrl+C's or `t`'s tracked unit in place, so each later follow step
-// pulled the view back toward that unit.
+// follow as the scroll pass and the drag-scroll entry do [07 R-CAM-01 §12].
+// Before issue #183 it moved only the current origin and left Ctrl+C's or
+// `t`'s tracked unit in place, so each later follow step pulled the view back
+// toward that unit. Like the drag-scroll entry it also refreshes the sample the
+// host took before pointer dispatch, so a sub-tick batch already in flight does
+// not take one step toward the old unit [07 R-CAM-01 §1][07 R-CAM-01 §11].
 func TestMiddleDragPanBreaksFollow(t *testing.T) {
 	b, cl, _, builder := resourceFixture(t, false)
 	b.cam.MapW, b.cam.MapH = 4096, 4096
 	b.cam.JumpTo(1000, 1000)
 	b.cam.SetTracked(builder)
-	b.pendingFollowInput = func() { b.cam.SetTracked(builder) }
 	mouse := cl.Input().Mouse
+	step := func() {
+		b.viewerStep(0, cl)
+		mouse.ResetEdges()
+	}
+	// Seed the previous pointer position, then press without moving: a held
+	// button alone is not a pan.
 	mouse.SetPosition(384, 240)
+	step()
 	mouse.SetButton(input.MouseButtonMiddle, true)
-	b.viewerStep(0, cl)
-	mouse.ResetEdges()
+	step()
+	if got := b.cam.Tracked(); got != builder {
+		t.Fatalf("tracked object after a motionless middle press = %d, want %d", got, builder)
+	}
+	// The host samples the follow before pointer dispatch; then the pan moves.
+	b.stepFollowCamera()
+	x0, z0 := b.cam.X, b.cam.Z
 	mouse.SetPosition(484, 240)
-	b.viewerStep(0, cl)
+	step()
+	if b.cam.X == x0 && b.cam.Z == z0 {
+		t.Fatal("the middle drag did not pan the view")
+	}
 	if got := b.cam.Tracked(); got != 0 {
 		t.Fatalf("tracked object after a middle-drag pan = %d, want none", got)
 	}
-	if b.pendingFollowInput != nil {
-		t.Fatal("a follow request deferred past the pan survived it")
-	}
-	// Later completed sub-ticks' follow steps must leave the view where the
-	// pan put it [01 §4.4].
+	// The in-flight batch's follow step, and later completed sub-ticks', must
+	// leave the view where the pan put it [01 §4.4].
 	x, z := b.cam.X, b.cam.Z
+	b.applyPublishedCamera(b.sess.Snapshot.Current())
 	for range 3 {
 		b.stepFollowCamera()
 		b.applyPublishedCamera(b.sess.Snapshot.Current())
