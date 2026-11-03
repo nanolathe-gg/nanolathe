@@ -140,17 +140,38 @@ func unmetModRequirements(base []string, mod modlibrary.Mod) []string {
 // or bind (cause) with no mod, and names the mod and the reason on the main
 // menu, as a saved mod that has gone does (§4.3 "A missing mod at start"):
 // start-up never fails because of the saved choice. The saved setting is
-// kept. launch is the command line as given; its roots are the base install.
-func startWithoutSavedMod(launch Options, mod modlibrary.Mod, cause error) (*contentSet, error) {
+// kept. launch is the command line as given; baseRoots are the base install
+// the failed mount resolved, mounted again as they are so the start without
+// the mod reads the same install (nil resolves launch's roots). When that
+// start fails too, its error names the saved mod's failure as well.
+func startWithoutSavedMod(launch Options, baseRoots []string, mod modlibrary.Mod, cause error) (*contentSet, error) {
 	launch.Mod, launch.ModSet = "none", true
+	if len(baseRoots) > 0 {
+		launch.Root, launch.Roots, launch.modBaseRoots = baseRoots[0], append([]string(nil), baseRoots...), true
+	}
 	fresh, err := openContent(launch)
 	if err != nil {
-		return nil, err
+		return nil, &savedModFallbackError{selector: modSelectorOf(mod.ID, mod.Version), cause: cause, err: err}
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: the saved mod %s did not start, so the game starts without it: %v\n", modSelectorOf(mod.ID, mod.Version), cause)
 	fresh.modNotice = fmt.Sprintf("%s %s did not start: %s", mod.Name, mod.Version, noticeReason(cause))
 	return fresh, nil
 }
+
+// savedModFallbackError is a start whose saved mod did not start (cause) and
+// whose start without it failed too (err). It names both: the base install's
+// own failure alone hides why the saved mod was left behind (issue #186).
+type savedModFallbackError struct {
+	selector   string
+	cause, err error
+}
+
+func (e *savedModFallbackError) Error() string {
+	return fmt.Sprintf("nanolathe: the saved mod %s did not start: %s\nnanolathe: starting without it failed too: %s",
+		e.selector, strings.TrimPrefix(e.cause.Error(), "nanolathe: "), strings.TrimPrefix(e.err.Error(), "nanolathe: "))
+}
+
+func (e *savedModFallbackError) Unwrap() []error { return []error{e.err, e.cause} }
 
 // noticeReason shortens a diagnostic to the failure and the logical path it
 // names, for a one-line notice; the full diagnostic goes to standard error.
