@@ -1732,6 +1732,30 @@ changing the distance branches and their RNG effects `[08 R-AI-01 §3]`
     keeps its truncate-write contract.
   - **Periodic autosave.** A live battle is also written to `Autosave`
     every ten minutes of game time. A paused game's clock does not run.
+    The clock starts when the game first sees the battle, so a new or
+    loaded battle waits a full interval.
+  - **Autosave interval (maintainer-approved 2026-11-02, issue #188).** Each
+    periodic autosave briefly pauses the game, so the interval is a host
+    preference, `presentation.autosaveMinutes`, in minutes of game time. The
+    Nanolathe screen's Game page offers it as the *Autosave interval* card:
+    *Off*, 5, 10, 15, 30 or 60 minutes. The default is 10, so a settings
+    file without the key, an earlier build's included, keeps the ten minutes
+    above. `0` is *Off*: no periodic autosave is written. A negative value
+    loads as 10. A value above 1440 (a day) loads as 1440. Any other
+    hand-edited value is kept, and the card shows it until a step is chosen.
+    *Off* changes only the periodic write: leaving a battle still writes
+    `Autosave`, and quick save still works. The write itself is unchanged
+    and still runs on the game goroutine between steps; this preference does
+    not move it to the background. The interval is read at every step and
+    measured from the last periodic autosave, or from the clock's start. A
+    changed interval therefore keeps the time already elapsed: an interval
+    already passed saves at once, and a longer one waits out the rest. *Off*
+    keeps the clock's start, so choosing an interval again counts from the
+    last periodic autosave. Like the other presentation preferences, the key
+    is mod-scoped: a change made while a mod runs is kept for that mod
+    ([DESIGN_MODS_MUTATORS §4.6](DESIGN_MODS_MUTATORS.md#46-settings-per-mod)).
+    The screen opens only from the main menu, so a change normally takes
+    effect from the next battle. No command-line flag sets it.
   - **Quick save and quick load.** Ctrl+F11 writes the `Quicksave` slot and
     Ctrl+F12 loads it.
   - **What writes nothing.** A battle whose result has latched, an online
@@ -1753,8 +1777,11 @@ changing the distance branches and their RNG effects `[08 R-AI-01 §3]`
     `TestSurvivalBattleAutosavesAndLoadsAsSurvival`,
     `TestLoadDialogOpensOnTheNewestSave`, `TestQuickSaveKeys`,
     `TestQuickSaveThenQuickLoad`, `TestPeriodicAutosave`,
+    `TestPeriodicAutosaveFollowsTheInterval`,
+    `TestNLScreenAutosaveIntervalCard`,
     `TestSaveSlotsNeedAHostSaveDirectory` and
-    `TestSaveSlotsStayInADottedSaveDirectory`. In `ebitenapp`:
+    `TestSaveSlotsStayInADottedSaveDirectory`. In `settings`:
+    `TestAutosaveMinutesLoadAndRoundTrip`. In `ebitenapp`:
     `TestWindowCloseIsHandedToTheGameThenForced`,
     `TestPendingWindowCloseCannotRestBeforeHostStep` and
     `TestWindowCloseWaitsForRecorderBeforeNotifying`. Slot publication tests

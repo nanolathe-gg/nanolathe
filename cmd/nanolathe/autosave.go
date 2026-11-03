@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // Autosave, quick save and quick load (docs/DESIGN_SESSIONS_AI_SAVE.md §5,
@@ -15,8 +16,10 @@ import (
 //
 //   - leaving a live battle — the window's close button, or Exit Game or
 //     Main Menu in the battle menu — first writes it to the Autosave slot;
-//   - a live battle is also written to the Autosave slot every
-//     autosaveIntervalTicks of game time;
+//   - a live battle is also written to the Autosave slot at the player's
+//     autosave interval of game time, ten minutes unless the Nanolathe
+//     screen's Autosave interval card chose another or Off
+//     (presentation.autosaveMinutes);
 //   - Ctrl+F11 writes the Quicksave slot and Ctrl+F12 loads it.
 //
 // Each goes through the same bank and sidecar writer as Save Game, and only
@@ -30,9 +33,19 @@ const (
 	// descriptions.
 	autosaveName  = "Autosave"
 	quicksaveName = "Quicksave"
-	// autosaveIntervalTicks is ten minutes of game time at 30 ticks a second.
-	autosaveIntervalTicks = 10 * 60 * 30
+	// autosaveTicksPerMinute is a minute of game time at 30 ticks a second.
+	autosaveTicksPerMinute = 60 * 30
 )
+
+// autosaveIntervalTicks is the player's periodic autosave interval in ticks
+// of game time, or 0 when the periodic autosave is off.
+func (g *gameShell) autosaveIntervalTicks() uint32 {
+	minutes := min(g.presentation.AutosaveMinutes, settings.MaxAutosaveMinutes)
+	if minutes <= settings.AutosaveOff {
+		return 0
+	}
+	return uint32(minutes) * autosaveTicksPerMinute
+}
 
 // quickAction is a quick save or load the battle's keys asked for, run at the
 // next shell step after the simulation join (serviceSaveSlots).
@@ -208,10 +221,16 @@ func (g *gameShell) quickload() {
 	g.saveNotice("Game loaded")
 }
 
-// periodicAutosave writes the Autosave slot once every
-// autosaveIntervalTicks of game time; a battle's clock starts when the shell
-// first sees it, so a load or a new battle waits a full interval. A paused
-// game's clock does not run, so it does not autosave.
+// periodicAutosave writes the Autosave slot once the player's interval of
+// game time has passed since the last periodic autosave; a battle's clock
+// starts when the shell first sees it, so a load or a new battle waits a full
+// interval. A paused game's clock does not run, so it does not autosave.
+//
+// The interval is read at every step, measured from the clock's start, so a
+// changed interval keeps the time already elapsed: a shorter one already
+// passed saves at once, a longer one waits out the rest. Off writes nothing
+// and keeps the clock's start, so choosing an interval again counts from the
+// last periodic autosave.
 func (g *gameShell) periodicAutosave() {
 	b := g.battle
 	if b == nil || !g.autosaveAllowed() {
@@ -219,13 +238,14 @@ func (g *gameShell) periodicAutosave() {
 	}
 	tick := b.currentTick()
 	if g.autosaveBattle != b {
-		g.autosaveBattle, g.autosaveDue = b, tick+autosaveIntervalTicks
+		g.autosaveBattle, g.autosaveFrom = b, tick
 		return
 	}
-	if tick < g.autosaveDue {
+	every := g.autosaveIntervalTicks()
+	if every == 0 || tick-g.autosaveFrom < every {
 		return
 	}
-	g.autosaveDue = tick + autosaveIntervalTicks
+	g.autosaveFrom = tick
 	if err := g.writeSlotSave(autosaveName); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return

@@ -699,6 +699,17 @@ const (
 	MaxChromeScale  = 2
 )
 
+// Periodic autosave interval preferences, in minutes of game time
+// (DESIGN_SESSIONS_AI_SAVE §5, "Autosave, quick save and quick load").
+// AutosaveOff turns the periodic autosave off; the default keeps the ten
+// minutes issue #146 introduced. MaxAutosaveMinutes, a day, only bounds a
+// hand-edited value so the tick arithmetic cannot overflow.
+const (
+	AutosaveOff            = 0
+	DefaultAutosaveMinutes = 10
+	MaxAutosaveMinutes     = 24 * 60
+)
+
 // Presentation holds Nanolathe's host presentation preferences
 // (DESIGN_GPU_RENDERER §13.5, §14.6). FPS zero follows the display refresh;
 // positive values cap modern presentation without changing the simulation.
@@ -886,6 +897,12 @@ type Presentation struct {
 	// (DESIGN_INTERFACE_HUD_INPUT §3.16). Zero, the default, is retail: only
 	// the campaign trigger cue plays [08 R-TRIG-01 §8].
 	VictoryCue int `json:"victoryCue"`
+
+	// AutosaveMinutes is how often a live battle is written to the Autosave
+	// slot, in minutes of game time; AutosaveOff turns the periodic autosave
+	// off (DESIGN_SESSIONS_AI_SAVE §5). Leaving a battle still autosaves.
+	// A file that omits the key keeps DefaultAutosaveMinutes.
+	AutosaveMinutes int `json:"autosaveMinutes"`
 }
 
 // DefaultPresentation selects the modern executor with a 60 FPS cap and every
@@ -912,6 +929,7 @@ func DefaultPresentation() Presentation {
 		MegamapRadarColor: MegamapColorDefault, MegamapSonarColor: MegamapColorDefault,
 		MegamapRadarJamColor: MegamapColorDefault, MegamapSonarJamColor: MegamapColorDefault,
 		MegamapAntinukeColor: MegamapColorDefault,
+		AutosaveMinutes:      DefaultAutosaveMinutes,
 	}
 }
 
@@ -927,6 +945,10 @@ func (p *Presentation) Normalize() {
 		p.UIScale = ChromeScaleAuto
 	}
 	p.UIScale = min(p.UIScale, MaxChromeScale)
+	if p.AutosaveMinutes < AutosaveOff {
+		p.AutosaveMinutes = DefaultAutosaveMinutes
+	}
+	p.AutosaveMinutes = min(p.AutosaveMinutes, MaxAutosaveMinutes)
 	if p.NanoframePreview < 0 || p.NanoframePreview > 3 {
 		p.NanoframePreview = 0
 	}
