@@ -6286,6 +6286,20 @@ All mutable terrain and feature reads occur through a read-only session query;
 the host owns only the deterministic scan and command substitution
 [community patch engine CP-CON-6][I6].
 
+**Occupied deposits (Nanolathe host policy).** The published patch counts every
+metal cell regardless of what stands on it, so a deposit already under a
+building pulls the snap onto an off-centre or overlapping site. Nanolathe's
+extractor count skips a footprint cell whose ground occupant is a live
+building-class unit (finished or a nanoframe) that the commanding player owns
+or can currently see by the ordinary unit visibility predicate [03 §3.2]. A
+mobile unit on a deposit does not hide it, since it moves or is cleared from a
+construction site, and an unseen enemy structure does not either, so the
+cursor never reveals a building through fog. The rule changes only the
+position the order carries: placement validation, geothermal and reclaim snap,
+and the computer players are unchanged, and it reads the same read-only
+session query, so no tick state or RNG stream is touched. It applies wherever
+the feature table enables click snap; Strict 3.1 leaves click snap off.
+
 When construction kickout is enabled, the placement rectangle follows the
 patch's two drawers. `communityBuildSnap` reports when the patch's click-snap
 preview owns the site — an extractor centred over a deposit found within the

@@ -63,5 +63,11 @@ func (s *Session) snapCellHeldByStructure(cell *world.PlotCell) bool {
 		return false
 	}
 	u := s.Units.Unit(pool.Handle(uint16(occupant)))
-	return u != nil && u.Def != nil && u.Def.BMCode == 0
+	if u == nil || u.Def == nil || u.Def.BMCode != 0 {
+		return false
+	}
+	// Only a structure the commanding player can see may move the snap: an
+	// unseen enemy extractor must not steer the cursor and so reveal itself
+	// through fog (DESIGN_INTERFACE_HUD_INPUT, "Community placement input").
+	return u.Owner == s.LocalOwner || s.IsUnitVisible(int(s.LocalOwner), u)
 }
