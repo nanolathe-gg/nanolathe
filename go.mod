@@ -3,7 +3,7 @@ module github.com/nanolathe-gg/nanolathe
 go 1.27.1
 
 require (
-	github.com/ebitengine/purego v0.11.2
+	github.com/ebitengine/purego v0.11.3
 	github.com/hajimehoshi/ebiten/v2 v2.10.5
 	golang.org/x/sys v0.49.0
 )
