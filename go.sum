@@ -4,8 +4,8 @@ github.com/ebitengine/hideconsole v1.0.0 h1:5J4U0kXF+pv/DhiXt5/lTz0eO5ogJ1iXb8Yj
 github.com/ebitengine/hideconsole v1.0.0/go.mod h1:hTTBTvVYWKBuxPr7peweneWdkUwEuHuB3C1R/ielR1A=
 github.com/ebitengine/oto/v3 v3.5.0 h1:8ZDhKP3Hhslyb9NL3g4HWvhRQqwI+hKOHAXAqD6GPXs=
 github.com/ebitengine/oto/v3 v3.5.0/go.mod h1:Elkm7yzTRns3w2efvibzVOoQ65YOwmec9a76dCiK10o=
-github.com/ebitengine/purego v0.11.2 h1:WWiTx8rD8zYdOwSj8O/NiNbsOvSAgJMTlyV1XlbUSeU=
-github.com/ebitengine/purego v0.11.2/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
+github.com/ebitengine/purego v0.11.3 h1:OB+JLpdm7ioymhyA+6s5kbb/uOuYycAgL8NNTFc5MLg=
+github.com/ebitengine/purego v0.11.3/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
 github.com/hajimehoshi/ebiten/v2 v2.10.5 h1:D6XuOFhzgkvfqeA6Xwwvcz54uj6HHPNC9Y+0pE6Qfs4=
 github.com/hajimehoshi/ebiten/v2 v2.10.5/go.mod h1:47QNgyS/y2ZRkjVUvlGLx8a+F7MSjcn8/GsjcCZ9Rc8=
 github.com/hajimehoshi/go-mp3 v0.3.4 h1:NUP7pBYH8OguP4diaTZ9wJbUbk3tC0KlfzsEpWmYj68=
