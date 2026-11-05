@@ -206,6 +206,15 @@ func newEscalationAdjacencySession(t *testing.T, fs vfs.FSOps, cat *content.Cata
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The third side only has to exist. Left to play, its commander walks
+	// out from the neighbouring start and kills the fixtures with its D-gun.
+	for _, a := range s.AI {
+		if a != nil {
+			for j := range a.Deadlines {
+				a.Deadlines[j] = 1 << 30
+			}
+		}
+	}
 	advanceProTATicks(t, s, 2)
 	return s
 }

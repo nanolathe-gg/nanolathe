@@ -245,9 +245,9 @@ func TestEscalationAutomaticSurfaceTransport(t *testing.T) {
 
 func setEscalationTransportMode(t *testing.T, s *Session, h pool.Handle, value int32) {
 	t.Helper()
-	for _, cmd := range []HumanCommand{{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h}}}, {Kind: HumanStance, Stance: HumanStanceCommand{Fire: true, Value: value}}} {
-		if err := s.EnqueueHumanCommand(cmd); err != nil {
-			t.Fatal(err)
-		}
+	// Selection is client-local state (DESIGN_MULTIPLAYER §7.3); the stance
+	// press names its units itself.
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanStance, Stance: HumanStanceCommand{Handles: []pool.Handle{h}, Fire: true, Value: value}}); err != nil {
+		t.Fatal(err)
 	}
 }
