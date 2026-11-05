@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 func TestEffectiveClickSnapRadiusUsesTableBounds(t *testing.T) {
@@ -122,6 +123,70 @@ func TestCommunityBuildSnapCentersAndHonorsBypasses(t *testing.T) {
 	b.sess.Community = community.Features{}
 	if x, z, preview = b.communityBuildSnap(def, 10, 10, 1, 1, 0, cursorX, cursorZ); x != 10 || z != 10 || preview {
 		t.Fatalf("Strict snap = (%d,%d,%v), want raw (10,10,false)", x, z, preview)
+	}
+}
+
+func TestCommunityBuildSnapIgnoresDepositsUnderBuildings(t *testing.T) {
+	cat := testCatalogON05()
+	cat.Maps = map[string]*content.MapHeader{"snap": {Schemas: []content.MapSchema{{SurfaceMetal: 0}}}}
+	terrain := testWorldON05(24, 24)
+	b := newTestBattle(cat, terrain)
+	// Line of sight on, so an enemy with no observer nearby is unseen.
+	b.sess.Vis = visibility.New(terrain, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	b.sess.Vis.SetLocal(0)
+	b.sess.Mission = &mission.Mission{TerrainKey: "snap"}
+	b.sess.Community = community.Features{MexSnap: true, MexSnapRadius: 1, MexSnapRadiusMax: 3}
+	prefs := settings.DefaultPresentation()
+	b.hostPresentation = &prefs
+	b.sess.World.PlotAt(10, 10).SetMetal(1)
+	b.sess.World.PlotAt(11, 10).SetMetal(1)
+	def := &content.UnitDef{ExtractsMetal: 1, FootprintX: 2, FootprintZ: 2}
+	cursorX, cursorZ := numeric.FixedFromInt(11*16), numeric.FixedFromInt(10*16)
+
+	if x, z, preview := b.communityBuildSnap(def, 10, 10, 2, 2, 0, cursorX, cursorZ); x != 10 || z != 9 || !preview {
+		t.Fatalf("unoccupied deposits snap = (%d,%d,%v), want (10,9,true)", x, z, preview)
+	}
+
+	building, err := b.sess.Units.Create(cat.Units["armsolar"], 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create building: %v", err)
+	}
+	b.sess.World.PlotAt(11, 10).SetOccupantA(int16(building))
+	if x, z, preview := b.communityBuildSnap(def, 10, 10, 2, 2, 0, cursorX, cursorZ); x != 9 || z != 9 || !preview {
+		t.Fatalf("deposit under building snap = (%d,%d,%v), want (9,9,true)", x, z, preview)
+	}
+
+	b.sess.World.PlotAt(11, 10).SetOccupantA(0)
+	hidden, err := b.sess.Units.Create(cat.Units["armsolar"], 1, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create enemy building: %v", err)
+	}
+	if b.sess.IsUnitVisible(int(b.sess.LocalOwner), b.sess.Units.Unit(hidden)) {
+		t.Fatal("enemy building unexpectedly visible to the local player")
+	}
+	b.sess.World.PlotAt(11, 10).SetOccupantA(int16(hidden))
+	if x, z, preview := b.communityBuildSnap(def, 10, 10, 2, 2, 0, cursorX, cursorZ); x != 10 || z != 9 || !preview {
+		t.Fatalf("deposit under unseen enemy building snap = (%d,%d,%v), want (10,9,true)", x, z, preview)
+	}
+
+	b.sess.World.PlotAt(11, 10).SetOccupantA(0)
+	mobile, err := b.sess.Units.Create(cat.Units["armfav"], 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create mobile unit: %v", err)
+	}
+	b.sess.World.PlotAt(11, 10).SetOccupantA(int16(mobile))
+	if x, z, preview := b.communityBuildSnap(def, 10, 10, 2, 2, 0, cursorX, cursorZ); x != 10 || z != 9 || !preview {
+		t.Fatalf("deposit under mobile unit snap = (%d,%d,%v), want (10,9,true)", x, z, preview)
+	}
+
+	b.sess.World.PlotAt(11, 10).SetOccupantA(0)
+	nanoframe, err := b.sess.Units.CreateNanoframe(cat.Units["armsolar"], 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create nanoframe: %v", err)
+	}
+	b.sess.World.PlotAt(11, 10).SetOccupantA(int16(nanoframe))
+	if x, z, preview := b.communityBuildSnap(def, 10, 10, 2, 2, 0, cursorX, cursorZ); x != 9 || z != 9 || !preview {
+		t.Fatalf("deposit under nanoframe snap = (%d,%d,%v), want (9,9,true)", x, z, preview)
 	}
 }
 

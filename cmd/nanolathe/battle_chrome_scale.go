@@ -31,12 +31,7 @@ func (b *battleSession) resolveChromeScale() {
 	}
 	w, h := b.cl.Size()
 	p := b.hostPreferences()
-	b.chromeK = hud.ChromeScale(p.UIScale, int32(h), settings.MaxChromeScale)
-	// Auto also leaves the bars the width their art and readouts are authored
-	// for; a chosen size applies regardless.
-	for p.UIScale == settings.ChromeScaleAuto && b.chromeK > 1 && (int32(w)-railInset(b.chromeK))/b.chromeK < hud.MinBarScaleWidth {
-		b.chromeK--
-	}
+	b.chromeK = hud.SurfaceChromeScale(p.UIScale, int32(w), int32(h), settings.MaxChromeScale)
 	b.barOffsetY = int32(h) % b.chromeK
 }
 

@@ -477,6 +477,10 @@ a general detection contract or authorize a catalogue change.
   requirements (§4.2) are unmet, or it fails to open, build or bind, the game
   starts with no mod and the main menu shows one message naming the mod and
   the reason; the saved choice is kept, and start-up never fails for this.
+  The start without it mounts the base install the first mount resolved;
+  when that start fails as well — a base whose required products only the
+  mod supplies — the error names the saved mod's failure first and then the
+  base install's.
   The direct battle view (`--map`) falls back the same way when the saved
   mod's battle cannot be built or bound, naming the mod and the reason on
   standard error. `--check-install` checks what a start would mount: a

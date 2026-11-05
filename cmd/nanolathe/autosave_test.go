@@ -230,27 +230,119 @@ func TestPeriodicAutosave(t *testing.T) {
 	if _, err := os.Stat(path); err == nil {
 		t.Fatal("autosaved before the interval passed")
 	}
-	g.autosaveDue = b.currentTick() + 1
+	if got := g.autosaveIntervalTicks(); got != 10*60*30 {
+		t.Fatalf("default interval is %d ticks, want ten minutes", got)
+	}
+	startAutosaveClock(g, b, g.autosaveIntervalTicks()-1)
 	for range 3 {
 		autosaveStep(g, cl)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("no autosave after the interval: %v", err)
 	}
-	if g.autosaveDue < b.currentTick()+autosaveIntervalTicks-3 {
-		t.Fatalf("the next autosave is due at %d, an interval after %d", g.autosaveDue, b.currentTick())
+	if elapsed := b.currentTick() - g.autosaveFrom; elapsed > 3 {
+		t.Fatalf("the clock was not restarted by the autosave: %d ticks elapsed", elapsed)
+	}
+}
+
+// startAutosaveClock puts the periodic autosave's clock elapsed ticks into
+// the battle.
+func startAutosaveClock(g *gameShell, b *battleSession, elapsed uint32) {
+	g.autosaveBattle, g.autosaveFrom = b, b.currentTick()-elapsed
+}
+
+// The player's interval decides when the periodic autosave writes
+// (DESIGN_SESSIONS_AI_SAVE §5): Off never writes, another interval writes
+// once that much game time has passed, and a changed interval keeps the time
+// already elapsed.
+func TestPeriodicAutosaveFollowsTheInterval(t *testing.T) {
+	g, b, cl, dir := startAutosaveBattle(t, false)
+	path := session.RetailSavePath(dir, autosaveName)
+	const minute = autosaveTicksPerMinute
+	autosaved := func() bool {
+		t.Helper()
+		_, err := os.Stat(path)
+		if err == nil {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(save.SidecarPath(path))
+		}
+		return err == nil
+	}
+	steps := func(n int) {
+		for range n {
+			autosaveStep(g, cl)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		minutes int
+		elapsed uint32 // game time on the clock before three steps
+		want    bool
+	}{
+		{"off writes nothing however long", settings.AutosaveOff, 600 * minute, false},
+		{"five minutes not yet", 5, 5*minute - 100, false},
+		{"five minutes passed", 5, 5*minute - 1, true},
+		{"ten minutes at five", 10, 5 * minute, false},
+		{"thirty minutes not yet", 30, 29 * minute, false},
+		{"thirty minutes passed", 30, 30 * minute, true},
+	} {
+		g.presentation.AutosaveMinutes = tc.minutes
+		startAutosaveClock(g, b, tc.elapsed)
+		from := g.autosaveFrom
+		steps(3)
+		if got := autosaved(); got != tc.want {
+			t.Fatalf("%s: autosaved %t, want %t", tc.name, got, tc.want)
+		}
+		if !tc.want && g.autosaveFrom != from {
+			t.Fatalf("%s: the clock moved without an autosave", tc.name)
+		}
+	}
+
+	// Changing the interval mid-battle keeps the elapsed time: seven minutes
+	// into a ten-minute interval, choosing five saves at once, and choosing
+	// thirty after that waits a full thirty from that save.
+	g.presentation.AutosaveMinutes = 10
+	startAutosaveClock(g, b, 7*minute)
+	steps(3)
+	if autosaved() {
+		t.Fatal("autosaved seven minutes into ten")
+	}
+	g.presentation.AutosaveMinutes = 5
+	steps(3)
+	if !autosaved() {
+		t.Fatal("a shorter interval already passed did not autosave")
+	}
+	g.presentation.AutosaveMinutes = 30
+	startAutosaveClock(g, b, 7*minute)
+	steps(3)
+	if autosaved() {
+		t.Fatal("a longer interval autosaved early")
+	}
+	// Off and back keeps the clock too.
+	g.presentation.AutosaveMinutes = settings.AutosaveOff
+	startAutosaveClock(g, b, 40*minute)
+	steps(3)
+	if autosaved() {
+		t.Fatal("autosaved while off")
+	}
+	g.presentation.AutosaveMinutes = 30
+	steps(3)
+	if !autosaved() {
+		t.Fatal("turning the autosave back on did not count the elapsed time")
 	}
 }
 
 // Without a host-selected save directory nothing is written implicitly: the
 // retail default would be SAVEGAME inside the game folder.
 func TestSaveSlotsNeedAHostSaveDirectory(t *testing.T) {
-	g, _, cl, _ := startAutosaveBattle(t, false)
+	g, b, cl, _ := startAutosaveBattle(t, false)
 	root := t.TempDir()
 	g.opts.SaveDir, g.opts.Root = "", root
 	g.pendingQuick = quickSave
 	g.step(1.0/30, cl)
-	g.autosaveDue = 0
+	startAutosaveClock(g, b, g.autosaveIntervalTicks())
 	g.step(1.0/30, cl)
 	cl.NoteWindowClosing()
 	g.step(1.0/30, cl)

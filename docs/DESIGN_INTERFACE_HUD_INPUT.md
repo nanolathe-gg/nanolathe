@@ -421,7 +421,11 @@ the target; `GlideTo`/`StepGlide` are the message-source and next-unit glides;
 jump family's table; `StoreBookmark`/`RecallBookmark` are Ctrl+F5..F8 and
 F5..F8 `[07 R-CAM-01 §12]` `[07 R-CAM-01 §14]`. The `n` and F3 glide
 writers preserve the tracked object; its next follow pass can replace the
-desired origin written by the glide `[07 R-CAM-01 §12]`.
+desired origin written by the glide `[07 R-CAM-01 §12]`. The non-retail
+pans — middle-drag and trackpad pan — call `ClearFollow` whenever the
+player pans, as the scroll pass does, so a Ctrl+C or `t` follow never pulls a
+panned view back (issue #183). Middle-drag is pointer input, so it also
+re-latches the follow sample as the drag-scroll entry does.
 
 The `t`/`T` input adapter scans selected slots relative to the tracked slot,
 even when that unit has been deselected. Its inclusive owner range comes
@@ -2279,7 +2283,8 @@ to one (When space permits); zero selects Never. Legacy `expandedSidebar: 0`
 loads as `expandedSidebar: 1`, six items and Never, including through presets.
 Classic retains its authored/fitted layout. Apply, Cancel, Undo and Restore include both
 preferences, and the preview uses the resolved content recommendation and the
-selected game's logical resolution.
+rail the selected game's logical resolution gives it: the rows left after the
+draft's UI scale (see "Modern UI scale"; Classic is always 1x).
 
 Verification locks six-slot boundary comparisons, whole-row capacity, hiding
 orders before reducing a fixed count, cross-source pagination, explicit Free flow
@@ -2330,7 +2335,9 @@ stock page and the side panel art are authored for, and Auto also stays at 1x
 when 2x would leave the bars fewer than the 512 columns right of the rail
 their art and readouts are authored for (`hud.MinBarScaleWidth`). A fixed 2x
 applies as chosen even when it leaves less; the bottom of a page may then fall
-off the rail (`hud.ChromeScale`), and a centred modal too wide for the space
+off the rail (`hud.ChromeScale`; the whole-surface rule including the bar
+width is `hud.SurfaceChromeScale`, which the Nanolathe screen's sidebar
+demonstration also uses), and a centred modal too wide for the space
 beside the rail is kept on the surface. The scale is resolved at the joined
 host presentation boundary, before camera blending and world recording.
 Input until the next draw maps the pointer through that value, which is what
@@ -5377,8 +5384,9 @@ the bloom layer, and the separate source amounts multiply their own families.
 12 per page, Free flow) and Orders below build as independent named
 choices on one card. Sidebar and Fullscreen draw a small demonstration over
 the preview (`nlscreen_demo.go`). The sidebar shows the draft's actual
-resolved capacity and orders visibility at the selected logical game resolution.
-Twelve combines authored pages; Free flow reserves at least six slots before
+resolved capacity and orders visibility at the selected logical game resolution,
+laid out on the rows the draft's UI scale leaves the rail, as in the battle;
+the caption names the scale when it magnifies (issue #181). Twelve combines authored pages; Free flow reserves at least six slots before
 orders. Fullscreen scaling and world zoom do not alter that logical space.
 The common command rows always appear; the optional panel contains the
 supplementary Orders-page controls above them. Fixed counts put the native
@@ -5395,7 +5403,8 @@ stored build count. Missing or unsafe pages show no demonstration.
 Oversized authored/fitted pages show a layout description rather than a
 normalized grid with an inaccurate page count. The worker honours retirement
 between nested GUI and art reads. `TestNLSidebarPreviewPagePolicies` locks the
-partitions and fitted boundary; `TestNLSidebarLoaderStopsBetweenAssetReads`
+partitions and fitted boundary; `TestNLSidebarPreviewUsesTheBattleUIScale`
+locks the rail rows and scale against the battle's; `TestNLSidebarLoaderStopsBetweenAssetReads`
 locks cancellation, and the retail builder sweep compares preview cells with
 the live HUD.
 The demonstration code also places marks on the
@@ -6280,6 +6289,20 @@ and carries the terrain-derived click height raised to sea level when needed.
 All mutable terrain and feature reads occur through a read-only session query;
 the host owns only the deterministic scan and command substitution
 [community patch engine CP-CON-6][I6].
+
+**Occupied deposits (Nanolathe host policy).** The published patch counts every
+metal cell regardless of what stands on it, so a deposit already under a
+building pulls the snap onto an off-centre or overlapping site. Nanolathe's
+extractor count skips a footprint cell whose ground occupant is a live
+building-class unit (finished or a nanoframe) that the commanding player owns
+or can currently see by the ordinary unit visibility predicate [03 §3.2]. A
+mobile unit on a deposit does not hide it, since it moves or is cleared from a
+construction site, and an unseen enemy structure does not either, so the
+cursor never reveals a building through fog. The rule changes only the
+position the order carries: placement validation, geothermal and reclaim snap,
+and the computer players are unchanged, and it reads the same read-only
+session query, so no tick state or RNG stream is touched. It applies wherever
+the feature table enables click snap; Strict 3.1 leaves click snap off.
 
 When construction kickout is enabled, the placement rectangle follows the
 patch's two drawers. `communityBuildSnap` reports when the patch's click-snap

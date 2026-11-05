@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/content"
@@ -9,6 +10,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/gameplay"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/modlibrary"
+	"github.com/nanolathe-gg/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
@@ -32,6 +34,7 @@ type nlDraft struct {
 	unitLimit               int
 	resolution              retailDisplayMode
 	fullscreen              bool
+	monitor                 string
 	switchAlt               bool
 	controls                int // index into nlControlsPresets; 0 keeps the current rows
 	// keys is the draft keyboard map the Controls page edits; Apply hands a
@@ -133,15 +136,13 @@ func onOff(v bool) int {
 }
 
 // pages is the catalogue, built once and kept: Update, Draw and the change
-// count read it every frame. A builder reads exactly one input when it runs —
-// the installed mods' names and versions, which are the Content card's steps;
-// everything else (the draft, the shell, the part a grouped card compares) is
-// read by the cards' closures when they are called. So the catalogue is
-// rebuilt when that list differs from the one it was built from, or optional
-// glyphs become available and the language card can name Chinese in Chinese.
+// count read it every frame. Builders capture installed mod names/versions and
+// the display snapshot refreshed when the screen opens; both invalidate the
+// cached cards. Optional glyph availability also refreshes the language card.
+// Other values are read by the cards' closures when they are called.
 func (s *nlScreen) pages() []nlPage {
-	if !s.catalogue.builtFrom(s.mods) {
-		s.catalogue = nlCatalogue{pages: s.buildPages(), mods: make([]nlModName, len(s.mods)), cjk: film.CJKReady()}
+	if !s.catalogue.builtFrom(s.mods, s.monitors) {
+		s.catalogue = nlCatalogue{pages: s.buildPages(), mods: make([]nlModName, len(s.mods)), monitors: slices.Clone(s.monitors), cjk: film.CJKReady()}
 		for i, m := range s.mods {
 			s.catalogue.mods[i] = nlModName{m.Name, m.Version}
 		}
@@ -149,17 +150,18 @@ func (s *nlScreen) pages() []nlPage {
 	return s.catalogue.pages
 }
 
-// nlCatalogue is the built pages and the mod names they captured.
+// nlCatalogue is the built pages and the snapshots their builders captured.
 type nlCatalogue struct {
-	pages []nlPage
-	mods  []nlModName
-	cjk   bool
+	pages    []nlPage
+	mods     []nlModName
+	monitors []ebitenapp.DisplayMonitor
+	cjk      bool
 }
 
 type nlModName struct{ name, version string }
 
-func (c *nlCatalogue) builtFrom(mods []modlibrary.Mod) bool {
-	if c.pages == nil || len(c.mods) != len(mods) || c.cjk != film.CJKReady() {
+func (c *nlCatalogue) builtFrom(mods []modlibrary.Mod, monitors []ebitenapp.DisplayMonitor) bool {
+	if c.pages == nil || len(c.mods) != len(mods) || c.cjk != film.CJKReady() || !slices.Equal(c.monitors, monitors) {
 		return false
 	}
 	for i := range mods {
@@ -291,10 +293,43 @@ func (s *nlScreen) gameCards() []nlCard {
 		},
 		s.sidebarCard(),
 		s.languageCard(),
+		{
+			key: "autosave", label: "Autosave interval", pics: []string{"armcom", "corcom"}, kind: nlStepper,
+			steps: []string{"Off", "5 min", "10 min", "15 min", "30 min", "60 min"},
+			get: func(d *nlDraft) int {
+				for i, m := range nlAutosaveMinutes {
+					if m == d.pres.AutosaveMinutes {
+						return i
+					}
+				}
+				return slices.Index(nlAutosaveMinutes, settings.DefaultAutosaveMinutes)
+			},
+			set: func(d *nlDraft, v int) { d.pres.AutosaveMinutes = nlAutosaveMinutes[v] },
+			// A hand-edited interval no step names is kept until a step is
+			// chosen, as the frame rate keeps an arbitrary cap.
+			copy: func(to, from *nlDraft) { to.pres.AutosaveMinutes = from.pres.AutosaveMinutes },
+			valueText: func(d *nlDraft) string {
+				if d.pres.AutosaveMinutes == settings.AutosaveOff {
+					return "Off"
+				}
+				return fmt.Sprintf("%d min", d.pres.AutosaveMinutes)
+			},
+			desc: func(d *nlDraft, v int) string {
+				if nlAutosaveMinutes[v] == settings.AutosaveOff {
+					return "No autosave during a battle, so no pause for one. Leaving a battle still writes the Autosave slot, and Ctrl+F11 still quick saves."
+				}
+				return "How often a battle is written to the Autosave slot, in minutes of game time. Each autosave briefly pauses the game. Leaving a battle always writes it too."
+			},
+			scene: func(*nlDraft, int) string { return "armor" },
+		},
 	}
 }
 
 var nlUnitLimits = []int{0, 250, 500, 1000, 1500, 2000, 3000}
+
+// nlAutosaveMinutes are the Autosave interval card's choices
+// (DESIGN_SESSIONS_AI_SAVE §5, "Autosave, quick save and quick load").
+var nlAutosaveMinutes = []int{settings.AutosaveOff, 5, settings.DefaultAutosaveMinutes, 15, 30, 60}
 
 // nlRuleDetails is what each rule layer changes: DESIGN_COMMUNITY_PATCH §2–§4
 // and the Modern policies listed in CLAUDE.md, in player terms.
@@ -562,6 +597,7 @@ var nlFPS = []int{30, 60, 120, 144, 0}
 func (s *nlScreen) graphicsCards() []nlCard {
 	return []nlCard{
 		s.resolutionCard(),
+		s.monitorCard(),
 		{
 			key: "renderer", label: "Renderer", pics: []string{"armrad", "armarad"}, kind: nlHalves,
 			steps: []string{"Classic", "Enhanced"}, subs: []string{"8-bit · 30 fps · pixel-exact", "True colour · smooth · effects"},

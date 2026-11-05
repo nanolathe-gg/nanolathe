@@ -5,7 +5,9 @@ import (
 	"image/color"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/screenkit"
+	"github.com/nanolathe-gg/nanolathe/internal/settings"
 )
 
 // Small demonstrations drawn over the live preview for settings a battle
@@ -44,8 +46,20 @@ func (s *nlScreen) drawDemo(screen *ebiten.Image, card nlCard, v int) {
 	}
 }
 
-// demoSidebar draws the resolved products and retained controls at the
-// selected game's logical resolution. Both sidebar choices use this same draft.
+// nlDraftSidebarRows is the height of the surface a battle at the draft's
+// resolution lays the rail out on, and the UI scale it magnifies it by:
+// Classic never magnifies it (DESIGN_INTERFACE_HUD_INPUT "Modern UI scale").
+func nlDraftSidebarRows(d *nlDraft) (rows, k int) {
+	k = 1
+	if d.pres.Renderer != "classic" {
+		k = int(hud.SurfaceChromeScale(d.pres.UIScale, int32(d.resolution.W), int32(d.resolution.H), settings.MaxChromeScale))
+	}
+	return d.resolution.H / k, k
+}
+
+// demoSidebar draws the resolved products and retained controls on the rows
+// the rail has at the selected game's logical resolution and UI scale, as the
+// battle lays it out. Both sidebar choices use this same draft.
 func (s *nlScreen) demoSidebar(screen *ebiten.Image) {
 	u := s.u()
 	stage := s.demoStage()
@@ -58,7 +72,7 @@ func (s *nlScreen) demoSidebar(screen *ebiten.Image) {
 		return
 	}
 	c := preview.sidebarProductCatalog
-	height := s.draft.resolution.H
+	height, k := nlDraftSidebarRows(&s.draft)
 	original := s.draft.pres.ExpandedSidebar == 0
 	limit := s.nlSidebarBuildLimit(&s.draft)
 	starts, layout := nlSidebarPageStarts(c, original, height, limit, s.draft.pres.SidebarOrders != 0)
@@ -108,16 +122,10 @@ func (s *nlScreen) demoSidebar(screen *ebiten.Image) {
 			screenkit.Image(screen, pic, r, 1, false)
 		}
 	}
-	infoX, infoY := panel.X+panel.W+32*u, panel.Y+12*u
 	info := "Authored pages"
 	if !original {
 		info = fmt.Sprintf("Capacity: %d build slots", layout.capacity)
 	}
-	s.fonts.Display.Draw(screen, info, infoX, infoY, screenkit.Style{Size: 14 * u, Top: nlGreenText})
-	infoY += 26 * u
-	visible := fmt.Sprintf("Page items: %d", end-start)
-	s.fonts.Body.Draw(screen, visible, infoX, infoY, screenkit.Style{Size: 12 * u, Top: nlBody})
-	infoY += 24 * u
 	orders := "Authored controls"
 	if !original {
 		orders = "Orders-page controls on own page"
@@ -125,16 +133,51 @@ func (s *nlScreen) demoSidebar(screen *ebiten.Image) {
 			orders = "Orders-page controls below build"
 		}
 	}
-	s.fonts.Body.Draw(screen, orders, infoX, infoY, screenkit.Style{Size: 12 * u, Top: nlBody})
-	infoY += 28 * u
-	if !original && limit > 0 && limit != 6 && limit != 12 {
-		s.fonts.Body.Draw(screen, fmt.Sprintf("Current count: %d per page", limit), infoX, infoY, screenkit.Style{Size: 12 * u, Top: nlAmber})
-		infoY += 28 * u
+	type infoLine struct {
+		font  *screenkit.Font
+		text  string
+		style screenkit.Style
+		gap   float64 // to the next line
 	}
-	resolution := s.ui.text(nlTextKey{kind: "sidebar resolution", i: s.draft.resolution.W, j: height}, func() string {
-		return fmt.Sprintf("Game resolution: %d x %d", s.draft.resolution.W, height)
+	lines := []infoLine{
+		{s.fonts.Display, info, screenkit.Style{Size: 14 * u, Top: nlGreenText}, 26 * u},
+		{s.fonts.Body, fmt.Sprintf("Page items: %d", end-start), screenkit.Style{Size: 12 * u, Top: nlBody}, 24 * u},
+		{s.fonts.Body, orders, screenkit.Style{Size: 12 * u, Top: nlBody}, 28 * u},
+	}
+	if !original && limit > 0 && limit != 6 && limit != 12 {
+		lines = append(lines, infoLine{s.fonts.Body, fmt.Sprintf("Current count: %d per page", limit), screenkit.Style{Size: 12 * u, Top: nlAmber}, 28 * u})
+	}
+	// The live preview behind the demonstration can flash bright (explosions,
+	// fire), so its text sits on the same dark backing as a caption.
+	infoX, infoY := panel.X+panel.W+32*u, panel.Y+12*u
+	textW, textH := 0.0, 0.0
+	for i, line := range lines {
+		textW = max(textW, line.font.Measure(line.text, line.style))
+		if i < len(lines)-1 {
+			textH += line.gap
+		}
+	}
+	s.demoBacking(screen, screenkit.Rect{X: infoX, Y: infoY - 18*u, W: textW, H: textH + 24*u})
+	for _, line := range lines {
+		line.font.Draw(screen, line.text, infoX, infoY, line.style)
+		infoY += line.gap
+	}
+	resolution := s.ui.text(nlTextKey{kind: "sidebar resolution", a: fmt.Sprint(k), i: s.draft.resolution.W, j: s.draft.resolution.H}, func() string {
+		if k > 1 {
+			return fmt.Sprintf("Game resolution: %d x %d, UI scale %dx", s.draft.resolution.W, s.draft.resolution.H, k)
+		}
+		return fmt.Sprintf("Game resolution: %d x %d", s.draft.resolution.W, s.draft.resolution.H)
 	})
-	s.fonts.Body.Draw(screen, resolution, panel.X, panel.Y+panel.H+28*u, screenkit.Style{Size: 11 * u, Top: nlDim})
+	style := screenkit.Style{Size: 11 * u, Top: nlDim}
+	y := panel.Y + panel.H + 28*u
+	s.demoBacking(screen, screenkit.Rect{X: panel.X, Y: y - 14*u, W: s.fonts.Body.Measure(resolution, style), H: 18 * u})
+	s.fonts.Body.Draw(screen, resolution, panel.X, y, style)
+}
+
+// demoBacking is the translucent dark box a caption sits on, padded round r.
+func (s *nlScreen) demoBacking(screen *ebiten.Image, r screenkit.Rect) {
+	u := s.u()
+	screenkit.Fill(screen, screenkit.Rect{X: r.X - 10*u, Y: r.Y - 6*u, W: r.W + 20*u, H: r.H + 12*u}, color.RGBA{6, 12, 6, 215})
 }
 
 // demoFullscreen is a display with the game's window on it.

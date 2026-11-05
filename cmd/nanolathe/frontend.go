@@ -174,6 +174,7 @@ type gameShell struct {
 	settingsWritable bool
 	windowSize       retailDisplayMode // committed host size; options edits apply on OK
 	fullscreen       bool              // Nanolathe host preference (DESIGN_PRESENTATION_CLIENT §2.1)
+	monitor          string            // saved host display identity
 	language         string            // saved interface language, empty for English (language.go)
 	languagePending  string            // waiting for optional glyphs; the prior language stays readable
 	scrollSpeed      int               // persisted scrollspeed [02 "Settings"] [07 §10] C2 presentation-only
@@ -344,11 +345,11 @@ type gameShell struct {
 	battle *battleSession
 
 	// pendingQuick is a quick save or load the battle's keys asked for, and
-	// autosaveBattle and autosaveDue the periodic autosave's clock
+	// autosaveBattle and autosaveFrom the periodic autosave's clock
 	// (autosave.go).
 	pendingQuick   quickAction
 	autosaveBattle *battleSession
-	autosaveDue    uint32
+	autosaveFrom   uint32
 }
 
 func (g *gameShell) widgetTimerAdvanced(p *ui.Panel) bool {
@@ -578,7 +579,7 @@ func startWindowedShell(launch, opts Options, cs *contentSet, cl *client.Client)
 // reason) and runs start once more on that set
 // (docs/DESIGN_MODS_MUTATORS.md §4.3 "A missing mod at start"). It returns
 // the set start succeeded on, which the caller owns; a replaced cs is closed.
-// launch is the command line as given.
+// launch is the command line as given; the remount mounts cs's base roots.
 func startWithSavedModFallback[T any](launch, opts Options, cs *contentSet, start func(Options, *contentSet) (T, error)) (T, *contentSet, error) {
 	result, err := start(opts, cs)
 	if err == nil || !cs.savedMod || cs.mod == nil {
@@ -586,7 +587,7 @@ func startWithSavedModFallback[T any](launch, opts Options, cs *contentSet, star
 	}
 	var zero T
 	remountStarted := time.Now()
-	fresh, err := startWithoutSavedMod(launch, *cs.mod, err)
+	fresh, err := startWithoutSavedMod(launch, cs.baseRoots, *cs.mod, err)
 	if err != nil {
 		return zero, cs, err
 	}

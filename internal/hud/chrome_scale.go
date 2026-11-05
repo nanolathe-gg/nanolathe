@@ -24,3 +24,15 @@ func ChromeScale(pref int, screenH, maxScale int32) int32 {
 	}
 	return max(min(k, maxScale), 1)
 }
+
+// SurfaceChromeScale is ChromeScale for a whole screenW x screenH surface.
+// Auto also leaves the bars right of the magnified rail the width their art
+// and readouts are authored for; a chosen size applies regardless. The battle
+// and the Nanolathe screen's sidebar demonstration both resolve through it.
+func SurfaceChromeScale(pref int, screenW, screenH, maxScale int32) int32 {
+	k := ChromeScale(pref, screenH, maxScale)
+	for pref <= 0 && k > 1 && (screenW-(ChromeRailX*k-1))/k < MinBarScaleWidth {
+		k--
+	}
+	return k
+}

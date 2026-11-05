@@ -90,6 +90,7 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.keyMap = keyMapFromSettings(s.KeyBindings)
 	g.builderOptions = s.BuilderOptions
 	g.fullscreen = s.Fullscreen
+	g.monitor = s.Monitor
 	// The interface language is presentation only (language.go).
 	g.language = s.Language
 	g.applyLanguage()
@@ -224,6 +225,7 @@ func (g *gameShell) liveSettings() settings.Settings {
 	s := settings.Settings{
 		Version:     settings.FileVersion,
 		Fullscreen:  g.fullscreen,
+		Monitor:     g.monitor,
 		Language:    g.language,
 		Difficulty:  g.missionDifficultyValue,
 		ScrollSpeed: g.scrollSpeed,

@@ -146,7 +146,10 @@ installer-built executable uses its remembered game folder instead.
 
 Manual launches save under the first game root unless you supply
 `--save-dir "/path/to/saves"`. The installed shortcut supplies its own save
-directory, separate from the game data.
+directory, separate from the game data. When a save directory is supplied,
+a battle is autosaved every 10 minutes of game time. To choose another
+interval or **Off**, use **Autosave interval** on **Nanolathe → Game**. The
+setting is stored as `presentation.autosaveMinutes`, and `0` means Off.
 
 For content-only overrides, repeat `--root` in load order. Later roots override
 earlier ones, even across different archive types:

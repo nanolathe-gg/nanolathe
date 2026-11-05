@@ -370,6 +370,7 @@ func (s *nlScreen) chooseProfile(i int) {
 			// outside profile and preset scope; draftOf describes only the
 			// settings those layers can compose.
 			draft.fullscreen, draft.mutators = s.draft.fullscreen, s.draft.mutators
+			draft.monitor = s.draft.monitor
 			draft.restrictions = s.draft.restrictions
 			for _, page := range s.pages() {
 				for _, c := range page.cards {
