@@ -53,6 +53,18 @@ stance, armor and no script diagnostics. No completion, attachment or upgrade
 flag is synthesized by the test. The parent armor/health predicate remains
 separately owned by [Escalation shields](escalation-shields.md).
 
+**Established — constructed parents.** Gold 10.2.0's `ARMGUARD` program has
+no `Activate`, `Deactivate`, `Go` or `Stop` entry. Its `Create` raises the
+build stance once, before its first sleep, so in Nanolathe's execution that
+write lands in the inline drain of allocation. A Guardian a constructor builds
+is allocated unfinished, and its upgrade therefore needs allocation to keep
+the script's stance [05 "Nanoframe allocation"]; clearing it afterwards left
+the factory's stance wait unsatisfied and the queued `ARMGUARD_UPG` never
+started. `TestEscalationConstructedBuildingUpgrade` builds the Guardian with
+an ARM construction kbot, then queues and completes its upgrade through
+ordinary ticks. Other parents' `Create` programs were not individually
+inspected for the same dependency.
+
 **Established — Aegis menu and completion.** The actual non-builder Aegis
 menu now feeds ordinary counted production and completes its retained upgrade;
 the extended coverage test is owned by [Escalation shields](escalation-shields.md).

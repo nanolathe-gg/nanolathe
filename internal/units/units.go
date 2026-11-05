@@ -1778,11 +1778,11 @@ func (w *World) CreateWithMoverModeFacing(def *content.UnitDef, owner uint8, x, 
 // the unfinished-frame form of the creation service. It is Create in every
 // respect except that `activatewhenbuilt` does not raise the activation edge,
 // because [04 R-SPEC-01 §12] site 1 conditions that raise on the creation being
-// an already-built one. Site 2 — build completion — raises it instead, and only
-// then does the unit's `Activate` script run.
+// an already-built one. Site 2 — build completion — supplies that automatic
+// edge instead. Create can still explicitly activate an unfinished unit.
 //
-// The caller still demotes the record's construction state (remaining fraction
-// and health); this entry point owns only the activation half.
+// Initial remaining fraction, health and stance are installed before Create;
+// callers preserve the script's resulting state [05 "Nanoframe allocation"].
 func (w *World) CreateNanoframe(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
 	return w.create(def, owner, x, y, z, false, CreatedMoverMode, FacingSouth)
 }

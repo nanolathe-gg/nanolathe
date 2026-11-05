@@ -51,12 +51,16 @@ func TestWindowPreferencesPreserveShellAndDirectSettings(t *testing.T) {
 	if w, h := options.WindowSize(); w != 1024 || h != 768 {
 		t.Fatal("pending slider edit resized the window")
 	}
-	options.FullscreenChanged(false)
+	// Toggle into fullscreen from a saved windowed state. Leaving fullscreen
+	// also reselects the saved monitor, which starts the platform window
+	// system; that needs the main thread, which a test goroutine is not.
+	saveFullscreenSetting(false)
+	options.FullscreenChanged(true)
 	saved, err := settings.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Fullscreen || saved.Display.Width != 1024 {
+	if !saved.Fullscreen || saved.Display.Width != 1024 {
 		t.Fatal("fullscreen toggle persisted the pending resolution")
 	}
 	shell.commitWindowSize()
@@ -75,12 +79,12 @@ func TestWindowPreferencesPreserveShellAndDirectSettings(t *testing.T) {
 	if err := saved.Save(); err != nil {
 		t.Fatal(err)
 	}
-	saveFullscreenSetting(true)
+	saveFullscreenSetting(false)
 	saved, err = settings.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !saved.Fullscreen || saved.ScrollSpeed != 42 {
+	if saved.Fullscreen || saved.ScrollSpeed != 42 {
 		t.Fatal("fullscreen overwrote a later battle setting")
 	}
 }

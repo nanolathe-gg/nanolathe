@@ -69,30 +69,41 @@ func TestEscalationAegisUpgradeFromAuthoredMenu(t *testing.T) {
 	}
 	sess.CompleteUnit(rh)
 	recipient := sess.Units.Unit(rh)
-	for _, c := range []session.HumanCommand{
-		{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{h}}},
-		{Kind: session.HumanBuildPage, BuildPage: session.HumanBuildPageCommand{Builder: h, Page: 1}},
-	} {
-		if err := sess.EnqueueHumanCommand(c); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for tick := 0; tick < 300; tick++ {
-		sess.Step(sess.Clock.ScaledAnchor + 1)
-	}
-	if recipient.Armored {
-		t.Fatal("extractor outside the base radius is already protected")
-	}
 	cl, err := client.New(client.Options{Width: 640, Height: 480})
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := &battleSession{sess: sess, cat: cat, cl: cl, cam: &camera.Camera{ViewW: 640, ViewH: 480, MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16)}}
+	// Selection and build pages are this client's local interface state
+	// (DESIGN_MULTIPLAYER §7.3): select from a committed frame that shows the
+	// Aegis, through the host's submission path.
+	b.attachLocalInterface()
+	sess.State = session.StateBattle
+	sess.Step(sess.Clock.ScaledAnchor + 1)
+	for _, c := range []session.HumanCommand{
+		{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{h}}},
+		{Kind: session.HumanBuildPage, BuildPage: session.HumanBuildPageCommand{Builder: h, Page: 1}},
+	} {
+		if err := b.enqueueHumanCommand(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for tick := 0; tick < 300; tick++ {
+		sess.Step(sess.Clock.ScaledAnchor + 1)
+		b.syncLocalInterface()
+	}
+	if recipient.Armored {
+		t.Fatal("extractor outside the base radius is already protected")
+	}
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, retailPaletteForTest(t, cs), nil, newBattleWindowContext(cs, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, _, err := b.hud.windowForRequired(b, sess.Snapshot.Current())
+	committed, ok := b.currentSnapshot()
+	if !ok {
+		t.Fatal("no committed frame")
+	}
+	w, _, err := b.hud.windowForRequired(b, committed)
 	if err != nil {
 		t.Fatal(err)
 	}

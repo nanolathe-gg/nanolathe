@@ -102,6 +102,66 @@ func TestEscalationBuildingUpgrade(t *testing.T) {
 	}
 	t.Fatalf("fusion upgrade never applied: armor=%v queue=%+v diagnostics=%v", f.Armored, orders.QueueForUnit(f).Head(), f.ScriptState.Binding.VM.Diagnostics())
 }
+
+// An upgrade parent raises its build stance once, inside Create's inline drain,
+// and has no Activate or Go to raise it again. A parent that a constructor
+// builds is allocated as a nanoframe, so its upgrade depends on allocation
+// keeping that write [05 "Nanoframe allocation"]: the factory's phase-1 wait
+// on the stance otherwise never passes and the queued upgrade never starts.
+// Spawning the parent already built cannot show this.
+func TestEscalationConstructedBuildingUpgrade(t *testing.T) {
+	s := escalationSystemSession(t)
+	x, z := numeric.FixedFromInt(800), numeric.FixedFromInt(800)
+	builder := placeCompleteRetailUnit(t, s, "ARMCK", 0, x-numeric.FixedFromInt(120), z)
+	advanceProTATicks(t, s, 30)
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{Builder: builder.Handle, Product: "ARMGUARD", WX: x, WY: s.World.HeightAt(x, z), WZ: z}}); err != nil {
+		t.Fatal(err)
+	}
+	fund := func() {
+		p := &s.Econ.Players[0]
+		p.Stock = [2]float32{1e6, 1e6}
+		p.Capacity = [2]float32{1e6, 1e6}
+	}
+	var parent *units.Unit
+	for tick := 0; tick < 12000 && parent == nil; tick++ {
+		fund()
+		advanceProTATicks(t, s, 1)
+		for _, u := range s.Units.IterSliced() {
+			if u != nil && u.Def != nil && u.Def.CanonicalKey == "armguard" && u.Remaining == 0 {
+				parent = u
+			}
+		}
+	}
+	if parent == nil {
+		t.Fatal("constructor never completed the Guardian")
+	}
+	advanceProTATicks(t, s, 60)
+	if !parent.InBuildStance {
+		t.Fatal("constructed Guardian lost the build stance its Create raised")
+	}
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanFactoryBuild, FactoryBuild: HumanFactoryBuildCommand{Builder: parent.Handle, Product: "ARMGUARD_UPG", Count: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	for tick := 0; tick < 12000; tick++ {
+		fund()
+		advanceProTATicks(t, s, 1)
+		if len(parent.Attachment.Cargo) != 1 {
+			continue
+		}
+		upgrade := s.Units.Unit(parent.Attachment.Cargo[0])
+		if upgrade == nil || upgrade.Def.CanonicalKey != "armguard_upg" || upgrade.Remaining != 0 {
+			continue
+		}
+		for _, u := range []*units.Unit{parent, upgrade} {
+			if diagnostics := u.GetScript().Diagnostics(); len(diagnostics) != 0 {
+				t.Fatal(diagnostics)
+			}
+		}
+		return
+	}
+	t.Fatalf("constructed Guardian's upgrade never completed: stance=%v cargo=%v queue=%+v", parent.InBuildStance, parent.Attachment.Cargo, orders.QueueForUnit(parent).Head())
+}
+
 func TestEscalationTeleporter(t *testing.T) {
 	s := escalationSystemSession(t)
 	source := placeCompleteRetailUnit(t, s, "ARMGATE", 0, numeric.FixedFromInt(600), numeric.FixedFromInt(600))
@@ -185,9 +245,9 @@ func TestEscalationAutomaticSurfaceTransport(t *testing.T) {
 
 func setEscalationTransportMode(t *testing.T, s *Session, h pool.Handle, value int32) {
 	t.Helper()
-	for _, cmd := range []HumanCommand{{Kind: HumanSelectionReplace, Selection: HumanSelectionCommand{Handles: []pool.Handle{h}}}, {Kind: HumanStance, Stance: HumanStanceCommand{Fire: true, Value: value}}} {
-		if err := s.EnqueueHumanCommand(cmd); err != nil {
-			t.Fatal(err)
-		}
+	// Selection is client-local state (DESIGN_MULTIPLAYER §7.3); the stance
+	// press names its units itself.
+	if err := s.EnqueueHumanCommand(HumanCommand{Kind: HumanStance, Stance: HumanStanceCommand{Handles: []pool.Handle{h}, Fire: true, Value: value}}); err != nil {
+		t.Fatal(err)
 	}
 }
