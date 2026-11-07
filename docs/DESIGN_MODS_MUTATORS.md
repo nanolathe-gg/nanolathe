@@ -279,6 +279,7 @@ configuration files and the pinned patch source
 and §4.1, [ProTA engine package](../research/extensions/prota-engine.md),
 [TA Zero engine](../research/extensions/ta-zero-engine.md),
 [Escalation shields](../research/extensions/escalation-shields.md#passive-generator-healing),
+[Escalation interceptor coverage](../research/extensions/taesc-engine.md#interceptor-coverage-and-range-rings),
 [Total Mayhem package](../research/extensions/total-mayhem-engine.md)). A
 test proves each table resolves to the value and digest the removed table and
 profile produced (`internal/modlibrary/shipped_configs_test.go`). ProTA's and

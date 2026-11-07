@@ -540,6 +540,51 @@ offscreen/stack penalties. The historical repair helper instead uses the
 independently verified multiplier of one. Full source contracts and defaults belong to
 [Community patch engine behavior](community-patch-engine.md#31-feature-matrix-at-the-pinned-revision).
 
+## Interceptor coverage and range rings
+
+**Established — authored range rings (inspected 2026-11-07).** Gold's weapon
+table authors a family of weapons named `Range Ring` (keys `range_<n>`) with
+`interceptor=1` and a `coverage` exactly 512 greater than their `range`. A
+definition shows one by carrying `antiweapons=1` and placing the ring in a
+weapon slot beside the weapon whose range it matches. For example the Arm and
+Core T1 artillery towers (`ARMGUARD`, `CORPUN`) and the Guardian's upgrade
+(`ARMAMB`) pair the 1344-range `cannon_mrpc` with `range_1344` (coverage
+1856); Big Bertha pairs its 5376-range cannon with `range_5376`; Olympus pairs
+its 10752-range cannon with `range_10752`. Every `Range Ring` slot on an
+`antiweapons` definition keeps the 512 offset. The release notes describe
+these slots as weapon range indicators ("added range ring for weapon
+coverage", "replaced with weapon range ring indicator", "added max range
+rings to all mobile teleporters"). Retail draws such a slot on the minimap at
+radius `coverage − 512` [03 §3.9], so on retail's rule each authored ring is
+exactly its paired weapon's firing range.
+
+**Established — the current-source change.** The MIT TADR commit
+[e90121f](https://github.com/tanvanman/TADR/commit/e90121f74cbb21abc80563fb976aa5908eedd2ec)
+(2026-08-29, "Fix anti-nuke coverage calculation and display") introduced
+[CP-FIX-5](community-patch-engine.md#52-simulation-defect-fixes): the
+circular interceptor search and the removal of the 512 bias from both the
+engine's minimap ring and the patch's own megamap ring, in every build
+profile; the parent tree still subtracted it. On that source every authored
+range ring draws 512 world units beyond its weapon's range.
+
+**Supported inference — Gold 10.2.0 predates the change.** The installed
+DLL's repair path matches source commit f183cb6 (2026-08-01) and lacks the
+multipliers of f973336 (2026-08-18)
+([passive generator healing](escalation-shields.md#passive-generator-healing)),
+and the release's DLL notes name no antinuke or ring change. The DLL was
+therefore built before the 2026-08-29 change, so Gold plays with retail's
+square interceptor search [06 §11.2] and the `coverage − 512` minimap ring,
+which is the rule its authored rings were drawn for. The repair-path match is
+not a whole-DLL source identification. A bounded manual observation in the
+Gold 10.2.0 install would settle it: select a Guardian and compare its
+minimap ring with its firing range.
+
+**Host configuration.** The Escalation config sets `antinukeCircularCoverage`
+to false (issue #199), so under Community 3.9 and Modern this content keeps
+retail's square interceptor search and 512-biased minimap ring, and each range
+ring publishes its weapon's range. The mainline table and the other mods'
+configs keep CP-FIX-5. Strict 3.1 is unchanged.
+
 ## Authored package, interface and single-player coverage
 
 **Established — documented install composition.** `ESC_READ_ME.txt`
@@ -678,6 +723,13 @@ that every case below has passed:
   documentation or appropriately licensed source describing that selector,
   would settle it. Nanolathe keeps retail's stored-index schema selection
   pending that evidence.
+- **Unknown — Gold's interceptor coverage, directly.** The square search and
+  biased minimap ring rest on the version boundary and authored rings in
+  [Interceptor coverage and range rings](#interceptor-coverage-and-range-rings),
+  not on an observation of Gold itself. A Guardian's minimap ring compared
+  with its firing range in the Gold 10.2.0 install would settle the ring; an
+  antinuke's response to a nuke inside its coverage square but outside the
+  circle would settle the search.
 - **Unknown — the snap override key's default.** The key code is configurable
   and the changelog names a default, but the shipped default value could not be
   read from the configuration surface.

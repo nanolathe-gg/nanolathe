@@ -38,7 +38,7 @@
       "gridClaimTieBreak": true,
       "transportedExplosions": true,
       "buildWeaponSlotGuard": true,
-      "antinukeCircularCoverage": true,
+      "antinukeCircularCoverage": false,
       "alliedJammingIgnored": true,
       "resurrectionFinalization": true,
       "weaponTargetKeys": true,

@@ -205,6 +205,11 @@ override earlier ones field by field; an absent field means "keep":
    and both repair multipliers at one: the current-source table's
    multipliers are three, and a table alone does not identify an older
    package's engine. See [passive generator healing](../research/extensions/escalation-shields.md#passive-generator-healing).
+   For the same reason it turns CP-FIX-5 (§4.2) off: Gold's DLL predates the
+   circular antinuke coverage, and its authored range rings are drawn for
+   retail's `coverage − 512` minimap ring, so with the fix on each showed 512
+   beyond its weapon's range (issue #199,
+   [interceptor coverage and range rings](../research/extensions/taesc-engine.md#interceptor-coverage-and-range-rings)).
    A config named by `--mod-config` for a manual root stack is the same
    source.
 3. **The settings file.** `gameplayFeatures` — a JSON object of the same
