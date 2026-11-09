@@ -481,7 +481,7 @@ hot-radar list predicate, LOS-helper semantics and per-slot dotted-state
 production belong to the engine; this module alone does not establish them.
 The shared attack-flash cadence is the retail radar blink phase, which
 toggles every eight sub-ticks [01 R-CORE-03]. In the shipped ProTA 4.8 build
-the dotted state is the slot's interceptor flag byte, which the retail minimap
+the dotted state is the slot's stockpile byte, which the retail minimap
 ring also reads [03 §3.9]. That this source's per-slot indicator is the same
 byte is **Supported inference** from the matching use; its field offset was
 not compared. The projectile bounds predicate rejects coordinates

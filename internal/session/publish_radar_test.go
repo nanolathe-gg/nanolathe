@@ -214,3 +214,26 @@ func TestCommunityInterceptorRingPublication(t *testing.T) {
 		t.Fatalf("Community ring = %d", got)
 	}
 }
+
+// An interceptor ring is dashed while its slot holds stockpiled rounds and
+// solid while it holds none [03 §3.9]: a loaded antinuke blinks, an empty one
+// and a slot that never stockpiles draw a solid ring (issue #199).
+func TestInterceptorRingDashesWithStockpile(t *testing.T) {
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "antinuke"}, MaxDamage: 1, AntiWeapons: true,
+		Weapon1Def: &content.WeaponDef{ID: 1, Coverage: 1024, Range: 17, Interceptor: true, Stockpile: true}}
+	w := newSessionFixtureWorld(2, nil)
+	u, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Units: w, Snapshot: frame.NewBuffer(), Combat: combat.NewServiceWithProjectileCapacity(0)}
+	s.publishSnapshot(1)
+	if ring := s.Snapshot.Current().Radar.Contacts[0].Rings[0]; !ring.Enabled || ring.Dashed {
+		t.Fatalf("an empty stockpile's ring = %+v, want enabled and solid", ring)
+	}
+	w.Unit(u).Slots[0].Ammo = 1
+	s.publishSnapshot(2)
+	if ring := s.Snapshot.Current().Radar.Contacts[0].Rings[0]; !ring.Enabled || !ring.Dashed {
+		t.Fatalf("a loaded stockpile's ring = %+v, want enabled and dashed", ring)
+	}
+}

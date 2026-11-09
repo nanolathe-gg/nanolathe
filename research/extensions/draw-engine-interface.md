@@ -364,8 +364,8 @@ source documents for `IsPlayerAllyUnit`.
   has `interceptor` and `coverage > MegamapAntiNukeMinimum`, the radius is
   `(coverage − 512) × rowPitch / extentW`. The 512 bias is retail's minimap
   ring rule [03 §3.9]; the current source dropped it. The ring is solid when
-  the slot's interceptor flag byte is zero, and otherwise dashed with 32
-  segments seeded by the blink byte, as on the retail minimap.
+  the slot's stockpile byte is zero, and otherwise dashed with 32 segments
+  seeded by the blink byte, as on the retail minimap [03 §3.9].
 - *Weapon rings* are drawn for the hovered unit, and for the unit whose
   command page is open (the command-page subject of [07 R-P0-11 §3]; the
   earlier "show-range unit" wording named the same engine word). Each must
