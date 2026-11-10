@@ -11,9 +11,9 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
-	"github.com/nanolathe-gg/nanolathe/internal/hud"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/testsupport"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
 
@@ -44,9 +44,10 @@ func TestRetailModFactoryConstructionFromModernMenu(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				var commander *units.Unit
 				for _, u := range sess.Units.Iter() {
 					if u != nil && u.Owner == sess.LocalOwner && u.Def != nil && u.Def.Builder {
-						u.Flags |= hud.SelectionFlag
+						commander = u
 						break
 					}
 				}
@@ -63,7 +64,13 @@ func TestRetailModFactoryConstructionFromModernMenu(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				f := sess.Snapshot.Current()
+				// Selection belongs to the host's local interface, and menu
+				// readers need its composed frame (DESIGN_MULTIPLAYER §7.3).
+				replaceSelectionForTest(t, b, commander)
+				f, ok := b.currentSnapshot()
+				if !ok {
+					t.Fatal("missing battle snapshot")
+				}
 				builder := sess.Units.Unit(f.CommandPage.Builder)
 				if builder == nil {
 					t.Fatal("missing selected commander")
