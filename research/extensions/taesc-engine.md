@@ -52,8 +52,9 @@ decoded from the shipped binaries — a method the
 patch binaries. The wording is clean-room and the observations stand as
 recorded. The user's explicit 2026-09-25 shield-healing investigation is a
 bounded exception, documented in [Escalation shields](escalation-shields.md#passive-generator-healing).
-Other future gaps must
-be settled from documentation, authored content, appropriately licensed
+The user's explicit 2026-11-09 request to inspect the DLL is a second bounded
+exception for [interceptor targeting, display and routing](#interceptor-coverage-and-range-rings).
+Other future gaps must be settled from documentation, authored content, appropriately licensed
 source, or a bounded manual observation.
 
 ## Global engine changes (not asset-driven)
@@ -539,6 +540,101 @@ patches do not prove the mechanism of the historical package's scripted
 offscreen/stack penalties. The historical repair helper instead uses the
 independently verified multiplier of one. Full source contracts and defaults belong to
 [Community patch engine behavior](community-patch-engine.md#31-feature-matrix-at-the-pinned-revision).
+
+## Interceptor coverage and range rings
+
+**Established — authored range rings (inspected 2026-11-07).** Gold's weapon
+table authors a family of weapons named `Range Ring` (keys `range_<n>`) with
+`interceptor=1` and a `coverage` exactly 512 greater than their `range`. A
+definition shows one by carrying `antiweapons=1` and placing the ring in a
+weapon slot beside the weapon whose range it matches. For example the Arm and
+Core T1 artillery towers (`ARMGUARD`, `CORPUN`) and the Guardian's upgrade
+(`ARMAMB`) pair the 1344-range `cannon_mrpc` with `range_1344` (coverage
+1856); Big Bertha pairs its 5376-range cannon with `range_5376`; Olympus pairs
+its 10752-range cannon with `range_10752`. Every `Range Ring` slot on an
+`antiweapons` definition keeps the 512 offset. The release notes describe
+these slots as weapon range indicators ("added range ring for weapon
+coverage", "replaced with weapon range ring indicator", "added max range
+rings to all mobile teleporters"). Retail draws such a slot on the minimap at
+radius `coverage − 512` [03 §3.9], so on retail's rule each authored ring is
+exactly its paired weapon's firing range.
+
+**Established — identified Gold binaries (bounded inspection, 2026-11-09).**
+The maintainer explicitly authorized inspection of interceptor targeting,
+display and installation routing in the shipped executable, draw DLL and
+recorder DLL identified by the hashes above. Their combined inspected paths
+retain retail's inclusive horizontal coverage square [06 §11.2]. The test
+uses the projectile's stored aim point, not its current position, and does
+not subtract 512 from targeting coverage. The displayed circle is a separate
+contract and cannot establish the targeting geometry.
+
+- The shipped executable retains the retail interceptor search and all three
+  direct calls to it. Its square comparison and minimap radius arithmetic
+  are unchanged.
+- The shipped recorder's actual plugin registration and installation paths
+  do not contain the optional circular-search replacement described below.
+  Neither a mod identifier nor an INI preference can activate that absent
+  plugin. The recorder leaves the host search and its callers unredirected.
+- The draw DLL lacks the later circular replacement in the inspected hook
+  routing. Its traced hook installer writes to explicitly supplied host
+  destinations; the targeting search and callers are not destinations of
+  that mechanism. Its active small-minimap hook acts after the ring-radius
+  calculation and leaves that calculation intact. Its reachable megamap
+  renderer subtracts 512 before map scaling in all three weapon slots, with
+  coverage strictly above the configured minimum (512 in the shipped INI).
+
+This establishes square targeting and `coverage - 512` rings for the
+identified Gold package through bounded static inspection. It is not a
+Windows runtime observation, a whole-DLL source identification, or an
+exhaustive audit of unrelated memory-writing code; no alternative targeting
+override was found in the inspected routing. The conclusion does not cover
+replacement binaries or future releases. The raw reproduction trail remains
+outside the repository. The original-game ring observation in
+[issue 199](https://github.com/nanolathe-gg/nanolathe/issues/199#issuecomment-6712522284)
+independently supports the displayed radius.
+
+**Established — an older optional circular targeting path exists in source.**
+The MIT recorder source at
+[3e92d8e](https://github.com/tanvanman/TADR/commit/3e92d8eb9eeb1b46e2698c43afeccf96d26164c0)
+(2015-05-31) replaces the interceptor search through
+`src/Recorder/plugins/WeaponAimNTrajectory.pas`. For ordinary non-overflowing
+inputs, its distance helper in `src/Recorder/TAMem/TA_MemoryLocations.pas`
+compares the interceptor's horizontal position with the projectile's stored
+aim point. Each squared fixed-point delta is separately reduced to whole
+squared world units before addition; the candidate passes when the sum is
+less than or equal to squared coverage. This is a circular-distance test
+with fractional truncation distinct from the later draw-DLL calculation.
+It retains first-qualifying projectile order, rejects the owner's projectiles
+and non-targetable or already-claimed projectiles, and optionally restricts
+accepted weapon names.
+
+**Established — source activation is conditional.** At that revision,
+`src/Recorder/Plugins.pas` registers this plugin only when the configured mod
+identifier exceeds one. The plugin also requires its enabled state and the
+source's retail-version compatibility check. Its targeting replacement
+additionally requires `UseInterceptsOnlyList`: `src/Recorder/plugins/IniOptions.pas`
+reads that preference with default true when an INI is available, while the
+mod identifier defaults to -1. These conditions describe this source
+revision; they do not establish Gold's active plugins.
+
+**Established — later search and drawing changes are independently guarded.**
+The draw-DLL commit
+[e90121f](https://github.com/tanvanman/TADR/commit/e90121f74cbb21abc80563fb976aa5908eedd2ec)
+(2026-08-29) adds the circular search and removes the minimap's 512 subtraction
+in `src/DDraw/TABugFix.cpp`. Each installation has its own compatibility
+check; failure of one does not imply failure of the other. The patch's own
+megamap radius changes separately in `src/DDraw/UnitMinimap.cpp`.
+Consequently, predating this draw-DLL change does not establish square
+interception: the recorder already had a separate circular path.
+
+**Host configuration.** The Escalation config sets `antinukeCircularCoverage`
+to false (issue #199), so under Community 3.9 and Modern this content keeps
+retail's square interceptor search and 512-biased minimap ring, and each range
+ring publishes its weapon's range. This choice rests on the identified
+binary paths above, not on the age of an unrelated repair helper. The
+mainline table and the other mods' configs keep CP-FIX-5. Strict 3.1 is
+unchanged.
+
 
 ## Authored package, interface and single-player coverage
 

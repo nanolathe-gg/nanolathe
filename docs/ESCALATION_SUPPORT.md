@@ -10,7 +10,10 @@ minimum, carries the renamed directories and raised limits, and recommends no
 settings, so ProTA's distinct controls preset is never offered. Its Community
 table is the `escalation` build profile's matrix with Gold's historical
 HealTime caller and both repair multipliers at one
-([passive generator healing](../research/extensions/escalation-shields.md#passive-generator-healing)).
+([passive generator healing](../research/extensions/escalation-shields.md#passive-generator-healing)),
+and with retail's interceptor coverage, whose minimap ring draws Gold's
+authored range rings at their weapons' ranges
+([interceptor coverage and range rings](../research/extensions/taesc-engine.md#interceptor-coverage-and-range-rings)).
 The upstream Gold package has no such file; installed as it is, it mounts as
 plain content. It can start with base definitions and shared Escalation art,
 without loading Escalation's renamed content families or its rules table.
@@ -123,6 +126,7 @@ historical Gold engine parity.
 | Surface transport | Automatic loading and unloading, exact mixed-size capacity, excess rejection and ownership filtering. |
 | Commander research | Both factions: research eligibility, weapon activation, kinetic armor, redundant sources and removal. |
 | Aircraft penalties | Atlas stack armor loss/recovery and off-map cargo restrictions, including save/load and automatic unloading after recovery. |
+| Range rings | Every authored `Range Ring` slot publishes its paired weapon's range; the T1 Guardian, Punisher and Ambusher show their cannons' 1344-unit range as one solid minimap ring (the indicator slot has no stockpiled ammo). |
 | Large explosion art | Every root of the three oversized banks decodes; bounded caches support Classic and Modern; a 64-frame explosion exercises ordinary event creation through retirement. |
 
 Engine corrections preserve requested-feature validation, admit researched
