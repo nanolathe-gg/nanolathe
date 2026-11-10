@@ -156,9 +156,35 @@ func containsStop(s string) bool {
 	return strings.Contains(upper, "STOP")
 }
 
-// toggleOnOffSelected issues Activate/Deactivate for OnOffable units [02 "Unit record"].
+// toggleOnOffSelected is one press of the side panel's ONOFF gadget — the
+// on/off arm of the same battle-panel handler as CLOAK and the two stance
+// gadgets [04 R-STANCE-01 §2]. Like those arms it reads the published on/off
+// pair [07 R-HUD-03 §13] and sends every onoffable selected unit the same
+// direction, so a press brings a mixed selection to one state instead of
+// flipping each unit: a pair of 1 (every onoffable selected unit is on) sends
+// Deactivate, and 0 (all off) and 2 (mixed) send Activate. A pair of 3 means
+// no selected unit is onoffable; it greys the gadget [07 R-HUD-03 §6], so the
+// press sends nothing.
+//
+// TODO(question): establish the retail aggregate-refresh triggers before
+// retaining the handler's local pair write-back [04 R-STANCE-01 §2]. Until
+// then, repeated presses before publication read the same committed pair.
+//
 // OnOffable is data-driven; the command is Activate/Deactivate via orders.NewNodeForOrder [P0-I14].
 func (b *battleSession) toggleOnOffSelected(queued bool) {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	var activate bool
+	switch f.CommandPage.OnOffState {
+	case 0, 2:
+		activate = true
+	case 1:
+		activate = false
+	default:
+		return // 3: not applicable, the gadget is grey
+	}
 	for _, u := range b.selectedCommandUnits() {
 		if u == nil || u.Def == nil || !u.Def.OnOffable {
 			continue
@@ -167,7 +193,7 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 		// word. The queued command is consumed by the ordinary order/COB edge
 		// machinery [05 "Unit instance economy state"].
 		_ = b.DispatchActivation(session.HumanActivationCommand{
-			Unit: u.Handle, Activate: !u.Activated, Queued: queued,
+			Unit: u.Handle, Activate: activate, Queued: queued,
 		})
 	}
 }

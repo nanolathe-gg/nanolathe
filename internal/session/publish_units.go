@@ -318,9 +318,12 @@ func (s *Session) fillUnitContact(cp *frame.RadarContactView, u *units.Unit, vie
 		}
 		cp.Rings = append(cp.Rings, frame.RadarRingView{
 			// antiweapons enables the unit loop; interceptor admits
-			// each weapon ring [02 R-KEYS-01 §1][03 §3.9].
+			// each weapon ring [02 R-KEYS-01 §1][03 §3.9]. The ring is
+			// dashed while the slot holds stockpiled rounds and solid
+			// when it holds none [03 §3.9], so an antinuke shows whether
+			// it is loaded and a slot without a stockpile draws solid.
 			Enabled:   u.Def.AntiWeapons && ws.Weapon.Interceptor,
-			Dashed:    ws.Weapon.Interceptor,
+			Dashed:    ws.Ammo != 0,
 			Range:     s.Combat.InterceptorRingRadius(ws.Weapon),
 			Intercept: ws.Weapon.Interceptor,
 		})

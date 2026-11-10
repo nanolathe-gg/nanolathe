@@ -1670,6 +1670,22 @@ skip tests name only the two standing descriptors — so every selected unit
 receives the record and the can-cloak capability test is the order handler's,
 [R-ORD-01 §2].
 
+**Established — the on/off arm sends one direction to the whole
+selection.** The `ONOFF` link of the same chain reads the panel's **on/off
+pair** ([07 R-HUD-03 §13]) and sends every selected unit the same
+activate or deactivate command: a pair of `1` (every `onoffable` selected unit
+is on) deactivates, and `0` (all off) and the mixed value `2` activate. One
+press therefore brings a mixed selection to one state. The handler explicitly
+tests `0`, `1` and `2`; `3` dispatches nothing and greys the gadget
+[07 R-HUD-03 §6]. After dispatch it writes the target pair back into the
+panel word: `1` after Activate, `0` after Deactivate. The arm makes no direct
+Shift query, but its shared selection broadcaster reads held Shift and passes
+that queue modifier to the ordinary order producer. The arm's zero general
+parameter is separate from the queue modifier. Direct inspection of the
+retail handler and broadcaster establishes these operations. The timing of
+the next aggregate refresh remains unknown; this finding does not establish
+how long the written-back pair persists.
+
 **Established — the two order handlers.** `Standing_MoveOrder` and
 `Standing_FireOrder` are ordinary descriptors (state label `Acknowledged`,
 class `0x00`, acknowledgement group 19, static gate mask `0x10060` — see
