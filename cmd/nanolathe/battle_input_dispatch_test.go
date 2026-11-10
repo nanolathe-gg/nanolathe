@@ -82,6 +82,46 @@ func TestActivationCommandUsesEconomyStateNotProxyFlag(t *testing.T) {
 	}
 }
 
+// One ONOFF press sends every onoffable selected unit the same direction,
+// chosen from the committed on/off pair [04 R-STANCE-01 §2][07 R-HUD-03 §13]:
+// all on turns all off, and all off or a mixed selection turns all on. Each
+// unit flipping its own state instead left a mixed selection mixed for good.
+// The direction table is a Supported inference from retail play (see
+// toggleOnOffSelected).
+func TestOnOffPressSendsOneDirectionToTheSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		on       [2]bool
+		pair     uint8
+		activate bool
+	}{
+		{"all off", [2]bool{false, false}, 0, true},
+		{"all on", [2]bool{true, true}, 1, false},
+		{"mixed", [2]bool{false, true}, 2, true},
+	} {
+		b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+		a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+		c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+		a.Def.OnOffable = true
+		a.Activated, c.Activated = tc.on[0], tc.on[1]
+		replaceSelectionForTest(t, b, a, c)
+		f, ok := b.currentSnapshot()
+		if !ok || f.CommandPage.OnOffState != tc.pair {
+			t.Fatalf("%s: committed on/off pair is not %d", tc.name, tc.pair)
+		}
+		b.toggleOnOffSelected(false)
+		pending := b.sess.PendingHumanCommands()
+		if len(pending) != 2 {
+			t.Fatalf("%s: enqueued %d commands, want one per onoffable unit", tc.name, len(pending))
+		}
+		for _, p := range pending {
+			if p.Kind != session.HumanActivation || p.Activation.Activate != tc.activate {
+				t.Fatalf("%s: sent %+v, want Activate=%v for every unit", tc.name, p.Activation, tc.activate)
+			}
+		}
+	}
+}
+
 func TestFeatureIdentityDistinguishesCorpseFromReclaimable(t *testing.T) {
 	cat := testCatalogON05()
 	corpse := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armrecl_dead2"}, Reclaimable: true}
