@@ -444,8 +444,8 @@ func TestReaderMutations(t *testing.T) {
 // version, never an edit. Command schema version 2 added payloads and kept
 // every version-1 primitive and limit.
 func TestProtocolConstants(t *testing.T) {
-	if CommandSchemaVersion != 3 {
-		t.Fatalf("command schema version %d, want 3", CommandSchemaVersion)
+	if CommandSchemaVersion != 4 {
+		t.Fatalf("command schema version %d, want 4", CommandSchemaVersion)
 	}
 	if MaxCommandBytes != 4194304 || MaxKeyBytes != 255 || DigestBytes != 32 || IDBytes != 16 || AmountBytes != 4 {
 		t.Fatal("a version-1 primitive's limit moved")

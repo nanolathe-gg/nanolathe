@@ -212,6 +212,15 @@ func (b *battleSession) dispatchLocalCommand(text string) (cheat bool) {
 		if b.sess != nil {
 			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanNoShake})
 		}
+	case "shootall":
+		// Mask 1, so it runs in skirmish, Survival and campaign alike, is no
+		// cheat and posts nothing [07 R-CAM-01 §6]. The session toggles the
+		// combat gate at phase 1 [06 §3.2 "The option bit of check 2"]. An
+		// online battle or a playback refuses it above, as it refuses every
+		// command it has no seat form for (DESIGN_MULTIPLAYER §7.1).
+		if b.sess != nil {
+			_ = b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanShootAll})
+		}
 	case "spawn":
 		b.spawnChatCommand(words)
 	case "atm":

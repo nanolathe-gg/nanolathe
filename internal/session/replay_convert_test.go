@@ -251,9 +251,9 @@ func replayEquivalenceSteps(env *replayEnv, mode gameplay.Mode) []replayStep {
 			}
 		},
 	}, {
-		name: "damage gates and the shake driver",
+		name: "damage gates, the ShootAll gate and the shake driver",
 		commands: func(*testing.T, *Session) []HumanCommand {
-			return []HumanCommand{{Kind: HumanDoubleShot}, {Kind: HumanHalfShot}, {Kind: HumanNoShake}}
+			return []HumanCommand{{Kind: HumanDoubleShot}, {Kind: HumanHalfShot}, {Kind: HumanShootAll}, {Kind: HumanNoShake}}
 		},
 	}, {
 		name: "meteor forms behind a paused boundary", paused: true, ticks: 5,
@@ -487,7 +487,7 @@ func TestReplayCommandsApplyAsTheLocalCommands(t *testing.T) {
 			for _, k := range []SeatCommandKind{SeatOrder, SeatStop, SeatActivation, SeatMobileBuild, SeatFactoryBuild, SeatCancelProduction,
 				SeatStockpile, SeatGroupAssign, SeatStance, SeatCloak, SeatSelfDestruct, SeatNoShake, SeatATM, SeatSetResource, SeatSetLogo,
 				SeatView, SeatGive, SeatMakeSelectable, SeatVisibility, SeatDoubleShot, SeatHalfShot, SeatMeteor, SeatCancelQueuedMove,
-				SeatSpawn, SeatBuilderOptions, SeatCommunityOrderDrag, SeatCommunityKickout, SeatDeveloperSpawn, SeatGameplay} {
+				SeatSpawn, SeatBuilderOptions, SeatCommunityOrderDrag, SeatCommunityKickout, SeatDeveloperSpawn, SeatShootAll, SeatGameplay} {
 				if replayKindAdmission(k) != "" || !kinds[k] {
 					t.Errorf("replay kind %d not exercised", k)
 				}

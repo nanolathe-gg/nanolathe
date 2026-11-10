@@ -78,10 +78,11 @@ func TestCheck2RejectionSpendsSamplingButNotScoringDraws(t *testing.T) {
 		}
 	}
 
-	draws := func(control uint8) uint64 {
+	draws := func(control uint8, shootAll bool) uint64 {
 		r := rng.NewSimulation(9)
 		a := base(&r)
 		a.ShooterControlByte = control
+		a.ShootAll = shootAll
 		before := r.Draws()
 		AcquireTarget(population(), a)
 		return r.Draws() - before
@@ -92,11 +93,55 @@ func TestCheck2RejectionSpendsSamplingButNotScoringDraws(t *testing.T) {
 	// The same one sampling draw, and no score for either rejected pick.
 	const refusedDraws = 1
 
-	if got := draws(ControlByteComputer); got != admittedDraws {
+	if got := draws(ControlByteComputer, false); got != admittedDraws {
 		t.Fatalf("computer owner drew %d, want %d [06 §3.2]", got, admittedDraws)
 	}
-	if got := draws(ControlByteHuman); got != refusedDraws {
+	if got := draws(ControlByteHuman, false); got != refusedDraws {
 		t.Fatalf("human owner drew %d, want %d: a check-2 rejection removes the scoring draw [06 §3.2]", got, refusedDraws)
+	}
+	// Toggling the option bit changes the draw sequence from the next
+	// acquisition on [06 §3.2 "The option bit of check 2"]: the human's
+	// picks now survive check 2 and take their scoring draws.
+	if got := draws(ControlByteHuman, true); got != admittedDraws {
+		t.Fatalf("human owner under +ShootAll drew %d, want %d [06 §3.2]", got, admittedDraws)
+	}
+}
+
+// The service's own search reads its battle-local +ShootAll gate: a fresh
+// service starts clear, so a human's slot refuses an unmarked hostile; one
+// toggle admits it and a second restores the refusal
+// [06 §3.2 "The option bit of check 2"][07 R-CAM-01 §6].
+func TestServiceShootAllGateFeedsCheck2(t *testing.T) {
+	f := newRegistryFixture(t, false)
+	f.onProjectedGrid()
+	unmarked := *f.enemy.Def
+	unmarked.ShootMe = false
+	f.enemy.Def = &unmarked
+	f.shooter.InstallWeapon(0, &content.WeaponDef{ID: 99, Range: 1000})
+	f.shooter.SlotAt(0).Flags |= 0x02
+
+	s := &Service{}
+	s.SetControlByte(func(uint8) uint8 { return ControlByteHuman })
+	f.sensorTick(targetRegistryPeriod)
+	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	acquire := func() (pool.Handle, bool) {
+		return s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ)
+	}
+
+	if h, ok := acquire(); ok {
+		t.Fatalf("a fresh service acquired unmarked %d for a human shooter; the gate starts clear [06 §3.2]", h)
+	}
+	if !s.ToggleShootAll() {
+		t.Fatal("the first toggle did not set the gate")
+	}
+	if h, ok := acquire(); !ok || h != f.enemy.Handle {
+		t.Fatalf("with the gate set acquired %d, %v; want the unmarked hostile %d [06 §3.2]", h, ok, f.enemy.Handle)
+	}
+	if s.ToggleShootAll() {
+		t.Fatal("the second toggle did not clear the gate")
+	}
+	if h, ok := acquire(); ok {
+		t.Fatalf("typing it again did not restore check 2: acquired %d [06 §3.2]", h)
 	}
 }
 

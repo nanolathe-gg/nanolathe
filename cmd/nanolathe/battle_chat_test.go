@@ -304,6 +304,41 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	}
 }
 
+// `+ShootAll` is a mask-1 command [07 R-CAM-01 §6]: campaign enqueues the
+// same toggle skirmish does, the command is no cheat, so its line keeps its
+// recipients and a Survival best stays eligible, and an online battle or a
+// playback enqueues nothing [06 §3.2 "The option bit of check 2"].
+func TestShootAllDispatchesInEverySinglePlayerKind(t *testing.T) {
+	t.Setenv(settings.EnvPath, filepath.Join(t.TempDir(), "settings.json"))
+	campaign := &battleSession{sess: &session.Session{Mission: &mission.Mission{Type: mission.TypeCampaign}}}
+	skirmish := &battleSession{sess: &session.Session{}, survivalBest: &survivalBestRun{key: "setup"}}
+	for _, b := range []*battleSession{campaign, skirmish} {
+		if b.dispatchLocalCommand("+ShootAll") {
+			t.Error("+ShootAll returned the cheat mask")
+		}
+		b.dispatchLocalCommand("+shootall ignored")
+		pending := b.sess.PendingHumanCommands()
+		if len(pending) != 2 || pending[0].Kind != session.HumanShootAll || pending[1].Kind != session.HumanShootAll {
+			t.Fatalf("mission %+v: +ShootAll commands = %+v, want two toggles", b.sess.Mission, pending)
+		}
+	}
+	if skirmish.survivalBest.excluded != "" {
+		t.Fatalf("+ShootAll excluded a Survival best: %q", skirmish.survivalBest.excluded)
+	}
+	playback := &battleSession{sess: &session.Session{}, playback: &replayPlayback{}}
+	playback.dispatchLocalCommand("+ShootAll")
+	if pending := playback.sess.PendingHumanCommands(); len(pending) != 0 {
+		t.Fatalf("a playback took +ShootAll: %+v", pending)
+	}
+	online, _, _ := chatTestBattle(t)
+	before := len(online.sess.PendingHumanCommands())
+	online.dispatchLocalCommand("+ShootAll")
+	lines := chatLines(online)
+	if len(online.sess.PendingHumanCommands()) != before || len(lines) == 0 || lines[len(lines)-1].Text != "This +command is unavailable in multiplayer games" {
+		t.Fatalf("online +ShootAll: pending %+v, lines %+v", online.sess.PendingHumanCommands(), lines)
+	}
+}
+
 func TestLogoCommandBoundsDiagnosticOrderingAndNoSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	t.Setenv(settings.EnvPath, path)

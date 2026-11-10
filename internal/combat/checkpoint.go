@@ -194,6 +194,8 @@ func (s *Service) WriteCheckpoint(e *checkpoint.Encoder, c *CheckpointContext) e
 	for _, v := range s.scanCursor.next {
 		e.I64(int64(v))
 	}
+	e.Field("combat.Service.shootAll")
+	e.Bool(s.shootAll)
 	e.Field("combat.Service.targets.gate")
 	for _, v := range s.targets.gate {
 		e.Bool(v)

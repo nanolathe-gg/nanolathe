@@ -55,7 +55,7 @@ func checkpointHostBytes(t *testing.T, h *Host) []byte {
 
 func checkpointHostInitialHash() checkpoint.Digest {
 	// Independent initial envelope for the authored identity/player/kind.
-	v := append([]byte("NLCPAIST"), 6, 0)
+	v := append([]byte("NLCPAIST"), 7, 0)
 	v = append(v, 0x11)
 	v = append(v, make([]byte, 31)...)
 	v = append(v, 0x22)

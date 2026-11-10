@@ -62,11 +62,11 @@ func assertCheckpointLayoutHistory(t *testing.T, m *ai.Manager, a *ai.Applicatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := append([]byte("NLCPAIST"), 6, 0)
+	initial := append([]byte("NLCPAIST"), 7, 0)
 	initial = append(initial, make([]byte, 64)...)
 	initial = append(initial, 0, 2)
 	previous := sha256.Sum256(initial)
-	attempt := append([]byte("NLCPAIAP"), 6, 0)
+	attempt := append([]byte("NLCPAIAP"), 7, 0)
 	attempt = append(attempt, previous[:]...)
 	// Player/controller, tick, serial, ordinal, intent and APM.
 	attempt = append(attempt, checkpointDecode(t, "0002443322110100000000000000000000005501")...)

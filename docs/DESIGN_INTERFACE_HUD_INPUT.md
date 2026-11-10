@@ -3265,6 +3265,7 @@ as local chat. The implemented handlers are:
 | `LOS`, `Mapping`, `NowISee` | skirmish only; enqueue live visibility toggles or clear both history/current bits; LOS and Mapping write the unchanged setup preferences |
 | `LOSType` | enqueue the terrain-ray visibility toggle in either single-player mode, without a settings write |
 | `DoubleShot`, `HalfShot` | skirmish only; enqueue independent damage gates, applying signed doubling before halving in the existing weapon pipeline; no settings write |
+| `ShootAll` | every single-player session kind; enqueue the authoritative toggle of the battle's check-2 gate, so autonomous acquisition admits any hostile for every shooter while it is set; no message or settings write |
 | `Radar` | skirmish only; toggle the battle-local full-radar bit for unit contacts; no settings write |
 | `Meteor [n]` | skirmish only; no argument queues a forced storm arm through the existing scheduler owner, while an explicit argument only sets its enable bit from `n != 0`; no settings write |
 
@@ -3596,10 +3597,50 @@ turns current-sight tracking **on** (unseen ground greys), and from `True` or
 `Circular` it turns tracking off. The research command table records no posted text for either, so none is shown.
 Neither rewrites the setup record; their settings write-all re-serializes the
 unchanged triple. Not implemented: `MakePoster` (argument grammar Unknown),
-`ShootAll` (needs a session-owned seam into `combat.Acquisition.ShootAll`),
 the network-only share/compression/`NetStats` commands, `SFX`, `Drop` (its
 flag's consumer is not documented), and the mask-4 developer commands such as
 `Kill`, `IWin` and `ILose` whose deeper effects the census does not specify.
+
+**`ShootAll`.** Retail's handler only toggles bit 10 of the session
+mode-flags word, and the bit's one reader is check 2 of autonomous
+acquisition: a candidate is admitted when its definition authors `shootme`,
+when the shooter's owner is a computer, or when the bit is set
+`[06 §3.2 "The option bit of check 2"]`. It is a mask-1 command, so it runs
+in skirmish, Survival and campaign with no cheat gate, posts nothing and
+writes no settings `[07 R-CAM-01 §6]`. The dispatcher enqueues
+`HumanShootAll`; phase 1 toggles the combat service's battle-local gate
+(`combat.Service.ToggleShootAll`), and the unit-level target search copies
+it into every acquisition it builds, both the autonomous scan and the
+sight-distance caller (`Acquisition.ShootAll`). While it is set a human's
+units autonomously engage the enemy's non-combat buildings, which omit
+`shootme`; typing it again restores check 2. Because a rejected candidate
+skips its scoring draw, the toggle changes the simulation stream from the
+next acquisition on, so it crosses the authoritative command boundary and a
+single-player replay records it as kind 45 from command schema version 4
+(DESIGN_MULTIPLAYER §7.4.2); the canonical checkpoint retains the gate
+(schema 7). Modern's threat targeting already admits buildings regardless
+of check 2 (DESIGN_WEAPONS_PROJECTILES "Modern threat targeting and incoming
+fire"), so there the gate changes only the weaponless kamikaze search
+Modern delegates to the sampled selection. As a mask-1 entry it is not a
+cheat: the line keeps its chat recipients and a Survival personal best stays
+eligible. A replay playback and an online battle refuse the line like every
+command without an online form; online `ShootAll` waits for its seat
+semantics (DESIGN_MULTIPLAYER Q8). **Known difference:** retail's bit lives
+for the whole process — the object holding the word is zero-filled once at
+start-up, and only the command writes bit 10, so it survives loading a save
+and starting another battle
+`[06 §3.2 "The option bit of check 2"]` — while this gate lives one
+battle, as the DoubleShot and HalfShot gates do: a new or loaded battle
+starts with it clear.
+`TestShootAllDispatchesInEverySinglePlayerKind`,
+`TestHumanShootAllTogglesInEverySessionKind`,
+`TestServiceShootAllGateFeedsCheck2`,
+`TestCheck2RejectionSpendsSamplingButNotScoringDraws`,
+`TestCheck2AdmitsOnAnyOfItsThreeDisjuncts`,
+`TestSeatCommandContextIsNotThePayloads` and
+`TestReplayCommandsApplyAsTheLocalCommands` lock the mask, the toggle, the
+check-2 admission and its draw consequence, the schema and context gate,
+and the replay round trip.
 
 ### 3.10 Modern resource double-click construction
 
