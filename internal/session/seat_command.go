@@ -28,7 +28,7 @@ const (
 
 // SeatCommandKind is a command's kind byte. Every number is written out
 // rather than derived from iota or Go layout, because the numbers are a wire
-// schema (§7.4.2). Numbers 1..34, 46 and 255 match HumanCommandKind for
+// schema (§7.4.2). Numbers 1..34, 45, 46 and 255 match HumanCommandKind for
 // recognition; a test locks that, nothing derives one from the other.
 type SeatCommandKind uint8
 
@@ -78,7 +78,7 @@ const (
 	SeatShareGift          SeatCommandKind = 42 // D, online, schema 2
 	SeatDeclareAlliance    SeatCommandKind = 43 // D, online, schema 2
 	SeatSharedVictory      SeatCommandKind = 44 // D, online, schema 2
-	SeatShootAll           SeatCommandKind = 45 // D, cheat, reserved: no payload
+	SeatShootAll           SeatCommandKind = 45 // R, schema 4: no payload; no online form yet (Q8)
 	SeatDeveloperSpawn     SeatCommandKind = 46 // R: authorized local developer submission
 	SeatEconomyActivity    SeatCommandKind = 47 // S, Modern, schema 3
 	SeatGameplay           SeatCommandKind = 255

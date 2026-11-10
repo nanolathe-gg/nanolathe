@@ -269,7 +269,10 @@ func onlineKindAdmission(k SeatCommandKind) string {
 		// state-dependent admission is admitOnlineSharing's.
 		return ""
 	case SeatShootAll:
-		return "a kind with a payload; ShootAll is reserved and no command schema version carries it yet"
+		// Retail's bit is per machine, so online it would govern one seat's
+		// shooters only; that semantics and its cheat permission (Q8) are not
+		// designed, so ShootAll has no online form yet.
+		return "a single-player replay kind; ShootAll has no online seat semantics yet"
 	case SeatSelectionReplace, SeatSelectionToggle, SeatSelectionClear, SeatBuildPage, SeatGroupRecall, SeatBigBrother, SeatShiftState:
 		return "a seat command kind; selection, build pages, group recall, BigBrother and Shift are local interface state"
 	case SeatDeveloperSpawn:
@@ -284,14 +287,14 @@ func onlineKindAdmission(k SeatCommandKind) string {
 
 // replayKindAdmission is the single-player replay context's class column:
 // every S, D and R kind whose local operation exists is admitted; local-only
-// kinds and the reserved numbers are not.
+// kinds, the online-only sharing kinds and unlisted numbers are not.
 func replayKindAdmission(k SeatCommandKind) string {
 	switch k {
 	case SeatOrder, SeatStop, SeatActivation, SeatMobileBuild, SeatFactoryBuild, SeatCancelProduction,
 		SeatStockpile, SeatGroupAssign, SeatStance, SeatCloak, SeatSelfDestruct, SeatNoShake, SeatATM,
 		SeatSetResource, SeatSetLogo, SeatView, SeatGive, SeatMakeSelectable, SeatVisibility, SeatDoubleShot,
 		SeatHalfShot, SeatMeteor, SeatCancelQueuedMove, SeatSpawn, SeatBuilderOptions, SeatCommunityOrderDrag,
-		SeatCommunityKickout, SeatDeveloperSpawn, SeatEconomyActivity, SeatGameplay:
+		SeatCommunityKickout, SeatDeveloperSpawn, SeatEconomyActivity, SeatShootAll, SeatGameplay:
 		return ""
 	case SeatSelectionReplace, SeatSelectionToggle, SeatSelectionClear, SeatBuildPage, SeatGroupRecall, SeatBigBrother, SeatShiftState:
 		return "a recorded kind; local interface state has no replay payload"
@@ -300,8 +303,6 @@ func replayKindAdmission(k SeatCommandKind) string {
 		// Retail's share commands, SHARE screen and Allies window act only in
 		// a networked session [07 R-CAM-01 §6] [05 R-SHARE-01 §5].
 		return "a kind with a single-player replay payload; sharing and alliance commands act only in a networked session"
-	case SeatShootAll:
-		return "a kind with a payload; ShootAll is reserved and no command schema version carries it yet"
 	}
 	return "a kind number listed in command schema version 1"
 }
@@ -936,6 +937,8 @@ func (s *Session) bindSeatCommand(q *seatQueued, issuer uint8) boundCommand {
 		h.Kind = HumanDoubleShot
 	case SeatHalfShot:
 		h.Kind = HumanHalfShot
+	case SeatShootAll:
+		h.Kind = HumanShootAll
 	case SeatMeteor:
 		h.Kind = HumanMeteor
 		h.Meteor = HumanMeteorCommand{ArgumentPresent: c.Meteor.ArgumentPresent, Enabled: c.Meteor.Enabled}

@@ -273,6 +273,9 @@ type Service struct {
 	compactScratch  []int16
 	doubleShot      bool
 	halfShot        bool
+	// shootAll is check 2's option bit, the `+ShootAll` toggle; every
+	// acquisition the service builds reads it (ToggleShootAll).
+	shootAll bool
 	// shotQuery is the fire pipeline's reusable ShotQuery. It exists so a fire
 	// attempt allocates nothing: the spawner puts the query to an interface,
 	// which would otherwise force one heap query per shot. It is transient
@@ -451,6 +454,22 @@ func (s *Service) ToggleHalfShot() bool {
 	}
 	s.halfShot = !s.halfShot
 	return s.halfShot
+}
+
+// ToggleShootAll flips the battle-local gate that makes check 2 of the
+// picked-candidate order vacuous for every shooter, and returns its new
+// value. It is retail's session mode-flags bit 10, which the `+ShootAll` chat
+// command toggles and nothing else writes; it is clear in a fresh service, so
+// a stock battle runs with check 2 in force
+// [06 §3.2 "The option bit of check 2"][07 R-CAM-01 §6]. Retail keeps the bit
+// for the whole process; this gate lives one battle, as DoubleShot does
+// (DESIGN_INTERFACE_HUD_INPUT §3.9).
+func (s *Service) ToggleShootAll() bool {
+	if s == nil {
+		return false
+	}
+	s.shootAll = !s.shootAll
+	return s.shootAll
 }
 
 // weaponLookupFor returns the catalog's per-identifier weapon lookup

@@ -157,6 +157,9 @@ func seatWireLayouts() []seatWireCase {
 			command: SeatCommand{Kind: SeatEconomyActivity, EconomyActivity: EconomyActivityPayload{Activity: economy.ActivityConstruction, Pause: true}},
 			wire:    cat(47, 2, 1), since: seatSchemaV3})
 	}
+	// Version 4's `+ShootAll` record: the kind byte alone, single-player
+	// replay only.
+	cases = append(cases, seatWireCase{name: "shoot all", context: SinglePlayerReplay, command: SeatCommand{Kind: SeatShootAll}, wire: cat(45), since: seatSchemaV4})
 
 	sharing("share metal", SeatCommand{Kind: SeatShareMetal, ShareMetal: ShareMetalPayload{On: true}}, cat(35, 1))
 	sharing("share energy off", SeatCommand{Kind: SeatShareEnergy}, cat(36, 0))
@@ -274,6 +277,7 @@ func checkSeatDecodeEverywhere(t testing.TB, payload []byte) bool {
 		v1, ok1 := decodeSeatChecked(t, seatSchemaV1, context, payload)
 		v2, ok2 := decodeSeatChecked(t, seatSchemaV2, context, payload)
 		v3, ok3 := decodeSeatChecked(t, seatSchemaV3, context, payload)
+		v4, ok4 := decodeSeatChecked(t, seatSchemaV4, context, payload)
 		sharing := ok2 && slices.Contains(seatSharingKinds, v2.Kind)
 		if ok1 != (ok2 && !sharing) || ok1 && !sameSeatCommand(v1, v2) {
 			t.Fatalf("payload %x in context %d: version 1 accepted %v (%+v), version 2 accepted %v (%+v)", payload, context, ok1, v1, ok2, v2)
@@ -285,7 +289,14 @@ func checkSeatDecodeEverywhere(t testing.TB, payload []byte) bool {
 		if ok2 != (ok3 && !activity) || ok2 && !sameSeatCommand(v2, v3) {
 			t.Fatalf("payload %x in context %d: version 2 accepted %v (%+v), version 3 accepted %v (%+v)", payload, context, ok2, v2, ok3, v3)
 		}
-		accepted = accepted || ok3
+		shootAll := ok4 && v4.Kind == SeatShootAll
+		if ok3 != (ok4 && !shootAll) || ok3 && !sameSeatCommand(v3, v4) {
+			t.Fatalf("payload %x in context %d: version 3 accepted %v (%+v), version 4 accepted %v (%+v)", payload, context, ok3, v3, ok4, v4)
+		}
+		if shootAll && context != SinglePlayerReplay {
+			t.Fatalf("payload %x: ShootAll decoded in context %d", payload, context)
+		}
+		accepted = accepted || ok4
 	}
 	return accepted
 }
@@ -338,8 +349,8 @@ func TestSeatCommandWireLayouts(t *testing.T) {
 // entry points, which speak netproto.CommandSchemaVersion. Older versions
 // refuse exactly the kinds added after them.
 func TestSeatCommandNewVersionsKeepEarlierPayloads(t *testing.T) {
-	if netproto.CommandSchemaVersion != seatSchemaV3 {
-		t.Fatalf("this build speaks command schema version %d, want 3", netproto.CommandSchemaVersion)
+	if netproto.CommandSchemaVersion != seatSchemaV4 {
+		t.Fatalf("this build speaks command schema version %d, want 4", netproto.CommandSchemaVersion)
 	}
 	for _, c := range seatWireLayouts() {
 		got, err := EncodeSeatCommand(c.context, c.command)
@@ -491,7 +502,8 @@ func FuzzDecodeSeatCommand(f *testing.F) {
 // unlisted numbers have no payload in either context (§7.4.1, §7.4.2,
 // M2-C11).
 func TestSeatCommandContextIsNotThePayloads(t *testing.T) {
-	replayOnly := map[string]bool{"no shake": true, "set logo": true, "developer spawn": true, "gameplay": true, "set resource replay": true, "builder options replay": true}
+	replayOnly := map[string]bool{"no shake": true, "set logo": true, "developer spawn": true, "gameplay": true, "set resource replay": true, "builder options replay": true,
+		"shoot all": true}
 	seen := 0
 	for _, c := range seatWireLayouts() {
 		if !replayOnly[c.name] {
@@ -518,7 +530,7 @@ func TestSeatCommandContextIsNotThePayloads(t *testing.T) {
 		}
 	}
 	for _, k := range []SeatCommandKind{0, SeatSelectionReplace, SeatSelectionToggle, SeatSelectionClear, SeatBuildPage, SeatGroupRecall,
-		SeatBigBrother, SeatShiftState, SeatShootAll, 48, 128, 254} {
+		SeatBigBrother, SeatShiftState, 48, 128, 254} {
 		for _, v := range seatSchemaVersions() {
 			for _, context := range []CommandContext{OnlineCommand, SinglePlayerReplay} {
 				if _, err := EncodeSeatCommandVersion(v, context, SeatCommand{Kind: k}); err == nil {
@@ -562,6 +574,27 @@ func TestSeatCommandContextIsNotThePayloads(t *testing.T) {
 	}
 	if sharing < len(seatSharingKinds) {
 		t.Fatalf("found %d sharing layouts, fewer than the %d kinds", sharing, len(seatSharingKinds))
+	}
+	// ShootAll has a payload from version 4 and in the single-player replay
+	// context only: versions 1 to 3 refuse it in both contexts, and no
+	// version has an online form until its seat semantics are designed (Q8).
+	for _, v := range seatSchemaVersions() {
+		for _, context := range []CommandContext{OnlineCommand, SinglePlayerReplay} {
+			why := "from command schema version 4"
+			if v >= seatSchemaV4 {
+				if context == SinglePlayerReplay {
+					continue
+				}
+				why = "a single-player replay record"
+			}
+			_, err := EncodeSeatCommandVersion(v, context, SeatCommand{Kind: SeatShootAll})
+			if err == nil || !strings.Contains(err.Error(), why) {
+				t.Errorf("ShootAll: version %d context %d encoded or refused for another reason: %v", v, context, err)
+			}
+			if _, err := DecodeSeatCommandVersion(v, context, []byte{45}); err == nil || !strings.Contains(err.Error(), why) {
+				t.Errorf("ShootAll: version %d context %d decoded or refused for another reason: %v", v, context, err)
+			}
+		}
 	}
 	// Replay-only fields must be zero in an online value; they are absent
 	// from online bytes, never silently dropped.

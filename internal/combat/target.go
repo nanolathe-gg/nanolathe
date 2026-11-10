@@ -400,10 +400,11 @@ type Acquisition struct {
 	// until someone types the command [06 §3.2 "The option bit of check 2"]
 	// [07 R-CAM-01 §6].
 	//
-	// Service.ShootAll is the only producer and nothing sets it yet: nanolathe
-	// has no `+shootall` typed command. The field is the seam that command
-	// would write, and it is what makes check 2 testable as the contract states
-	// it rather than as two thirds of itself.
+	// The service's unit-level target search is the only producer: it copies
+	// the battle-local gate that the `+ShootAll` typed command toggles
+	// (Service.ToggleShootAll). slotAcquisition leaves it clear, as it leaves
+	// the other check-2 and check-3 fields, because the reaction offer's
+	// admission is the §3.1 gate alone [06 R-WPN-04 §2 part 3].
 	ShootAll bool
 
 	// Paralyzer marks the slot's weapon as a paralyzer, which is the only thing

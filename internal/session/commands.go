@@ -23,8 +23,14 @@ type HumanCommandKind uint8
 
 const HumanGameplay HumanCommandKind = 255
 
+// HumanShootAll is `+ShootAll`, a route-mask-1 command that dispatches in
+// every session kind with no cheat gate and toggles check 2's option bit
+// [07 R-CAM-01 §6][06 §3.2 "The option bit of check 2"]. Its number is seat
+// kind 45's for recognition.
+const HumanShootAll HumanCommandKind = 45
+
 // HumanDeveloperSpawn is the retail developer default handler, separate from
-// the Modern exact-name command and the reserved online kinds 35..45.
+// the Modern exact-name command and the online-only kinds 35..44.
 const HumanDeveloperSpawn HumanCommandKind = 46
 
 // HumanEconomyActivity is an issuer-owned temporary activity control.
@@ -1521,6 +1527,10 @@ func (s *Session) applyBoundPlayerCommand(b *boundCommand, tick uint32) bool {
 		s.SetGameplay(c.Gameplay)
 	case HumanNoShake:
 		s.ToggleNoShake()
+	case HumanShootAll:
+		// Mask 1: no campaign gate, no message and no settings write; the
+		// toggle is the whole command [06 §3.2 "The option bit of check 2"].
+		s.Combat.ToggleShootAll()
 	case HumanSpawn:
 		s.applySpawnCommand(c.Spawn, b.issuer, tick)
 	case HumanDeveloperSpawn:
