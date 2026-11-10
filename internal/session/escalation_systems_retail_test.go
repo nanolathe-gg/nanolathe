@@ -162,6 +162,80 @@ func TestEscalationConstructedBuildingUpgrade(t *testing.T) {
 	t.Fatalf("constructed Guardian's upgrade never completed: stance=%v cargo=%v queue=%+v", parent.InBuildStance, parent.Attachment.Cargo, orders.QueueForUnit(parent).Head())
 }
 
+// The Core repair pad builds its tower on its tower piece at the pad centre.
+// The tower's model draws its body off to one corner. Completion runs two
+// authored halves together. The tower's Create moves its body back over its own
+// origin. The pad's StopBuilding finds the tower by model height, moves its tower
+// piece by the opposite amount, and re-attaches the tower there. The visible
+// tower therefore stays where it was built. Spawning the parent complete is
+// enough here: this pad's upgrade scan does not read a Create-time stance.
+// [research/extensions/escalation-script-systems.md "Repair pad tower upgrade"]
+//
+// The Arm pair cannot be tested this way. ARMASP's scan compares against the
+// Core tower's model height, so it never finds ARMASP_UPGRADE (issue #198).
+func TestEscalationRepairPadUpgradeKeepsTowerPosition(t *testing.T) {
+	s := escalationSystemSession(t)
+	pad := placeCompleteRetailUnit(t, s, "CORASP", 0, numeric.FixedFromInt(600), numeric.FixedFromInt(600))
+	advanceProTATicks(t, s, 60)
+	if err := construction.QueueFactoryBuild(pad, "CORASP_UPGRADE", 1, s.Catalog); err != nil {
+		t.Fatal(err)
+	}
+	// bodyOffset is the tower body's world point relative to the pad.
+	bodyOffset := func(u *units.Unit) (numeric.Fixed, numeric.Fixed) {
+		t.Helper()
+		binding := u.COBBinding()
+		body := -1
+		for i, name := range binding.VM.Program().Pieces {
+			if strings.EqualFold(name, "body") {
+				body = i
+			}
+		}
+		offset, ok := binding.ComposePiece(body, u.Move.Heading, u.Move.Pitch, u.Move.Bank)
+		if !ok {
+			t.Fatal("tower body piece does not compose")
+		}
+		return u.X + offset[0] - pad.X, u.Z + offset[2] - pad.Z
+	}
+	abs := func(v numeric.Fixed) numeric.Fixed { return max(v, -v) }
+	var tower *units.Unit
+	var builtX, builtZ numeric.Fixed
+	for tick := 0; tick < 16000; tick++ {
+		p := &s.Econ.Players[0]
+		p.Stock = [2]float32{1e6, 1e6}
+		p.Capacity = [2]float32{1e6, 1e6}
+		advanceProTATicks(t, s, 1)
+		if tower == nil {
+			for _, u := range s.Units.IterSliced() {
+				if u != nil && u.Def != nil && u.Def.CanonicalKey == "corasp_upgrade" {
+					tower = u
+				}
+			}
+			continue
+		}
+		if tower.Remaining > 0 {
+			builtX, builtZ = bodyOffset(tower)
+			continue
+		}
+		if len(pad.Attachment.Cargo) != 1 || pad.Attachment.Cargo[0] != tower.Handle {
+			continue
+		}
+		if abs(builtX) < numeric.FixedFromInt(10) || abs(builtZ) < numeric.FixedFromInt(10) {
+			t.Fatalf("tower was not built off-centre: body offset %v,%v", builtX, builtZ)
+		}
+		x, z := bodyOffset(tower)
+		if abs(x-builtX) > numeric.FixedFromInt(1) || abs(z-builtZ) > numeric.FixedFromInt(1) {
+			t.Fatalf("completed tower moved: built at %v,%v, now %v,%v", builtX, builtZ, x, z)
+		}
+		for _, u := range []*units.Unit{pad, tower} {
+			if diagnostics := u.GetScript().Diagnostics(); len(diagnostics) != 0 {
+				t.Fatal(diagnostics)
+			}
+		}
+		return
+	}
+	t.Fatalf("Core repair pad never retained its tower: cargo=%v stance=%v", pad.Attachment.Cargo, pad.InBuildStance)
+}
+
 func TestEscalationTeleporter(t *testing.T) {
 	s := escalationSystemSession(t)
 	source := placeCompleteRetailUnit(t, s, "ARMGATE", 0, numeric.FixedFromInt(600), numeric.FixedFromInt(600))
