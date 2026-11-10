@@ -1670,19 +1670,21 @@ skip tests name only the two standing descriptors — so every selected unit
 receives the record and the can-cloak capability test is the order handler's,
 [R-ORD-01 §2].
 
-**Supported inference — the on/off arm sends one direction to the whole
+**Established — the on/off arm sends one direction to the whole
 selection.** The `ONOFF` link of the same chain reads the panel's **on/off
 pair** ([07 R-HUD-03 §13]) and sends every selected unit the same
 activate or deactivate command: a pair of `1` (every `onoffable` selected unit
 is on) deactivates, and `0` (all off) and the mixed value `2` activate. One
-press therefore brings a mixed selection to one state, and later presses turn
-the whole selection off and on together. The evidence is retail play, not a
-trace: a mixed selection of two solar collectors turns the off one on and
-leaves the on one alone, and every later press switches both together. Still
-open: whether the arm's test compares the pair with `1` or tests `0` and `2`
-(the pair cannot reach the arm at `3`, which greys the gadget
-[07 R-HUD-03 §6]), what it writes back into the pair, and whether it reads
-Shift. *Decider:* static trace of the handler's `ONOFF` link.
+press therefore brings a mixed selection to one state. The handler explicitly
+tests `0`, `1` and `2`; `3` dispatches nothing and greys the gadget
+[07 R-HUD-03 §6]. After dispatch it writes the target pair back into the
+panel word: `1` after Activate, `0` after Deactivate. The arm makes no direct
+Shift query, but its shared selection broadcaster reads held Shift and passes
+that queue modifier to the ordinary order producer. The arm's zero general
+parameter is separate from the queue modifier. Direct inspection of the
+retail handler and broadcaster establishes these operations. The timing of
+the next aggregate refresh remains unknown; this finding does not establish
+how long the written-back pair persists.
 
 **Established — the two order handlers.** `Standing_MoveOrder` and
 `Standing_FireOrder` are ordinary descriptors (state label `Acknowledged`,

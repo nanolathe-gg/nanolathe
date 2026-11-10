@@ -12,13 +12,15 @@ import (
 )
 
 // TestRetailConstructedWindGeneratorFollowsEveryRedraw is the end-to-end
-// guard for issue #195. A wind generator the commander builds is paid
+// guard for the stock-content path investigated in issue #195. It does not
+// cover Uberhack's reported SetSpeed write to the ACTIVATION port. A stock
+// wind generator the commander builds is paid
 // `currentWindScalar × windgenerator` at every settlement pass, and the scalar
 // it multiplies is the one published before that tick's economy phase, so the
 // payment follows each phase-8 redraw rather than the value at completion
 // [05 "Wind generation"][05 R-ECO-01 §2][05 R-PROD-01 §3]. The redraw's
-// script pair (SetDirection, SetSpeed) never touches the activation bit the
-// generator arm hangs off [05 R-PROD-01 §2].
+// stock ARMWIN script pair (SetDirection, SetSpeed) leaves the activation bit
+// set; the generator arm depends on that bit [05 R-PROD-01 §2].
 //
 // The ARMWIN script is the authored corpus; the test asserts the relationship
 // at each pass, not a census of values. Both reserved rule sets are checked:

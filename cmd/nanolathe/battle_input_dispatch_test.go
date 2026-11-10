@@ -86,36 +86,44 @@ func TestActivationCommandUsesEconomyStateNotProxyFlag(t *testing.T) {
 // chosen from the committed on/off pair [04 R-STANCE-01 §2][07 R-HUD-03 §13]:
 // all on turns all off, and all off or a mixed selection turns all on. Each
 // unit flipping its own state instead left a mixed selection mixed for good.
-// The direction table is a Supported inference from retail play (see
-// toggleOnOffSelected).
 func TestOnOffPressSendsOneDirectionToTheSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		on       [2]bool
 		pair     uint8
 		activate bool
+		disabled bool
+		queued   bool
 	}{
-		{"all off", [2]bool{false, false}, 0, true},
-		{"all on", [2]bool{true, true}, 1, false},
-		{"mixed", [2]bool{false, true}, 2, true},
+		{name: "all off", on: [2]bool{false, false}, pair: 0, activate: true},
+		{name: "all on", on: [2]bool{true, true}, pair: 1},
+		{name: "mixed", on: [2]bool{false, true}, pair: 2, activate: true},
+		{name: "queued mixed", on: [2]bool{false, true}, pair: 2, activate: true, queued: true},
+		{name: "not applicable", pair: 3, disabled: true},
 	} {
 		b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
 		a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
 		c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
-		a.Def.OnOffable = true
+		a.Def.OnOffable = !tc.disabled
 		a.Activated, c.Activated = tc.on[0], tc.on[1]
 		replaceSelectionForTest(t, b, a, c)
 		f, ok := b.currentSnapshot()
 		if !ok || f.CommandPage.OnOffState != tc.pair {
 			t.Fatalf("%s: committed on/off pair is not %d", tc.name, tc.pair)
 		}
-		b.toggleOnOffSelected(false)
+		b.toggleOnOffSelected(tc.queued)
 		pending := b.sess.PendingHumanCommands()
+		if tc.disabled {
+			if len(pending) != 0 {
+				t.Fatalf("%s: enqueued %d commands for an inapplicable gadget", tc.name, len(pending))
+			}
+			continue
+		}
 		if len(pending) != 2 {
 			t.Fatalf("%s: enqueued %d commands, want one per onoffable unit", tc.name, len(pending))
 		}
 		for _, p := range pending {
-			if p.Kind != session.HumanActivation || p.Activation.Activate != tc.activate {
+			if p.Kind != session.HumanActivation || p.Activation.Activate != tc.activate || p.Activation.Queued != tc.queued {
 				t.Fatalf("%s: sent %+v, want Activate=%v for every unit", tc.name, p.Activation, tc.activate)
 			}
 		}

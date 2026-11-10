@@ -5268,17 +5268,12 @@ When the slot's stockpile byte — the count of rounds the slot holds
 [06 §1.2] — is zero the ring is solid via the solid-circle rasterizer;
 otherwise it is dashed, and the dashed-circle routine receives the same
 radius, the ring palette index, a literal 32, and the blink phase bit.
-**Supported inference:** the tested byte belongs to the unit's
-per-slot record, not to the weapon definition, and two sources place it at
-the stockpile count. The MIT-licensed community patch's own megamap ring code
-tests the same per-slot byte, and in its unit record that byte sits just
-before the slot's control byte, after fields matching in order the distance,
-reload, yaw and pitch that the save's slot record stores before its stockpile
-count and control byte [08 R-SAVE-WEAPON-01]. Escalation's `Range Ring`
-slots, which never stockpile, draw solid in its own engine. Still open: the
-identity of the byte the ring routine reads. *Decider:* static trace of that
-read. Both variants use the
-ring palette index. **Established.** The literal 32 is the segment count: the
+**Established:** the ring selector reads the same per-slot completed-round
+count that stockpile construction increments and successful stockpile firing
+decrements [06 §1.2]. Direct inspection of those retail readers and writers
+establishes its identity; the weapon definition's `interceptor` flag admits
+the ring but does not select its style. Both variants use the ring palette
+index. **Established.** The literal 32 is the segment count: the
 dashed routine divides the full circle into `0x10000 / 32 = 0x800`-unit angular
 steps and draws alternating one-segment dashes and one-segment gaps — a
 segment is emitted only when `(segmentIndex + blinkPhase) & 1 == 1`, so the

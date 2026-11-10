@@ -166,9 +166,9 @@ func containsStop(s string) bool {
 // no selected unit is onoffable; it greys the gadget [07 R-HUD-03 §6], so the
 // press sends nothing.
 //
-// TODO(question): the direction test is a Supported inference from retail
-// play, not a trace — [04 R-STANCE-01 §2] names the ONOFF link of the chain
-// but not its test. A static trace of that link settles it.
+// TODO(question): establish the retail aggregate-refresh triggers before
+// retaining the handler's local pair write-back [04 R-STANCE-01 §2]. Until
+// then, repeated presses before publication read the same committed pair.
 //
 // OnOffable is data-driven; the command is Activate/Deactivate via orders.NewNodeForOrder [P0-I14].
 func (b *battleSession) toggleOnOffSelected(queued bool) {
