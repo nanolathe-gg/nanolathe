@@ -82,7 +82,7 @@ authored path.
 
 **Established — authored placement.** Both air repair pads (`ARMASP`,
 `CORASP`) name their `tower` piece as the build piece. That piece rests at the
-pad centre, raised above the pad deck. The pad's `StartBuilding` returns the
+pad centre, raised above the pad origin. The pad's `StartBuilding` returns the
 piece to its rest offset and lowers the build stance. The tower products
 (`ARMASP_UPGRADE`, `CORASP_UPGRADE`) are zero-footprint mobile definitions.
 Each tower model authors its `body` piece offset toward one corner of the pad:
