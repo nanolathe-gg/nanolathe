@@ -540,6 +540,65 @@ offscreen/stack penalties. The historical repair helper instead uses the
 independently verified multiplier of one. Full source contracts and defaults belong to
 [Community patch engine behavior](community-patch-engine.md#31-feature-matrix-at-the-pinned-revision).
 
+## Interceptor targeting and range-ring evidence
+
+**Established — retail search and display are different contracts.** Retail
+admits a projectile by its stored aim point within an inclusive horizontal
+coverage square [06 §11.2]. Its minimap draws a circle with radius
+`coverage - 512` [03 §3.9]. A matching ring therefore does not establish the
+search geometry. Gold's authored `Range Ring` weapons carry coverage 512
+greater than their named firing range; the original-game observation in
+[issue 199](https://github.com/nanolathe-gg/nanolathe/issues/199#issuecomment-6712522284)
+supports that displayed radius, not a targeting contract.
+
+**Established — an older optional circular targeting path exists in source.**
+The MIT recorder source at
+[3e92d8e](https://github.com/tanvanman/TADR/commit/3e92d8eb9eeb1b46e2698c43afeccf96d26164c0)
+(2015-05-31) replaces the interceptor search through
+`src/Recorder/plugins/WeaponAimNTrajectory.pas`. For ordinary non-overflowing
+inputs, its distance helper in `src/Recorder/TAMem/TA_MemoryLocations.pas`
+compares the interceptor's horizontal position with the projectile's stored
+aim point. Each squared fixed-point delta is separately reduced to whole
+squared world units before addition; the candidate passes when the sum is
+less than or equal to squared coverage. This is a circular-distance test
+with fractional truncation distinct from the later draw-DLL calculation.
+It retains first-qualifying projectile order, rejects the owner's projectiles
+and non-targetable or already-claimed projectiles, and optionally restricts
+accepted weapon names.
+
+**Established — source activation is conditional.** At that revision,
+`src/Recorder/Plugins.pas` registers this plugin only when the configured mod
+identifier exceeds one. The plugin also requires its enabled state and the
+source's retail-version compatibility check. Its targeting replacement
+additionally requires `UseInterceptsOnlyList`: `src/Recorder/plugins/IniOptions.pas`
+reads that preference with default true when an INI is available, while the
+mod identifier defaults to -1. These conditions describe this source
+revision; they do not establish Gold's active plugins.
+
+**Established — later search and drawing changes are independently guarded.**
+The draw-DLL commit
+[e90121f](https://github.com/tanvanman/TADR/commit/e90121f74cbb21abc80563fb976aa5908eedd2ec)
+(2026-08-29) adds the circular search and removes the minimap's 512 subtraction
+in `src/DDraw/TABugFix.cpp`. Each installation has its own compatibility
+check; failure of one does not imply failure of the other. The patch's own
+megamap radius changes separately in `src/DDraw/UnitMinimap.cpp`.
+Consequently, predating this draw-DLL change does not establish square
+interception: the recorder already had a separate circular path.
+
+**Unknown — Gold 10.2.0's active interception path.** The repair-helper match
+identifies only that helper. The recorder's `3.9.2.416` version has no
+established source/build correspondence
+([recorder version boundary](ta-demo-recorder.md)). The supplied `TAESC.ini`
+names neither `UseInterceptsOnlyList` nor a `[MOD]` identifier; another source
+revision's initialization defaults cannot establish the shipped recorder's
+behavior. The reported ring radius settles the display observation only.
+The decider is an exact source/build correspondence or a bounded manual Gold
+observation with a loaded antinuke, an unclaimed targetable enemy projectile
+aimed clearly inside the coverage square but outside its circle, and a
+positive control aimed inside the circle. Empty range-indicator slots do not
+exercise acquisition. This evidence does not authorize changing Nanolathe's
+existing Escalation targeting configuration.
+
 ## Authored package, interface and single-player coverage
 
 **Established — documented install composition.** `ESC_READ_ME.txt`
@@ -671,6 +730,11 @@ that every case below has passed:
 
 ## Unknown
 
+- **Unknown — Gold's interceptor coverage geometry.** Retail's square search,
+  an older optional recorder circular search, and later independently guarded
+  search/display patches do not identify the shipped Gold combination. See
+  [interceptor targeting and range-ring evidence](#interceptor-targeting-and-range-ring-evidence)
+  for the bounded observation or source/build evidence needed to settle it.
 - **Unknown — campaign schema difficulty order in Gold 10.2.0.** The reversed
   difficulty slots establish the AI tier ordering, but do not settle whether
   campaign OTA schema choice follows the same reversal. A manual campaign
