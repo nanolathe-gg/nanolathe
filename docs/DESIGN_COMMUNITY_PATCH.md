@@ -205,6 +205,12 @@ override earlier ones field by field; an absent field means "keep":
    and both repair multipliers at one: the current-source table's
    multipliers are three, and a table alone does not identify an older
    package's engine. See [passive generator healing](../research/extensions/escalation-shields.md#passive-generator-healing).
+   It also turns CP-FIX-5 (§4.2) off: bounded inspection of the identified
+   Gold executable and both DLLs establishes square targeting and
+   `coverage − 512` rings. Its authored rings match that display contract;
+   with the fix on each showed 512
+   beyond its weapon's range (issue #199,
+   [interceptor coverage and range rings](../research/extensions/taesc-engine.md#interceptor-coverage-and-range-rings)).
    A config named by `--mod-config` for a manual root stack is the same
    source.
 3. **The settings file.** `gameplayFeatures` — a JSON object of the same
@@ -666,8 +672,8 @@ reads the service's projected table copy. Modern embeds Community.
   whatever the sources say; a mod config's `communityFeatures` resolves to
   exactly the value the removed table and profile produced (digests locked),
   plus only the explicitly declared post-migration additions in
-  `shippedConfig.added`. Escalation's difficulty reversal is that config's
-  sole addition; the frozen replica still matches its original digest;
+  `shippedConfig.added`. Escalation declares its difficulty reversal and historical interceptor
+  coverage selection; the frozen replica still matches its original digest;
   a settings override wins over the config and the command line over both.
 - **Escalation difficulty order (§4.8).** `TestDifficultyTierReversesOnlyUnderTheSwitch`,
   `TestReversedSeatWordsReachEveryReader` and

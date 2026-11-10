@@ -58,8 +58,13 @@ var shippedConfigs = []shippedConfig{
 			f.RepairRate.RepairMultiplier, f.RepairRate.SelfHealMultiplier = 1, 1
 		},
 		// The patched executable's swapped difficulty name slots
-		// (research/extensions/taesc-engine.md "AI").
-		added:     func(f *community.Features) { f.AIDifficultyReversed = true },
+		// (research/extensions/taesc-engine.md "AI"), and Gold's inspected
+		// square interception and biased minimap ring (taesc-engine.md
+		// "Interceptor coverage and range rings").
+		added: func(f *community.Features) {
+			f.AIDifficultyReversed = true
+			f.AntinukeCircularCoverage = false
+		},
 		unitLimit: 1000, searchEntries: 66650,
 		wantDigest: "d398864376254306cf03d54645a25f08b5803c9bd0727da8b3c999d9690c3ff9",
 		detect:     []string{"aE", "downloadsE", "gamedatE", "guiE", "unitpicE", "unitsE", "weaponE"},
@@ -181,6 +186,18 @@ func TestEscalationConfigHistoricalHealing(t *testing.T) {
 	got, err := community.Resolve(false, meta.CommunitySources()...)
 	if err != nil || !got.HealTimeBitmask || !got.RepairRate.Enabled || got.RepairRate.RepairMultiplier != 1 || got.RepairRate.SelfHealMultiplier != 1 {
 		t.Fatalf("Gold historical healing: %+v, %v", got, err)
+	}
+}
+
+// Gold's authored range rings are interceptor slots whose coverage is the
+// firing range plus retail's 512 minimap bias. The identified binaries retain
+// square targeting and that display bias (issue #199) [research/extensions/taesc-engine.md
+// "Interceptor coverage and range rings"][03 §3.9].
+func TestEscalationConfigKeepsRetailInterceptorCoverage(t *testing.T) {
+	meta := readShippedConfig(t, "escalation-10.2.0")
+	got, err := community.Resolve(false, meta.CommunitySources()...)
+	if err != nil || got.AntinukeCircularCoverage {
+		t.Fatalf("Gold interceptor coverage: circular=%v, %v", got.AntinukeCircularCoverage, err)
 	}
 }
 
