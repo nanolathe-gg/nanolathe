@@ -21,6 +21,9 @@ type MouseState struct {
 	// ZoomScrollY excludes precise scrolling and momentum where the host exposes them.
 	// Total scrolling remains available to GUI controls (DESIGN_GPU_RENDERER §16.6).
 	ZoomScrollY float32
+	// ZoomScrollX is the same horizontal notch count. macOS reports a wheel
+	// turned with Shift held on this axis.
+	ZoomScrollX float32
 	// PanX/PanY are direct precise-scroll deltas in logical screen pixels.
 	PanX, PanY float64
 	Pinches    []PinchEvent
@@ -75,7 +78,7 @@ func (m *MouseState) SetWheel(dx, dy float32) {
 	}
 	m.scrolled = dx != 0 || dy != 0
 	m.ScrollX, m.ScrollY = dx, dy
-	m.ZoomScrollY = dy
+	m.ZoomScrollX, m.ZoomScrollY = dx, dy
 }
 
 // ResetEdges clears the per-host-frame edges: press, release, wheel and
@@ -88,7 +91,7 @@ func (m *MouseState) ResetEdges() {
 	m.released = [4]bool{}
 	m.scrolled = false
 	m.moved = false
-	m.ScrollX, m.ScrollY, m.ZoomScrollY = 0, 0, 0
+	m.ScrollX, m.ScrollY, m.ZoomScrollX, m.ZoomScrollY = 0, 0, 0, 0
 	m.PanX, m.PanY = 0, 0
 	m.Pinches = nil
 }
@@ -311,7 +314,7 @@ type Sample struct {
 	Buttons                         MouseButtons
 	Modifiers                       Modifiers
 	WheelX, WheelY                  float32
-	ZoomWheelY                      float32
+	ZoomWheelX, ZoomWheelY          float32
 	PanX, PanY                      float64
 	Pinches                         []PinchEvent
 	PressedButtons, ReleasedButtons [4]bool
@@ -374,7 +377,7 @@ func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sampl
 		s.MouseX, s.MouseY = logical(m.X, surfaceW), logical(m.Y, surfaceH)
 		s.Buttons = MouseButtons{Left: m.Held(MouseButtonLeft), Middle: m.Held(MouseButtonMiddle), Right: m.Held(MouseButtonRight)}
 		s.WheelX, s.WheelY = m.ScrollX, m.ScrollY
-		s.ZoomWheelY = m.ZoomScrollY
+		s.ZoomWheelX, s.ZoomWheelY = m.ZoomScrollX, m.ZoomScrollY
 		s.PanX, s.PanY = m.PanX, m.PanY
 		s.Pinches = append([]PinchEvent(nil), m.Pinches...)
 		for i := range s.PressedButtons {
@@ -409,7 +412,7 @@ func StateFromSample(s Sample) *State {
 	in.Mouse.SetButton(MouseButtonMiddle, s.Buttons.Middle)
 	in.Mouse.SetButton(MouseButtonRight, s.Buttons.Right)
 	in.Mouse.SetWheel(s.WheelX, s.WheelY)
-	in.Mouse.ZoomScrollY = s.ZoomWheelY
+	in.Mouse.ZoomScrollX, in.Mouse.ZoomScrollY = s.ZoomWheelX, s.ZoomWheelY
 	in.Mouse.PanX, in.Mouse.PanY = s.PanX, s.PanY
 	in.Mouse.Pinches = append([]PinchEvent(nil), s.Pinches...)
 	in.Mouse.edges = s.PressedButtons

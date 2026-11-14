@@ -174,3 +174,54 @@ func TestNativeWheelCountsIgnoreLineDistance(t *testing.T) {
 		t.Fatalf("idle poll replayed scrolling: %+v", mouse)
 	}
 }
+
+// A wheel turned with Shift held arrives on the horizontal axis; its notch
+// count must survive as ZoomScrollX without zooming. Authored events only.
+func TestNativeHorizontalWheelCount(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	lib, err := purego.Dlopen(coreGraphicsLibrary, purego.RTLD_LAZY|purego.RTLD_LOCAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer purego.Dlclose(lib)
+	var create func(uintptr, uint32, uint32, int32, int32, int32) uintptr
+	var setDouble func(uintptr, uint32, float64)
+	var integerValue func(uintptr, uint32) int64
+	var release func(uintptr)
+	purego.RegisterLibFunc(&create, lib, "CGEventCreateScrollWheelEvent2")
+	purego.RegisterLibFunc(&setDouble, lib, "CGEventSetDoubleValueField")
+	purego.RegisterLibFunc(&integerValue, lib, "CGEventGetIntegerValueField")
+	purego.RegisterLibFunc(&release, lib, "CFRelease")
+	pool := objc.ID(objc.GetClass("NSAutoreleasePool")).Send(objc.RegisterName("new"))
+	defer pool.Send(objc.RegisterName("drain"))
+	nativeScroll.setActive(true)
+	defer nativeScroll.setActive(false)
+	const (
+		lineUnits   = 1  // kCGScrollEventUnitLine
+		fixedDeltaX = 94 // kCGScrollWheelEventFixedPtDeltaAxis2
+	)
+	for _, direction := range []int32{-1, 1} {
+		cg := create(0, lineUnits, 2, 0, direction, 0)
+		if cg == 0 {
+			t.Fatal("create scroll event returned nil")
+		}
+		setDouble(cg, fixedDeltaX, 0.1*float64(direction))
+		event := objc.ID(objc.GetClass("NSEvent")).Send(objc.RegisterName("eventWithCGEvent:"), cg)
+		if event == 0 {
+			t.Fatal("decode scroll event returned nil")
+		}
+		recordNativeScroll(event, integerValue)
+		release(cg)
+		var sample sampledInput
+		sample.applyScroll(nativeScroll.take(99, 99))
+		var buffer hostInputBuffer
+		buffer.add(sample)
+		in := input.NewState()
+		applyInput(in, buffer.take())
+		mouse := input.StateFromSample(input.SampleFromState(in, 0, 1024, 768)).Mouse
+		if mouse.ZoomScrollX != float32(direction) || mouse.ZoomScrollY != 0 || mouse.PanX != 0 {
+			t.Fatalf("direction %d: mouse=%+v", direction, mouse)
+		}
+	}
+}

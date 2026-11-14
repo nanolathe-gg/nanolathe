@@ -2877,6 +2877,7 @@ evidence only.
 |---|---|---|
 | Orders | Move `m`, Attack `a`, Patrol `p`, Guard `g`, Stop `s`, Repair `r`, Reclaim `e`, Capture `c`, Load `l`, Unload `u`, D-gun `d`, Fire orders `f`, Move orders `v`, On/off `x`, Cloak `k`, Orders page `o`, Build page `b` | the command palette's quick keys, identical in stock `ARMGEN.GUI` and `CORGEN.GUI` (gadgets `MOVE`…`BUILD`, `DEFEND`, `BLAST`, `FIREORD`, `MOVEORD`, `ONOFF`); `TestRetailOrderKeysMatchAuthoredPalette` reads both windows from the install `[07 R-WGT-01 §3]` |
 | Orders | Previous / next build page `,` / `.`, plus this build's Page Down / Page Up; Self-destruct Ctrl+D | census rows above; the page keys' host extras in `handleBattleShortcuts` |
+| Orders | Build drag: narrower / wider gap `[` / `]` (`{` / `}` with Shift) | host extension of §3.11, read only while a build row or grid holds the pointer |
 | Selection | Select all Ctrl+A, commander Ctrl+C, on screen Ctrl+S, same type Ctrl+Z; `CTRL_B`, `CTRL_E`…`CTRL_R`, `CTRL_T`…`CTRL_Y` category selects on their Ctrl letters | census rows `[07 R-CAM-01 §2]` |
 | Camera | Follow next / previous `t` / `T`; next unvisited `n`; message source F3; store bookmarks 1–4 Ctrl+F5–F8 and recall F5–F8; zoom step F9 | census rows; F9 is the host extension of §3.8 |
 | Game | Options F2; options, resume or megamap Tab (online, the Tab strip with Options or F2 with Overview; Share `h`, §3.9); Pause; speed `+` `=` / `-` `_`; label every unit `` ` `` `~` `!` `#` `*`; unit information F1; score panel F4; clear messages F12; chat Enter; switch renderer F10 | census rows; Enter opens TALK (§3.9); F10 is the host extension of DESIGN_GPU_RENDERER §14.6 |
@@ -3880,6 +3881,40 @@ A click still uses the existing single-site path, on release in modern mode.
 card, §3.17) switches the construction row and grid off, so every press
 places one site through that path; move, repair and reclaim drags are
 unaffected.
+
+**Build-drag gap (requested input policy, 2026-10-31).** While a construction
+row or grid holds the pointer, the mouse wheel sets the gap: each whole notch
+adds (wheel up) or removes (wheel down) one free map cell between neighbouring
+sites, from 0 (touching, the behaviour above) to 16. A row then advances by
+the footprint plus the gap on its dominant axis, and a grid by the footprint
+plus the gap on both axes; axis choice compares spans measured in these
+steps. Precise scrolling (a trackpad or Magic Mouse) carries no notch count,
+so its vertical travel counts one notch per `dragBuildGapPanStep` (30) logical
+pixels, a feel knob; fractions accumulate until they make a notch. macOS
+reports a wheel turned with Shift held (as when queueing a row) on the
+horizontal axis, so while Shift is held horizontal notches and travel count
+as vertical. The keys `]` and `[` step the gap by one cell the same way, with
+Shift held or released; a row started with Shift stays a row when Shift is let
+go before the button. They are the rebindable *Build drag: wider/narrower gap*
+actions of §3.6. Such an action is marked `DragKey`: a letter bound to it also
+answers with Shift held, and a rebound press emits the bracket (`{` or `}`
+with Shift). After the key map rewrites the head token, the drag claims a
+bracket token before the command palette reads it, and neither that claim nor
+the bound key's press edge cancels the drag as a new command's key does.
+Outside a build drag the bracket reaches the residual table, which has no case
+for it. During the
+gesture the wheel does not zoom and precise scrolling does not pan the camera
+(DESIGN_GPU_RENDERER §16.6); the Community snap-override wheel, which rotates the
+structure while its modifier is held, still takes the wheel first. The
+preview shows `gap N` beside the pointer. The gap is kept for the rest of
+the battle, so later rows reuse it, and is not saved. Validation, reservation
+skipping and Shift cancellation are unchanged; the gap only moves the
+candidate anchors. `TestDragBuildGap`, `TestCommandDragWheelSetsBuildGap` and
+`TestCommandDragPreciseScrollSetsBuildGapWithoutPanning` and
+`TestCommandDragShiftWheelSetsBuildGap`, `TestCommandDragKeysSetBuildGap` and
+`TestBuildGapKeysRebind` cover the geometry, the wheel's ownership, precise
+scrolling, the Shift wheel, the gap keys and their rebinding, the bound and
+the released row.
 
 **Cancelling queued sites with a Shift row (requested input policy,
 2026-09-28).** A player sweeps a row over queued sites to take them off, as

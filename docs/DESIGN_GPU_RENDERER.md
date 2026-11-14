@@ -3794,7 +3794,11 @@ supplied monotonic host milliseconds; neither reads simulation time [I6].
   both zero count and zero vertical distance supplies none. This normalization
   follows the native precision flag; it does not classify devices from delta
   magnitude or timing. GUI controls retain the original scrolling distance.
-  Native synthetic-event checks in
+  The horizontal axis (`kCGScrollWheelEventDeltaAxis2`, `scrollingDeltaX`) is
+  normalized the same way into `ZoomScrollX`. Camera zoom never reads it; it
+  exists because macOS reports a wheel turned with Shift held on that axis,
+  and the build-drag gap (DESIGN_INTERFACE_HUD_INPUT §3.11) reads it under
+  Shift. Native synthetic-event checks in
   `internal/platform/ebitenapp/scroll_darwin_test.go` exercise small and large
   line distances, slow and batched clicks, multiple ticks, both directions,
   conflicting field signs, the absent-count fallback and touch/momentum

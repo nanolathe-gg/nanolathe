@@ -54,6 +54,11 @@ type Action struct {
 	// so a letter bound to it also answers with Shift held, and that press
 	// emits the shifted letter [07 R-WGT-01 §3].
 	AnyShift bool
+	// DragKey marks a key read only while a build row or grid holds the
+	// pointer (DESIGN_INTERFACE_HUD_INPUT §3.11). A row is usually queued
+	// with Shift held, so a letter bound to it also answers with Shift held,
+	// as an order key does; the press emits the action's own token.
+	DragKey bool
 	// shiftUp marks a row that acts only with Shift up (F1 and F2 in the
 	// battle's dispatcher); a shifted chord could never reach it, so none is
 	// bound to it.
@@ -180,7 +185,7 @@ func (m *KeyMap) Owner(c Chord) (string, bool) {
 		return id, true
 	}
 	if plain, ok := unshifted(c); ok {
-		if id, ok := m.owner[plain]; ok && catalogue[actionIndex[id]].AnyShift {
+		if id, ok := m.owner[plain]; ok && catalogue[actionIndex[id]].anyShiftLetter() {
 			return id, true
 		}
 	}
@@ -284,7 +289,7 @@ func (m *KeyMap) bind(a Action, keys []Chord) (displaced []string) {
 		if !ok {
 			continue
 		}
-		if a.AnyShift && c.Shift && isLetter(c.Key) {
+		if a.anyShiftLetter() && c.Shift && isLetter(c.Key) {
 			c.Shift = false
 		}
 		if a.shiftUp && c.Shift {
@@ -314,6 +319,10 @@ func (m *KeyMap) bind(a Action, keys []Chord) (displaced []string) {
 	m.rebuild()
 	return displaced
 }
+
+// anyShiftLetter reports whether a letter bound to the action also answers
+// with Shift held: an order key or a build-drag key.
+func (a Action) anyShiftLetter() bool { return a.AnyShift || a.DragKey }
 
 func (m *KeyMap) rebuild() {
 	m.owner = make(map[Chord]string, len(catalogue)*2)
@@ -412,11 +421,13 @@ var shiftedDigits = [10]rune{')', '!', '@', '#', '$', '%', '^', '&', '*', '('}
 
 // charPairs are the punctuation keys' unshifted and shifted characters.
 var charPairs = map[Key][2]rune{
-	KeyMinus:     {'-', '_'},
-	KeyEqual:     {'=', '+'},
-	KeyBackquote: {'`', '~'},
-	KeyComma:     {',', '<'},
-	KeyPeriod:    {'.', '>'},
+	KeyMinus:        {'-', '_'},
+	KeyEqual:        {'=', '+'},
+	KeyBackquote:    {'`', '~'},
+	KeyComma:        {',', '<'},
+	KeyPeriod:       {'.', '>'},
+	KeyLeftBracket:  {'[', '{'},
+	KeyRightBracket: {']', '}'},
 }
 
 // charOf is the character a character key translates to.
@@ -526,7 +537,7 @@ func chordOfRune(r rune) (Chord, bool) {
 			return Chord{Key: Key0 + Key(d), Shift: true}, true
 		}
 	}
-	for _, k := range []Key{KeyMinus, KeyEqual, KeyBackquote, KeyComma, KeyPeriod} {
+	for _, k := range []Key{KeyMinus, KeyEqual, KeyBackquote, KeyComma, KeyPeriod, KeyLeftBracket, KeyRightBracket} {
 		pair := charPairs[k]
 		if r == pair[0] {
 			return Chord{Key: k}, true
@@ -581,6 +592,7 @@ func buildKeyNames() (names, labels map[Key]string, byName map[string]Key) {
 		{KeyEscape, "escape", "Esc"}, {KeyPause, "pause", "Pause"},
 		{KeyMinus, "-", "-"}, {KeyEqual, "=", "="}, {KeyBackquote, "`", "`"},
 		{KeyComma, ",", ","}, {KeyPeriod, ".", "."},
+		{KeyLeftBracket, "[", "["}, {KeyRightBracket, "]", "]"},
 	} {
 		names[e.key], labels[e.key] = e.name, e.label
 	}
@@ -592,6 +604,7 @@ func buildKeyNames() (names, labels map[Key]string, byName map[string]Key) {
 		"del": KeyDelete, "ins": KeyInsert, "minus": KeyMinus, "equal": KeyEqual,
 		"equals": KeyEqual, "backquote": KeyBackquote, "grave": KeyBackquote,
 		"comma": KeyComma, "period": KeyPeriod,
+		"leftbracket": KeyLeftBracket, "rightbracket": KeyRightBracket,
 	} {
 		byName[alias] = k
 	}
@@ -757,7 +770,7 @@ func mustChords(written ...string) []Chord {
 // census rows of DESIGN_INTERFACE_HUD_INPUT §3.6 [07 R-CAM-01 §2][07 R-CAM-01 §14],
 // the command palette's quick keys as ARMGEN.GUI and CORGEN.GUI author them
 // (identical in both) [07 R-WGT-01 §3], and the host's own bindings on the
-// same path (F9, F10, Page Up/Down).
+// same path (F9, F10, Page Up/Down, and the build-drag gap's `[` and `]`).
 var catalogue = buildCatalogue()
 
 func buildCatalogue() []Action {
@@ -785,6 +798,8 @@ func buildCatalogue() []Action {
 		{ID: "prevBuildPage", Label: "Previous build page", Group: GroupOrders, Default: mustChords(",", "pagedown")},
 		{ID: "nextBuildPage", Label: "Next build page", Group: GroupOrders, Default: mustChords(".", "pageup")},
 		{ID: "selfDestruct", Label: "Self-destruct", Group: GroupOrders, Default: mustChords("ctrl+d")},
+		{ID: "buildGapNarrower", Label: "Build drag: narrower gap", Group: GroupOrders, Default: mustChords("[", "{"), DragKey: true},
+		{ID: "buildGapWider", Label: "Build drag: wider gap", Group: GroupOrders, Default: mustChords("]", "}"), DragKey: true},
 
 		{ID: "selectAll", Label: "Select all units", Group: GroupSelection, Default: mustChords("ctrl+a")},
 		{ID: "selectCommander", Label: "Select commander", Group: GroupSelection, Default: mustChords("ctrl+c")},
