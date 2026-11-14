@@ -709,3 +709,50 @@ func TestCommandDragShiftWheelSetsBuildGap(t *testing.T) {
 		t.Fatalf("Shift wheel gap = %d, want 1", b.buildDragGap)
 	}
 }
+
+// The gap keys step a build row's gap with Shift held or released, and their
+// press does not cancel the row the way a new command's key does; outside a
+// build drag they change nothing. The frames run through viewerStep, which
+// owns the token queue.
+func TestCommandDragKeysSetBuildGap(t *testing.T) {
+	b, cl, _, _ := resourceFixture(t, false)
+	b.armPlacement(b.cat.Units["armsolar"])
+	cl.SetFocused(true)
+	in := cl.Input()
+	in.Mouse.SetPosition(300, 250)
+	frame := func(shift bool, key input.Key, r rune) {
+		in.Mouse.ResetEdges()
+		in.Kbd.ResetEdges()
+		in.Kbd.SetKey(input.KeyShift, shift)
+		if key != input.KeyNone {
+			in.Kbd.SetKey(key, true)
+			in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
+		}
+		b.viewerStep(0, cl)
+		in.Kbd.SetKey(key, false)
+	}
+	frame(false, input.KeyRightBracket, ']')
+	if b.buildDragGap != 0 {
+		t.Fatalf("a gap key outside a build drag set gap %d", b.buildDragGap)
+	}
+	dragInput(b, cl, 300, 250, input.MouseButtonLeft, "press", input.Modifiers{Shift: true})
+	in.Mouse.SetPosition(492, 250)
+	in.Mouse.SetButton(input.MouseButtonLeft, true)
+	frame(true, input.KeyNone, 0)
+	if !b.buildDragWheelOwned() {
+		t.Fatal("no build drag")
+	}
+	frame(true, input.KeyRightBracket, '}')
+	frame(false, input.KeyRightBracket, ']')
+	frame(false, input.KeyRightBracket, ']')
+	frame(true, input.KeyLeftBracket, '{')
+	if b.buildDragGap != 2 || !b.buildDragWheelOwned() {
+		t.Fatalf("gap = %d, drag %v; want 2 and the row still held", b.buildDragGap, b.buildDragWheelOwned())
+	}
+	for range dragBuildGapMax + 2 {
+		frame(false, input.KeyLeftBracket, '[')
+	}
+	if b.buildDragGap != 0 || !b.buildDragWheelOwned() {
+		t.Fatalf("gap = %d, drag %v; want 0 and the row still held", b.buildDragGap, b.buildDragWheelOwned())
+	}
+}

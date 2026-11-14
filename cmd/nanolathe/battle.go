@@ -1382,7 +1382,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// ordered peek, and only an Enter left unclaimed by both opens TALK
 	// [07 §3][07 §5 "Chat"].
 	talkOwned := b.chat.active
-	tokenClaimed := false
+	tokenClaimed, gapKeyClaimed := false, false
 	unitInfoAtFrameStart := false
 	b.paletteFrameServiced = true
 	b.palettePointerOwned = talkOwned
@@ -1406,6 +1406,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		if !tokenClaimed {
 			tokenClaimed = b.serviceKeyMap(in)
 		}
+		// A build row's gap keys step its gap and leave the drag running
+		// (battle_command_drag.go, DESIGN_INTERFACE_HUD_INPUT §3.11).
+		if !tokenClaimed && b.serviceBuildDragGapKey(in) {
+			tokenClaimed, gapKeyClaimed = true, true
+		}
 		if b.hud != nil && !unitInfoAtFrameStart {
 			result, owned := b.hud.servicePaletteFrame(b, in, !tokenClaimed)
 			b.palettePointerOwned = owned
@@ -1416,7 +1421,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			b.palettePointerOwned = true
 		}
 	}
-	if talkOwned || tokenClaimed || unitInfoAtFrameStart || b.palettePointerOwned {
+	if talkOwned || tokenClaimed && !gapKeyClaimed || unitInfoAtFrameStart || b.palettePointerOwned {
 		b.modernDrag = nil
 		b.resourceClick = nil
 		b.resourceQueueFeedback = nil

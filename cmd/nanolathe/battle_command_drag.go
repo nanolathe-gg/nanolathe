@@ -172,7 +172,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 		return false
 	}
 	for key := input.Key(1); key < input.KeyCount; key++ {
-		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && in.Kbd.KeyDown(key) {
+		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && !b.buildDragGapKey(key) && in.Kbd.KeyDown(key) {
 			b.modernDrag = nil
 			state.PlaceCaptured = d.button == input.MouseButtonLeft && mouse.Held(d.button)
 			return false // The new command owns this sample, including its hotkey.
@@ -382,6 +382,51 @@ func (b *battleSession) stepBuildDragGap(wheel float32, panY float64) {
 	}
 	b.buildDragWheel -= float32(steps)
 	b.buildDragGap = min(max(b.buildDragGap+steps, 0), dragBuildGapMax)
+}
+
+// serviceBuildDragGapKey claims the head token when it is a gap key and a
+// build row or grid holds the pointer: `]` (`}` with Shift) adds one free cell
+// between sites and `[` (`{`) removes one, within the wheel's bound. The key
+// map has already rewritten a rebound key onto these tokens. Outside a build
+// drag the tokens reach the residual table, which has no case for them (§3.11).
+func (b *battleSession) serviceBuildDragGapKey(in *input.State) bool {
+	if !b.buildDragWheelOwned() || in == nil || b.textEntryActive() {
+		return false
+	}
+	tokens := in.PeekTokens()
+	if len(tokens) == 0 || tokens[0].Kind != input.TokenText || tokens[0].Ctrl {
+		return false
+	}
+	var step int32
+	switch tokens[0].Rune {
+	case ']', '}':
+		step = 1
+	case '[', '{':
+		step = -1
+	default:
+		return false
+	}
+	in.DiscardTokens(1)
+	b.buildDragGap = min(max(b.buildDragGap+step, 0), dragBuildGapMax)
+	return true
+}
+
+// buildDragGapKey reports whether a physical key is bound to a gap action
+// during a build drag, so its press edge does not cancel the drag the way a
+// new command's key does.
+func (b *battleSession) buildDragGapKey(key input.Key) bool {
+	if !b.buildDragWheelOwned() {
+		return false
+	}
+	m := b.keyMap()
+	for _, id := range []string{"buildGapNarrower", "buildGapWider"} {
+		for _, c := range m.Keys(id) {
+			if c.Key == key {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dragCancelQueue copies the drag builder's committed primary queue for the

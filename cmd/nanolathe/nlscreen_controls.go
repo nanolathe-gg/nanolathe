@@ -50,7 +50,7 @@ var nlKeyboard = [][]nlKeyCap{
 		{"6", input.Key6, 1}, {"7", input.Key7, 1}, {"8", input.Key8, 1}, {"9", input.Key9, 1}, {"0", input.Key0, 1}, {"-", input.KeyMinus, 1},
 		{"=", input.KeyEqual, 1}, {"Back", input.KeyBackspace, 1.9}, {"", 0, 0.3}, {"Ins", input.KeyInsert, 1}, {"Home", input.KeyHome, 1}, {"PgUp", input.KeyPrior, 1}},
 	{{"Tab", input.KeyTab, 1.5}, {"Q", input.KeyQ, 1}, {"W", input.KeyW, 1}, {"E", input.KeyE, 1}, {"R", input.KeyR, 1}, {"T", input.KeyT, 1},
-		{"Y", input.KeyY, 1}, {"U", input.KeyU, 1}, {"I", input.KeyI, 1}, {"O", input.KeyO, 1}, {"P", input.KeyP, 1}, {"[", 0, 1}, {"]", 0, 1},
+		{"Y", input.KeyY, 1}, {"U", input.KeyU, 1}, {"I", input.KeyI, 1}, {"O", input.KeyO, 1}, {"P", input.KeyP, 1}, {"[", input.KeyLeftBracket, 1}, {"]", input.KeyRightBracket, 1},
 		{"\\", 0, 1.4}, {"", 0, 0.3}, {"Del", input.KeyDelete, 1}, {"End", input.KeyEnd, 1}, {"PgDn", input.KeyNext, 1}},
 	{{"Caps", 0, 1.8}, {"A", input.KeyA, 1}, {"S", input.KeyS, 1}, {"D", input.KeyD, 1}, {"F", input.KeyF, 1}, {"G", input.KeyG, 1},
 		{"H", input.KeyH, 1}, {"J", input.KeyJ, 1}, {"K", input.KeyK, 1}, {"L", input.KeyL, 1}, {";", 0, 1}, {"'", 0, 1}, {"Enter", input.KeyEnter, 2.1}},
@@ -690,6 +690,8 @@ func (s *nlScreen) drawActionInfo(screen *ebiten.Image, r screenkit.Rect) {
 			text += " Held keys and group digits are read directly and are not rebound."
 		} else if a.AnyShift {
 			text += " An order key also answers with Shift held."
+		} else if a.DragKey {
+			text += " It acts only while a build row is dragged, with or without Shift held."
 		}
 		y += s.drawWrapped(screen, bf, text, r.X, y, r.W, 2.0, screenkit.Style{Size: 12 * u, Top: nlBody})
 	}

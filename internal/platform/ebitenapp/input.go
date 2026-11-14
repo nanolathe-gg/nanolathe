@@ -312,6 +312,10 @@ func translatedKeyToken(key input.Key, modifiers input.Modifiers) (input.Token, 
 				r = ','
 			case input.KeyPeriod:
 				r = '.'
+			case input.KeyLeftBracket:
+				r = '['
+			case input.KeyRightBracket:
+				r = ']'
 			}
 		}
 		if r != 0 {
@@ -486,6 +490,10 @@ func ebitenKey(k input.Key) (ebiten.Key, bool) {
 		return ebiten.KeyComma, true
 	case input.KeyPeriod:
 		return ebiten.KeyPeriod, true
+	case input.KeyLeftBracket:
+		return ebiten.KeyBracketLeft, true
+	case input.KeyRightBracket:
+		return ebiten.KeyBracketRight, true
 	case input.KeyShift:
 		return ebiten.KeyShiftLeft, true
 	case input.KeyCtrl:
