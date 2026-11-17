@@ -167,6 +167,33 @@ func TestHumanDamageModeCommandsRespectCampaignGate(t *testing.T) {
 	}
 }
 
+// `+ShootAll` is a mask-1 command: campaign applies it exactly as skirmish
+// does, each application toggles the combat gate, and a second one restores
+// check 2 [07 R-CAM-01 §6][06 §3.2 "The option bit of check 2"]. ToggleShootAll
+// reports the value after its own flip, so it reads the gate and then puts it
+// back.
+func TestHumanShootAllTogglesInEverySessionKind(t *testing.T) {
+	for _, m := range []*mission.Mission{nil, {Type: mission.TypeCampaign}} {
+		combatService := &combat.Service{}
+		s := &Session{Combat: combatService, Mission: m}
+		gate := func() bool {
+			on := !combatService.ToggleShootAll()
+			combatService.ToggleShootAll()
+			return on
+		}
+		s.applyHumanCommand(HumanCommand{Kind: HumanShootAll}, 1)
+		if !gate() {
+			t.Fatalf("mission %+v: the first +ShootAll left the gate clear", m)
+		}
+		s.applyHumanCommand(HumanCommand{Kind: HumanShootAll}, 2)
+		if gate() {
+			t.Fatalf("mission %+v: the second +ShootAll did not clear the gate", m)
+		}
+	}
+	// A session without a combat service has nothing to toggle.
+	(&Session{}).applyHumanCommand(HumanCommand{Kind: HumanShootAll}, 1)
+}
+
 func TestHumanCommandSequenceAndDueTickAreSessionOwned(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", MaxDamage: 10}

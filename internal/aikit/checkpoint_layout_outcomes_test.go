@@ -100,11 +100,11 @@ func assertLayoutOutcomeHash(t *testing.T, e *executor, c *checkpointCommand, op
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial := append([]byte("NLCPAIST"), 6, 0)
+	initial := append([]byte("NLCPAIST"), 7, 0)
 	initial = append(initial, make([]byte, 64)...)
 	initial = append(initial, 0, 2)
 	prev := sha256.Sum256(initial)
-	b := append([]byte("NLCPAIAP"), 6, 0)
+	b := append([]byte("NLCPAIAP"), 7, 0)
 	b = append(b, prev[:]...)
 	b = append(b, checkpointDecode(t, "0002443322110100000000000000000000005501")...)
 	b = binary.LittleEndian.AppendUint32(b, ops.count)

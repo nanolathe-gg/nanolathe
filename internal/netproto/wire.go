@@ -25,10 +25,10 @@ import (
 // negotiated outside every payload (§7.4.1): no payload carries it, and a
 // seat reports it as its Identity's Protocol. Version 2 adds the sharing and
 // alliance payloads; every version-1 payload keeps its bytes and meaning
-// under it. Version 3 adds temporary economy activity controls. All versions
-// are written in this package's version-1
-// primitives.
-const CommandSchemaVersion uint16 = 3
+// under it. Version 3 adds temporary economy activity controls. Version 4
+// adds the single-player replay record of the `+ShootAll` toggle. All
+// versions are written in this package's version-1 primitives.
+const CommandSchemaVersion uint16 = 4
 
 // Protocol limits of the version-1 primitives (§7.4.1), unchanged by command
 // schema version 2. They are Nanolathe protocol limits, not retail constants.

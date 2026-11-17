@@ -116,6 +116,7 @@ func TestCheckpointCombatOwnerVector(t *testing.T) {
 	s.modernNextProjectileTick = 15
 	s.modernTick = 16
 	s.scanCursor.next[0] = -17
+	s.shootAll = true
 	s.targets.gate[9] = true
 	s.targets.lastRebuild[0] = 18
 	s.targets.primary[0] = []pool.Handle{0xffff, 2}
@@ -131,6 +132,7 @@ func TestCheckpointCombatOwnerVector(t *testing.T) {
 			"0d0000000e0000000200000001000000010000000000ffff0000010000000000"+
 			"0101000000000f00000010000000"+
 			"efffffffffffffff"+strings.Repeat("00", 72)+ // cursors
+			"01"+ // the +ShootAll gate
 			strings.Repeat("00", 9)+"01"+"12000000"+strings.Repeat("00", 36)+
 			"02000000ffff000002000000"+strings.Repeat("00", 36)+ // primary
 			strings.Repeat("00", 36)+"0100000003000000")

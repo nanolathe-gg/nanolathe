@@ -13,7 +13,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
 
-// The wire form of command schema versions 1 and 2 (docs/DESIGN_MULTIPLAYER.md
+// The wire form of command schema versions 1 through 4 (docs/DESIGN_MULTIPLAYER.md
 // §7.4.1–§7.4.4, contracts M2-C4, M2-C5 and M2-C11). A payload is one kind
 // byte and that kind's fields in the order of the §7.4.2 table, written in
 // the shared primitives of internal/netproto: u8 and bool one byte; u16, u32
@@ -29,8 +29,11 @@ import (
 //
 // Version 2 adds the payloads of the sharing and alliance kinds 35..44, in
 // the online context only. Every version-1 payload is the same bytes, with
-// the same meaning, under version 2; kinds 35..44 decode only under version 2,
-// and ShootAll (45) stays reserved in both.
+// the same meaning, under version 2; kinds 35..44 decode only from version 2.
+// Version 3 adds EconomyActivity (47) in both contexts. Version 4 adds
+// ShootAll (45), payload-less and in the single-player replay context only;
+// versions 1 to 3 refuse it everywhere. Each version keeps every earlier
+// payload's bytes and meaning.
 //
 // Decoding establishes schema validity before any gameplay code runs: a
 // payload over 4 MiB is refused before it is parsed; every count is checked
@@ -64,10 +67,11 @@ import (
 //   - Deferred (D) kinds encode in both contexts where their local operation
 //     exists, so M2 can test their codec; the receiver refuses their online
 //     application until M5. The single-player replay kinds NoShake, SetLogo,
-//     DeveloperSpawn and Gameplay are refused by the online codec; the
-//     sharing and alliance kinds by the replay codec, because retail runs
-//     them only in a networked session [07 R-CAM-01 §6] [05 R-SHARE-01 §5];
-//     local interface kinds and the reserved ShootAll by both.
+//     DeveloperSpawn, Gameplay and ShootAll are refused by the online codec
+//     (ShootAll because its online seat semantics are not designed, §15 Q8);
+//     the sharing and alliance kinds by the replay codec, because retail
+//     runs them only in a networked session [07 R-CAM-01 §6]
+//     [05 R-SHARE-01 §5]; local interface kinds by both.
 //   - A sharing payload is bounded only where the wire must be: seats 0..9,
 //     the `actors` ceiling and exact booleans. Every signed 32-bit amount and
 //     threshold is representable; which of them, and which targets, the
@@ -89,6 +93,7 @@ const (
 	seatSchemaV1 uint16 = 1
 	seatSchemaV2 uint16 = 2
 	seatSchemaV3 uint16 = 3
+	seatSchemaV4 uint16 = 4
 )
 
 // seatAreaEntryMinBytes and seatActorMinBytes are the smallest encodings of
@@ -241,7 +246,13 @@ func seatCodecKind(sc seatCodec, k SeatCommandKind) string {
 		}
 		return ""
 	case SeatShootAll:
-		return fmt.Sprintf("a kind with a version-%d payload; this number is reserved for a later schema", sc.version)
+		switch {
+		case sc.version < seatSchemaV4:
+			return fmt.Sprintf("a kind with a version-%d payload; ShootAll has a single-player replay payload from command schema version 4", sc.version)
+		case context != SinglePlayerReplay:
+			return "a kind with an online payload; ShootAll is a single-player replay record until its online seat semantics are designed"
+		}
+		return ""
 	}
 	return fmt.Sprintf("a kind number listed in command schema version %d", sc.version)
 }

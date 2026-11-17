@@ -852,7 +852,7 @@ Every `HumanCommandKind` falls into one of four classes:
 | `ShareMetal` … `SetShareEnergy`, `ShareGift` (online only) | `+ShareMetal`, `+ShareEnergy`, `+ShareMapping`, `+ShareRadar`, `+ShareAll`, `+SetShareMetal`, `+SetShareEnergy` flip the issuer's own options `[07 R-CAM-01 §6]` `[05 R-SHARE-01 §3]`; the share screen gives metal, then energy, then the selected units, then map information to any seated, non-watching, non-eliminated player, enemies included `[05 R-SHARE-01 §5]`; retail's receiver does not check the sender `[05 R-SHARE-01 §4]`. All act only in a networked session. | **Seat commands** (kinds 35–42) acting on the issuing seat; a toggle carries the option's value after the flip. A gift's units are explicit references, visited in ascending identifier order; its amounts are zero or more unless the room's cheat permission is on (Q8); Survival's attacker is not a target (DESIGN_SURVIVAL). Share options are per-seat battle state in the checkpoint, not configuration. Single-player refuses them at the input boundary. |
 | `View`, `ATM`, `DoubleShot`, `HalfShot`, `Visibility`, `Meteor`, `MakeSelectable`, `Spawn` | Retail cheats, most behind the cheat gate `[08 R-OOS-01 §5]`, and the Modern testing spawn. `MakeSelectable` and the line-of-sight-type half of `Visibility` are ungated in retail `[07 R-CAM-01 §6]`. `DoubleShot`/`HalfShot` toggle the typing machine's damage gates `[06 §9.2]`. | **Seat commands only when the room enabled cheats** (Q8), the ungated two included, enforced by every receiver. `View` and `Visibility` change only the issuing seat's perspective; `DoubleShot`/`HalfShot` set the issuing seat's own bits `[06 R-DMG-01 §9]` (§6.3); `ATM` and `Spawn` act for the issuing seat; `Meteor` and `MakeSelectable` act on the whole battle. |
 | `DeclareAlliance`, `SharedVictory` (online only) | Allies-window declarations and shared victory `[05 R-SHARE-01 §1]` `[07 R-FE-01 §7]`. | **Seat commands** (kinds 43, 44). A declaration `{target, value}` needs a seated, non-eliminated, non-watching issuer and a distinct such human target outside its team; shared victory `{on}` refuses watchers and seats in teams of two or more. They update Q22's matrix (§6.7). |
-| *(not yet a command)* `ShootAll` | Toggles bit 10 of the per-machine options word, ungated `[07 R-CAM-01 §6]` `[06 §3.2]`. | **Seat command** behind the cheat permission when added. |
+| `ShootAll` | Toggles bit 10 of the per-machine options word, ungated `[07 R-CAM-01 §6]`; while it is set, autonomous acquisition's check 2 admits every candidate for every shooter `[06 §3.2]`. | **No online form yet**: retail's bit acts only for one machine's shooters, and its seat semantics and cheat permission (Q8) are not designed, so the client refuses the line and every codec and receiver refuses kind 45. Single-player toggles the battle's combat gate and records it as replay kind 45 from schema 4 (DESIGN_INTERFACE_HUD_INPUT §3.9). |
 | `Gameplay` | Switches the rule set at the phase-1 boundary (DESIGN_GAMEPLAY_RULES §5). | **Lobby only**; refused in a lockstep battle. |
 
 ### 7.2 Attribution and validation
@@ -955,9 +955,10 @@ payload; online admission refuses them.
 #### 7.4.1 Primitives and limits
 
 **Nanolathe protocol contracts**, not retail findings. The command schema
-version is `3`, negotiated outside the payload. Version 3 adds Modern economy
-activity holds (kind 47); earlier payloads keep their bytes and semantics.
-Version 2 adds the sharing
+version is `4`, negotiated outside the payload. Version 4 adds the
+single-player replay record of `+ShootAll` (kind 45, no fields); version 3
+adds Modern economy activity holds (kind 47); earlier payloads keep their
+bytes and semantics. Version 2 adds the sharing
 and alliance kinds 35–44 and changes nothing version 1 encodes, so a
 version-1 payload decodes to the same command and a version-1 replay still
 plays (§10). A payload starts with one kind byte; its context comes from
@@ -1061,12 +1062,13 @@ Fields are in wire order. Records are named `<Kind>Payload` under
 | 42 | ShareGift / S, online only, v2; cheat for a negative amount | Target `u8` 0..9, Metal `s32`, Energy `s32`, Actors `actors` (ascending identifier order), MapInfo `bool` |
 | 43 | DeclareAlliance / S, online only, v2 | Target `u8` 0..9, Value `bool` |
 | 44 | SharedVictory / S, online only, v2 | On `bool` |
-| 45 | ShootAll / D, cheat | Reserved; no payload in any version |
+| 45 | ShootAll / R, v4 | None. Toggles the battle's ShootAll gate; single-player replay only. Versions 1–3 refuse it in both contexts, and every version's online codec and receiver refuse it until its seat semantics are designed (Q8). |
 | 46 | DeveloperSpawn / R | Pattern `key` (wildcards allowed), Owner `u8` (the typed integer's low byte), Position `point`; replay only (DESIGN_DEVELOPER_TOOLS §8). Online codecs and receivers reject it. |
 | 47 | EconomyActivity / S, v3 | Activity `u8` 1 generation, 2 construction, 3 weapons, 4 upkeep, 5 healing, 6 cloaking, 7 reclaim; Pause `bool`. Acts only on the issuer, requires the bound economy hold rule, and needs no cheat permission. |
 | 255 | Gameplay / R; lobby-only online | Mode name `key`, resolved through the registered rule sets |
 
-Every unlisted number is invalid. Kinds 35–44 exist from version 2 and
+Every unlisted number is invalid. Kind 45 exists from version 4 and only
+in the single-player replay context. Kinds 35–44 exist from version 2 and
 only online: retail runs them only in a networked session
 `[07 R-CAM-01 §6]` `[05 R-SHARE-01 §5]`, so the single-player replay
 context has neither their bytes nor their application. Their receiver
@@ -2414,7 +2416,7 @@ finding.
 | Q5 | Nobody pauses or changes speed online: normal speed, thirty ticks a second. Relay grants still wait for lag or disconnect. A later policy needs a decision before §4.4's mechanism is enabled. |
 | Q6 | A dropped seat is retained idle until a removal vote passes (Q27). On final removal Strict 3.1 destroys its units and removes its hosted computers in ascending slot order (peer removal for a vote, silent deletion for a resignation, §19 O23); Modern and Community keep the units idle and the computers running. One rule answer selects both halves (§11.1). |
 | Q7 | Delivery follows §16's milestones. |
-| Q8 | Cheat and debug commands need the room's cheat permission, enforced by every receiver in every online mode, including retail's ungated world-changing commands (own-stock `+NoMetal`/`+NoEnergy`, `+Selectable`, `+LOSType`, later `+ShootAll`). Competitive rooms disable it; the developer phrase cannot bypass it. Online `Give` of a positive whole amount within its producer's range is ordinary sharing; any other amount needs the permission, under which the signed retail transfer applies to every whole amount from −2^31 to 2^31; non-finite or non-whole amounts are always rejected. `SetResource` is cheat-gated. Single-player keeps retail behaviour. |
+| Q8 | Cheat and debug commands need the room's cheat permission, enforced by every receiver in every online mode, including retail's ungated world-changing commands (own-stock `+NoMetal`/`+NoEnergy`, `+Selectable`, `+LOSType`, and `+ShootAll` once it has an online form). Competitive rooms disable it; the developer phrase cannot bypass it. Online `Give` of a positive whole amount within its producer's range is ordinary sharing; any other amount needs the permission, under which the signed retail transfer applies to every whole amount from −2^31 to 2^31; non-finite or non-whole amounts are always rejected. `SetResource` is cheat-gated. Single-player keeps retail behaviour. |
 | Q9 | Casual rooms keep the researched target admission; ranked play needs an approved delayed-observation contract first (§7.2). |
 | Q10 | The project runs one public relay reached by room code; the protocol is open. |
 | Q11 | Display names until ranked play needs accounts. |
@@ -2693,8 +2695,8 @@ the Modern set; `Give` follows Q8 and Q28; CommunityKickout needs its
 feature; the sharing and alliance kinds 35–44 follow §7.1. MobileBuild,
 CommunityOrderDrag, View, Visibility, DoubleShot and HalfShot are refused
 naming M5, except that the online session admits MobileBuild with its
-known-site check (§16.4.2); the reserved ShootAll is refused in every
-schema.
+known-site check (§16.4.2); ShootAll, a single-player replay record from
+schema 4, is refused online in every schema.
 Local kinds,
 replay-only NoShake and SetLogo, lobby-only Gameplay and unlisted numbers
 are never admitted online; the single-player replay context applies every
@@ -3135,7 +3137,7 @@ error until reviewed.
 | `economy.Player`, ledger | Slot-ordered stock/capacity/mirror/AI production/consumption/update/waste/totals/pass counters, kills/losses/commander counters, archived mirrors; all bucket production/requested/accepted/carry and archived production/requested pairs, Metal before Energy. Per-unit buckets by physical handle. Player exists/control/observer/option/full-income/ended/countdown, directed allies, autoshares/thresholds/storage bonus, side/watcher/rejection/result auxiliary. Service reference player, networked, optional selector and effective Community. | Archived accounting is retained as battle accounting even where consumers are reports. Names/logos/rank/timers/sensor-call counts are presentation or diagnostics. `aiAggregatesPrepared` is reset before the next settlement consumer. Callbacks bind session/unit/world operands. |
 | Construction | Builder links by product; placements by product with rectangle/definition/creation-oriented yard; two repair-bank entries per builder in slot order, target/remainder; repair-world binding; kick records X/Y/Z/valid; effective Community/rules/mode/limit/special-state bindings. | The rotation cache derives from immutable definition/facing; row-registration caches from the immutable descriptor registry. Active reclaim/VTOL/completion pump contexts are rejected. Diagnostic admission/message/command/permanent/kill records and builder debug identity are excluded. Progress, products and queues are unit/order state. |
 | Combat pool | Count/capacity/dead flags and **every projectile record through capacity**, residual records beyond count included; all stored fields: weapon, position/start/target, unit/projectile/shooter/side/muzzle references, velocity/speed/distance/angles, creation/burst/expiry/smoke deadlines, burst flags/count, beam/two-phase/dead, orientation and cached cell/floor/state/marker values. | Reservation clears only part of a reused record, so the live prefix alone is not enough. The pool diagnostic payload and compaction scratch are excluded. Full residuals are a deliberate conservative inclusion. |
-| Combat service | Double/half shot, opaque liquid, effective Community/rules; target last-rebuild/gate and primary/secondary lists in stored order, scan cursors; death-notified map with allocation identities; Modern incoming live-span target/shooter/weapon/motion/beam-invalid, modern tick/next-projectile tick; ordered transport captures (allocation/handle/type/health), tick/presence. | Air-base lists belong to movement. Impact stack and transport pending handoff must be empty. Query/candidate scratch and one-visit firing observations are excluded. Model box centres and weapon lookup derive from immutable content. Process-global projectile presentation IDs are excluded. |
+| Combat service | Double/half shot and ShootAll gates, opaque liquid, effective Community/rules; target last-rebuild/gate and primary/secondary lists in stored order, scan cursors; death-notified map with allocation identities; Modern incoming live-span target/shooter/weapon/motion/beam-invalid, modern tick/next-projectile tick; ordered transport captures (allocation/handle/type/health), tick/presence. | Air-base lists belong to movement. Impact stack and transport pending handoff must be empty. Query/candidate scratch and one-visit firing observations are excluded. Model box centres and weapon lookup derive from immutable content. Process-global projectile presentation IDs are excluded. |
 | Community area damage | Cells with stamp/head/tail/count; nodes in insertion order with unit/next; width/height/limit/built tick/built/stamp; hit-generation array and counter. | The current generation is zero outside a damage transaction. Counter wrap skips zero without clearing marks and admission uses `>=`, so these are not scratch. Rebuild walk and saturation count are excluded. |
 | Effect admission | `EffectService.max`, `nextID`, `lastSequence`; bound fixed-pool identity. Event-buffer effective limits, next ID/sequence and exhausted flag. | Zero or exhausted identity can refuse future events. Diagnostics are excluded. The bound production service has no ownerless pending fallback; an unsupported nonempty fallback fails capture. |
 | Fixed effects/fragments | Capacity, ordered records, fragment slots/cursors/round-robin, gravity/sea level and effective fragment step inputs; record source/target/kind, XYZ/velocity/gravity/expiry/model-presence/fragment slot/explode-on-hit; both animation players (index/countdown/loop/active/frame count/durations). Fragment live/base velocity/angles/angular rates/vertices. | Durations are stored values, producer overrides included. Graphic/presentation identity/flash/material metadata is excluded once lifecycle operands are retained; `FrozenFragmentMaterial` is host artwork, differs in headless fallback and never controls admission, physics or RNG. |
@@ -3159,6 +3161,14 @@ exclusion proof. This specifies existing behaviour and fixes no wrap
 behaviour.
 
 #### 16.3.6 Canonical format and public API
+
+Schema 7 (2026-11-09) adds combat's retained `shootAll` gate, the
+`+ShootAll` toggle (DESIGN_INTERFACE_HUD_INPUT §3.9), one boolean byte after
+`scanCursor.next` in source-field lexical order, written false too. The
+gate decides autonomous acquisition and its scoring draws from the next
+acquisition on `[06 §3.2]`, and only a single-player battle sets it. The
+shared version also changes the AI application-history hash domains; their
+receipt payloads are unchanged.
 
 Schema 6 (2026-10-23) adds the retained `AIDifficultyReversed` boolean to
 every resolved Community table, after `AIDifficultyIncome` in source-field
@@ -3190,7 +3200,7 @@ dependencies.
 
 ```go
 // internal/sim/checkpoint
-const SchemaVersion uint16 = 6
+const SchemaVersion uint16 = 7
 const OwnerCount = 13
 
 type Owner uint16

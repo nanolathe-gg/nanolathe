@@ -259,7 +259,7 @@ func TestCheckpointCombatBindingPresenceVector(t *testing.T) {
 			"000000000000000000"+"0101"+
 			strings.Repeat("00", 41)+"0000"+ // area state/death count and two option gates
 			strings.Repeat("00", 12)+ // incoming count and both Modern ticks
-			strings.Repeat("00", 80+10+40+80)) // cursors, gates, rebuild ticks and empty target rows
+			strings.Repeat("00", 80+1+10+40+80)) // cursors, ShootAll gate, registry gates, rebuild ticks and empty target rows
 	before := combatCheckpointBytes(t, f.s, f.c)
 	if !bytes.Equal(before, want) {
 		t.Fatalf("got (%d) %x; want (%d) %x", len(before), before, len(want), want)

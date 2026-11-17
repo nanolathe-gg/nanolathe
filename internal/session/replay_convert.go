@@ -335,6 +335,8 @@ func (k *replayConversion) convert(c *HumanCommand) (SeatCommand, error) {
 		out.Kind = SeatDoubleShot
 	case HumanHalfShot:
 		out.Kind = SeatHalfShot
+	case HumanShootAll:
+		out.Kind = SeatShootAll
 	case HumanSetResource:
 		p := &c.SetResource
 		if p.Resource != economy.Metal && p.Resource != economy.Energy {
