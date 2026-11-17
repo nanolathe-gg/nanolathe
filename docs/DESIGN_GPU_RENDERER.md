@@ -3126,6 +3126,17 @@ contract.
   the algorithm version and every input byte. One file per result has a magic
   and a version; a file that fails to parse is recomputed and rewritten. The
   cache is derived retail art and is never committed or shipped.
+  One directory serves every content set, and nothing evicts or caps it, so
+  results for different inputs sit side by side. The palette and ALP are read
+  through the running content set's view, and a mod may mount its own: TA:
+  Escalation 10.2.0 ships `palettes/PALETTE.ALP`, which differs from the
+  retail install's table in 53,378 of its 65,536 entries while the palette and
+  every stock map's tiles stay retail's (issue #200). The synthesis compares
+  blocks by their reduction through the ALP in palette-index space, so on a
+  stock map nearly every detail tile differs between the two tables, and a key
+  over only the table entries a map reads would differ too. Each such map
+  therefore synthesizes once per table and then hits under either content set;
+  feature banks key the same table and behave alike.
 * **When.** On the loader goroutine after the session composes, before the
   battle is adopted, for the frontend load and the `--map` direct route; the
   capture route runs it inline and only at `--zoom 2`; a save restore adopts on
