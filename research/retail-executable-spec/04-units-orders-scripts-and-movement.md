@@ -6535,7 +6535,7 @@ below are as pushed back on the script stack.
 
 | Id | Name | Read — exact expression, units, default | Write |
 |---:|---|---|---|
-| 1 | activation | the activation bit of the first state byte, 0 or 1. Zero at unit creation | drives the **activation edge machine**, which fires the Activate and Deactivate callbacks re-entrantly |
+| 1 | activation | the activation bit of the first state byte, 0 or 1. Zero at unit creation | drives the **activation edge machine** with the whole value: any nonzero value sets the bit, zero clears it. The machine fires the Activate and Deactivate callbacks re-entrantly |
 | 2 | standing move orders | bits 18–19 of the unit state word, a **two-bit** field, values 0 to 3. Seeded at creation from the definition's `standingmoveorder` (`[fmt fbi]`, default **2**) | ignored |
 | 3 | standing fire orders | bits 20–21 of the same word, a **two-bit** field, values 0 to 3. Seeded at creation from `standingfireorder` (`[fmt fbi]`, default **2**) | ignored |
 | 4 | health | `(uint32)((int16)health * 100) / (uint32)maxdamage`, an **unsigned** 32-bit division of a signed product, giving 0 to 100. `health` is seeded to `(uint16)maxdamage` for a unit created complete and to 0 for a nanoframe. A definition without `maxdamage` divides by zero — see the edge note below | ignored |
@@ -6554,7 +6554,7 @@ below are as pushed back on the script stack.
 | 17 | build percent left | from the remaining-build fraction *f*: zero when *f* compares exactly equal to `0.0f`, otherwise `1 - trunc(f * -99.0f)`. *f* is `1.0f` for a fresh nanoframe (reads 100) and `0` once complete (reads 0) | ignored |
 | 18 | yard open | bit 2 of the second state byte, 0 or 1. Zero at creation | a gated admission — see §4.7 |
 | 19 | bugger off | bit 3 of the second state byte, 0 or 1, a plain flag, not a queued request. Zero at creation. **The engine never reads it** — see [R-COB-05] | sets the bit from the low bit of the value |
-| 20 | armored | bit 1 of the first state byte, 0 or 1. Zero at creation | drives the armor edge event |
+| 20 | armored | bit 1 of the first state byte, 0 or 1. Zero at creation | drives the armor edge event with the whole value: any nonzero value sets the bit, zero clears it |
 
 The two angle ports are the **only** place in the port arithmetic that rounds
 rather than truncates: the arc tangent is scaled by 65,536 divided by two pi
@@ -7098,7 +7098,8 @@ is not the deciding evidence.
 Per-port write effects:
 
 - port 1 (activation): routes into the shared activation edge machine with
-  mask 1;
+  mask 1 and the unmasked value, so any nonzero value sets the bit and only
+  zero clears it ([R-COB-03 §4]);
 - port 5 (in-build-stance): writes bit 0 of the stance byte from the low bit
   of the value;
 - port 6 (busy): writes bit 1 of the same byte from the low bit;
@@ -7106,8 +7107,9 @@ Per-port write effects:
   same byte from the low bit, sets the occupancy-dirty bit (bit 27 of the
   state word), recomputes occupancy, and refreshes the footprint words;
 - port 19 (bugger off): writes bit 3 of the same byte from the low bit;
-- port 20 (armored): routes into the shared edge machine with mask 2, flipping
-  the armored bit; the damage paths consult the bit directly and there is no
+- port 20 (armored): routes into the shared edge machine with mask 2 and the
+  unmasked value, setting the armored bit for any nonzero value and clearing
+  it for zero; the damage paths consult the bit directly and there is no
   callback.
 
 The unit keeps two port-relevant state bytes: one holds bits 0 = activated,
@@ -7544,6 +7546,24 @@ the byte untouched; a value of 2 therefore clears the bit. Ports 1 and 20 do
 not write a bit directly — they call the shared edge machine with mask 1 and
 mask 2 respectively, so the write goes through the diff-then-fire sequence
 §4.7 describes and can raise callbacks re-entrantly.
+
+**Established — ports 1 and 20 treat any nonzero value as on.** The two arms
+do not mask the value. Each passes the script's whole 32-bit value to the edge
+machine as its on/off argument, and the machine tests that argument against
+zero as a whole word: nonzero ORs the mask into the state byte, zero clears it
+([R-UNIT-06 §2]). So `set ACTIVATION to 100`, `to 2` or `to -1` sets the
+activation bit (an edge only when it was clear), and only `to 0` clears it;
+the same holds for `ARMORED`. The low-bit reading of ports 5, 6 and 19 is
+done inside those three arms and does not apply here. A clone that reads
+ports 1 or 20 by the low bit turns an even nonzero write into a falling
+edge. *Evidence:* a static reading of the write dispatch's six arms and of the
+edge machine's opening test (2026-11-17, issue #195). *Corpus:* every one of
+the 841 COB files in the reference install's archives (base game, the 3.1
+patch, Core Contingency, Battle Tactics and the loose `.ufo` units) writes only
+the constants 0 and 1 to every port, so stock content cannot tell the two
+readings apart. Third-party content can: the UberHack 4.0 `ARMWIN` and
+`CORWIN` scripts attached to issue #195 write the constant 100 to port 1 from
+`SetSpeed` once the unit is complete.
 
 **Established — port 18 is admission-gated and writes nothing when denied.**
 The yard write first calls the yard-occupancy admission predicate with the
@@ -8048,7 +8068,8 @@ therefore the PREVIOUS 30-tick-window health percentage.
 StartBuilding/StopBuilding edge-form callbacks and the yard-open edge ride a
 single engine-state byte on the unit record, written only through one edge
 machine. The machine takes a bit mask and an on/off value, computes the new
-byte (`byte | mask` or `byte & ~mask`), stores it, and — only when the byte
+byte (`byte | mask` when the value is nonzero as a whole 32-bit word,
+`byte & ~mask` when it is zero), stores it, and — only when the byte
 actually changed — derives rising and falling edges from the old/new
 difference. Producer-side suppression of unchanged state is exactly this
 change test; there is no per-callback suppression beyond it. Established bit

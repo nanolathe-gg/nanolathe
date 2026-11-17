@@ -103,6 +103,8 @@ func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 	ports[cob.Port(3)] = cob.PortBinding{Read: func([4]int32) int32 {
 		return int32((u.Flags >> StandingFireShift) & StandingFieldMask)
 	}}
+	// Ports 5, 6 and 19 take the bit from the low bit of the value, so a
+	// write of 2 clears it [04 R-COB-03 §4].
 	bindFlag := func(port cob.Port, get func() bool, set func(bool)) {
 		ports[port] = cob.PortBinding{
 			Read: func([4]int32) int32 {
@@ -139,7 +141,19 @@ func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 		return cob.BuildPercentLeft(u.Remaining)
 	}}
 	bindFlag(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
-	bindFlag(cob.Port(20), func() bool { return u.Armored }, u.SetArmored)
+	// Ports 1 and 20 do not mask the value: they hand the whole word to the
+	// shared edge machine, which sets its bit for any nonzero value and clears
+	// it only for zero. UberHack 4.0's wind generators write 100 to port 1 on
+	// every SetSpeed; that keeps them on [04 R-COB-03 §4] (issue 195).
+	ports[cob.Port(20)] = cob.PortBinding{
+		Read: func([4]int32) int32 {
+			if u.Armored {
+				return 1
+			}
+			return 0
+		},
+		Write: func(value int32) { u.SetArmored(value != 0) },
+	}
 	ports[cob.Port(1)] = cob.PortBinding{
 		Read: func([4]int32) int32 {
 			if u.Activated {
@@ -147,7 +161,7 @@ func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 			}
 			return 0
 		},
-		Write: func(value int32) { u.setActivationEdge(value&1 != 0, vm) },
+		Write: func(value int32) { u.setActivationEdge(value != 0, vm) },
 	}
 	return ports
 }
