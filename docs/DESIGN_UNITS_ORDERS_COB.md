@@ -1747,6 +1747,15 @@ a script's engine write is the only thing that re-polls the in-build-stance and
 transport-busy waits `[04 R-COB-06]`. Modern adds a retry deadline to the
 ground work rows' in-build-stance wait ("Modern build-stance retry").
 
+The arms read the written value two ways, and `internal/units/cob_binding.go`
+keeps them apart. In-build stance, busy and bugger off take their bit from the
+value's low bit, so a write of 2 clears it. Activation and armored pass the
+whole value to the unit's edge machine, which sets the bit for any nonzero
+value and clears it only for zero, so `set ACTIVATION to 100` turns a unit on,
+or does nothing if it is already on. Third-party content relies on that:
+UberHack 4.0's wind generators make that write in `SetSpeed` (issue #195)
+`[04 R-COB-03 §4]` `[04 R-UNIT-06 §2]`.
+
 **Callbacks** (`ports.go`, `bridge.go`). `CallbackBridge` is the one bridge per
 unit, retained for its life so that sinks a caller installed survive a callback
 run. The arithmetic is here: the rock and hit-by-weapon impulse arguments
