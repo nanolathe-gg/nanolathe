@@ -172,7 +172,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 		return false
 	}
 	for key := input.Key(1); key < input.KeyCount; key++ {
-		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && !b.buildDragGapKey(key) && in.Kbd.KeyDown(key) {
+		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && in.Kbd.KeyDown(key) && !b.buildDragGapKey(key) {
 			b.modernDrag = nil
 			state.PlaceCaptured = d.button == input.MouseButtonLeft && mouse.Held(d.button)
 			return false // The new command owns this sample, including its hotkey.
