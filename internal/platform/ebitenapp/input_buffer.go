@@ -33,6 +33,7 @@ func (b *hostInputBuffer) add(sample sampledInput) {
 	p.wheelX += sample.wheelX
 	p.wheelY += sample.wheelY
 	p.zoomWheelY += sample.zoomWheelY
+	p.zoomWheelX += sample.zoomWheelX
 	p.panX += sample.panX
 	p.panY += sample.panY
 	p.pinches = append(p.pinches, sample.pinches...)

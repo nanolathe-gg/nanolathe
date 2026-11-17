@@ -12,8 +12,12 @@ import (
 
 const coreGraphicsLibrary = "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
 
-// scrollWheelDeltaY is kCGScrollWheelEventDeltaAxis1 from CGEventTypes.h.
-const scrollWheelDeltaY uint32 = 11
+// scrollWheelDeltaY and scrollWheelDeltaX are kCGScrollWheelEventDeltaAxis1
+// and kCGScrollWheelEventDeltaAxis2 from CGEventTypes.h.
+const (
+	scrollWheelDeltaY uint32 = 11
+	scrollWheelDeltaX uint32 = 12
+)
 
 // Observe AppKit scroll and magnify events without consuming them (§16.6 of
 // DESIGN_GPU_RENDERER). Ebitengine's Wheel API loses precision and momentum
@@ -68,28 +72,38 @@ func recordNativeScroll(event objc.ID, integerValue func(uintptr, uint32) int64)
 	y := objc.Send[float64](event, objc.RegisterName("scrollingDeltaY"))
 	precise := objc.Send[bool](event, objc.RegisterName("hasPreciseScrollingDeltas"))
 	momentum := objc.Send[uint64](event, objc.RegisterName("momentumPhase")) != 0
-	var wheelY float64
+	var wheelX, wheelY float64
 	if !precise && !momentum {
 		// AppKit's line distance can be fractional or accelerated independently
 		// of the wheel count. Only camera zoom spends the integer count; GUI
 		// controls retain the scrolling distance (DESIGN_GPU_RENDERER §16.6).
+		// macOS reports a wheel turned with Shift held on the horizontal axis,
+		// so both axes keep their counts.
 		if cg := event.Send(objc.RegisterName("CGEvent")); cg != 0 {
-			wheelY = float64(integerValue(uintptr(cg), scrollWheelDeltaY))
-		}
-		// Keep AppKit's user-preference-adjusted direction when a line delta
-		// supplies it. The integer field supplies only the notch magnitude then.
-		if y > 0 && wheelY < 0 || y < 0 && wheelY > 0 {
-			wheelY = -wheelY
-		}
-		// An event without a discrete count still represents deliberate wheel
-		// input. Spend one signed notch rather than the scroll-distance magnitude.
-		if wheelY == 0 {
-			if y > 0 {
-				wheelY = 1
-			} else if y < 0 {
-				wheelY = -1
-			}
+			wheelX = wheelNotches(float64(integerValue(uintptr(cg), scrollWheelDeltaX)), x)
+			wheelY = wheelNotches(float64(integerValue(uintptr(cg), scrollWheelDeltaY)), y)
+		} else {
+			wheelX, wheelY = wheelNotches(0, x), wheelNotches(0, y)
 		}
 	}
-	nativeScroll.add(x, y, wheelY, precise, momentum)
+	nativeScroll.add(x, y, wheelX, wheelY, precise, momentum)
+}
+
+// wheelNotches signs one axis's integer wheel count by AppKit's distance.
+func wheelNotches(count, distance float64) float64 {
+	// Keep AppKit's user-preference-adjusted direction when a line delta
+	// supplies it. The integer field supplies only the notch magnitude then.
+	if distance > 0 && count < 0 || distance < 0 && count > 0 {
+		count = -count
+	}
+	// An event without a discrete count still represents deliberate wheel
+	// input. Spend one signed notch rather than the scroll-distance magnitude.
+	if count == 0 {
+		if distance > 0 {
+			count = 1
+		} else if distance < 0 {
+			count = -1
+		}
+	}
+	return count
 }

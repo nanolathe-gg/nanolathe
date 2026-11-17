@@ -10,6 +10,7 @@ import (
 // DESIGN_GPU_RENDERER). The callback and Update can run on different threads.
 type scrollBatch struct {
 	x, y, zoomY        float64
+	zoomX              float64 // horizontal notch count; Shift turns a macOS wheel sideways
 	panX, panY         float64
 	pinches            []input.PinchEvent
 	pointerX, pointerY int32
@@ -51,6 +52,7 @@ func (c *scrollCollector) collect(batch scrollBatch, point *[2]float64) {
 	c.pending.x += batch.x
 	c.pending.y += batch.y
 	c.pending.zoomY += batch.zoomY
+	c.pending.zoomX += batch.zoomX
 	c.pending.panX += batch.panX
 	c.pending.panY += batch.panY
 	for _, event := range batch.pinches {
@@ -73,7 +75,7 @@ func (c *scrollCollector) setActive(active bool) {
 	c.hasPoint = false
 }
 
-func (c *scrollCollector) add(x, y, wheelY float64, precise, momentum bool) {
+func (c *scrollCollector) add(x, y, wheelX, wheelY float64, precise, momentum bool) {
 	var batch scrollBatch
 	if precise {
 		if !momentum {
@@ -84,7 +86,7 @@ func (c *scrollCollector) add(x, y, wheelY float64, precise, momentum bool) {
 		x *= 0.1
 		y *= 0.1
 	} else if !momentum {
-		batch.zoomY = wheelY
+		batch.zoomX, batch.zoomY = wheelX, wheelY
 	}
 	batch.x, batch.y = x, y
 	c.collect(batch, nil)
@@ -98,7 +100,7 @@ func (c *scrollCollector) take(fallbackX, fallbackY float64) scrollBatch {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.active {
-		return scrollBatch{x: fallbackX, y: fallbackY, zoomY: fallbackY}
+		return scrollBatch{x: fallbackX, y: fallbackY, zoomX: fallbackX, zoomY: fallbackY}
 	}
 	batch := c.pending
 	c.pending = scrollBatch{}

@@ -50,7 +50,7 @@ func (p *idlePresentation) observeInput(now time.Time, sample sampledInput) {
 func (p *idlePresentation) inputChanged(sample sampledInput) bool {
 	next := idleInput{sample.x, sample.y, sample.keys, sample.buttons, sample.modifiers, sample.command}
 	return next != p.input ||
-		sample.wheelX != 0 || sample.wheelY != 0 || sample.zoomWheelY != 0 || sample.panX != 0 || sample.panY != 0 ||
+		sample.wheelX != 0 || sample.wheelY != 0 || sample.zoomWheelY != 0 || sample.zoomWheelX != 0 || sample.panX != 0 || sample.panY != 0 ||
 		len(sample.pinches) != 0 || len(sample.characters) != 0 || len(sample.dropped) != 0
 }
 

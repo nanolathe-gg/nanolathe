@@ -30,14 +30,14 @@ func TestMomentumTailCannotAdvanceZoomAfterCooldown(t *testing.T) {
 		}
 	}
 	// Active scrolling and the first momentum event may share a host poll.
-	collector.add(0, -1, -1, false, false)
-	collector.add(0, -8, -8, false, true)
+	collector.add(0, -1, 0, -1, false, false)
+	collector.add(0, -8, 0, -8, false, true)
 	poll(0)
 	if zoom.Target(cam) != camera.ZoomUnit || in.Mouse.ScrollY != -9 {
 		t.Fatal("initial flick did not stop at native")
 	}
 	for _, now := range []uint32{100, 499, 500, 900, 1600, 3000} {
-		collector.add(0, -2, -2, false, true)
+		collector.add(0, -2, 0, -2, false, true)
 		poll(now)
 		if zoom.Target(cam) != camera.ZoomUnit {
 			t.Fatalf("momentum advanced zoom at %dms", now)
@@ -47,7 +47,7 @@ func TestMomentumTailCannotAdvanceZoomAfterCooldown(t *testing.T) {
 	if in.Mouse.Scrolled() || zoom.Target(cam) != camera.ZoomUnit {
 		t.Fatal("empty poll replayed wheel input")
 	}
-	collector.add(0, -1, -1, false, false)
+	collector.add(0, -1, 0, -1, false, false)
 	poll(3200)
 	if zoom.Target(cam) != camera.ZoomUnit/4 {
 		t.Fatal("fresh deliberate scroll did not advance")
@@ -57,8 +57,8 @@ func TestMomentumTailCannotAdvanceZoomAfterCooldown(t *testing.T) {
 	}
 	// A new finger gesture can oppose residual momentum in the same poll.
 	// Even when total scrolling cancels, its direct zoom input survives.
-	collector.add(0, 1, 1, false, false)
-	collector.add(0, -1, -1, false, true)
+	collector.add(0, 1, 0, 1, false, false)
+	collector.add(0, -1, 0, -1, false, true)
 	poll(4000)
 	if in.Mouse.ScrollY != 0 || zoom.Target(cam) != camera.ZoomUnit {
 		t.Fatal("opposing momentum hid deliberate scroll")
@@ -71,16 +71,16 @@ func TestMomentumTailCannotAdvanceZoomAfterCooldown(t *testing.T) {
 
 func TestScrollCollectorFallbackAndRestart(t *testing.T) {
 	var collector scrollCollector
-	if got := collector.take(2, 1); !reflect.DeepEqual(got, scrollBatch{x: 2, y: 1, zoomY: 1}) {
+	if got := collector.take(2, 1); !reflect.DeepEqual(got, scrollBatch{x: 2, y: 1, zoomX: 2, zoomY: 1}) {
 		t.Fatalf("fallback = %+v", got)
 	}
 	collector.setActive(true)
-	collector.add(2, 3, 3, false, false)
-	collector.add(4, 5, 5, false, true)
+	collector.add(2, 3, 0, 3, false, false)
+	collector.add(4, 5, 0, 5, false, true)
 	if got := collector.take(99, 99); !reflect.DeepEqual(got, scrollBatch{x: 6, y: 8, zoomY: 3}) {
 		t.Fatalf("mixed batch = %+v", got)
 	}
-	collector.add(0, 20, 20, false, true)
+	collector.add(0, 20, 0, 20, false, true)
 	collector.setActive(false)
 	collector.setActive(true)
 	if got := collector.take(99, 99); !reflect.DeepEqual(got, scrollBatch{}) {
@@ -93,9 +93,9 @@ func TestScrollCollectorFallbackAndRestart(t *testing.T) {
 func TestPreciseScrollAndPinchSurviveInputCopy(t *testing.T) {
 	var collector scrollCollector
 	collector.setActive(true)
-	collector.add(2.5, -5, -5, true, false)
-	collector.add(30, -40, -40, true, true)
-	collector.add(0, 1, 1, false, false)
+	collector.add(2.5, -5, 0, -5, true, false)
+	collector.add(30, -40, 0, -40, true, true)
+	collector.add(0, 1, 0, 1, false, false)
 	events := []input.PinchEvent{{Began: true}, {Delta: -0.2}, {Ended: true}, {Began: true, Delta: 0.3, Ended: true}}
 	for _, event := range events {
 		collector.pinch(event)
@@ -122,7 +122,7 @@ func TestPreciseScrollAndPinchSurviveInputCopy(t *testing.T) {
 	if m.PanX != 0 || m.PanY != 0 || len(m.Pinches) != 0 {
 		t.Fatal("reset retained gestures")
 	}
-	collector.add(40, 50, 50, true, true)
+	collector.add(40, 50, 0, 50, true, true)
 	tail := collector.take(99, 99)
 	if tail.panX != 0 || tail.panY != 0 || tail.zoomY != 0 {
 		t.Fatal("momentum moved camera")

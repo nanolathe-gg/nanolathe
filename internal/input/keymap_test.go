@@ -222,3 +222,22 @@ func TestParseChordRoundTrip(t *testing.T) {
 		t.Error("Shift alone is a chord")
 	}
 }
+
+// TestBuildGapKeysRebind: a letter bound to a build-drag gap action answers
+// with Shift held too, emitting the action's shifted or plain bracket, and
+// the old bracket no longer reaches the gap.
+func TestBuildGapKeysRebind(t *testing.T) {
+	m := NewKeyMap(ProfileRetail, nil)
+	m.Rebind("buildGapWider", []Chord{chord(t, "q")})
+	for in, want := range map[rune]rune{'q': ']', 'Q': '}'} {
+		if got, ok := m.Translate(Token{Kind: TokenText, Rune: in}); !ok || got != (Token{Kind: TokenText, Rune: want}) {
+			t.Fatalf("%q became %+v (%v), want %q", in, got, ok, want)
+		}
+	}
+	if _, ok := m.Translate(Token{Kind: TokenText, Rune: ']'}); ok {
+		t.Fatal("the unbound ] still reaches the gap")
+	}
+	if got := m.Overrides()["buildGapWider"]; !slices.Equal(got, mustChords("q")) {
+		t.Fatalf("saved binding %v", got)
+	}
+}

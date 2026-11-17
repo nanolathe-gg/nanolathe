@@ -15,15 +15,25 @@ type dragPoint struct{ x, z int32 }
 
 const dragBuildSiteLimit = 1024
 
+// dragBuildGapMax bounds the wheel-chosen gap between build-drag sites, in
+// footprint cells. It is a UI bound, not a retail constant.
+const dragBuildGapMax = 16
+
+// dragBuildGapPanStep is the precise-scroll travel, in logical pixels, that
+// counts as one wheel notch of build-drag gap. It is a feel knob, not a
+// retail constant.
+const dragBuildGapPanStep = 30.0
+
 // dragBuildCells starts at the press anchor and stops before a footprint step
-// would pass the release anchor. Grid rows walk X first, then Z, in drag order.
-func dragBuildCells(start, end dragPoint, footX, footZ int32, grid bool) []dragPoint {
-	if footX <= 0 || footZ <= 0 {
+// would pass the release anchor. Each step is the footprint plus gap free
+// cells on its axis. Grid rows walk X first, then Z, in drag order.
+func dragBuildCells(start, end dragPoint, footX, footZ, gap int32, grid bool) []dragPoint {
+	if footX <= 0 || footZ <= 0 || gap < 0 {
 		return nil
 	}
 	dx, dz := int64(end.x)-int64(start.x), int64(end.z)-int64(start.z)
 	ax, az := numeric.Abs(dx), numeric.Abs(dz)
-	fx, fz := int64(footX), int64(footZ)
+	fx, fz := int64(footX)+int64(gap), int64(footZ)+int64(gap)
 	if grid {
 		cols, rows := ax/fx+1, az/fz+1
 		capacity := min(min(cols, dragBuildSiteLimit)*min(rows, dragBuildSiteLimit), dragBuildSiteLimit)
@@ -38,7 +48,7 @@ func dragBuildCells(start, end dragPoint, footX, footZ int32, grid bool) []dragP
 		}
 		return points
 	}
-	// Cross multiplication compares spans measured in their own footprints,
+	// Cross multiplication compares spans measured in their own steps,
 	// rather than preferring the longer unscaled coordinate delta.
 	xMajor := ax*fz >= az*fx
 	span, step, minor := ax, fx, az

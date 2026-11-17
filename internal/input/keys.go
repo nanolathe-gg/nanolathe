@@ -91,6 +91,11 @@ const (
 	// and forwards with them [07 §2][07 R-CAM-01 §2].
 	KeyComma
 	KeyPeriod
+	// KeyLeftBracket and KeyRightBracket are the `[` and `]` keys. Retail's
+	// battle has no case for them; Nanolathe's build drag reads them to step
+	// its gap (docs/DESIGN_INTERFACE_HUD_INPUT.md §3.11).
+	KeyLeftBracket
+	KeyRightBracket
 	KeyCount
 )
 

@@ -34,7 +34,11 @@ func (b *battleSession) applyTrackpadGestures(mouse *input.MouseState, allowed b
 		*g = battleGestures{}
 		return
 	}
-	if mouse.PanX != 0 || mouse.PanY != 0 {
+	if b.buildDragWheelOwned() {
+		// A build row or grid spends precise scrolling on its gap (§3.11 of
+		// DESIGN_INTERFACE_HUD_INPUT); the camera must not also pan.
+		g.panX, g.panY = 0, 0
+	} else if mouse.PanX != 0 || mouse.PanY != 0 {
 		factor := float64(camera.ZoomUnit) / float64(b.cam.EffectiveZoom())
 		g.panX += mouse.PanX * factor
 		g.panY += mouse.PanY * factor

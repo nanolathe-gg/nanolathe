@@ -4,6 +4,7 @@ package main
 // DESIGN_INTERFACE_HUD_INPUT §3.11 owns the geometry and interaction choices.
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
@@ -171,7 +172,7 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 		return false
 	}
 	for key := input.Key(1); key < input.KeyCount; key++ {
-		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && in.Kbd.KeyDown(key) {
+		if key != input.KeyShift && key != input.KeyAlt && key != input.KeyCtrl && !b.buildDragGapKey(key) && in.Kbd.KeyDown(key) {
 			b.modernDrag = nil
 			state.PlaceCaptured = d.button == input.MouseButtonLeft && mouse.Held(d.button)
 			return false // The new command owns this sample, including its hotkey.
@@ -180,6 +181,15 @@ func (b *battleSession) serviceCommandDrag(in *input.State, cl *client.Client, m
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	state.PointerX, state.PointerY = mx, my
 	state.ShiftHeld = modifiers.Shift
+	if d.product != "" {
+		wheel, travel := mouse.ZoomScrollY, mouse.PanY
+		if modifiers.Shift {
+			// macOS reports a wheel turned with Shift held, as when queueing
+			// a row, on the horizontal axis.
+			wheel, travel = wheel+mouse.ZoomScrollX, travel+mouse.PanX
+		}
+		b.stepBuildDragGap(wheel, travel)
+	}
 	b.updateCommandDrag(cl, mx, my, modifiers)
 	if mouse.Held(d.button) {
 		return true
@@ -295,7 +305,7 @@ func (b *battleSession) updateCommandDrag(cl *client.Client, mx, my int32, modif
 		if !d.dragged {
 			end = d.start
 		}
-		cells := dragBuildCells(d.start, end, state.BuildFootX, state.BuildFootZ, d.grid)
+		cells := dragBuildCells(d.start, end, state.BuildFootX, state.BuildFootZ, b.buildDragGap, d.grid)
 		reserved, complete := b.resourceReservations()
 		def, _ := b.cat.Unit(d.product)
 		d.facing = b.communityPlacementFacing(def)
@@ -348,6 +358,75 @@ func (b *battleSession) updateCommandDrag(cl *client.Client, mx, my int32, modif
 			}
 		}
 	}
+}
+
+// buildDragWheelOwned reports whether the wheel sets the build-drag gap rather
+// than zooming: for as long as a build row or grid holds the pointer (§3.11).
+func (b *battleSession) buildDragWheelOwned() bool {
+	return b != nil && b.modernDrag != nil && b.modernDrag.product != ""
+}
+
+// stepBuildDragGap spends the wheel on the build-drag gap, one free cell per
+// whole notch, wheel up widening. Precise scrolling (a trackpad or a Magic
+// Mouse) carries no notch count, so its vertical travel counts one notch per
+// dragBuildGapPanStep logical pixels. Fractions accumulate until they make a
+// notch. The gap stays for the rest of the battle.
+func (b *battleSession) stepBuildDragGap(wheel float32, panY float64) {
+	if wheel == 0 && panY == 0 {
+		return
+	}
+	b.buildDragWheel += wheel + float32(panY/dragBuildGapPanStep)
+	steps := int32(b.buildDragWheel)
+	if steps == 0 {
+		return
+	}
+	b.buildDragWheel -= float32(steps)
+	b.buildDragGap = min(max(b.buildDragGap+steps, 0), dragBuildGapMax)
+}
+
+// serviceBuildDragGapKey claims the head token when it is a gap key and a
+// build row or grid holds the pointer: `]` (`}` with Shift) adds one free cell
+// between sites and `[` (`{`) removes one, within the wheel's bound. The key
+// map has already rewritten a rebound key onto these tokens. Outside a build
+// drag the tokens reach the residual table, which has no case for them (§3.11).
+func (b *battleSession) serviceBuildDragGapKey(in *input.State) bool {
+	if !b.buildDragWheelOwned() || in == nil || b.textEntryActive() {
+		return false
+	}
+	tokens := in.PeekTokens()
+	if len(tokens) == 0 || tokens[0].Kind != input.TokenText || tokens[0].Ctrl {
+		return false
+	}
+	var step int32
+	switch tokens[0].Rune {
+	case ']', '}':
+		step = 1
+	case '[', '{':
+		step = -1
+	default:
+		return false
+	}
+	in.DiscardTokens(1)
+	b.buildDragGap = min(max(b.buildDragGap+step, 0), dragBuildGapMax)
+	return true
+}
+
+// buildDragGapKey reports whether a physical key is bound to a gap action
+// during a build drag, so its press edge does not cancel the drag the way a
+// new command's key does.
+func (b *battleSession) buildDragGapKey(key input.Key) bool {
+	if !b.buildDragWheelOwned() {
+		return false
+	}
+	m := b.keyMap()
+	for _, id := range []string{"buildGapNarrower", "buildGapWider"} {
+		for _, c := range m.Keys(id) {
+			if c.Key == key {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dragCancelQueue copies the drag builder's committed primary queue for the
@@ -569,6 +648,11 @@ func (b *battleSession) drawCommandDrag(cl *client.Client) {
 			l, t, r, bt := b.siteRectToScreen(site.cell.x*16, site.cell.z*16, (site.cell.x+state.BuildFootX)*16, (site.cell.z+state.BuildFootZ)*16, site.height)
 			cl.UIFrameRect(int(l), int(t), int(r-l), int(bt-t), color)
 			cl.UIFrameRect(int(l)+1, int(t)+1, int(r-l)-2, int(bt-t)-2, color)
+		}
+		if d.dragged && b.hud != nil && b.hud.console != nil {
+			// The wheel's gap beside the pointer, so a row's spacing is read
+			// before it is released.
+			cl.UIText(b.hud.console, fmt.Sprintf("gap %d", b.buildDragGap), int(state.PointerX)+14, int(state.PointerY)+14, green)
 		}
 		return
 	}
