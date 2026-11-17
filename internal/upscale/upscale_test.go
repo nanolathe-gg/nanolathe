@@ -101,6 +101,67 @@ func TestCacheTilesRoundTripReturnsTheComputedBytes(t *testing.T) {
 	}
 }
 
+// A content set can mount its own blend table over the retail one (TA:
+// Escalation 10.2.0 ships palettes/PALETTE.ALP), and the synthesis reduces
+// every 2x2 block through that table in palette-index space, so the same map
+// under two tables is two different results. The cache is one directory for
+// every content set with no eviction: each table's result is computed once
+// and both stay stored, so alternating content sets after the first load of
+// each is a hit both ways [DESIGN_GPU_RENDERER §14.4 "Cache"].
+func TestCacheKeepsEachBlendTablesResultSideBySide(t *testing.T) {
+	first := testTerrainInput(t, 2, 2, 0)
+	second := first
+	// Round the other way: a different table that is still a plausible blend.
+	second.ALP = make([]byte, 256*256)
+	for a := range 256 {
+		for b := range 256 {
+			second.ALP[a*256+b] = byte((a + b) / 2)
+		}
+	}
+	cache := &Cache{Dir: t.TempDir()}
+
+	firstTiles, cached, err := cache.Tiles2x(first, Options{Workers: 2})
+	if err != nil || cached {
+		t.Fatalf("first table, cold: cached %v, err %v", cached, err)
+	}
+	secondTiles, cached, err := cache.Tiles2x(second, Options{Workers: 2})
+	if err != nil || cached {
+		t.Fatalf("second table, cold: cached %v, err %v; a different table must not reuse the first table's result", cached, err)
+	}
+	differ := false
+	for index := range firstTiles {
+		if firstTiles[index] != secondTiles[index] {
+			differ = true
+			break
+		}
+	}
+	if !differ {
+		t.Fatal("the two blend tables synthesized identical tiles; the fixture no longer shows the table is a real input")
+	}
+	for _, step := range []struct {
+		name  string
+		input TerrainInput
+		want  [][4096]byte
+	}{{"first", first, firstTiles}, {"second", second, secondTiles}, {"first again", first, firstTiles}} {
+		got, cached, err := cache.Tiles2x(step.input, Options{Workers: 2})
+		if err != nil || !cached {
+			t.Fatalf("%s table, warm: cached %v, err %v; storing one table's result must not displace the other's", step.name, cached, err)
+		}
+		for index := range step.want {
+			if got[index] != step.want[index] {
+				t.Fatalf("%s table: cached tile %d is not the tile computed for that table", step.name, index)
+			}
+		}
+	}
+	entries, err := os.ReadDir(cache.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("cache holds %d files, want one per table", len(entries))
+	}
+}
+
 // Determinism is the premise the cache rests on: seeds derive from tile
 // indices and tiles are independent, so the worker count is a scheduling
 // choice and never an input.
