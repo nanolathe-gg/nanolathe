@@ -446,8 +446,9 @@ type commandButtonVerdict struct {
 // one command button. paged is the selected builder's page-shown bit. The
 // second result is false when the name is not a command button at all.
 //
-// The stance and pair values come from the committed selection aggregate the
-// command-window switch computes [07 §9][07 R-HUD-03 §13]. A stance field greys
+// The stance and pair values come from the panel's retained selection
+// aggregate: the fold at the last refresh, carrying any press write-back since
+// [07 §9][07 R-HUD-03 §13][04 R-STANCE-01 §2] (hud.LocalInterface.RetainPanel). A stance field greys
 // at 4 and a cloak/on-off pair at 3: both are the not-applicable value their
 // fold starts from, so a selection carrying nothing that accepts the command
 // greys its button. A disagreeing selection folds to one below that instead — 3

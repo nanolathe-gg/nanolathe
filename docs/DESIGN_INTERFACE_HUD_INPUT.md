@@ -1964,6 +1964,33 @@ selection and health, projectiles, explosions, gadgets, squad overlays. The
 compositor is DESIGN_PRESENTATION_CLIENT's; this document owns the gadget
 layer's contents `[07 §6]` `[03 §1]`.
 
+#### Panel refresh and write-back
+
+The MOVEORD, FIREORD, CLOAK and ONOFF gadgets stage from four fields that
+`hud.LocalInterface` retains, as retail's panel words do. They are not
+refolded at every publication `[07 R-HUD-03 §13]`. `ComposeCommandPage` folds
+the composed selection, and `LocalInterface.RetainPanel` then either takes
+that fold, when the refresh-needed flag is up or the selection has changed,
+or replaces it with the retained values. A press writes the value it sent back
+into its field (`WriteBackStance`, `WriteBackCloak`, `WriteBackOnOff`)
+`[04 R-STANCE-01 §2]`. Because the cloak fold of two cloak-capable units is
+always `2`, it is the write-back that lets the second CLOAK press cloak them.
+
+The host raises the flag for these triggers:
+
+* every selection gesture, in `applyLocalInterfaceCommand`, including one that
+  leaves the membership unchanged, and any other change of the selection;
+* local page navigation (`SetBuildPage`);
+* a selected unit whose committed activation changes, or which finishes
+  construction, detected by `LocalInterface.ObservePanel` once per
+  publication in tick order.
+
+A battle starts with the flag up, and a loaded battle starts with a fresh
+`LocalInterface`. A cloak or stance change raises nothing. A selected
+builder's build-order transitions, and the building bit of its activation
+byte, are retail triggers this host does not observe. They are a
+`TODO(question)` in `internal/hud/localpanel.go`.
+
 #### Modern defeated players
 
 **Nanolathe Modern policy** (user-authorized 2026-10-01, issue #61).
@@ -3007,8 +3034,8 @@ The consequences of that shape are the contract:
 
 * **Presentation resolves, the session validates.** A build page arrives as an
   absolute zero-based page and the boundary clamps it against the compiled page
-  count; a stance arrives as the next value computed from the published
-  three-bit panel field and the boundary owns the broadcast and the definition
+  count; a stance arrives as the next value computed from the panel's
+  retained three-bit field and the boundary owns the broadcast and the definition
   gate; a group recall carries the `CTRL_F` mask when one has been published and
   an all-zero mask means no filter `[07 §9]` `[04 R-STANCE-01 §2]`.
 * **A mobile build carries its validated site.** The world X, Z and the

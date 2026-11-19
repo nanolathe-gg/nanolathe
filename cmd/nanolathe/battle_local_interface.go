@@ -160,6 +160,10 @@ func (b *battleSession) observeLocalInterface(cur *frame.Frame) hud.InterfaceEve
 	if b.local != nil {
 		b.local.ObserveTick(cur.Tick)
 		b.local.Prune(frameLiveRef(cur))
+		// A selected unit's activation or construction change raises the
+		// panel's refresh-needed flag before cur is composed
+		// [07 R-HUD-03 §13].
+		b.local.ObservePanel(cur)
 		b.composeLocalInterface(cur)
 	}
 	return ev
@@ -202,6 +206,10 @@ func (b *battleSession) composeLocalInterface(f *frame.Frame) {
 		products = b.sess.CommandPageProducts
 	}
 	hud.ComposeCommandPage(&f.CommandPage, f, b.cat, products)
+	// The four panel fields are retail's retained interface words: refreshed
+	// from the fold only when the refresh-needed flag is up, and otherwise
+	// carrying the presses' write-backs [07 R-HUD-03 §13][04 R-STANCE-01 §2].
+	b.local.RetainPanel(&f.CommandPage)
 }
 
 // finishLocalInterfaceStep runs at the end of each host step, while the
@@ -348,6 +356,12 @@ func (b *battleSession) submitHumanCommand(c session.HumanCommand) (uint64, erro
 // input batch reads the selection, page and command page this one produced.
 func (b *battleSession) applyLocalInterfaceCommand(c session.HumanCommand) {
 	local := b.localState()
+	switch c.Kind {
+	case session.HumanSelectionReplace, session.HumanSelectionToggle, session.HumanSelectionClear, session.HumanGroupRecall:
+		// Every selection gesture raises the panel's refresh-needed flag,
+		// even one that leaves the membership as it was [07 R-HUD-03 §13].
+		local.MarkPanelStale()
+	}
 	switch c.Kind {
 	case session.HumanSelectionReplace:
 		local.ReplaceSelection(b.localRefs(c.Selection.Handles))

@@ -67,6 +67,7 @@ type LocalInterface struct {
 	assigns  []pendingGroupAssign
 	logos    [10]logoOverride
 	noShake  bool
+	panel    panelWords
 	epoch    uint64
 }
 
@@ -330,6 +331,8 @@ func (l *LocalInterface) SetBuildPage(builder pool.UnitRef, published uint32, de
 	} else {
 		l.pages = slices.Insert(l.pages, i, localPage{ref: builder, flags: flags})
 	}
+	// Page navigation raises the panel's refresh-needed flag [07 R-HUD-03 §13].
+	l.markPanelStale()
 	l.touch()
 	return true
 }
