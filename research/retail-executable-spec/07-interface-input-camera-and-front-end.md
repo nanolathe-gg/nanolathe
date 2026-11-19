@@ -8475,11 +8475,15 @@ whatever the last refresh or a later press write-back left
 ([04 R-STANCE-01 §2] step 3). A census of every store that raises the bit
 finds these raisers:
 
-* every selection producer: point click, drag box, select-all and the
-  type and group selections (`CTRL_F` included), and the deferred
-  command-window close. A unit dropped from the selection because it is no
-  longer selectable raises it too. The producers raise it whether or not the
-  membership changed;
+* the selection producers. The point click raises it whenever the clicked
+  unit is a selectable unit of the local player, in both its toggle and its
+  replace form. The drag box raises it when at least one unit falls inside
+  the box, and select-all when it selects at least one unit. The
+  select-by-type, next-unit and group selections (`CTRL_F` included) raise it
+  unconditionally, as does the deferred command-window close. None of them
+  compares the result with the previous selection, so reselecting the same
+  units raises it too. A unit dropped from the selection because it is no
+  longer selectable raises it as well;
 * build-page navigation: next, previous, a page set directly, and the deferred
   page and BUILD-tab consumer;
 * a change of a selected local unit's activation byte. The unit's edge machine
@@ -8491,7 +8495,7 @@ finds these raisers:
   the order running. Which of those arms run every tick is not classified;
 * a construction completing when either the builder or the product is
   selected;
-* loading a saved game's interface state.
+* the saved-game restore coordinator, after it has restored the save.
 
 The cloak handlers `Cloak_On`/`Cloak_Off`, the standing-order handlers and the
 battle panel's own press path raise nothing. A cloak or stance change

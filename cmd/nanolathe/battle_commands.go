@@ -188,6 +188,7 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 	default:
 		return // 3: not applicable, the gadget is grey
 	}
+	sent := false
 	for _, u := range b.selectedCommandUnits() {
 		if u == nil || u.Def == nil || !u.Def.OnOffable {
 			continue
@@ -195,11 +196,18 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 		// Activation state is typed unit state, not the unrelated order flag
 		// word. The queued command is consumed by the ordinary order/COB edge
 		// machinery [05 "Unit instance economy state"].
-		_ = b.DispatchActivation(session.HumanActivationCommand{
+		if b.DispatchActivation(session.HumanActivationCommand{
 			Unit: u.Handle, Activate: activate, Queued: queued,
-		})
+		}) == nil {
+			sent = true
+		}
 	}
-	b.localState().WriteBackOnOff(activate)
+	// A press whose every command was refused (a playback, say) sends
+	// nothing and changes nothing an activation edge would later correct, so
+	// it writes nothing back.
+	if sent {
+		b.localState().WriteBackOnOff(activate)
+	}
 }
 
 // cycleStance is one press of the side panel's MOVEORD or FIREORD gadget, in

@@ -13,7 +13,8 @@ import (
 // §7.3, §16.2 M2-C6): the selection, the two visited bits, each builder's
 // build page, BigBrother with the held Shift that pauses it, and the online
 // presentation preferences that are not commands (the local logo override and
-// NoShake). None of it is simulation state and no phase reads it; it never
+// NoShake), and the battle panel's retained aggregate fields (localpanel.go).
+// None of it is simulation state and no phase reads it; it never
 // enters a fingerprint, a digest or the command stream.
 //
 // Retail keeps the selection bit, the visited bits and the page field in each
@@ -137,7 +138,7 @@ func NewLocalInterface() *LocalInterface {
 }
 
 // Epoch changes whenever something composed onto a frame changes: the
-// selection, a page or a logo override.
+// selection, a page, a logo override or the panel's retained fields.
 func (l *LocalInterface) Epoch() uint64 {
 	if l == nil {
 		return 0

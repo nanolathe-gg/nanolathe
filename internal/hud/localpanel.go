@@ -24,23 +24,27 @@ import (
 // The flag's raisers modelled here are the ones the host can observe
 // [07 R-HUD-03 §13]:
 //
-//   - every selection gesture, and any other change of the selection;
+//   - a selection gesture that selects or toggles at least one unit, and a
+//     group recall, whether or not the membership changes (MarkPanelStale);
+//   - any other change of the composed selection;
 //   - local page navigation (SetBuildPage);
 //   - a change of a selected unit's committed activation;
 //   - a selected unit finishing construction.
 //
 // A battle starts with the flag up. A loaded battle enters through a fresh
-// LocalInterface, which is retail's load trigger.
+// LocalInterface, which is retail's load trigger. A replay playback raises it
+// at every publication, because the recorded seat's own presses, whose
+// write-backs this client never saw, change the fields it shows.
 //
 // TODO(question): retail's build-order handlers also raise the flag for a
-// selected builder when construction starts, terminates or completes, and
-// a completion raises it when the builder rather than the product is
-// selected. Some handlers raise it on their continue arms as well. The activation edge also
-// raises it when the builder's StartBuilding/StopBuilding bit changes.
-// Neither is published to the host, so a selected builder's build
-// transitions leave the retained fields alone here. Publishing the
-// activation byte's building bit, and classifying which handler arms run
-// every tick, would settle it [07 R-HUD-03 §13].
+// selected builder when construction starts, terminates or completes, and a
+// completion raises it when the builder rather than the product is selected.
+// Some handlers raise it on arms that keep the order running as well. The
+// activation edge also raises it when the builder's StartBuilding/
+// StopBuilding bit changes. Neither is published to the host, so a selected
+// builder's build transitions leave the retained fields alone here.
+// Publishing the activation byte's building bit, and classifying which
+// handler arms run every tick, would settle it [07 R-HUD-03 §13].
 
 // panelWords is the retained copy of the four fields and the state that
 // decides when it is refreshed.
@@ -51,11 +55,15 @@ type panelWords struct {
 	fire  uint8
 	cloak uint8
 	onoff uint8
-	// selection is the selection the last refresh folded.
+	// selection is the composed selection the last refresh folded.
 	selection []pool.UnitRef
 	// watch is each selected unit's trigger state at the last observed
-	// publication, ascending by reference.
+	// publication, ascending by reference; spare is the buffer the next
+	// observation fills.
 	watch []panelWatch
+	spare []panelWatch
+	// scratch holds the composed selection while RetainPanel compares it.
+	scratch []pool.UnitRef
 }
 
 // panelWatch is the part of one selected unit's committed state whose change
@@ -71,10 +79,11 @@ func (l *LocalInterface) markPanelStale() {
 	l.panel.fresh = false
 }
 
-// MarkPanelStale raises the refresh-needed flag for a selection gesture.
-// Retail's selection producers raise it whether or not the membership
-// changes, so reselecting the same units refreshes the panel too
-// [07 R-HUD-03 §13].
+// MarkPanelStale raises the refresh-needed flag for a selection gesture, a
+// replay publication or a takeover. Retail's click, drag-box and select-all
+// producers raise it whenever the gesture selects or toggles a unit, and its
+// group selections always do, whether or not the membership changes, so
+// reselecting the same units refreshes the panel too [07 R-HUD-03 §13].
 func (l *LocalInterface) MarkPanelStale() {
 	if l == nil {
 		return
@@ -92,7 +101,9 @@ func (l *LocalInterface) ObservePanel(f *frame.Frame) {
 		return
 	}
 	prev := l.panel.watch
-	next := make([]panelWatch, 0, len(l.selected))
+	next := l.panel.spare[:0]
+	// f.Units is in ascending slot order and a slot holds one unit, so next
+	// is built ascending by reference.
 	for i := range f.Units {
 		v := &f.Units[i]
 		ref := pool.UnitRef{Handle: v.Slot, Serial: v.AllocationSerial}
@@ -108,25 +119,33 @@ func (l *LocalInterface) ObservePanel(f *frame.Frame) {
 		}
 		next = append(next, w)
 	}
-	slices.SortFunc(next, func(a, b panelWatch) int { return refLess(a.ref, b.ref) })
-	l.panel.watch = next
+	l.panel.watch, l.panel.spare = next, prev
 }
 
-// RetainPanel applies the retained fields to page, the command page just
-// folded from the composed selection. While the refresh-needed flag is up,
-// or the selection differs from the one the retained fields were folded
+// RetainPanel applies the retained fields to f's command page, just folded
+// from f's composed selection. While the refresh-needed flag is up, or the
+// composed selection differs from the one the retained fields were folded
 // from, the fold refreshes them. Otherwise the retained values, write-backs
 // included, replace the fold's [07 R-HUD-03 §13][04 R-STANCE-01 §2].
-func (l *LocalInterface) RetainPanel(page *frame.CommandPageView) {
-	if l == nil || page == nil {
+func (l *LocalInterface) RetainPanel(f *frame.Frame) {
+	if l == nil || f == nil {
 		return
 	}
 	p := &l.panel
-	if !p.fresh || !slices.Equal(p.selection, l.selected) {
+	composed := p.scratch[:0]
+	for i := range f.Units {
+		v := &f.Units[i]
+		if f.Selection.Contains(v.Slot) {
+			composed = append(composed, pool.UnitRef{Handle: v.Slot, Serial: v.AllocationSerial})
+		}
+	}
+	p.scratch = composed
+	page := &f.CommandPage
+	if !p.fresh || !slices.Equal(p.selection, composed) {
 		p.fresh = true
 		p.move, p.fire = page.MoveStance, page.FireStance
 		p.cloak, p.onoff = page.CloakState, page.OnOffState
-		p.selection = append(p.selection[:0], l.selected...)
+		p.selection = append(p.selection[:0], composed...)
 		return
 	}
 	page.MoveStance, page.FireStance = p.move, p.fire

@@ -93,6 +93,9 @@ func (b *battleSession) takeOverReplay(v replayPerspective, cl *client.Client) e
 	// The selection made while watching stays, less any unit the new player
 	// does not own; build pages and BigBrother stay with it.
 	b.localState().ReplaceSelection(b.localRefs(b.selectedHandlesInSlotOrder()))
+	// The panel fields shown while watching are the recording's; live
+	// control starts from a fresh fold [07 R-HUD-03 §13].
+	b.localState().MarkPanelStale()
 	b.modernDrag, b.resourceClick = nil, nil
 	b.resourceQueueFeedback = nil
 	b.radial.close()

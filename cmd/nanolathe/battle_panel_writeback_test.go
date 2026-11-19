@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
@@ -110,5 +111,48 @@ func TestPanelRefreshFollowsActivationNotCloak(t *testing.T) {
 	f, _ := b.currentSnapshot()
 	if f.CommandPage.CloakState != 2 || f.CommandPage.OnOffState != 2 {
 		t.Fatalf("after an activation change cloak=%d onoff=%d, want the refolded 2 and 2", f.CommandPage.CloakState, f.CommandPage.OnOffState)
+	}
+}
+
+// A selection gesture between a press and the tick that applies its order
+// refolds the field from the units' state at that moment, before the order
+// has run. A standing-order change raises nothing, so the field keeps that
+// older value until the next trigger, as retail's does [07 R-HUD-03 §13].
+func TestStanceRefoldBeforeTheOrderAppliesStaysUntilTheNextTrigger(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.FireStandOrders = true
+	replaceSelectionForTest(t, b, a, c)
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+	f, _ := b.currentSnapshot()
+	before := f.CommandPage.FireStance
+	if before > 2 {
+		t.Fatalf("fire stance fold is %d, want an agreed stance", before)
+	}
+
+	b.cycleStance(true)
+	pressed, _ := b.currentSnapshot()
+	written := pressed.CommandPage.FireStance
+	if written == before {
+		t.Fatalf("FIREORD press left the field at %d", before)
+	}
+
+	// Reselect before the stance command's tick: the refold sees the old
+	// stance.
+	if err := b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{a.Handle, c.Handle}}}); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := b.currentSnapshot(); f.CommandPage.FireStance != before {
+		t.Fatalf("reselection before the order applied shows %d, want the refolded %d", f.CommandPage.FireStance, before)
+	}
+	applyAndObserve(t, b)
+	if f, _ := b.currentSnapshot(); f.CommandPage.FireStance != before {
+		t.Fatalf("the applied stance order refreshed the field to %d; a standing order raises nothing", f.CommandPage.FireStance)
+	}
+	// The next trigger folds the units' new stance.
+	replaceSelectionForTest(t, b, a, c)
+	if f, _ := b.currentSnapshot(); f.CommandPage.FireStance != written {
+		t.Fatalf("after the next trigger the field shows %d, want the applied %d", f.CommandPage.FireStance, written)
 	}
 }

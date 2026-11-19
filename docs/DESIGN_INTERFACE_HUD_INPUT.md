@@ -1978,15 +1978,23 @@ always `2`, it is the write-back that lets the second CLOAK press cloak them.
 
 The host raises the flag for these triggers:
 
-* every selection gesture, in `applyLocalInterfaceCommand`, including one that
-  leaves the membership unchanged, and any other change of the selection;
+* a selection gesture that selects or toggles at least one unit, and every
+  group recall, in `applyLocalInterfaceCommand`. This holds even when the
+  membership is unchanged. Any other change of the composed selection also
+  raises it;
 * local page navigation (`SetBuildPage`);
 * a selected unit whose committed activation changes, or which finishes
   construction, detected by `LocalInterface.ObservePanel` once per
   publication in tick order.
 
 A battle starts with the flag up, and a loaded battle starts with a fresh
-`LocalInterface`. A cloak or stance change raises nothing. A selected
+`LocalInterface`. A replay playback raises the flag at every publication,
+because the recorded seat's presses change the fields without a write-back on
+this client, and a takeover raises it once more before live control. A
+selection gesture between a press and the tick that applies its order refolds
+the field from the units' state before the order has run. A standing-order
+or cloak change raises nothing, so that older value stays until the next
+trigger, as in retail. A cloak or stance change raises nothing. A selected
 builder's build-order transitions, and the building bit of its activation
 byte, are retail triggers this host does not observe. They are a
 `TODO(question)` in `internal/hud/localpanel.go`.
