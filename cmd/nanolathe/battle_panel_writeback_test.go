@@ -1,0 +1,243 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/pool"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+)
+
+// applyAndObserve runs the pending commands for one tick and observes the
+// publication as the host does at each completed tick (applyPublishedCamera).
+func applyAndObserve(t *testing.T, b *battleSession) {
+	t.Helper()
+	applyPendingBattleCommands(b)
+	if b.sess == nil || b.sess.Snapshot == nil {
+		t.Fatal("no snapshot")
+	}
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+}
+
+// pressCloak presses CLOAK and reports the direction it sent and the pair the
+// panel shows afterwards.
+func pressCloak(t *testing.T, b *battleSession) (cloak bool, shown uint8) {
+	t.Helper()
+	b.toggleCloakSelected()
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanCloak {
+		t.Fatalf("CLOAK press enqueued %+v, want one cloak command", pending)
+	}
+	cloak = pending[0].Cloak.Cloak
+	f, ok := b.currentSnapshot()
+	if !ok {
+		t.Fatal("no snapshot after the press")
+	}
+	return cloak, f.CommandPage.CloakState
+}
+
+// Two cloak-capable units always fold to the generic CLOAK ORDERS pair 2,
+// whether or not they agree [07 R-HUD-03 §13]. The press writes the pair it
+// sent back into the panel's retained field, and neither the press nor the
+// cloak order raises the refresh-needed flag. So the first press decloaks and
+// shows VISIBLE, and the second cloaks both [04 R-STANCE-01 §2]. When the
+// panel refolded at every publication, every press sent Cloak_Off and the
+// selection could never be cloaked from the panel (issue #203).
+func TestCloakPressOnTwoCloakableUnitsAlternates(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.CloakCost, c.Def.CloakCost = 100, 100
+	a.Def.CanAttack = true
+	a.IsCloaked = true
+	replaceSelectionForTest(t, b, a, c)
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+		t.Fatalf("two cloak-capable units fold to %d, want 2", f.CommandPage.CloakState)
+	}
+
+	if cloak, shown := pressCloak(t, b); cloak || shown != 0 {
+		t.Fatalf("first press sent Cloak=%v showing %d, want Cloak_Off showing 0 (VISIBLE)", cloak, shown)
+	}
+	applyAndObserve(t, b)
+	if a.IsCloaked || c.IsCloaked {
+		t.Fatal("Cloak_Off left a unit cloaked")
+	}
+	f, _ := b.currentSnapshot()
+	if f.CommandPage.CloakState != 0 {
+		t.Fatalf("after Cloak_Off applied the panel shows %d, want the written-back 0", f.CommandPage.CloakState)
+	}
+	if !f.CommandPage.CanAttack {
+		t.Fatal("retaining the CLOAK press disabled the selection's ATTACK button")
+	}
+
+	if cloak, shown := pressCloak(t, b); !cloak || shown != 1 {
+		t.Fatalf("second press sent Cloak=%v showing %d, want Cloak_On showing 1 (CLOAKED)", cloak, shown)
+	}
+	applyAndObserve(t, b)
+	if !a.IsCloaked || !c.IsCloaked {
+		t.Fatal("Cloak_On did not cloak both units")
+	}
+
+	// Reselecting the same two units is a selection gesture: it refreshes
+	// the field from the fold, which is 2 again.
+	replaceSelectionForTest(t, b, a, c)
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+		t.Fatalf("reselection shows %d, want the refolded 2", f.CommandPage.CloakState)
+	}
+}
+
+// A selected unit's activation change raises the refresh-needed flag; a
+// cloak change alone does not [07 R-HUD-03 §13].
+func TestPanelRefreshFollowsActivationNotCloak(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.CloakCost, c.Def.CloakCost = 100, 100
+	a.Def.OnOffable = true
+	a.Activated, c.Activated = true, true
+	replaceSelectionForTest(t, b, a, c)
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+	if cloak, _ := pressCloak(t, b); cloak {
+		t.Fatal("press on pair 2 sent Cloak_On")
+	}
+	applyAndObserve(t, b)
+
+	// A cloak change that is not a trigger leaves the written-back 0.
+	a.IsCloaked = true
+	applyAndObserve(t, b)
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 0 {
+		t.Fatalf("a cloak change refreshed the panel to %d, want the retained 0", f.CommandPage.CloakState)
+	}
+
+	// An activation change is a trigger: the next composition refolds.
+	c.Activated = false
+	applyAndObserve(t, b)
+	f, _ := b.currentSnapshot()
+	if f.CommandPage.CloakState != 2 || f.CommandPage.OnOffState != 2 {
+		t.Fatalf("after an activation change cloak=%d onoff=%d, want the refolded 2 and 2", f.CommandPage.CloakState, f.CommandPage.OnOffState)
+	}
+}
+
+func TestPanelRefreshFollowsFirstActivationAfterSelection(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.CloakCost, a.Def.OnOffable = 100, true
+	a.Activated, c.Activated = true, true
+	b.attachLocalInterface()
+	applyAndObserve(t, b)
+
+	// Select and press both gadgets before another publication. The next
+	// observation must compare activation with the frame used for selection.
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{a.Handle, c.Handle}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cloak, shown := pressCloak(t, b); cloak || shown != 0 {
+		t.Fatalf("first CLOAK press sent Cloak=%v showing %d, want off and VISIBLE", cloak, shown)
+	}
+	b.toggleOnOffSelected(false)
+	applyAndObserve(t, b)
+	if a.Activated || c.Activated {
+		t.Fatal("ONOFF did not deactivate both units")
+	}
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+		t.Fatalf("activation change left cloak at %d, want refreshed pair 2", f.CommandPage.CloakState)
+	}
+}
+
+func TestPanelRefreshFollowsBuildingEdges(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.CloakCost = 100
+	replaceSelectionForTest(t, b, a, c)
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+
+	for _, building := range []bool{true, false} {
+		if cloak, shown := pressCloak(t, b); cloak || shown != 0 {
+			t.Fatalf("CLOAK press sent Cloak=%v showing %d, want off and VISIBLE", cloak, shown)
+		}
+		a.SetBuildingEdge(building)
+		applyAndObserve(t, b)
+		if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+			t.Fatalf("building edge to %v left cloak at %d, want refreshed pair 2", building, f.CommandPage.CloakState)
+		}
+	}
+}
+
+func TestOlderPublicationCannotEraseCloakWriteBack(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	a.Def.CloakCost = 100
+	b.attachLocalInterface()
+	applyAndObserve(t, b)
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	applyAndObserve(t, b)
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{a.Handle, c.Handle}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+		t.Fatalf("two cloak-capable units fold to %d, want 2", f.CommandPage.CloakState)
+	}
+
+	// The previous publication is still in the buffer and only has unit a.
+	b.toggleCloakSelected()
+	b.finishLocalInterfaceStep()
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 0 {
+		t.Fatalf("finishing the host step left cloak at %d, want the write-back of 0", f.CommandPage.CloakState)
+	}
+	applyAndObserve(t, b)
+	if cloak, shown := pressCloak(t, b); !cloak || shown != 1 {
+		t.Fatalf("second CLOAK press sent Cloak=%v showing %d, want on and CLOAKED", cloak, shown)
+	}
+}
+
+// A selection gesture between a press and the tick that applies its order
+// refolds the field from the units' state at that moment, before the order
+// has run. A standing-order change raises nothing, so the field keeps that
+// older value until the next trigger, as retail's does [07 R-HUD-03 §13].
+func TestStanceRefoldBeforeTheOrderAppliesStaysUntilTheNextTrigger(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.FireStandOrders = true
+	replaceSelectionForTest(t, b, a, c)
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+	f, _ := b.currentSnapshot()
+	before := f.CommandPage.FireStance
+	if before > 2 {
+		t.Fatalf("fire stance fold is %d, want an agreed stance", before)
+	}
+
+	b.cycleStance(true)
+	pressed, _ := b.currentSnapshot()
+	written := pressed.CommandPage.FireStance
+	if written == before {
+		t.Fatalf("FIREORD press left the field at %d", before)
+	}
+
+	// Reselect before the stance command's tick: the refold sees the old
+	// stance.
+	if err := b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{a.Handle, c.Handle}}}); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := b.currentSnapshot(); f.CommandPage.FireStance != before {
+		t.Fatalf("reselection before the order applied shows %d, want the refolded %d", f.CommandPage.FireStance, before)
+	}
+	applyAndObserve(t, b)
+	if f, _ := b.currentSnapshot(); f.CommandPage.FireStance != before {
+		t.Fatalf("the applied stance order refreshed the field to %d; a standing order raises nothing", f.CommandPage.FireStance)
+	}
+	// The next trigger folds the units' new stance.
+	replaceSelectionForTest(t, b, a, c)
+	if f, _ := b.currentSnapshot(); f.CommandPage.FireStance != written {
+		t.Fatalf("after the next trigger the field shows %d, want the applied %d", f.CommandPage.FireStance, written)
+	}
+}

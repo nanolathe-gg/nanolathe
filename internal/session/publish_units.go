@@ -59,6 +59,7 @@ func (s *Session) fillUnitView(vp *frame.UnitView, u *units.Unit, id uint64, que
 		Pitch:             u.Move.Pitch,
 		Bank:              u.Move.Bank,
 		Activated:         u.Activated,
+		BuildingState:     u.BuildingState,
 		CloakRequested:    u.IsCloaked,
 		Kills:             u.Kills,
 		// The unit painter's pass selector is the committed low two
