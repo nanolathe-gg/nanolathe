@@ -48,6 +48,7 @@ func TestCloakPressOnTwoCloakableUnitsAlternates(t *testing.T) {
 	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
 	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
 	a.Def.CloakCost, c.Def.CloakCost = 100, 100
+	a.Def.CanAttack = true
 	a.IsCloaked = true
 	replaceSelectionForTest(t, b, a, c)
 	b.observeLocalInterface(b.sess.Snapshot.Current())
@@ -62,8 +63,12 @@ func TestCloakPressOnTwoCloakableUnitsAlternates(t *testing.T) {
 	if a.IsCloaked || c.IsCloaked {
 		t.Fatal("Cloak_Off left a unit cloaked")
 	}
-	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 0 {
+	f, _ := b.currentSnapshot()
+	if f.CommandPage.CloakState != 0 {
 		t.Fatalf("after Cloak_Off applied the panel shows %d, want the written-back 0", f.CommandPage.CloakState)
+	}
+	if !f.CommandPage.CanAttack {
+		t.Fatal("retaining the CLOAK press disabled the selection's ATTACK button")
 	}
 
 	if cloak, shown := pressCloak(t, b); !cloak || shown != 1 {

@@ -125,12 +125,12 @@ func (l *LocalInterface) RefreshPanel(f *frame.Frame, cat *content.Catalog) bool
 	return true
 }
 
-// panelMatchesSelection reports whether f can use the retained words. An
-// older publication may lack a selected unit or show another in its slot.
-func (l *LocalInterface) panelMatchesSelection(f *frame.Frame) bool {
+// ApplyPanel overlays only the four retained words when f shows the same
+// selection. Older frames with a different selection keep their own fold.
+func (l *LocalInterface) ApplyPanel(f *frame.Frame) {
 	p := &l.panel
 	if !p.fresh || int(f.Selection.Count) != len(p.watch) {
-		return false
+		return
 	}
 	i := 0
 	for _, w := range p.watch {
@@ -138,13 +138,15 @@ func (l *LocalInterface) panelMatchesSelection(f *frame.Frame) bool {
 			i++
 		}
 		if i == len(f.Units) {
-			return false
+			return
 		}
 		if v := &f.Units[i]; v.Slot != w.ref.Handle || v.AllocationSerial != w.ref.Serial || v.Flags&SelectionFlag == 0 {
-			return false
+			return
 		}
 	}
-	return true
+	page := &f.CommandPage
+	page.MoveStance, page.FireStance = p.move, p.fire
+	page.CloakState, page.OnOffState = p.cloak, p.onoff
 }
 
 // WriteBackStance is the stance arm's step 3: the new value goes into the

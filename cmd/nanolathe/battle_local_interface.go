@@ -217,7 +217,8 @@ func (b *battleSession) composeLocalInterface(f *frame.Frame, refreshPanel bool)
 	if b.sess != nil {
 		products = b.sess.CommandPageProducts
 	}
-	b.local.ComposeCommandPage(f, b.cat, products)
+	hud.ComposeCommandPage(&f.CommandPage, f, b.cat, products)
+	b.local.ApplyPanel(f)
 }
 
 // finishLocalInterfaceStep runs at the end of each host step, while the

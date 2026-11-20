@@ -81,27 +81,6 @@ func (l *LocalInterface) ComposeSelection(f *frame.Frame) bool {
 // (session.CommandPageProducts); cat is the battle's compiled catalog, the
 // immutable definitions the publisher used to read.
 func ComposeCommandPage(dst *frame.CommandPageView, f *frame.Frame, cat *content.Catalog, products func(builder string) []string) {
-	composeBuildPage(dst, f, cat, products)
-	if dst != nil {
-		foldSelectionAggregate(dst, f, cat)
-	}
-}
-
-// ComposeCommandPage stages the page and the retained panel words for a
-// frame whose selection has been composed. A frame with a different
-// selection gets the fold of its own units.
-func (l *LocalInterface) ComposeCommandPage(f *frame.Frame, cat *content.Catalog, products func(builder string) []string) {
-	page := &f.CommandPage
-	if !l.panelMatchesSelection(f) {
-		ComposeCommandPage(page, f, cat, products)
-		return
-	}
-	composeBuildPage(page, f, cat, products)
-	page.MoveStance, page.FireStance = l.panel.move, l.panel.fire
-	page.CloakState, page.OnOffState = l.panel.cloak, l.panel.onoff
-}
-
-func composeBuildPage(dst *frame.CommandPageView, f *frame.Frame, cat *content.Catalog, products func(builder string) []string) {
 	if dst == nil {
 		return
 	}
@@ -110,6 +89,7 @@ func composeBuildPage(dst *frame.CommandPageView, f *frame.Frame, cat *content.C
 		GeneratedProducts: dst.GeneratedProducts[:0],
 		AllowedProducts:   nil,
 	}
+	foldSelectionAggregate(dst, f, cat)
 	if f == nil || cat == nil || f.Selection.Count != 1 || f.Selection.Primary == 0 {
 		return
 	}

@@ -1970,11 +1970,11 @@ The MOVEORD, FIREORD, CLOAK and ONOFF gadgets stage from four fields that
 `hud.LocalInterface` retains, as retail's panel words do. They are not
 refolded into the retained words at every publication `[07 R-HUD-03 §13]`.
 After the host composes the selection, `LocalInterface.RefreshPanel` folds
-the retained words when a trigger calls for it. `LocalInterface.ComposeCommandPage`
-uses those words for frames with the same selection, including older frames
-still held by the presentation buffer. A frame that predates a selected
-unit keeps its own fold. A press writes the value it sent back into its
-field (`WriteBackStance`, `WriteBackCloak`, `WriteBackOnOff`)
+the retained words when a trigger calls for it. `ComposeCommandPage` sets
+the page's capabilities from the frame and `LocalInterface.ApplyPanel`
+overlays the four words when the frame shows the same selection. A frame
+that predates a selected unit keeps its own fold. A press writes the value
+it sent back into its field (`WriteBackStance`, `WriteBackCloak`, `WriteBackOnOff`)
 `[04 R-STANCE-01 §2]`. Because the cloak fold of two cloak-capable units is
 always `2`, it is the write-back that lets the second CLOAK press cloak them.
 
