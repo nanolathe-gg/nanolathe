@@ -66,6 +66,7 @@ func (b *battleSession) attachLocalInterface() {
 	if b.sess != nil {
 		b.sess.SetLocalInterfaceFacts(true)
 	}
+	b.composeCurrentFrame()
 }
 
 // retailLocalInterface is this client's selection and the page fields local
@@ -160,17 +161,13 @@ func (b *battleSession) observeLocalInterface(cur *frame.Frame) hud.InterfaceEve
 	if b.local != nil {
 		b.local.ObserveTick(cur.Tick)
 		b.local.Prune(frameLiveRef(cur))
-		// A selected unit's activation or construction change raises the
-		// panel's refresh-needed flag before cur is composed
-		// [07 R-HUD-03 §13].
-		b.local.ObservePanel(cur)
 		if b.replayPlayback() != nil {
 			// The recorded seat's presses change the fields without a
 			// write-back on this client, so a playback refreshes them at
 			// every publication.
 			b.local.MarkPanelStale()
 		}
-		b.composeLocalInterface(cur)
+		b.composeLocalInterface(cur, true)
 	}
 	return ev
 }
@@ -199,23 +196,28 @@ func (b *battleSession) frameReadyRef(f *frame.Frame) func(pool.UnitRef) bool {
 // selection words, logo overrides and the command page. A frame already
 // composed at the current epoch is left alone. It runs on the host's
 // goroutine for a frame no writer can reach: the committed frame while the
-// simulation is quiescent, or a pinned one [I6].
-func (b *battleSession) composeLocalInterface(f *frame.Frame) {
+// simulation is quiescent, or a pinned one [I6]. Only the host paths
+// advancing local state refresh the retained panel words. Rendering and
+// recomposing older frames only apply the retained words.
+func (b *battleSession) composeLocalInterface(f *frame.Frame, refreshPanel bool) {
 	if b == nil || b.local == nil || f == nil {
 		return
 	}
-	if !b.local.ComposeSelection(f) {
+	composed := b.local.ComposeSelection(f)
+	if refreshPanel && b.local.RefreshPanel(f, b.cat) {
+		// RefreshPanel advances the epoch for other frames. This selection
+		// is already current, so only its command page needs composing.
+		f.Selection.Composed = b.local.Epoch()
+		composed = true
+	}
+	if !composed {
 		return
 	}
 	var products func(string) []string
 	if b.sess != nil {
 		products = b.sess.CommandPageProducts
 	}
-	hud.ComposeCommandPage(&f.CommandPage, f, b.cat, products)
-	// The four panel fields are retail's retained interface words: refreshed
-	// from the fold only when the refresh-needed flag is up, and otherwise
-	// carrying the presses' write-backs [07 R-HUD-03 §13][04 R-STANCE-01 §2].
-	b.local.RetainPanel(f)
+	b.local.ComposeCommandPage(f, b.cat, products)
 }
 
 // finishLocalInterfaceStep runs at the end of each host step, while the
@@ -227,7 +229,9 @@ func (b *battleSession) finishLocalInterfaceStep() {
 	if b == nil || b.local == nil || b.sess == nil || b.sess.Snapshot == nil {
 		return
 	}
-	b.sess.Snapshot.PublicationsSince(0, b.composeLocalInterface)
+	b.sess.Snapshot.PublicationsSince(0, func(f *frame.Frame) {
+		b.composeLocalInterface(f, false)
+	})
 	var subject pool.Handle
 	if selected := b.selectedHandlesInSlotOrder(); len(selected) != 0 {
 		subject = selected[0]
@@ -364,27 +368,26 @@ func (b *battleSession) applyLocalInterfaceCommand(c session.HumanCommand) {
 	local := b.localState()
 	switch c.Kind {
 	case session.HumanSelectionReplace, session.HumanSelectionToggle:
+		refs := b.localRefs(c.Selection.Handles)
+		if c.Kind == session.HumanSelectionReplace {
+			local.ReplaceSelection(refs)
+		} else {
+			local.ToggleSelection(refs)
+		}
 		// A gesture that selects or toggles a unit raises the panel's
 		// refresh-needed flag, even one that leaves the membership as it
 		// was. An empty one raises it only by changing the selection,
-		// which RetainPanel sees [07 R-HUD-03 §13].
-		if len(c.Selection.Handles) != 0 {
+		// which RefreshPanel sees [07 R-HUD-03 §13].
+		if len(refs) != 0 {
 			local.MarkPanelStale()
 		}
-	case session.HumanGroupRecall:
-		local.MarkPanelStale()
-	}
-	switch c.Kind {
-	case session.HumanSelectionReplace:
-		local.ReplaceSelection(b.localRefs(c.Selection.Handles))
-	case session.HumanSelectionToggle:
-		local.ToggleSelection(b.localRefs(c.Selection.Handles))
 	case session.HumanSelectionClear:
 		local.ClearSelection()
 	case session.HumanBuildPage:
 		b.applyLocalBuildPage(c.BuildPage)
 	case session.HumanGroupRecall:
 		b.applyLocalGroupRecall(c.Group)
+		local.MarkPanelStale()
 	case session.HumanBigBrother:
 		local.ToggleBigBrother()
 		if b.sess.Clock != nil && b.sess.Clock.Paused {
@@ -403,7 +406,7 @@ func (b *battleSession) composeCurrentFrame() {
 	if b == nil || b.sess == nil || b.sess.Snapshot == nil {
 		return
 	}
-	b.composeLocalInterface(b.sess.Snapshot.Current())
+	b.composeLocalInterface(b.sess.Snapshot.Current(), true)
 }
 
 // applyLocalBuildPage is a page key or gadget: the single selected builder's
@@ -534,5 +537,5 @@ func (b *battleSession) syncLocalInterface() {
 	b.local.ObserveTick(cur.Tick)
 	b.localEvents.Merge(ev)
 	b.local.Prune(frameLiveRef(cur))
-	b.composeLocalInterface(cur)
+	b.composeLocalInterface(cur, true)
 }

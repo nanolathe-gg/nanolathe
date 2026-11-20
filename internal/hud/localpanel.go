@@ -3,6 +3,7 @@ package hud
 import (
 	"slices"
 
+	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 )
@@ -28,7 +29,7 @@ import (
 //     group recall, whether or not the membership changes (MarkPanelStale);
 //   - any other change of the composed selection;
 //   - local page navigation (SetBuildPage);
-//   - a change of a selected unit's committed activation;
+//   - a change of a selected unit's committed activation or building bit;
 //   - a selected unit finishing construction.
 //
 // A battle starts with the flag up. A loaded battle enters through a fresh
@@ -40,11 +41,9 @@ import (
 // selected builder when construction starts, terminates or completes, and a
 // completion raises it when the builder rather than the product is selected.
 // Some handlers raise it on arms that keep the order running as well. The
-// activation edge also raises it when the builder's StartBuilding/
-// StopBuilding bit changes. Neither is published to the host, so a selected
-// builder's build transitions leave the retained fields alone here.
-// Publishing the activation byte's building bit, and classifying which
-// handler arms run every tick, would settle it [07 R-HUD-03 §13].
+// host sees the StartBuilding/StopBuilding bit, but the order handlers'
+// other refresh requests are not published. Classify the handler arms that
+// run every tick before publishing those requests [07 R-HUD-03 §13].
 
 // panelWords is the retained copy of the four fields and the state that
 // decides when it is refreshed.
@@ -55,15 +54,10 @@ type panelWords struct {
 	fire  uint8
 	cloak uint8
 	onoff uint8
-	// selection is the composed selection the last refresh folded.
-	selection []pool.UnitRef
-	// watch is each selected unit's trigger state at the last observed
-	// publication, ascending by reference; spare is the buffer the next
-	// observation fills.
+	// watch holds the composed selection and its trigger state in the last
+	// frame the host examined. Both buffers are in ascending slot order.
 	watch []panelWatch
 	spare []panelWatch
-	// scratch holds the composed selection while RetainPanel compares it.
-	scratch []pool.UnitRef
 }
 
 // panelWatch is the part of one selected unit's committed state whose change
@@ -71,6 +65,7 @@ type panelWords struct {
 type panelWatch struct {
 	ref       pool.UnitRef
 	activated bool
+	building  bool
 	complete  bool
 }
 
@@ -92,64 +87,64 @@ func (l *LocalInterface) MarkPanelStale() {
 	l.touch()
 }
 
-// ObservePanel compares each selected unit's committed activation and
-// construction state in f with the previous observed publication, and raises
-// the refresh-needed flag when any of them changed [07 R-HUD-03 §13]. The
-// host calls it once per publication, in tick order, before composing f.
-func (l *LocalInterface) ObservePanel(f *frame.Frame) {
-	if l == nil || f == nil {
-		return
-	}
-	prev := l.panel.watch
-	next := l.panel.spare[:0]
-	// f.Units is in ascending slot order and a slot holds one unit, so next
-	// is built ascending by reference.
-	for i := range f.Units {
-		v := &f.Units[i]
-		ref := pool.UnitRef{Handle: v.Slot, Serial: v.AllocationSerial}
-		if !l.Selected(ref) {
-			continue
-		}
-		w := panelWatch{ref: ref, activated: v.Activated, complete: v.BuildRemaining == 0}
-		if j, found := slices.BinarySearchFunc(prev, ref, func(p panelWatch, r pool.UnitRef) int { return refLess(p.ref, r) }); found {
-			if prev[j] != w && l.panel.fresh {
-				l.markPanelStale()
-				l.touch()
+// RefreshPanel examines f after ComposeSelection. The host calls it in
+// publication order and after local interface input. The input call starts
+// watching newly selected units before the first tick that can change them.
+// It reports whether a trigger refreshed the words [07 R-HUD-03 §13].
+func (l *LocalInterface) RefreshPanel(f *frame.Frame, cat *content.Catalog) bool {
+	p := &l.panel
+	next := p.spare[:0]
+	if f.Selection.Count != 0 {
+		for i := range f.Units {
+			v := &f.Units[i]
+			if v.Flags&SelectionFlag != 0 {
+				next = append(next, panelWatch{
+					ref:       pool.UnitRef{Handle: v.Slot, Serial: v.AllocationSerial},
+					activated: v.Activated,
+					building:  v.BuildingState,
+					complete:  v.BuildRemaining == 0,
+				})
 			}
 		}
-		next = append(next, w)
 	}
-	l.panel.watch, l.panel.spare = next, prev
+	refresh := !p.fresh || !slices.EqualFunc(p.watch, next, func(before, after panelWatch) bool {
+		return before.ref == after.ref && before.activated == after.activated &&
+			before.building == after.building && (before.complete || !after.complete)
+	})
+	p.watch, p.spare = next, p.watch
+	if !refresh {
+		return false
+	}
+
+	var page frame.CommandPageView
+	foldSelectionAggregate(&page, f, cat)
+	p.fresh = true
+	p.move, p.fire = page.MoveStance, page.FireStance
+	p.cloak, p.onoff = page.CloakState, page.OnOffState
+	l.touch()
+	return true
 }
 
-// RetainPanel applies the retained fields to f's command page, just folded
-// from f's composed selection. While the refresh-needed flag is up, or the
-// composed selection differs from the one the retained fields were folded
-// from, the fold refreshes them. Otherwise the retained values, write-backs
-// included, replace the fold's [07 R-HUD-03 §13][04 R-STANCE-01 §2].
-func (l *LocalInterface) RetainPanel(f *frame.Frame) {
-	if l == nil || f == nil {
-		return
-	}
+// panelMatchesSelection reports whether f can use the retained words. An
+// older publication may lack a selected unit or show another in its slot.
+func (l *LocalInterface) panelMatchesSelection(f *frame.Frame) bool {
 	p := &l.panel
-	composed := p.scratch[:0]
-	for i := range f.Units {
-		v := &f.Units[i]
-		if f.Selection.Contains(v.Slot) {
-			composed = append(composed, pool.UnitRef{Handle: v.Slot, Serial: v.AllocationSerial})
+	if !p.fresh || int(f.Selection.Count) != len(p.watch) {
+		return false
+	}
+	i := 0
+	for _, w := range p.watch {
+		for i < len(f.Units) && f.Units[i].Slot < w.ref.Handle {
+			i++
+		}
+		if i == len(f.Units) {
+			return false
+		}
+		if v := &f.Units[i]; v.Slot != w.ref.Handle || v.AllocationSerial != w.ref.Serial || v.Flags&SelectionFlag == 0 {
+			return false
 		}
 	}
-	p.scratch = composed
-	page := &f.CommandPage
-	if !p.fresh || !slices.Equal(p.selection, composed) {
-		p.fresh = true
-		p.move, p.fire = page.MoveStance, page.FireStance
-		p.cloak, p.onoff = page.CloakState, page.OnOffState
-		p.selection = append(p.selection[:0], composed...)
-		return
-	}
-	page.MoveStance, page.FireStance = p.move, p.fire
-	page.CloakState, page.OnOffState = p.cloak, p.onoff
+	return true
 }
 
 // WriteBackStance is the stance arm's step 3: the new value goes into the

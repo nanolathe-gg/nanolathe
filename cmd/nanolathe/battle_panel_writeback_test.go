@@ -114,6 +114,86 @@ func TestPanelRefreshFollowsActivationNotCloak(t *testing.T) {
 	}
 }
 
+func TestPanelRefreshFollowsFirstActivationAfterSelection(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.CloakCost, a.Def.OnOffable = 100, true
+	a.Activated, c.Activated = true, true
+	b.attachLocalInterface()
+	applyAndObserve(t, b)
+
+	// Select and press both gadgets before another publication. The next
+	// observation must compare activation with the frame used for selection.
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{a.Handle, c.Handle}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if cloak, shown := pressCloak(t, b); cloak || shown != 0 {
+		t.Fatalf("first CLOAK press sent Cloak=%v showing %d, want off and VISIBLE", cloak, shown)
+	}
+	b.toggleOnOffSelected(false)
+	applyAndObserve(t, b)
+	if a.Activated || c.Activated {
+		t.Fatal("ONOFF did not deactivate both units")
+	}
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+		t.Fatalf("activation change left cloak at %d, want refreshed pair 2", f.CommandPage.CloakState)
+	}
+}
+
+func TestPanelRefreshFollowsBuildingEdges(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	a.Def.CloakCost = 100
+	replaceSelectionForTest(t, b, a, c)
+	b.observeLocalInterface(b.sess.Snapshot.Current())
+
+	for _, building := range []bool{true, false} {
+		if cloak, shown := pressCloak(t, b); cloak || shown != 0 {
+			t.Fatalf("CLOAK press sent Cloak=%v showing %d, want off and VISIBLE", cloak, shown)
+		}
+		a.SetBuildingEdge(building)
+		applyAndObserve(t, b)
+		if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+			t.Fatalf("building edge to %v left cloak at %d, want refreshed pair 2", building, f.CommandPage.CloakState)
+		}
+	}
+}
+
+func TestOlderPublicationCannotEraseCloakWriteBack(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(20, 20))
+	a := placeUnit(b, "armcons", numeric.Fixed(6*65536), numeric.Fixed(6*65536))
+	a.Def.CloakCost = 100
+	b.attachLocalInterface()
+	applyAndObserve(t, b)
+	c := placeUnit(b, "armcons", numeric.Fixed(12*65536), numeric.Fixed(12*65536))
+	applyAndObserve(t, b)
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{a.Handle, c.Handle}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 2 {
+		t.Fatalf("two cloak-capable units fold to %d, want 2", f.CommandPage.CloakState)
+	}
+
+	// The previous publication is still in the buffer and only has unit a.
+	b.toggleCloakSelected()
+	b.finishLocalInterfaceStep()
+	if f, _ := b.currentSnapshot(); f.CommandPage.CloakState != 0 {
+		t.Fatalf("finishing the host step left cloak at %d, want the write-back of 0", f.CommandPage.CloakState)
+	}
+	applyAndObserve(t, b)
+	if cloak, shown := pressCloak(t, b); !cloak || shown != 1 {
+		t.Fatalf("second CLOAK press sent Cloak=%v showing %d, want on and CLOAKED", cloak, shown)
+	}
+}
+
 // A selection gesture between a press and the tick that applies its order
 // refolds the field from the units' state at that moment, before the order
 // has run. A standing-order change raises nothing, so the field keeps that

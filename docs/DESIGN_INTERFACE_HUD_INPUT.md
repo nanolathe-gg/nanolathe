@@ -1968,11 +1968,13 @@ layer's contents `[07 §6]` `[03 §1]`.
 
 The MOVEORD, FIREORD, CLOAK and ONOFF gadgets stage from four fields that
 `hud.LocalInterface` retains, as retail's panel words do. They are not
-refolded at every publication `[07 R-HUD-03 §13]`. `ComposeCommandPage` folds
-the composed selection, and `LocalInterface.RetainPanel` then either takes
-that fold, when the refresh-needed flag is up or the selection has changed,
-or replaces it with the retained values. A press writes the value it sent back
-into its field (`WriteBackStance`, `WriteBackCloak`, `WriteBackOnOff`)
+refolded into the retained words at every publication `[07 R-HUD-03 §13]`.
+After the host composes the selection, `LocalInterface.RefreshPanel` folds
+the retained words when a trigger calls for it. `LocalInterface.ComposeCommandPage`
+uses those words for frames with the same selection, including older frames
+still held by the presentation buffer. A frame that predates a selected
+unit keeps its own fold. A press writes the value it sent back into its
+field (`WriteBackStance`, `WriteBackCloak`, `WriteBackOnOff`)
 `[04 R-STANCE-01 §2]`. Because the cloak fold of two cloak-capable units is
 always `2`, it is the write-back that lets the second CLOAK press cloak them.
 
@@ -1983,8 +1985,9 @@ The host raises the flag for these triggers:
   membership is unchanged. Any other change of the composed selection also
   raises it;
 * local page navigation (`SetBuildPage`);
-* a selected unit whose committed activation changes, or which finishes
-  construction, detected by `LocalInterface.ObservePanel` once per
+* a selected unit whose committed activation or StartBuilding/StopBuilding
+  bit changes, or which finishes construction. `RefreshPanel` starts watching
+  each newly selected unit from the frame used for selection and checks each
   publication in tick order.
 
 A battle starts with the flag up, and a loaded battle starts with a fresh
@@ -1994,10 +1997,8 @@ this client, and a takeover raises it once more before live control. A
 selection gesture between a press and the tick that applies its order refolds
 the field from the units' state before the order has run. A standing-order
 or cloak change raises nothing, so that older value stays until the next
-trigger, as in retail. A cloak or stance change raises nothing. A selected
-builder's build-order transitions, and the building bit of its activation
-byte, are retail triggers this host does not observe. They are a
-`TODO(question)` in `internal/hud/localpanel.go`.
+trigger, as in retail. The build-order handlers' separate refresh requests
+are a `TODO(question)` in `internal/hud/localpanel.go`.
 
 #### Modern defeated players
 

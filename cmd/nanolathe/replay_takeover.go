@@ -96,6 +96,7 @@ func (b *battleSession) takeOverReplay(v replayPerspective, cl *client.Client) e
 	// The panel fields shown while watching are the recording's; live
 	// control starts from a fresh fold [07 R-HUD-03 §13].
 	b.localState().MarkPanelStale()
+	b.composeCurrentFrame()
 	b.modernDrag, b.resourceClick = nil, nil
 	b.resourceQueueFeedback = nil
 	b.radial.close()

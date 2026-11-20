@@ -843,7 +843,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// a pass that stepped the session some other way (a capture, a test)
 	// composes here. The frame is pinned or the writer is quiescent, and no
 	// input runs beside a draw (battle_local_interface.go).
-	b.composeLocalInterface(cur)
+	b.composeLocalInterface(cur, false)
 	if b != nil && b.resultScreenActive(cur) {
 		h.drawResultOverlay(c, b, cur.Result, localSlotWatching(cur))
 		h.drawFrontendDialog(c, b)

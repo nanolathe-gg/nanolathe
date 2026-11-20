@@ -184,6 +184,9 @@ type UnitView struct {
 	// Activated is the committed on/off state used by UI command dispatch.
 	// Presentation must not rehydrate a selected unit from the live pool [I6].
 	Activated bool
+	// BuildingState is the committed StartBuilding/StopBuilding bit. An edge
+	// on a selected unit refreshes the battle panel [07 R-HUD-03 §13].
+	BuildingState bool
 	// CloakRequested is the unit's cloak-REQUESTED bit, the one cloak input
 	// the CLOAK gadget's aggregate folds [04 R-ORD-01 §2] (Cloaked below is the
 	// instance bit). StockpileRounds is runtime weapon slot 0's completed-round
