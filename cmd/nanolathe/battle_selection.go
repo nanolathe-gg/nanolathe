@@ -27,7 +27,7 @@ func (b *battleSession) currentSnapshot() (*frame.Frame, bool) {
 		return nil, false
 	}
 	cur := b.sess.Snapshot.Current()
-	b.composeLocalInterface(cur)
+	b.composeLocalInterface(cur, false)
 	return cur, cur != nil
 }
 
@@ -43,7 +43,7 @@ func (b *battleSession) presentedSnapshot(cl *client.Client) (*frame.Frame, bool
 		return b.currentSnapshot()
 	}
 	cur := cl.PresentedFrame()
-	b.composeLocalInterface(cur)
+	b.composeLocalInterface(cur, false)
 	return cur, cur != nil
 }
 

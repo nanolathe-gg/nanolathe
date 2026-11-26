@@ -8465,6 +8465,42 @@ status word carries selection bit `0x10`. The aggregate words are then written
 unconditionally, so an empty or all-ineligible selection deposits every
 field's starting value.
 
+**Established — the refresh runs only when its flag is raised.** The
+per-frame battle step calls the refresh only while a **refresh-needed** bit of
+the battle panel's flag word is set and no interface-busy condition holds. It
+clears that bit before folding. While the interface is busy it leaves the bit
+set for a later frame and clears the selected-builder single-select id. No
+path recomputes the words every frame, so between refreshes the words keep
+whatever the last refresh or a later press write-back left
+([04 R-STANCE-01 §2] step 3). A census of every store that raises the bit
+finds these raisers:
+
+* the selection producers. The point click raises it whenever the clicked
+  unit is a selectable unit of the local player, in both its toggle and its
+  replace form. The drag box raises it when at least one unit falls inside
+  the box, and select-all when it selects at least one unit. The
+  select-by-type, next-unit and group selections (`CTRL_F` included) raise it
+  unconditionally, as does the deferred command-window close. None of them
+  compares the result with the previous selection, so reselecting the same
+  units raises it too. A unit dropped from the selection because it is no
+  longer selectable raises it as well;
+* build-page navigation: next, previous, a page set directly, and the deferred
+  page and BUILD-tab consumer;
+* a change of a selected local unit's activation byte. The unit's edge machine
+  raises it after any change, which covers Activate/Deactivate and the
+  StartBuilding/StopBuilding bit;
+* a selected local builder's build-order transitions: construction started,
+  terminated or complete, in the mobile, factory, assist, VTOL-assist and
+  resurrect handlers. Some of those handlers also raise it on arms that keep
+  the order running. Which of those arms run every tick is not classified;
+* a construction completing when either the builder or the product is
+  selected;
+* the saved-game restore coordinator, after it has restored the save.
+
+The cloak handlers `Cloak_On`/`Cloak_Off`, the standing-order handlers and the
+battle panel's own press path raise nothing. A cloak or stance change
+therefore never refreshes the words by itself.
+
 **Established — four folded state fields, in two shapes.** Each field is
 gated on a per-definition capability; a unit without the gate does not
 participate in that field at all.

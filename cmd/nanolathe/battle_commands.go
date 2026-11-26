@@ -166,9 +166,12 @@ func containsStop(s string) bool {
 // no selected unit is onoffable; it greys the gadget [07 R-HUD-03 §6], so the
 // press sends nothing.
 //
-// TODO(question): establish the retail aggregate-refresh triggers before
-// retaining the handler's local pair write-back [04 R-STANCE-01 §2]. Until
-// then, repeated presses before publication read the same committed pair.
+// After dispatch the arm writes the target pair back into the panel's
+// retained field, 1 after Activate and 0 after Deactivate, so a second press
+// before the order applies reads the pair the first one set. The activation
+// edge that follows raises the panel's refresh-needed flag, so the next
+// refresh folds the selection's new state [04 R-STANCE-01 §2]
+// [07 R-HUD-03 §13].
 //
 // OnOffable is data-driven; the command is Activate/Deactivate via orders.NewNodeForOrder [P0-I14].
 func (b *battleSession) toggleOnOffSelected(queued bool) {
@@ -185,6 +188,7 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 	default:
 		return // 3: not applicable, the gadget is grey
 	}
+	sent := false
 	for _, u := range b.selectedCommandUnits() {
 		if u == nil || u.Def == nil || !u.Def.OnOffable {
 			continue
@@ -192,20 +196,27 @@ func (b *battleSession) toggleOnOffSelected(queued bool) {
 		// Activation state is typed unit state, not the unrelated order flag
 		// word. The queued command is consumed by the ordinary order/COB edge
 		// machinery [05 "Unit instance economy state"].
-		_ = b.DispatchActivation(session.HumanActivationCommand{
+		if b.DispatchActivation(session.HumanActivationCommand{
 			Unit: u.Handle, Activate: activate, Queued: queued,
-		})
+		}) == nil {
+			sent = true
+		}
+	}
+	// A press whose every command was refused (a playback, say) sends
+	// nothing and changes nothing an activation edge would later correct, so
+	// it writes nothing back.
+	if sent {
+		b.localState().WriteBackOnOff(activate)
 	}
 }
 
 // cycleStance is one press of the side panel's MOVEORD or FIREORD gadget, in
 // the order [04 R-STANCE-01 §2] gives it: read the published three-bit panel
 // field, compute the next value with that section's cycle, transmit the
-// standing order through the selection broadcast, and play the cue. Step 3 —
-// the local write-back into the panel word — is display only and has no place
-// here: this build recomputes the aggregate from the selection at every
-// publication boundary [I6], which is the same refresh retail's step 3 is
-// overwritten by.
+// standing order through the selection broadcast, write the new value back
+// into the panel's retained field, and play the cue. The write-back holds
+// until something raises the panel's refresh-needed flag; a stance order
+// does not [07 R-HUD-03 §13].
 //
 // A field reading 4 is not applicable to this selection; the gadget is greyed
 // and matches no arm of the cycle, so the press does nothing at all.
@@ -236,6 +247,7 @@ func (b *battleSession) cycleStance(fire bool) {
 	}); err != nil {
 		return
 	}
+	b.localState().WriteBackStance(fire, uint8(next))
 	b.playUICue(nil, cue)
 }
 
@@ -243,7 +255,7 @@ func (b *battleSession) cycleStance(fire bool) {
 // arm of the same battle-panel handler as the two stance gadgets, in the order
 // [04 R-STANCE-01 §2] gives it: read the published two-bit cloak pair, resolve
 // the direction from it, transmit the descriptor through the selection
-// broadcast, then play `specialorders`.
+// broadcast, write the pair back, then play `specialorders`.
 //
 // The direction test is the pair against zero, not a comparison with 1: only a
 // pair of 0 (every cloak-capable selected unit is visible) sends `Cloak_On`, and
@@ -251,9 +263,12 @@ func (b *battleSession) cycleStance(fire bool) {
 // not-applicable value 3 greys the gadget [07 R-HUD-03 §6], so a press never
 // reaches here carrying it; it would take the same off arm if it did.
 //
-// The local write-back into the panel word is display only and has no place
-// here — this build recomputes the aggregate from the selection at every
-// publication boundary [I6], the same refresh that overwrites retail's.
+// The write-back is what makes a selection of two or more cloak-capable units
+// cloakable from the panel. Their fold is always 2, so the first press sends
+// `Cloak_Off` and writes 0 (VISIBLE). Neither the press nor the cloak order
+// raises the panel's refresh-needed flag, so the second press reads that 0
+// and sends `Cloak_On`. A selection change refreshes the field to 2 again
+// [04 R-STANCE-01 §2][07 R-HUD-03 §13].
 func (b *battleSession) toggleCloakSelected() {
 	f, ok := b.currentSnapshot()
 	if !ok {
@@ -265,6 +280,7 @@ func (b *battleSession) toggleCloakSelected() {
 	}); err != nil {
 		return
 	}
+	b.localState().WriteBackCloak(on)
 	b.playUICue(nil, cueSpecialOrders)
 }
 

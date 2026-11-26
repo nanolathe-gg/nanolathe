@@ -1964,6 +1964,42 @@ selection and health, projectiles, explosions, gadgets, squad overlays. The
 compositor is DESIGN_PRESENTATION_CLIENT's; this document owns the gadget
 layer's contents `[07 §6]` `[03 §1]`.
 
+#### Panel refresh and write-back
+
+The MOVEORD, FIREORD, CLOAK and ONOFF gadgets stage from four fields that
+`hud.LocalInterface` retains, as retail's panel words do. They are not
+refolded into the retained words at every publication `[07 R-HUD-03 §13]`.
+After the host composes the selection, `LocalInterface.RefreshPanel` folds
+the retained words when a trigger calls for it. `ComposeCommandPage` sets
+the page's capabilities from the frame and `LocalInterface.ApplyPanel`
+overlays the four words when the frame shows the same selection. A frame
+that predates a selected unit keeps its own fold. A press writes the value
+it sent back into its field (`WriteBackStance`, `WriteBackCloak`, `WriteBackOnOff`)
+`[04 R-STANCE-01 §2]`. Because the cloak fold of two cloak-capable units is
+always `2`, it is the write-back that lets the second CLOAK press cloak them.
+
+The host raises the flag for these triggers:
+
+* a selection gesture that selects or toggles at least one unit, and every
+  group recall, in `applyLocalInterfaceCommand`. This holds even when the
+  membership is unchanged. Any other change of the composed selection also
+  raises it;
+* local page navigation (`SetBuildPage`);
+* a selected unit whose committed activation or StartBuilding/StopBuilding
+  bit changes, or which finishes construction. `RefreshPanel` starts watching
+  each newly selected unit from the frame used for selection and checks each
+  publication in tick order.
+
+A battle starts with the flag up, and a loaded battle starts with a fresh
+`LocalInterface`. A replay playback raises the flag at every publication,
+because the recorded seat's presses change the fields without a write-back on
+this client, and a takeover raises it once more before live control. A
+selection gesture between a press and the tick that applies its order refolds
+the field from the units' state before the order has run. A standing-order
+or cloak change raises nothing, so that older value stays until the next
+trigger, as in retail. The build-order handlers' separate refresh requests
+are a `TODO(question)` in `internal/hud/localpanel.go`.
+
 #### Modern defeated players
 
 **Nanolathe Modern policy** (user-authorized 2026-10-01, issue #61).
@@ -3007,8 +3043,8 @@ The consequences of that shape are the contract:
 
 * **Presentation resolves, the session validates.** A build page arrives as an
   absolute zero-based page and the boundary clamps it against the compiled page
-  count; a stance arrives as the next value computed from the published
-  three-bit panel field and the boundary owns the broadcast and the definition
+  count; a stance arrives as the next value computed from the panel's
+  retained three-bit field and the boundary owns the broadcast and the definition
   gate; a group recall carries the `CTRL_F` mask when one has been published and
   an all-zero mask means no filter `[07 §9]` `[04 R-STANCE-01 §2]`.
 * **A mobile build carries its validated site.** The world X, Z and the

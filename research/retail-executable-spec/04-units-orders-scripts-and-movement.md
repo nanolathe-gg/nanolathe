@@ -1636,7 +1636,11 @@ in this order:
 display only.** Step 3 touches nothing but the interface word, and the next
 aggregate refresh recomputes that word from the selection
 [R-STANCE-01 §1]. Every change to a unit's field goes through the order
-handler in step 2.
+handler in step 2. The refresh is not per frame: it runs only after something
+raises the panel's refresh-needed flag [07 R-HUD-03 §13], and neither the
+press nor a standing-order or cloak handler raises it. The written-back value
+therefore stays on the panel until the next selection change, page change,
+activation change of a selected unit, or other listed trigger.
 
 **Established — the cloak arm of the same handler, in the same four steps.**
 The `CLOAK` link of the chain runs the identical shape with a two-value field
@@ -1662,6 +1666,16 @@ Shift query, so a cloak press is never a queued record. Step 3's write-back is
 display only here for the same reason it is for the stance arm, and step 4
 plays `specialorders`.
 
+**Established — the cloak write-back is what makes two cloak-capable units
+cloakable.** The cloak fold of [07 R-HUD-03 §13] does not compare, so a
+selection of two or more cloak-capable units folds to `2` every time. The
+first press on such a selection therefore sends `CLOAK_OFF` and writes the
+pair back as `0`, and the panel shows `VISIBLE`. The `Cloak_On`/`Cloak_Off`
+handlers only set or clear the unit's cloak-requested bit and raise no refresh,
+so the `0` stays. A second press reads it and sends `CLOAK_ON`, writing `1`
+(`CLOAKED`), and later presses alternate. Any refresh trigger, reselecting the
+same units included, folds the pair back to `2`.
+
 Neither the broadcast's leader exclusion nor its centroid arm is active: both
 cloak descriptors carry static gate mask `0x10060`, which has no
 target-required bit, and the command carries no ground position. The broadcast
@@ -1682,9 +1696,11 @@ panel word: `1` after Activate, `0` after Deactivate. The arm makes no direct
 Shift query, but its shared selection broadcaster reads held Shift and passes
 that queue modifier to the ordinary order producer. The arm's zero general
 parameter is separate from the queue modifier. Direct inspection of the
-retail handler and broadcaster establishes these operations. The timing of
-the next aggregate refresh remains unknown; this finding does not establish
-how long the written-back pair persists.
+retail handler and broadcaster establishes these operations. The written-back
+pair persists until the next refresh trigger [07 R-HUD-03 §13]. The resulting
+Activate or Deactivate is one, because the unit's activation edge raises the
+refresh-needed flag for a selected unit. Once the order has run, the
+refresh folds the selection's new, agreeing state.
 
 **Established — the two order handlers.** `Standing_MoveOrder` and
 `Standing_FireOrder` are ordinary descriptors (state label `Acknowledged`,
